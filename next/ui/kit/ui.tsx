@@ -175,7 +175,12 @@ export function useAction(done: () => void) {
   return { busy, error, run };
 }
 
-type Variant = "primary" | "quiet" | "danger";
+/**
+ * A button's weight: primary is a view's one main action (filled), quiet the ordinary button
+ * (outlined), ghost a button with no border until hovered, danger an outlined button in the
+ * danger colour.
+ */
+type Variant = "primary" | "quiet" | "ghost" | "danger";
 
 /** How long a Copy button says it copied. */
 const COPIED_MS = 2000;
@@ -237,6 +242,8 @@ export function Button(props: {
   focusKey?: string;
   /** For a component that moves focus to this button. */
   buttonRef?: Ref<HTMLButtonElement>;
+  /** The id of what describes the button, such as the question it answers. */
+  describedBy?: string;
   children: ComponentChildren;
 }) {
   const [running, setRunning] = useState(false);
@@ -279,6 +286,7 @@ export function Button(props: {
       aria-busy={busy ? "true" : undefined}
       data-busy={busy && marked ? "" : undefined}
       aria-label={props.label}
+      aria-describedby={props.describedBy}
     >
       {props.children}
     </button>
@@ -292,11 +300,23 @@ export function confirmActionLabel(label: string): string {
   );
 }
 
-/** A button that asks once more before it acts. */
+/**
+ * A button that asks once more before it acts. question, when given, is shown beside the
+ * answers while it asks ("Delete the key Claude Code? Tools using it stop working."), and
+ * describes both, so a screen reader says it with the answer in focus. The button that asks is
+ * danger unless variant says otherwise (signing out is not a loss, so it asks quietly); the
+ * answer that goes ahead stays danger. confirmLabel is that answer's text when "Yes, {action}"
+ * does not say enough (it names what is removed), and label the asking button's accessible name
+ * when several buttons on a page read the same.
+ */
 export function ConfirmButton(props: {
   /** A promise it returns keeps the button busy until it ends. */
   onConfirm: () => unknown;
   disabled?: boolean;
+  question?: string;
+  variant?: Variant;
+  confirmLabel?: string;
+  label?: string;
   children: string;
 }) {
   const [asking, setAsking] = useState(false);
@@ -310,6 +330,8 @@ export function ConfirmButton(props: {
   }, []);
   const ask = useRef<HTMLButtonElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
+  const questionId = useId();
+  const describedBy = props.question ? questionId : undefined;
   // The button in focus is replaced when the question opens or closes: focus goes to the button
   // that takes its place (Cancel, the safe answer, or the button that asked), not to the page.
   const moved = useRef(false);
@@ -320,9 +342,10 @@ export function ConfirmButton(props: {
   if (!asking) {
     return (
       <Button
-        variant="danger"
+        variant={props.variant ?? "danger"}
         disabled={props.disabled}
         busy={working}
+        label={props.label}
         buttonRef={ask}
         onClick={() => {
           moved.current = true;
@@ -335,17 +358,21 @@ export function ConfirmButton(props: {
   }
   return (
     <span class="confirm">
+      {props.question && (
+        <span class="confirm-question" id={questionId}>
+          {props.question}
+        </span>
+      )}
       <Button
         variant="danger"
         disabled={props.disabled}
+        describedBy={describedBy}
         onClick={() => {
           setAsking(false);
+          // The asking button comes back (working, for a promise): focus goes to it. A confirm
+          // that removes the button leaves nothing to focus.
           const result = props.onConfirm();
-          if (!(result instanceof Promise)) {
-            moved.current = false;
-            return;
-          }
-          // The asking button comes back, working: focus goes to it.
+          if (!(result instanceof Promise)) return;
           setWorking(true);
           const ended = () => {
             if (live.current) setWorking(false);
@@ -353,9 +380,9 @@ export function ConfirmButton(props: {
           result.then(ended, ended);
         }}
       >
-        {t("confirm", { action: confirmActionLabel(props.children) })}
+        {props.confirmLabel ?? t("confirm", { action: confirmActionLabel(props.children) })}
       </Button>
-      <Button buttonRef={cancel} onClick={() => setAsking(false)}>
+      <Button buttonRef={cancel} describedBy={describedBy} onClick={() => setAsking(false)}>
         {t("cancel")}
       </Button>
     </span>
@@ -376,14 +403,19 @@ export function Badge(props: { tone: Tone; children: ComponentChildren }) {
  * A state from core as a badge, in plain words (states.ts). The value core sent stays on the
  * badge, as its title and data-state, for support. `of` says what the state belongs to.
  */
-export function StateBadge(props: { state: string; of?: StateOf }) {
+/**
+ * A state in plain words. sent is the state core sent, kept in data-state and the title for
+ * support, when the words come from another state (an account's condition); else state.
+ */
+export function StateBadge(props: { state: string; of?: StateOf; sent?: string }) {
+  const sent = props.sent ?? props.state;
   return (
     <span
       class="badge"
       data-part="badge"
       data-tone={stateTone(props.state, props.of)}
-      data-state={props.state}
-      title={props.state}
+      data-state={sent}
+      title={sent}
     >
       {stateText(props.state, props.of)}
     </span>
@@ -404,13 +436,43 @@ export function Card(props: { title?: string; actions?: ComponentChildren; child
   );
 }
 
+/**
+ * Where a page's head goes when the page is shown in the frame (frame.tsx): the frame's header
+ * strip draws the title and the actions. undefined takes either back.
+ */
+export interface HeadSlot {
+  setTitle(title: string | undefined): void;
+  setActions(actions: ComponentChildren): void;
+}
+
+export const HeadContext = createContext<HeadSlot | undefined>(undefined);
+
+/**
+ * A page's title and its main actions. In the frame they are drawn in the header strip, which
+ * holds the page's one h1; a page shown outside a frame draws them itself, in place.
+ */
 export function PageHead(props: { title: string; actions?: ComponentChildren }) {
+  const slot = useContext(HeadContext);
+  useLayoutEffect(() => {
+    if (!slot) return;
+    slot.setTitle(props.title);
+    return () => slot.setTitle(undefined);
+  }, [slot, props.title]);
+  // After every render: the actions are drawn elsewhere, with what this render gave them.
+  useLayoutEffect(() => slot?.setActions(props.actions));
+  useLayoutEffect(() => () => slot?.setActions(undefined), [slot]);
+  if (slot) return null;
   return (
     <header class="page-head">
       <h1 data-part="page-title">{props.title}</h1>
       {props.actions && <div class="actions">{props.actions}</div>}
     </header>
   );
+}
+
+/** Draws the heads inside it in place, not in the frame's header strip. */
+export function InlineHeads(props: { children: ComponentChildren }) {
+  return <HeadContext.Provider value={undefined}>{props.children}</HeadContext.Provider>;
 }
 
 export function Notice(props: { tone: Tone; children: ComponentChildren }) {
@@ -456,7 +518,7 @@ export function CopyTrace(props: { id: string }) {
       class="btn"
       data-part="button"
       data-slot="button"
-      data-variant="quiet"
+      data-variant="ghost"
       data-size="small"
       aria-label={t("copyTrace", { id: props.id })}
       onClick={(e) => {
@@ -561,7 +623,7 @@ export function List<T>(props: {
     );
   }
   return (
-    <div class="table-wrap">
+    <TableFrame>
       <table class="table" data-part="list" aria-label={props.label}>
         <thead>
           <tr>
@@ -594,6 +656,48 @@ export function List<T>(props: {
           ))}
         </tbody>
       </table>
+    </TableFrame>
+  );
+}
+
+/** Which sides of a box that scrolls sideways have more to see. */
+export function overflowSides(box: {
+  scrollLeft: number;
+  scrollWidth: number;
+  clientWidth: number;
+}): "start" | "end" | "both" | undefined {
+  // In a right-to-left page scrollLeft runs from 0 down to a negative number.
+  const before = Math.abs(box.scrollLeft) > 1;
+  const after = box.scrollWidth - box.clientWidth - Math.abs(box.scrollLeft) > 1;
+  return before && after ? "both" : before ? "start" : after ? "end" : undefined;
+}
+
+/**
+ * The box a table scrolls in. When the table is wider than the box, data-more on the frame
+ * names the side (or sides) with columns out of view, and the frame fades that side out.
+ */
+export function TableFrame(props: { children: ComponentChildren }) {
+  const wrap = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState<ReturnType<typeof overflowSides>>();
+  useLayoutEffect(() => {
+    const box = wrap.current;
+    if (!box) return;
+    const update = () => setMore(overflowSides(box));
+    update();
+    box.addEventListener("scroll", update, { passive: true });
+    const seen = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
+    seen?.observe(box);
+    if (box.firstElementChild) seen?.observe(box.firstElementChild);
+    return () => {
+      box.removeEventListener("scroll", update);
+      seen?.disconnect();
+    };
+  }, []);
+  return (
+    <div class="table-frame" data-part="list-frame" data-more={more}>
+      <div class="table-wrap" ref={wrap}>
+        {props.children}
+      </div>
     </div>
   );
 }
@@ -650,7 +754,7 @@ export function Detail(props: { title: string; onClose: () => void; children: Co
     >
       <header class="card-head">
         <h2 class="mono">{props.title}</h2>
-        <Button label={t("closeDetails")} onClick={props.onClose}>
+        <Button variant="ghost" label={t("closeDetails")} onClick={props.onClose}>
           ✕
         </Button>
       </header>
@@ -671,6 +775,8 @@ export function Choices<V extends string>(props: {
   value: V | undefined;
   choices: Choice<V>[];
   onChange: (v: V) => void;
+  /** Every choice shown but none can be picked, such as while what it chooses is in use. */
+  disabled?: boolean;
 }) {
   const id = useId();
   return (
@@ -686,6 +792,7 @@ export function Choices<V extends string>(props: {
               name={id}
               value={c.value}
               checked={props.value === c.value}
+              disabled={props.disabled}
               onChange={() => props.onChange(c.value)}
             />
             <span>

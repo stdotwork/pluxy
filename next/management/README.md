@@ -21,10 +21,10 @@ in this package (`types.go`, `client.go`); core's handlers write the same types.
 - **Wrong keys.** Five wrong keys in a row from one address block that address for 30 minutes (403
   `blocked`, `Retry-After`). A call with no key at all is a 401 and does not count. A call from this
   machine is never blocked, so the person at the keyboard can always get back in.
-- **Bodies.** JSON in, JSON out, UTF-8. These calls refuse unknown fields with 400 `invalid_request`:
+- **Bodies.** JSON in, JSON out, UTF-8. These calls refuse unknown fields, and anything after the one JSON object, with 400 `invalid_request`:
   `POST /models/refresh`, `POST /config/validate`, `PUT /config`, `PATCH /settings`,
-  `POST /setup/apply`, `POST /setup/import`, `PUT /chains/{name}`, `PUT /theme` and
-  `PATCH /accounts/{id}`, which takes `disabled`, `settings` and an account's routing fields (with `timeouts`). The
+  `POST /setup/apply`, `POST /setup/import`, `PUT /chains/{name}`, `PUT /theme`, `POST /client-keys`,
+  `PATCH /client-keys/{id}` and `PATCH /accounts/{id}`, which takes `disabled`, `label`, `settings` and an account's routing fields (with `timeouts`). The
   other calls that read a body ignore the fields they do not know: `POST /packages`,
   `PATCH /extensions/{id}/config`, `POST /accounts`, `POST /accounts/{id}/login`,
   `POST /logins/{id}/input`, `POST /accounts/{id}/test` and `POST /accounts/import`.
@@ -70,22 +70,50 @@ in this package (`types.go`, `client.go`); core's handlers write the same types.
 `pluxy` is one program: `pluxy serve` runs the core (as does `pluxy -config ...` with no subcommand),
 `pluxy init [-config file] [-port n]` writes a first config without starting core, `pluxy -version`
 prints the build's version, commit and date, and `pluxy help` lists every subcommand. Every other
-subcommand is a client of the management API of a core that is already running.
+subcommand is a client of the management API of a core that is already running, except
+`pluxy key management`, which calls no core.
 
-- **Which core.** `--config <path>` (default `config.json`) is read for the address and the management
-  key; or `--url` and `--key` (or `PLUXY_URL` and `PLUXY_MANAGEMENT_KEY`) name a core on another machine.
+- **Which core.** The address and the management key each come from the first of: `--url` and `--key`;
+  `PLUXY_URL` and `PLUXY_MANAGEMENT_KEY`; the config file, which is `--config <path>`, else `config.json`
+  in the current folder, else `config.json` in [pluxy's home](../README.md#pluxys-home). `--verbose` says
+  on standard error which core the command called and where its address and key came from. With no
+  config file anywhere, the error names each place looked in and what to run (exit code 1; 5 for
+  `pluxy key management`).
+- **A key is not sent where a folder says.** When the key comes from `--key` or
+  `PLUXY_MANAGEMENT_KEY` and the address only from `config.json` in the current folder, the command
+  compares that file's `management_key` with the key it was given, byte for byte (in constant time).
+  When the file loads and has a usable address and the keys differ, it sends nothing and exits 2
+  (`pluxy: not sending the management key from <where> to <address>, the address in this folder's
+  config.json, which holds a different key`), so a stray file cannot steer a key to another machine.
+  A file with no `management_key`, or whose `listen` has port 0, fails first with its own error (exit
+  1) and sends nothing either. When the current folder is pluxy's home, its `config.json` is the
+  folder's and is checked. The same key in the file, `--config` (a deliberate choice of file, so the
+  key given goes to its address), `--url` and `PLUXY_URL` are not refused; pluxy's home's
+  `config.json`, read when the current folder has none, is not checked, and neither is
+  `pluxy key management`, which calls no core. The message says what to do: leave out the key it
+  names, so the key in the folder's `config.json` is used, or add `--url <its address>` to call another.
 - **Environment variables.** Client subcommands read two variables:
 
   | Variable | What it does | Default | Example |
   | --- | --- | --- | --- |
-  | `PLUXY_URL` | Core's base URL for `pluxy` client commands; `--url` overrides it. | Read from `--config` (`config.json`) | `http://127.0.0.1:8317` |
-  | `PLUXY_MANAGEMENT_KEY` | Management API key for `pluxy` client commands; `--key` overrides it. | Read from `--config` (`config.json`) | `<management-key>` |
+  | `PLUXY_URL` | Core's base URL for `pluxy` client commands; `--url` overrides it. | Read from the config file (above) | `http://127.0.0.1:8317` |
+  | `PLUXY_MANAGEMENT_KEY` | Management API key for `pluxy` client commands; `--key` overrides it. | Read from the config file (above) | `<management-key>` |
+
+  `PLUXY_HOME` names pluxy's home ([next/README.md](../README.md#pluxys-home)).
 - **Output.** For people by default: aligned columns, one thing per line, no colour when not a terminal.
   Help asked for (`help`, `-h`, `--help`) goes to standard output and exits 0. With `--json`: the API's
   reply body, unchanged, on standard output and nothing else (`{}` when core replied with an empty body).
   Errors go to standard error: a sentence, or with `--json` the API's error object (including flag and
   usage errors).
 - **Nothing asks a question** unless standard input is a terminal; `--yes` answers yes.
+- **The management key.** `pluxy key management [--show-key]` calls no core: it says where the key the
+  commands use came from, the `management_key` field of the config file read, `PLUXY_MANAGEMENT_KEY` or
+  `--key`, and with `--show-key` prints the key alone on standard output. When there is no key to find it
+  says why: each place it looked or the `--config` file that is not there (exit code 5), or a config
+  file core refuses too, one that does not parse or has no `management_key`, with core's reason
+  (exit code 1). When the key or its place cannot be written to standard output, it exits 1. Its `--json` is `{"from": "config", "config": "<path>"}` (`from` is `config`, `--key` or
+  `PLUXY_MANAGEMENT_KEY`, and `config` is there for `config`), with `key` only with `--show-key`.
+  `pluxy key rotate-management [--show-key] [--yes]` is in the [Core](#core) table.
 - **Signing in.** `pluxy account add` and `pluxy account login` start a sign-in and follow it: the
   address to open or the code to type is printed (on standard error), each value the sign-in asks
   for is sent to it, and core is read again every 2 seconds until it ends. A value a sign-in wants
@@ -140,8 +168,9 @@ subcommand is a client of the management API of a core that is already running.
 | `GET /requests`, `POST /requests/{trace}/cancel` | `pluxy requests`, `pluxy request cancel <trace>` | The client requests core is serving now, oldest first, each with its trace ID (`id`, the `X-CPA-TRACE-ID` reply header), when it arrived, endpoint, format, whether it streams, model, the client key's ID, the client's address and, once routing has chosen, the account, provider and upstream model of the newest attempt and the number of attempts. A Responses WebSocket is listed while one of its turns runs, under the socket's trace ID. `cancel` ends one as its client going away does: the call to the extension is closed, the client gets the `cancelled` error (a WebSocket is closed), the usage record has the request as `cancelled`, and core's log says an operator cancelled it. The reply is the request as it was. Cancel is best effort: it answers 200 whenever the request is listed, and a reply core had already gathered may still reach the client whole. A request cancelled before it was routed (its body still arriving, say) is answered with the same error and makes no attempt. 404 `not_found` when no request with that trace ID is being served, also one that has just ended (exit code 5) |
 | `GET /config`, `POST /config/validate`, `PUT /config` | `pluxy config show`, `pluxy config validate <file>` (not built yet), `pluxy config apply <file>` (not built yet) | The config file with secrets replaced by placeholders; check a document; replace the file |
 | `GET /settings`, `PATCH /settings` | `pluxy settings` | The basic and routing settings by name, [window ignition](../README.md#window-ignition)'s (`routing.ignition`) among them. `pluxy settings` only reads them (a command for `PATCH /settings` is not built yet; the Config Panel changes them) |
-| `GET /client-keys`, `POST /client-keys`, `DELETE /client-keys/{id}` | `pluxy key list`, `pluxy key add`, `pluxy key remove <id>` | Client keys. `id` is stable across restarts. `add` prints the key once |
-| `POST /management-key/rotate` | `pluxy key rotate-management` (not built yet) | A new management key, printed once |
+| `GET /client-keys`, `POST /client-keys`, `PATCH /client-keys/{id}`, `DELETE /client-keys/{id}` | `pluxy key list`, `pluxy key add`, `pluxy key remove <id>` (`PATCH` has no command yet) | Client keys: `{ "id", "masked", "label"? }`. `id` is stable across restarts. `add` prints the key once. `POST` takes an optional `{ "label" }` and `PATCH` `{ "label" }`, a name such as the tool the key is for; `""` or `null` clears it. A label is trimmed, one line, at most 64 characters (the same as an account's), and not a client key or the management key, else 400 (a hand-edited file with such a label is refused too); `PATCH` answers 404 for an ID no key has, and 422 `refused`, writing nothing, when a `config.yaml` sets the key's label through a YAML alias or merge key (`<<`), which core cannot change in place: edit the file. A `PATCH` that succeeds answers with the key as stored. Deleting a key deletes its label. Usage events record the key's `label` at request time. The names are kept beside the keys in the config file (`client_key_labels`, by key ID) |
+| `POST /management-key/rotate/stage`, `POST /management-key/rotate/commit` | `pluxy key rotate-management [--show-key] [--yes]` | A new management key in two steps, so that, one rotation at a time, a lost reply does not leave the caller without a key that works. `stage` makes the key and keeps it in memory only: one at a time (another stage replaces it), for 10 minutes, and not across a restart. The old key keeps working and the config file is not touched. The reply is `{"value": "<new key>", "config": "<config file>"}`, `config` being the absolute path of the config file core runs on. `commit` with `{"value": "<staged key>"}` writes the staged key to that file and puts it into use, and the old key stops working: 204. Core decides a commit under the lock every config write takes, a stage sent meanwhile waits for it, and a commit of the key already in use changes nothing and answers 204 too, so a commit sent again after a lost reply is safe. Any other value (wrong, replaced, older than 10 minutes, or staged before a restart) answers 409 `conflict` and changes nothing. An older core answers 404 to both. The command asks first on a terminal and needs `--yes` without one; without `--show-key` it needs pluxy's address and key from a config file, and that address to be a loopback one (otherwise exit code 2, before any call: over another address the config file it read can be another machine's). It stages, and then makes sure the new key can be had: without `--show-key` only when the config file it read is the file `config` names, the same directory entry (a symbolic link to it counts), not a copy with the same contents or a hard link elsewhere, which keeps the old key once pluxy replaces its file (otherwise exit code 2, nothing changed); with `--show-key` by printing the key alone on standard output (with `--json`, the stage reply), and only when that write works. Then it commits. When the commit's reply is lost it commits once more with the old key: 204 is done; 401 is done when the new key answers `GET /status`; 409 is nothing changed. A stage reply that is lost or holds no key, a key that cannot be printed, and a commit core answers 409 change nothing: exit code 1, saying the old key still works. A 404 from `stage` (an older core) changes nothing either, exit code 1. When core stops answering during the commit, the command exits 1 and says which key to try: the one it printed, or the one in the config file. It exits 0 only when the new key is in use, and ends by naming what must be given the new key: the web panel, the desktop app, `PLUXY_MANAGEMENT_KEY` and `--key` |
+| `POST /management-key/rotate` | None: the desktop app and the web panel use it | A new management key in one step, which core writes to its config file; the old one stops working at once. The reply is `{"value": "<new key>"}`. A reply lost on its way leaves the caller with neither key, which is why `pluxy key rotate-management` uses the two steps above |
 | `GET /logs`, `DELETE /logs`, `GET /request-error-logs[/{name}]`, `GET /request-log-by-id/{id}` | `pluxy logs [--after n] [--limit n]`, `pluxy logs clear`, `pluxy logs errors [name]`, `pluxy logs request <id>` | Core's log and request logs. `logs errors` lists the error logs (name, size in bytes, modified); with a name, and `logs request`, it copies the file's text to standard output as it arrives, however large, and on a terminal shows control and Unicode format characters escaped (`\x1b`) so a logged escape sequence cannot act on it; `pluxy logs` escapes its lines the same way. `--json` is the reply (`?format=json`, which core refuses above 2 MiB with 413 `log_too_large`). `logs clear` says what core reports: `main.log` emptied, how many rotated files it deleted, request and error logs kept. If any file could not be deleted or emptied, `DELETE /logs` still tries the rest and answers 500 `internal` naming how many rotated files it deleted and what is left |
 
 ### Setup
@@ -171,7 +200,7 @@ The reply to `GET /setup/clients/{id}/paste`: `tool` (the canonical ID), `name`,
      "config": "~/.claude/settings.json", "state": "not-configured"}
   ],
   "sign_ins": [
-    {"provider": "pluxy/codex", "from": "codex", "label": "Codex is signed in on this machine"}
+    {"provider": "pluxy/codex", "from": "codex", "label": "Codex is signed in on this computer"}
   ],
   "imports": [
     {"kind": "cliproxyapi", "config": "~/.cli-proxy-api/config.yaml", "auth_dir": "~/.cli-proxy-api", "accounts": 7,
@@ -181,7 +210,9 @@ The reply to `GET /setup/clients/{id}/paste`: `tool` (the canonical ID), `name`,
 }
 ```
 
-A client's `state` is `not-configured`, `configured` (it points at this core), `needs-update`, or `refused` (a file the desktop app's writer for that tool would refuse to change; no pick is suggested to apply to it). `sign_ins`
+A client's `state` is `not-configured`, `configured` (it points at this core), `needs-update`, `refused` (a file the desktop app's writer for that tool would refuse to change; no pick is suggested to apply to it), or `unchecked` (core does not read this tool's settings, so it cannot say whether they point at this core; see the last three tools below).
+
+`clients` lists eight tools: `claude-code`, `codex`, `opencode`, `pi`, `omp`, `claude-desktop`, `grok-build` and `hermes`. The last three are looked for where the desktop app's tools for them look: Claude Desktop is the program `claude-desktop` on the `PATH` on Linux and `Claude.app` in `/Applications` or `~/Applications` on macOS (core knows of nothing to look for on Windows); Grok Build is `~/.grok/bin/grok`, else `grok` on the `PATH`; Hermes Agent is `~/.local/bin/hermes` (`bin\hermes.exe` in the `hermes` folder of `%LOCALAPPDATA%` on Windows), else `hermes` on the `PATH`. Core does not run Claude Desktop, so it has no `version`, and does not read the settings of any of the three: their `state` is always `unchecked`, found or not (`installed` says whether core found the tool; `config` names the file the desktop app edits), and they have no paste text (`GET /setup/clients/{id}/paste` answers 404 for them). `sign_ins`
 only says a sign-in exists; core reads no token from it.
 
 An import's `last_import` is there once core has brought that setup across (`POST /setup/import`
@@ -197,7 +228,7 @@ shows the time in its Imports table.
 ```json
 [
   {"id": "pluxy/claude", "kind": "provider", "title": "Claude", "summary": "Claude subscriptions and API keys",
-   "installed": false, "suggested": true, "because": "Claude Code is installed on this machine"}
+   "installed": false, "suggested": true, "because": "Claude Code is installed on this computer"}
 ]
 ```
 
@@ -246,11 +277,11 @@ is not brought, plain or bcrypt: core keeps its own management key, and its row 
 
 | Call | Command | What it does |
 | --- | --- | --- |
-| `GET /accounts` | `pluxy account list` | Every account, with its `timeouts` when it sets them, `health` (below) and `public_id`: the short stable ID client replies name the account by, never an email address or a label (below). An account that [window ignition](../README.md#window-ignition) runs for also has `ignition`: `{"windows": [{"id", "state", "next", "why", "failures", "last", "model", "error"}], "error"}`, each usage window core starts with its state (`running`, `waiting`, `starting` or `paused`) and when core starts it next; `pluxy account list --json` shows it |
+| `GET /accounts` | `pluxy account list` | Every account, with its `timeouts` when it sets them, `health` (below) and `public_id`: the short stable ID client replies name the account by, never an email address or a label (below). An account that [window ignition](../README.md#window-ignition) runs for also has `ignition`: `{"windows": [{"id", "state", "next", "why", "failures", "last", "model", "error"}], "error"}`, each usage window core starts with its state (`running`, `waiting`, `starting` or `paused`) and when core starts it next; `pluxy account list --json` shows it. Also `quota`, when core has read the account's quota since it started: `{"fetched_at", "quota"}`, the last reply of `GET /accounts/{id}/quota` as it was, whoever asked for it (that call or routing's own readings for `soonest-reset`); it is kept in memory until the account is removed, and absent for an account never read. The list reads nothing from providers to fill it |
 | `GET /login-methods` | `pluxy account methods` | How each running extension can add an account |
-| `POST /accounts`, `GET /logins/{id}`, `POST /logins/{id}/input`, `DELETE /logins/{id}` | `pluxy account add <provider> [--id id] [--method m] [--input name=value]... [--no-wait]` | Start a sign-in and follow it to the end; prints the address to open or the code to type. `--id` names the account (default: `account-` and 12 hex digits); `--no-wait` stops once it has started, with exit code 7, unless the sign-in waits on a prompt's value, which is exit code 2 and cancels it |
+| `POST /accounts`, `GET /logins/{id}`, `POST /logins/{id}/input`, `DELETE /logins/{id}` | `pluxy account add <provider> [--id id] [--method m] [--input name=value]... [--no-wait]` | Start a sign-in and follow it to the end; prints the address to open or the code to type. `--id` names the account (default: `account-` and 12 hex digits). The call also takes `label`, a name for people that wins over the provider's (as `PATCH` takes it), and makes the account's ID itself when `id` is left out (`acc_` and 8 hex digits, its own `public_id`; an `id` that, or whose public ID, is another account's ID or public ID is a 409); the command sends neither yet; `--no-wait` stops once it has started, with exit code 7, unless the sign-in waits on a prompt's value, which is exit code 2 and cancels it |
 | `POST /accounts/{id}/login` | `pluxy account login <id> [--method m] [--input name=value]... [--no-wait]` | Sign in again, followed as `account add` follows a sign-in |
-| `PATCH /accounts/{id}` | `pluxy account enable <id>`, `pluxy account disable <id>`, `pluxy account set <id> name=value...` | Turn on or off; change routing settings. `name` is `disabled`, `timeouts` (an object of `header_ms`, `idle_ms` and `total_ms`) or one of the fields below; its value is JSON, except `prefix` and `proxy_url`, which take their text as it is; `null` sets a field other than `disabled` back to its default |
+| `PATCH /accounts/{id}` | `pluxy account enable <id>`, `pluxy account disable <id>`, `pluxy account set <id> name=value...` | Turn on or off; change routing settings. `name` is `disabled`, `timeouts` (an object of `header_ms`, `idle_ms` and `total_ms`) or one of the fields below; its value is JSON, except `prefix` and `proxy_url`, which take their text as it is; `null` sets a field other than `disabled` back to its default. The call also takes `label`, the account's name for people (trimmed, one line of at most 64 characters, else 400; `""` or `null` takes it away, leaving the last label its provider gave it, or none when it never gave one; an account stored before core kept the two apart keeps its old label), which `account set` does not send yet; an account set in the config takes none (409) |
 | `DELETE /accounts/{id}` | `pluxy account remove <id>` | Remove |
 | `POST /accounts/{id}/refresh` | `pluxy account refresh <id>` | Renew its credential now |
 | `POST /accounts/{id}/cooldown/reset` | `pluxy account clear <id>` | Forget the cooldowns routing holds against the account; a ban stays |
@@ -285,13 +316,16 @@ the blocks themselves, that one too, stay in `cooldowns`. When several blocks ho
 `exhausted` one decides, then the one that ends last. `next_check` is when core next reads the account's
 usage from its provider; it is absent when no check is due, and while a check of an account without a usage
 reading waits for the one request it lets through. `pluxy account list` shows `state` (with
-`(unverified)`), `until` and `why` as its HEALTH, UNTIL and WHY columns.
+`(unverified)`), `until` and `why` as its HEALTH, UNTIL and WHY columns. Blocks on the account and
+its models with more than 30 seconds left survive a restart, each with its `error`, and so do the
+account's `last_error` and `last_error_at` when one of them set it (see `next/README.md`); endpoint
+blocks and shorter ones do not.
 
 A `broken` account is one whose credential file cannot be read: core knows it only by its file's
 name, so `extension`, `kind` and `state` are empty and `why` names the file and the error. It never
 serves a request, `PATCH` on it is a 404, and `DELETE` removes the file.
 
-`public_id` is `acc_` and 8 hex digits, a keyed digest of the account's ID: an ID can be an email address or a label a person typed (an import of today's auth files names an account by its file), and an ID must not leave core in a client reply. The key is made at the first start and kept in `state/account-key` beside the config, so an account keeps its public ID across restarts. `X-Pluxy-Account`, the header a request pins an account by, takes either ID.
+`public_id` is `acc_` and 8 hex digits, a keyed digest of the account's ID: an ID can be an email address or a label a person typed (an import of today's auth files names an account by its file), and an ID must not leave core in a client reply. An ID of the shape `acc_` and 8 lower-case hex digits is its own `public_id`, so such an account has one ID everywhere: an account added with `POST /accounts` without an `id` gets one core makes (8 random digits), and an `id` sent to `POST /accounts` or named by `POST /accounts/import` is refused (409) while it or its public ID is another account's ID or public ID. The key is made at the first start and kept in `state/account-key` beside the config, so an account keeps its public ID across restarts. `X-Pluxy-Account`, the header a request pins an account by, takes either ID.
 
 ### Models
 
@@ -316,7 +350,7 @@ serves a request, `PATCH` on it is a 404, and `DELETE` removes the file.
 | Call | Command | What it does |
 | --- | --- | --- |
 | `GET /usage` | `pluxy usage [--since 7d] [--until t] [--by model\|account\|key\|provider] [--model m] [--account a] [--provider p] [--client-key k]` | Totals, breakdowns (`by` + `breakdown` alongside `models`, `providers`, `accounts`, `keys`) and a time series (`1h` buckets for ranges up to 2 days / 48 hours, `24h` beyond, unless `bucket` is given; `1m` / 60 steps when no range is given). Reaches back across all usage files kept on disk (`usage.keep_days`, default 90), reading closed UTC days from hourly `usage/summary/YYYY-MM-DD.json` files (stays when `.jsonl` files are pruned) and today from memory / `usage/YYYY-MM-DD.jsonl`. Also accepts `key` as an alias for `key_id` |
-| `GET /usage/events` | `pluxy usage events [--after seq \| --before [seq]] [--limit n] [--since t] [--until t] [--model m] [--account a] [--provider p] [--client-key k] [--failed true\|false]`, `pluxy usage export [--since t] [--until t] [--model m] [--account a] [--provider p] [--client-key k] [--failed true\|false]` | The recorded requests, oldest first with `after` or newest first with `before`. `usage export` writes those core still holds as CSV (the panel's Export columns and encoding, newest first), paging with `after` and `limit=1000`; on a terminal it shows control and Unicode format characters escaped and ends rows in a plain newline. `usage events` has a TRIES column (`attempts`, `-` when absent); `usage export`'s columns are unchanged. `usage events` on a terminal shows them escaped in the model, account, key and error code cells, tabs and newlines included. Piped and `--json` output is exact. It says on standard error when older requests are no longer available (`lost`) or usage is not recorded. Each event names the requested `model`, the routed account's `upstream_model` when it differs, and the `served_model` the upstream reply names, when it names one. Each event may also carry `chain_step`, `attempts` and `tried`. `attempts` is how many accounts the request went to (the reply's `X-Pluxy-Attempts`), absent when it reached none. `tried` lists each attempt in order as the error body's `pluxy.tried` does (`account` public ID, `provider`, `model`, `result`), the attempt that ended the request last: `result` is `ok` when it answered, else the error's code when it is one of core's own and `error` otherwise (a reply that broke after it began, or `cancelled`). It is absent for a request with one attempt that succeeded, whose `account` and `provider` say it; a failed request or one that fell back has the list, so a request with `attempts` above 1 and `failed` false fell back. At most 16 entries are kept, the first 15 and the last, so `attempts` can exceed the length of `tried`. They are recorded whatever `routing.explain` says, which hides them from client replies only |
+| `GET /usage/events` | `pluxy usage events [--after seq \| --before [seq]] [--limit n] [--since t] [--until t] [--model m] [--account a] [--provider p] [--client-key k] [--failed true\|false]`, `pluxy usage export [--since t] [--until t] [--model m] [--account a] [--provider p] [--client-key k] [--failed true\|false]` | The recorded requests, oldest first with `after` or newest first with `before`. `usage export` writes those core still holds as CSV (the panel's Export columns and encoding, newest first), paging with `after` and `limit=1000`; on a terminal it shows control and Unicode format characters escaped and ends rows in a plain newline. `usage events` has a TRIES column (`attempts`, `-` when absent); `usage export`'s columns are unchanged. `usage events` on a terminal shows them escaped in the model, account, key and error code cells, tabs and newlines included. Piped and `--json` output is exact. It says on standard error when older requests are no longer available (`lost`) or usage is not recorded. Each event names the requested `model`, the routed account's `upstream_model` when it differs, and the `served_model` the upstream reply names, when it names one. Each event may also carry `chain_step`, `attempts` and `tried`. `attempts` is how many accounts the request went to (the reply's `X-Pluxy-Attempts`), absent when it reached none. `tried` lists each attempt in order as the error body's `pluxy.tried` does (`account` public ID, `provider`, `model`, `result`), the attempt that ended the request last: `result` is `ok` when it answered, else the error's code when it is one of core's own and `error` otherwise (a reply that broke after it began, or `cancelled`). It is absent for a request with one attempt that succeeded, whose `account` and `provider` say it; a failed request or one that fell back has the list, so a request with `attempts` above 1 and `failed` false fell back. At most 16 entries are kept, the first 15 and the last, so `attempts` can exceed the length of `tried`. A failed request also has `left_out` when routing left accounts out of it, as the error body's `pluxy.left_out` names them (`account` public ID, `state`, `until` when known, and `provider` and `model` through a fallback chain), the first 8 of them; a request that reached no account has `left_out` and no `account`. They are recorded whatever `routing.explain` says, which hides them from client replies only |
 
 Closed days are counted by whole UTC hours, so a `since` or `until` inside an hour on a closed day counts that whole hour.
 
@@ -336,9 +370,9 @@ Core serves the HTTP calls behind these commands today, but the CLI commands the
 
 - `pluxy config validate <file>` (`POST /config/validate`) — not built yet.
 - `pluxy config apply <file>` (`PUT /config`) — not built yet.
-- `pluxy key rotate-management` (`POST /management-key/rotate`) — not built yet.
 - `pluxy ext config <id> [name=value]...` (`GET`, `PATCH /extensions/{id}/config`) — not built yet.
 - `PATCH /settings` has no CLI command yet (`pluxy settings` only reads settings).
+- `PATCH /client-keys/{id}` has no CLI command yet, and `pluxy key add` takes no label. The table of `pluxy key list` shows no label; `--json` passes core's reply through, with each key's `label`.
 
 ## What a client request gets back
 
@@ -364,6 +398,10 @@ Not part of the management API, listed here because the same names appear in `GE
 `skipped` for one the request's limits (`max_attempts`, `max_accounts`) ended it before reaching. The
 member holds codes and times, never an upstream's words. An account turned off or waiting for a login is
 named when its own `models` name the model, or when it shares its extension with an account that serves it.
+- When no account that serves the model can take the request for more than 5 minutes, or none can until a
+  person acts (every one turned off, waiting for a new sign-in, closed by its provider or without a running
+  provider), the error says `X-Should-Retry: false` and has no `Retry-After`, so a client stops instead of
+  retrying; a shorter wait keeps `Retry-After`. Status, body and message do not change.
 
 `routing.explain: false` leaves out the headers and `pluxy`, for a core whose client keys are given to
 people who should not see account IDs.

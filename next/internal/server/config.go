@@ -41,6 +41,11 @@ type Config struct {
 	// ClientKeys are the keys clients must send as a bearer token. At least one is required:
 	// core serves no client without a key.
 	ClientKeys []string `json:"client_keys"`
+	// ClientKeyLabels are the names of client keys, by the ID the management API lists a key
+	// under (never the key itself). A key without an entry has no name. Each label passes
+	// CheckLabel and is not a client key or the management key; ParseConfig trims them and drops an
+	// empty one.
+	ClientKeyLabels map[string]string `json:"client_key_labels,omitempty"`
 	// Extension is the extension run from a manifest path, with its accounts. Optional once
 	// packages are used.
 	Extension ExtensionConfig `json:"extension"`
@@ -485,6 +490,15 @@ func IsYAML(path string) bool {
 	return ext == ".yaml" || ext == ".yml"
 }
 
+// ErrLabelIsKey is why a client key's label may not be a client key or the management key: the
+// label is listed by the management API and recorded in usage events, which no key may reach.
+var ErrLabelIsKey = errors.New("a label must not be the same as a client key or the management key")
+
+// LabelIsKey reports whether label is one of the client keys or the management key.
+func (c *Config) LabelIsKey(label string) bool {
+	return label != "" && (label == c.ManagementKey || slices.Contains(c.ClientKeys, label))
+}
+
 // ParseConfig parses and validates the contents of the config file at path. Relative paths in
 // it are relative to path's folder. A config.yaml (IsYAML) is read with today's core's key
 // names (package legacy) and then checked as the JSON config is.
@@ -518,6 +532,17 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 		// Today's core serves anyone without a key then; this core refuses to.
 		return nil, errors.New("config: client_keys is empty (access.api-keys in a config.yaml): set at least one client key; core serves no client without one")
 	}
+	for id, label := range c.ClientKeyLabels {
+		l, err := CheckLabel(label)
+		if err != nil {
+			return nil, fmt.Errorf("config %s: client_key_labels: the label of key %q: %w", path, id, err)
+		}
+		if l == "" {
+			delete(c.ClientKeyLabels, id)
+		} else {
+			c.ClientKeyLabels[id] = l
+		}
+	}
 	if c.ManagementKey == "" && hashed {
 		return nil, fmt.Errorf("config %s: remote-management.secret-key is a bcrypt hash: replace it with a new key (pluxy cannot use a bcrypt hash); core always has a management key, so the panel and the pluxy command can manage it", path)
 	}
@@ -528,6 +553,11 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 			where = "remote-management: {secret-key: <a long random secret>}"
 		}
 		return nil, fmt.Errorf("config %s: no management key: core always has one, so the panel and the pluxy command can manage it. Add %s to the file, or move the file aside and run pluxy init to write a new config with both keys", path, where)
+	}
+	for id, label := range c.ClientKeyLabels {
+		if c.LabelIsKey(label) {
+			return nil, fmt.Errorf("config %s: client_key_labels: the label of key %q: %w", path, id, ErrLabelIsKey)
+		}
 	}
 	if ex := c.ExampleClientKeys(); len(ex) > 0 {
 		// Core starts, as today's core does, so the management API stays open to fix the keys.

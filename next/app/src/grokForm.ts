@@ -1,6 +1,8 @@
 // The Grok Build page's form logic (grok.tsx), apart from the page so its unit tests need no
-// webview: the catalog rows from what the config holds and from the core's models, and whether the
-// form can be applied.
+// webview: the catalog rows from what the config holds and from the models pluxy serves, and why
+// the form cannot be written yet.
+
+import { hasControl, hasSpaceOrControl, length, trimText } from "./textRules";
 
 export const PACKAGE = "pluxy/grok-setup";
 /** The client label the tool's recipe gives its launches, which the launcher keys recent folders by. */
@@ -18,7 +20,7 @@ export interface Entry {
 }
 
 /** What the tool's preview reads back of the config; `refused` (with `reason`) for a file Grok
- * Build would not take, which apply and clear refuse and Restore Backup still reaches. */
+ * Build would not take, which apply and clear refuse and Restore backup still reaches. */
 export interface ReadBack {
   state: "configured" | "not-configured" | "needs-update" | "refused";
   reason?: string;
@@ -52,7 +54,7 @@ export function rowsOf(r: ReadBack): Row[] {
 /** The default model the form starts from: pluxy's default in the config, else none. */
 export const modelOf = (r: ReadBack): string => (r.state === "refused" ? "" : (r.model ?? ""));
 
-/** rows with the core's served models added (selected, as the old app wrote them all); rows already
+/** rows with the models pluxy serves added (selected, as the old app wrote them all); rows already
  * there keep their window and choice. */
 export function withServed(rows: Row[], served: { id: string; display_name?: string }[]): Row[] {
   return [
@@ -63,12 +65,33 @@ export function withServed(rows: Row[], served: { id: string; display_name?: str
   ];
 }
 
-/** Why the selected rows and default model cannot be applied, or undefined when they can. */
-export function blocked(rows: Row[], model: string): "none" | "too-many" | "window" | "model" | undefined {
+/** The largest context window the tool takes. */
+export const WINDOW_MAX = 100000000;
+
+/** The longest model ID or name the tool takes. */
+const TEXT_MAX = 240;
+
+/** Why the selected rows and default model cannot be written yet, every reason at once, as the
+ * tool's apply would refuse them (grok-setup's `settings`, which trims each ID and name first): no
+ * model selected, more than the tool takes, a window that is not a whole number from 1 to
+ * WINDOW_MAX, an ID or name it would refuse (an ID empty, with white space or a control character, a
+ * name with a control character, either more than 240 characters), an ID selected twice, a default
+ * that is not one of the selected models. Empty when they can be written. */
+export type Held = "none" | "too-many" | "window" | "text" | "twice" | "model";
+
+const idOk = (id: string) => id !== "" && length(id) <= TEXT_MAX && !hasSpaceOrControl(id);
+const nameOk = (name: string) => length(name) <= TEXT_MAX && !hasControl(name);
+
+export function heldOf(rows: Row[], model: string): Held[] {
   const on = rows.filter((r) => r.on);
-  if (on.length === 0) return "none";
-  if (on.length > MODELS_MAX) return "too-many";
-  if (!on.every((r) => Number.isInteger(r.window) && r.window >= 1 && r.window <= 100000000)) return "window";
-  if (!on.some((r) => r.model === model.trim())) return "model";
-  return undefined;
+  if (on.length === 0) return ["none"];
+  const held: Held[] = [];
+  if (on.length > MODELS_MAX) held.push("too-many");
+  if (!on.every((r) => Number.isInteger(r.window) && r.window >= 1 && r.window <= WINDOW_MAX))
+    held.push("window");
+  const ids = on.map((r) => trimText(r.model));
+  if (!on.every((r, i) => idOk(ids[i] as string) && nameOk(trimText(r.name)))) held.push("text");
+  if (new Set(ids).size < ids.length) held.push("twice");
+  if (!ids.includes(trimText(model))) held.push("model");
+  return held;
 }

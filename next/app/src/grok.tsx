@@ -1,133 +1,99 @@
-// The app's Grok Build page: Agent Configuration (Apply, Clear, Restore Backup) and Start CLI for
-// Grok Build, through the optional curated native tool pluxy/grok-setup
-// (next/app-tools/grok-setup) and the launcher. The page is the window's own, not an extension
-// page, because Apply takes the client key: the window names a vault secret's ID and the native
-// confirmation of the apply names its label; an extension page can pass no secret. The key's value
-// never reaches this webview: native key entry keeps it, and the tool's preview reads back only
-// whether one is set. Labels follow the old app's Agents page.
+// The app's Grok Build page, on the shared tool-page parts (clientPage.tsx): how Grok Build stands
+// and Connect in the head, its models (the catalog pluxy's entries list, imported from pluxy on
+// request, each with its context window, and the default model), Start, and the settings file, key
+// and backups, through the optional add-on pluxy/grok-setup (next/app-tools/grok-setup) and the
+// launcher. The key's value never reaches this webview.
 
-import { useEffect, useId, useState } from "preact/hooks";
+import { useState } from "preact/hooks";
+import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { strings } from "../../ui/kit/strings";
-import {
-  Button,
-  Card,
-  Choices,
-  ConfirmButton,
-  Facts,
-  Notice,
-  PageHead,
-  Switch,
-  useAction,
-  useKit,
-  useLoad,
-} from "../../ui/kit/ui";
+import { Button, Notice, PageHead, Switch, useAction, useKit } from "../../ui/kit/ui";
 import { Backups } from "./backups";
-import { NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
-import { keysOf, type Secret, StartCli, Text, usePreview } from "./clientPage";
+import {
+  FileChoice,
+  FileKeyBackups,
+  fileDefault,
+  NumberInput,
+  SaveButton,
+  Section,
+  StartSection,
+  servedNames,
+  Text,
+  type ToolPreview,
+  ToolTop,
+  Unserved,
+  useStart,
+  useToolSetup,
+} from "./clientPage";
 import type { AgentPage } from "./easyMode";
 import {
-  blocked,
   CLIENT,
+  type Held,
+  heldOf,
   MODELS_MAX,
   modelOf,
   PACKAGE,
   type ReadBack,
   type Row,
   rowsOf,
+  WINDOW_MAX,
   withServed,
 } from "./grokForm";
-import { connectionGet, reply } from "./host";
+import { plainReply, useShown } from "./toolWords";
 
 const t = strings("grok", {
   title: "Grok Build",
-  short: "Grok",
-  tip: "Set up and start Grok Build with this core",
-  intro:
-    "Adds this core's models and a client key to Grok Build's config.toml and sets a default model. Apply, Clear, and Restore backup ask for confirmation and keep other settings. Restart Grok Build afterward.",
-  unavailable:
-    "Install and enable the curated Grok Build tool (pluxy/grok-setup) on the {device} page to set up Grok Build from here.",
-  file: "Configuration file",
-  fileDefault: "Grok Build's user config",
-  fileSelected: "A selected file",
-  fileInRoot: "A file in a selected folder",
+  tip: "Connect Grok Build to pluxy and start it",
+  fileOne: "A file",
+  fileRoot: "In a folder",
   filePath: "File",
-  filePathHint:
-    "A full path, for example $GROK_HOME/config.toml; a link (as stow makes) is followed and kept",
+  filePathHint: "A full path, such as $GROK_HOME/config.toml; a link (as stow makes) is followed and kept.",
   root: "Folder",
-  rootHint: "A full path; the folder may be a link (as chezmoi can make)",
+  rootHint: "A full path; the folder may be a link (as chezmoi can make).",
   inRoot: "File in the folder",
-  read: "Refresh",
-  status: "Status",
-  target: "Writes to",
-  keySet: "Key in the file",
-  defaultNow: "Default model",
-  yes: "Yes",
-  no: "No",
-  applied: "Applied",
-  notConfigured: "Not configured",
-  configured: "Configured",
-  needsUpdate: "Configuration modified",
-  legacy:
-    "config.toml still has {count} model entries an older app wrote (cpa-gui/…). pluxy leaves them as they are; remove them in Grok Build's config.toml if you no longer use them.",
-  models: "Model catalog",
-  modelsHint:
-    "The core's models Grok Build lists, each with its context window (it drives auto-compaction). Entries pluxy wrote for models left out here are removed on Apply; your own entries stay.",
-  refresh: "Refresh models",
-  noModels: "No models yet: refresh them from the core.",
-  tooMany: "Grok Build's catalog takes at most {max} models from here: leave some out.",
+  legacy: {
+    one: "config.toml still has {count} model entry an older app wrote (cpa-gui/…). pluxy leaves it as it is; remove it from config.toml if you no longer use it.",
+    other:
+      "config.toml still has {count} model entries an older app wrote (cpa-gui/…). pluxy leaves them as they are; remove them from config.toml if you no longer use them.",
+  },
+  models: "Models",
+  catalog: "Model list",
+  catalogNote:
+    "The models Grok Build lists from pluxy, each with its context window in tokens, which Grok Build compacts by. Turning one off takes it out of the list when you connect; your own entries stay.",
+  count: { one: "{count} of {total} models listed", other: "{count} of {total} models listed" },
+  importModels: "Import models from pluxy",
+  empty: "No models yet. Import models from pluxy.",
+  listed: "List in Grok Build",
   window: "Context window",
+  badWindow: "A whole number from 1 to {max}.",
   model: "Default model",
-  modelHint: "The model Grok Build starts with; one of the selected models.",
-  refused: "Grok Build would not take this file",
-  refusedHint: "Apply and Clear leave this file unchanged until you fix it; Restore backup reverts it.",
-  key: "Client key",
-  keyHint: "The client key Grok Build uses to reach this core.",
-  addKey: "Add key…",
-  keyLabel: "Grok Build client key",
-  connect: "Apply",
-  repair: "Repair",
-  update: "Update",
-  clear: "Clear",
-  clearHint: "Remove pluxy's integration settings and keep other settings. Restart the agent afterward.",
-  restore: "Restore backup",
-  restoreHint: "Put the file back as it was before the first apply.",
-  noCore: "Connect to a core first: its address goes into the configuration.",
-  start: "Start CLI",
-  cwd: "Working folder",
-  recent: "Recently used",
-  override: "Agent program path",
-  overrideHint: "A full path used instead of ~/.grok/bin/grok or grok found on the PATH (optional)",
-  terminal: "Terminal",
-  launch: "Start Grok Build",
+  modelNote: "The model Grok Build starts with, one of the models listed.",
+  chooseModel: "Choose a model",
+  heldNone: "Import models from pluxy and list at least one.",
+  heldTooMany: "Grok Build takes at most {max} models from here: turn some off.",
+  heldWindow: "Each context window must be a whole number from 1 to {max}.",
+  heldModel: "Choose a default model from the models listed.",
+  heldText:
+    "Each model listed needs an ID of 1 to 240 characters with no spaces or control characters, and a name of at most 240 characters with no control characters.",
+  heldTwice: "A model is listed twice: turn one off.",
 });
 
-const tool = <T,>(op: string, input: Record<string, unknown>) =>
-  reply<T>("program_call", { package: PACKAGE, op, input });
-
-interface Preview {
-  /** The pinned file: passed as it is to apply, clear and restore. */
-  targets: { selected: string; target: string; link: string | null; [k: string]: unknown }[];
-  applied: boolean;
+interface Preview extends ToolPreview {
   settings: ReadBack;
 }
 
-function Num(props: { label: string; value: number; onInput: (v: number) => void; disabled?: boolean }) {
-  const id = useId();
-  return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
-      <input
-        id={id}
-        type="number"
-        min={1}
-        max={100000000}
-        step={1000}
-        disabled={props.disabled}
-        value={String(props.value)}
-        onInput={(e) => props.onInput(Number(e.currentTarget.value))}
-      />
-    </label>
-  );
+const HELD: Record<Held, () => string> = {
+  none: () => t("heldNone"),
+  "too-many": () => t("heldTooMany", { max: MODELS_MAX }),
+  window: () => t("heldWindow", { max: WINDOW_MAX }),
+  text: () => t("heldText"),
+  twice: () => t("heldTwice"),
+  model: () => t("heldModel"),
+};
+
+interface Form {
+  rows: Row[];
+  model: string;
 }
 
 export function GrokPage() {
@@ -136,235 +102,186 @@ export function GrokPage() {
   const [file, setFile] = useState("");
   const [root, setRoot] = useState("");
   const [inRoot, setInRoot] = useState("config.toml");
-  const [rows, setRows] = useState<Row[]>([]);
-  const [model, setModel] = useState("");
-  const [secret, setSecret] = useState("");
-  const [core, setCore] = useState<string>();
-  const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
-  const keys = keysOf(PACKAGE, secrets.data);
-  const listId = useId();
-  useEffect(() => {
-    connectionGet().then(
-      (c) => setCore(c.signed_in ? c.target : undefined),
-      () => setCore(undefined),
-    );
-  }, []);
-  const selection = () =>
+  const [form, setForm] = useState<Form>({ rows: [], model: "" });
+  const [read, setRead] = useState<Form>({ rows: [], model: "" });
+  const typed = where === "file" ? file : where === "root" ? root : "";
+  const selection =
     where === "file"
       ? { targets: [{ file: file.trim() }] }
       : where === "root"
         ? { targets: [{ root: root.trim(), path: inRoot.trim() }] }
         : {};
-  // A write acts on the file the last preview pinned (the tool refuses it if the file changed
-  // since); the preview belongs to the selection it was read for, so a write never pins a file unread.
-  const selected = JSON.stringify(selection());
-  const { preview, readFor } = usePreview<Preview>(selected);
-  const read = useAction(() => {});
-  const load = () =>
-    read.run(async () => {
-      const r = await readFor(selected, () =>
-        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
-      );
-      if (r.body) {
-        setRows(rowsOf(r.body.settings));
-        setModel(modelOf(r.body.settings));
-      }
+  const s = useToolSetup<Preview>({
+    pkg: PACKAGE,
+    name: t("title"),
+    scan: "grok-build",
+    selection,
+    isDefault: where === "default",
+    canRead: where === "default" || typed.trim() !== "",
+    settings: (p) => p.settings,
+    onRead: (p) => {
+      const f = { rows: rowsOf(p.settings), model: modelOf(p.settings) };
+      setForm(f);
+      setRead(f);
+    },
+  });
+  const start = useStart({ s, client: CLIENT, folder: true });
+  const shown = useShown();
+  const served = servedNames(s);
+  const edit = (patch: Partial<Form>) => {
+    s.setDone(false);
+    setForm((f) => ({ ...f, ...patch }));
+  };
+  const setRow = (i: number, patch: Partial<Row>) =>
+    edit({ rows: form.rows.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
+  const imports = useAction(() => {});
+  const doImport = () =>
+    imports.run(async () => {
+      const r = plainReply(await api.servedModels());
+      if (r.body) edit({ rows: withServed(form.rows, r.body.models) });
       return r;
     });
-  const write = useAction(load);
-  const fetchModels = useAction(() => {});
-  // The core's models join the catalog (selected, as the old app wrote them all); rows already
-  // there keep their window and choice.
-  const refresh = () =>
-    fetchModels.run(async () => {
-      const r = await api.servedModels();
-      const served = r.body?.models;
-      if (served) setRows((have) => withServed(have, served));
-      return r;
-    });
-  const chosen = rows.filter((r) => r.on);
-  const apply = () =>
-    write.run(() =>
-      tool("apply", {
-        targets: preview?.targets,
-        base_url: core,
-        key: secret,
-        model: model.trim(),
-        models: chosen.map((r) => ({
-          model: r.model,
-          name: r.name === r.model ? "" : r.name,
-          context_window: r.window,
-        })),
-      }),
-    );
-  const undo = (op: "clear" | "restore") => write.run(() => tool(op, { targets: preview?.targets }));
-  const addKey = useAction(secrets.reload);
-  const st = preview?.settings;
-  const refused = st?.state === "refused";
-  const applyLabel = !preview?.applied
-    ? t("connect")
-    : st?.state === "configured"
-      ? t("update")
-      : t("repair");
-  const unavailable = read.error?.includes(PACKAGE) || read.error?.includes("not installed");
-  const busy = read.busy || write.busy || fetchModels.busy;
-  const held = blocked(rows, model);
+  const chosen = form.rows.filter((r) => r.on);
+  const input = () => ({
+    model: form.model.trim(),
+    models: chosen.map((r) => ({
+      model: r.model,
+      name: r.name === r.model ? "" : r.name,
+      context_window: r.window,
+    })),
+  });
+  const held = heldOf(form.rows, form.model).map((h) => HELD[h]());
+  const dirty = JSON.stringify(form) !== JSON.stringify(read);
+  const st = s.preview?.settings.state === "refused" ? undefined : s.preview?.settings;
+  const target = s.preview?.targets[0]?.target;
+  const path =
+    where === "default" ? (s.found?.config ?? target ?? "~/.grok/config.toml") : (target ?? typed.trim());
+  const names = chosen.map((r) => r.model);
 
   return (
-    <div class="stack">
+    <div class="tool-page" data-tool="grok-build">
       <PageHead title={t("title")} />
-      <p class="muted">{t("intro")}</p>
-      {unavailable && <Notice tone="warn">{withDeviceLink(t("unavailable"))}</Notice>}
-      {!core && <Notice tone="warn">{t("noCore")}</Notice>}
-      <datalist id={listId}>
-        {chosen.map((r) => (
-          <option key={r.model} value={r.model} />
-        ))}
-      </datalist>
-      <Card title={t("file")}>
-        <Choices
-          label={t("file")}
-          value={where}
-          choices={[
-            { value: "default", label: t("fileDefault"), note: "~/.grok/config.toml" },
-            { value: "file", label: t("fileSelected") },
-            { value: "root", label: t("fileInRoot") },
-          ]}
-          onChange={setWhere}
-        />
-        {where === "file" && (
-          <Text label={t("filePath")} hint={t("filePathHint")} value={file} onInput={setFile} />
-        )}
-        {where === "root" && (
-          <>
-            <Text label={t("root")} hint={t("rootHint")} value={root} onInput={setRoot} />
-            <Text label={t("inRoot")} value={inRoot} onInput={setInRoot} />
-          </>
-        )}
-        {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
-        <Button onClick={load} disabled={busy}>
-          {t("read")}
-        </Button>
-        {preview && st && (
-          <Facts
-            rows={[
-              [
-                t("status"),
-                refused
-                  ? t("refused")
-                  : preview.applied
-                    ? t("applied")
-                    : st.state === "configured"
-                      ? t("configured")
-                      : st.state === "needs-update"
-                        ? t("needsUpdate")
-                        : t("notConfigured"),
-              ],
-              [t("target"), preview.targets[0]?.target ?? ""],
-              ...(refused
-                ? []
-                : ([
-                    [t("defaultNow"), st.default ?? ""],
-                    [t("keySet"), st.key_set ? t("yes") : t("no")],
-                  ] as [string, string][])),
-            ]}
-          />
-        )}
-        {refused && (
-          <Notice tone="warn">
-            {st?.reason} {t("refusedHint")}
-          </Notice>
-        )}
-        {st && (st.legacy ?? 0) > 0 && (
-          <Notice tone="warn">{t("legacy", { count: String(st.legacy) })}</Notice>
-        )}
-      </Card>
-      {preview && !refused && (
-        <>
-          <Card title={t("models")}>
-            <p class="muted">{t("modelsHint")}</p>
-            {fetchModels.error && <Notice tone="danger">{fetchModels.error}</Notice>}
-            <Button onClick={refresh} disabled={busy || !core}>
-              {t("refresh")}
-            </Button>
-            {rows.length === 0 && <p class="muted">{t("noModels")}</p>}
-            {rows.map((r, i) => (
-              <div key={r.model} class="row">
-                <Switch
-                  label={r.name === r.model ? r.model : `${r.name} (${r.model})`}
-                  checked={r.on}
-                  onChange={(on) => setRows(rows.map((x, j) => (j === i ? { ...x, on } : x)))}
-                />
-                <Num
-                  label={t("window")}
-                  value={r.window}
-                  disabled={!r.on}
-                  onInput={(v) => setRows(rows.map((x, j) => (j === i ? { ...x, window: v } : x)))}
-                />
-              </div>
-            ))}
-            {held === "too-many" && <Notice tone="warn">{t("tooMany", { max: String(MODELS_MAX) })}</Notice>}
-            <Text label={t("model")} hint={t("modelHint")} value={model} list={listId} onInput={setModel} />
-          </Card>
-          <Card title={t("key")}>
-            <p class="muted">{t("keyHint")}</p>
-            {secrets.error && <Notice tone="danger">{secrets.error}</Notice>}
-            {keys.length > 0 ? (
-              <Choices
-                label={t("key")}
-                value={secret || undefined}
-                choices={keys.map((s) => ({ value: s.id, label: s.label }))}
-                onChange={setSecret}
-              />
-            ) : (
-              <NoKeys secrets={secrets} />
-            )}
-            {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
-            <Button
-              disabled={addKey.busy}
-              onClick={() =>
-                addKey.run(async () => {
-                  const r = await reply<{ id: string }>("vault_secret_add", { label: t("keyLabel") });
-                  if (r.body) setSecret(r.body.id);
-                  return r;
-                })
-              }
-            >
-              {t("addKey")}
-            </Button>
-          </Card>
-        </>
-      )}
-      {preview && (
-        <Card>
-          {write.error && <Notice tone="danger">{write.error}</Notice>}
-          <Button
-            variant="primary"
-            onClick={apply}
-            disabled={busy || refused || !secret || !core || held !== undefined}
-          >
-            {applyLabel}
-          </Button>
-          <NeedsKey missing={!secret} />
-          <ConfirmButton disabled={busy || refused || !preview.applied} onConfirm={() => undo("clear")}>
-            {t("clear")}
-          </ConfirmButton>
-          <small class="hint">{t("clearHint")}</small>
-          <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
-            {t("restore")}
-          </ConfirmButton>
-          <small class="hint">{t("restoreHint")}</small>
-        </Card>
-      )}
-      {preview && (
-        <Backups pkg={PACKAGE} pins={async () => preview.targets} disabled={busy} onChange={load} />
-      )}
-      <StartCli
-        available={!unavailable}
-        client={CLIENT}
-        recipe={() => tool<Record<string, unknown>>("recipe", {})}
-        t={t}
+      <ToolTop
+        s={s}
+        start={start}
+        facts={[s.found?.version]}
+        paths={[path]}
+        held={held}
+        form={input}
+        lines={(st?.legacy ?? 0) > 0 && <p class="muted">{t("legacy", { count: st?.legacy ?? 0 })}</p>}
       />
+      {s.addon === "on" && st && (
+        <Section title={t("models")} aside={<SaveButton s={s} dirty={dirty} form={input} held={held} />}>
+          <SettingRow name={t("catalog")} description={t("catalogNote")}>
+            <span class="tool-inline">
+              <span class="muted">{t("count", { count: chosen.length, total: form.rows.length })}</span>
+              <Button busy={imports.busy} onClick={doImport} disabled={s.busy || imports.busy || !s.core}>
+                {t("importModels")}
+              </Button>
+            </span>
+          </SettingRow>
+          {imports.error && <Notice tone="danger">{shown.text(imports.error)}</Notice>}
+          {form.rows.length === 0 && (
+            <div class="tool-say">
+              <p class="muted">{t("empty")}</p>
+            </div>
+          )}
+          {form.rows.map((r, i) => (
+            <SettingRow
+              key={r.model}
+              name={shown.text(r.name)}
+              description={r.name === r.model ? undefined : shown.text(r.model)}
+            >
+              <span class="tool-inline">
+                <Switch label={t("listed")} checked={r.on} onChange={(on) => setRow(i, { on })} />
+                <span class="muted">{t("window")}</span>
+                <NumberInput
+                  label={t("window")}
+                  min={1}
+                  max={WINDOW_MAX}
+                  step={1000}
+                  disabled={!r.on}
+                  value={r.window}
+                  onInput={(v) => setRow(i, { window: v ?? 0 })}
+                />
+              </span>
+              {r.on && !(Number.isInteger(r.window) && r.window >= 1 && r.window <= WINDOW_MAX) && (
+                <small class="tool-unserved">{t("badWindow", { max: WINDOW_MAX })}</small>
+              )}
+              <Unserved model={r.model} served={served} />
+            </SettingRow>
+          ))}
+          <SettingRow name={t("model")} description={t("modelNote")}>
+            <select
+              aria-label={t("model")}
+              value={form.model}
+              onChange={(e) => edit({ model: e.currentTarget.value })}
+            >
+              {!names.includes(form.model) && (
+                <option value={form.model}>{form.model ? shown.text(form.model) : t("chooseModel")}</option>
+              )}
+              {chosen.map((r) => (
+                <option key={r.model} value={r.model}>
+                  {shown.text(r.name)}
+                </option>
+              ))}
+            </select>
+          </SettingRow>
+        </Section>
+      )}
+      {s.addon === "on" && <StartSection s={s} start={start} />}
+      {s.addon === "on" && (
+        <FileKeyBackups
+          s={s}
+          start={start}
+          program="grok"
+          files={
+            <FileChoice
+              s={s}
+              value={where}
+              onChange={setWhere}
+              options={[
+                { value: "default", label: fileDefault(), note: "~/.grok/config.toml" },
+                { value: "file", label: t("fileOne") },
+                { value: "root", label: t("fileRoot") },
+              ]}
+            >
+              {where === "file" && (
+                <Text
+                  label={t("filePath")}
+                  hint={t("filePathHint")}
+                  value={file}
+                  onInput={setFile}
+                  disabled={s.locked}
+                />
+              )}
+              {where === "root" && (
+                <>
+                  <Text
+                    label={t("root")}
+                    hint={t("rootHint")}
+                    value={root}
+                    onInput={setRoot}
+                    disabled={s.locked}
+                  />
+                  <Text label={t("inRoot")} value={inRoot} onInput={setInRoot} disabled={s.locked} />
+                </>
+              )}
+            </FileChoice>
+          }
+          backups={
+            s.preview && (
+              <Backups
+                pkg={PACKAGE}
+                pins={async () => s.preview?.targets}
+                disabled={!s.writable}
+                onBusy={s.setOutside}
+                onChange={s.load}
+              />
+            )
+          }
+        />
+      )}
     </div>
   );
 }
@@ -372,9 +289,10 @@ export function GrokPage() {
 export const grokPage = (): AgentPage => ({
   id: "grok-build",
   package: PACKAGE,
-  group: "control",
+  dest: "tools",
+  kind: "topic",
+  under: "tools",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <GrokPage />,
 });

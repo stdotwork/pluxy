@@ -184,10 +184,52 @@ fn not_kept(e: &str, binding: &ClientKey, undone: bool) -> String {
     )
 }
 
+/// The most characters core takes in a client key's label (`maxLabel` in
+/// next/internal/server/manage.go).
+const CORE_MAX_LABEL: usize = 64;
+
+/// Checks that core takes label as a client key's name, as `CheckLabel` in
+/// next/internal/server/manage.go does: once trimmed (as `capture` trims it first, so core keeps
+/// the label the vault does), one line (no control character, line or paragraph separator) of at
+/// most CORE_MAX_LABEL characters. Core also refuses a label that is
+/// one of its keys; the app cannot check that, as it does not have every key core holds, and core
+/// refuses such a label before it makes a key.
+fn core_label(label: &str) -> Result<(), String> {
+    let t = label.trim();
+    if t.chars().count() > CORE_MAX_LABEL
+        || t.chars()
+            .any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}')
+    {
+        return Err(format!(
+            "pluxy names a client key only with one line of at most {CORE_MAX_LABEL} characters"
+        ));
+    }
+    Ok(())
+}
+
+/// Asks core through caller for a new client key named label (`POST /client-keys` with
+/// `{"label"}`, which core lists the key under); gives core's reply, which holds the key.
+fn make_key(caller: &Caller, label: &str) -> Result<Value, String> {
+    let r = caller.call("POST", "/client-keys", Some(&json!({ "label": label })));
+    if r.status != 201 {
+        let why = r
+            .error
+            .map(|e| e.message)
+            .unwrap_or_else(|| format!("core answered {}", r.status));
+        return Err(format!("core did not make a client key: {why}"));
+    }
+    Ok(r.body.unwrap_or_default())
+}
+
 /// Asks core for a new client key for client after the person confirms, and keeps it in the
-/// vault as label; gives the window's view of it. Run off the window's thread.
+/// vault as label, trimmed; gives the window's view of it. Run off the window's thread.
 pub fn capture(app: &AppHandle, label: &str, client: &str) -> Result<Value, String> {
+    // Core keeps a label trimmed (`CheckLabel`): this one trimmed value is what the checks, the
+    // confirmation, core, the vault and the window all get, so the key has one name.
+    let label = label.trim();
     check(app, label, client)?;
+    // Core gets the label too: one it would refuse is refused before the person is asked.
+    core_label(label)?;
     let st = app.state::<App>();
     // Before core makes a key: one the vault cannot keep would be left on core.
     st.vault.can_add()?;
@@ -200,15 +242,8 @@ pub fn capture(app: &AppHandle, label: &str, client: &str) -> Result<Value, Stri
         return Err("cancelled".into());
     }
     let caller = fresh(app, &pin, "Capture the key again.")?;
-    let r = caller.call("POST", "/client-keys", None);
-    if r.status != 201 {
-        let why = r
-            .error
-            .map(|e| e.message)
-            .unwrap_or_else(|| format!("core answered {}", r.status));
-        return Err(format!("core did not make a client key: {why}"));
-    }
-    let (value, binding) = from_reply(&r.body.unwrap_or_default(), target, client)?;
+    let made = make_key(&caller, label)?;
+    let (value, binding) = from_reply(&made, target, client)?;
     match st.vault.add_client_key(label, &value, binding.clone()) {
         Ok(secret) => Ok(view(secret, label, &binding)),
         Err(e) => {
@@ -538,6 +573,58 @@ mod tests {
             "p"
         )
         .is_err());
+    }
+
+    #[test]
+    fn a_new_key_is_asked_for_under_its_label() {
+        let reply = json!({"key": {"id": "0123456789abcdef01234567", "masked": "sk******YZ",
+            "label": "Claude Code"}, "value": "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ"});
+        let answer = reply.clone();
+        let (caller, seen) =
+            crate::core_aliases::tests::core(move |method, path, _, _| match (method, path) {
+                ("POST", "/client-keys") => (201, answer.clone()),
+                _ => (
+                    404,
+                    json!({"error": {"code": "not_found", "message": "no such call"}}),
+                ),
+            });
+        assert_eq!(make_key(&caller, "Claude Code").unwrap(), reply);
+        // The body core got: the name the vault keeps the key under.
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [(
+                "POST".to_string(),
+                "/client-keys".to_string(),
+                json!({"label": "Claude Code"})
+            )]
+        );
+    }
+
+    #[test]
+    fn core_label_takes_what_core_s_check_label_takes() {
+        // Core's own cases (CheckLabel): trimmed, then one line of at most 64 characters. That
+        // capture refuses such a label before its confirmation is the native test's `label` step.
+        for good in [
+            "Claude Code",
+            "  Codex  ",
+            &"é".repeat(64),
+            &format!(" {} ", "a".repeat(64)),
+        ] {
+            assert!(core_label(good).is_ok(), "{good:?}");
+        }
+        for bad in [
+            "a\u{2028}b",
+            "a\u{2029}b",
+            "a\u{85}b",
+            "a\tb",
+            &"a".repeat(65),
+        ] {
+            let e = core_label(bad).unwrap_err();
+            assert!(
+                e.contains("one line of at most 64 characters"),
+                "{bad:?}: {e}"
+            );
+        }
     }
 
     #[test]

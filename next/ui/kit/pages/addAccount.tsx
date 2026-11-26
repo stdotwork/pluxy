@@ -5,10 +5,10 @@ import { usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
 import { Button, Empty, List, Notice, PageHead, useKit, useLoad } from "../ui";
+import { AuthImport } from "./authImport";
 
 const t = strings("addAccount", {
   title: "Add Account",
-  short: "Add",
   tip: "Sign in or add an API key",
   methods: "Sign-in methods",
   method: "Method",
@@ -196,6 +196,7 @@ export function AddAccountPage(props: { onSuccess?: (accountId: string) => void;
             })}
           </>
         )}
+        {!props.embedded && <AuthImport />}
       </div>
     </>
   );
@@ -203,9 +204,9 @@ export function AddAccountPage(props: { onSuccess?: (accountId: string) => void;
 
 export const addAccountPage = (): PageDef => ({
   id: "add-account",
-  group: "gateway",
+  dest: "accounts",
+  under: "accounts",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <AddAccountPage />,
 });

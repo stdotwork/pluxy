@@ -7,8 +7,7 @@ import { Button, Card, Empty, List, Notice, PageHead, useKit, useLoad, when } fr
 
 const t = strings("system", {
   title: "System",
-  short: "System",
-  tip: "Runtime & diagnostics",
+  tip: "Version, models and addresses",
   about: "About",
   version: "Core version",
   commit: "Commit {commit}",
@@ -208,9 +207,9 @@ export function SystemPage() {
 
 export const systemPage = (): PageDef => ({
   id: "system",
-  group: "control",
+  dest: "settings",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <SystemPage />,
 });

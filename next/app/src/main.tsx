@@ -1,5 +1,8 @@
 // The desktop app's window: the kit's shell with core's pages, the same as the panel's and in the
-// same places, then the app's own Connection and Device extensions pages. Extension pages, from
+// same places, then the app's own: the topics of Tools (Beginner Mode, Manage Clients and the
+// listed clients' pages), and Where pluxy runs, Updates, Add-ons
+// and Launcher among the Settings topics. Until the app is connected and signed in it
+// shows the first launch screen or the not-running pane (firstLaunch.tsx). Extension pages, from
 // core and from packages installed on this device (devicePage.tsx), open in webviews of their
 // own (nativePage.tsx).
 
@@ -19,13 +22,16 @@ import { agentPages, setupClientAction, setupOffersNeeded } from "./agentPages";
 import { clientListPage } from "./clientList";
 import { detected, encode, listed, openClient, PREF, parse } from "./clientListItems";
 import { ConnectionPage } from "./connection";
+import { WHERE } from "./connectionCopy";
 import { type DeviceCatalog, type DeviceRegistry, device, newest } from "./device";
 import { DevicePage, devicePage } from "./devicePage";
 import { easyModePage } from "./easyMode";
+import { FirstLaunch, NotRunning } from "./firstLaunch";
+import { connectionStatus } from "./frameStatus";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
 import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
-import { UpdatesPage } from "./updates";
+import { updatesPage } from "./updates";
 import { ClosePrompt } from "./window";
 
 function brand(c: Connection): string {
@@ -41,8 +47,9 @@ function devicePages(catalog?: DeviceCatalog): PageDef[] {
       p.active.pages.map((page) => ({
         id: `device/${p.id}/${page.id}`,
         title: page.title,
-        short: page.short,
-        group: "extensions" as const,
+        dest: "settings" as const,
+        kind: "topic" as const,
+        section: "extensions" as const,
         tip: `${page.title} (on this device)`,
         render: () => (
           <NativeExtensionPage
@@ -145,34 +152,29 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
     // it offers to only when core runs here.
     const setup = conn.mode === "remote" ? undefined : setupClientAction(agents, catalog, offers);
     return [
-      ...corePages({ setup }),
+      ...corePages({ general: { signOut: false }, setup }),
       easyModePage(agents, catalog, loadDevice),
-      {
-        id: "connection",
-        title: "Connection",
-        short: "Conn",
-        group: "control",
-        render: () => <ConnectionPage connection={shown} onChange={changed} />,
-      },
-      {
-        id: "versions",
-        title: "Version Management",
-        short: "Vers",
-        group: "control",
-        tip: "App and core versions, and release notes",
-        render: () => <UpdatesPage />,
-      },
-      devicePage(loadDevice),
-      launcherPage(),
       clientListPage(clients, installed, saved, visible.length, saveClients),
       ...visible.flatMap((c) => agents.find((a) => a.id === c.id) ?? []),
+      {
+        id: "connection",
+        title: WHERE.title,
+        dest: "settings",
+        kind: "topic",
+        section: "device",
+        render: () => <ConnectionPage connection={shown} onChange={changed} />,
+      },
+      updatesPage(shown),
+      devicePage(loadDevice),
+      launcherPage(),
       ...devicePages(catalog),
     ];
   }, [conn.mode, shown, catalog, offers, loadDevice, agents, clients, saved, open, saveClients]);
 
-  // Not connected or not signed in (or the app's own core did not start): the Connection page,
-  // where the person can fix the address or give the key, and this device's extensions, which
-  // need no core (in safe mode, to disable or remove a package).
+  // Not connected or not signed in (or the app's own pluxy did not start): the first launch screen
+  // while no place is chosen, else the frame with the case in its pane. Where pluxy runs and this
+  // device's add-ons need no pluxy, so they open inside that frame (in safe mode, to turn off or
+  // remove a package).
   if (!conn.target || !conn.signed_in) {
     const kit = {
       host,
@@ -182,20 +184,22 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       unauthorized: () => {},
       extensionsChanged: () => {},
     };
+    if (!conn.mode)
+      return (
+        <KitContext.Provider value={kit}>
+          <FirstLaunch connection={shown} onChange={changed} />
+        </KitContext.Provider>
+      );
     return (
       <KitContext.Provider value={kit}>
-        <div class="shell" data-part="shell">
-          <main class="main" data-part="main">
-            <div class="content stack">
-              <div>
-                <ConnectionPage connection={shown} onChange={changed} />
-              </div>
-              <div>
-                <DevicePage onChanged={loadDevice} />
-              </div>
-            </div>
-          </main>
-        </div>
+        <NotRunning
+          connection={shown}
+          onChange={changed}
+          themes={themes}
+          brand={brand(conn)}
+          safeMode={catalog?.safe_mode}
+          device={<DevicePage onChanged={loadDevice} />}
+        />
       </KitContext.Provider>
     );
   }
@@ -207,6 +211,7 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       privacy={privacy}
       pages={pages}
       brand={brand(conn)}
+      status={connectionStatus(shown, changed)}
       extensionPages
       extensionPage={NativeExtensionPage}
     />

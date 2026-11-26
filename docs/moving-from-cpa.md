@@ -27,9 +27,10 @@ cd ~/pluxy
 ./pluxy serve
 ```
 
-With no config in the folder, pluxy writes its own `config.json` and prints its address:
-`127.0.0.1` port 8317, or a free port when CPA still holds 8317. The import adds to this config.
-Leave pluxy running and open a second terminal in `~/pluxy`.
+With no config in the folder or in [pluxy's home](../next/README.md#pluxys-home), pluxy writes
+its own `config.json` in pluxy's home and prints its address: `127.0.0.1` port 8317, or a free
+port when CPA still holds 8317. The import adds to this config. Leave pluxy running and open a
+second terminal in `~/pluxy`.
 
 ### 2. See what the import would do
 
@@ -199,8 +200,9 @@ The names on the right are the ones in pluxy's `config.json`, its commands and i
 - **A failing upstream is retried sooner.** After a server error from the upstream (a 5xx), with
   `transient-error-cooldown-seconds` at 0, pluxy backs off from one second up to a minute, where
   CPA waits a fixed minute.
-- **Quota blocks survive a restart, and are checked at once when pluxy starts**, so a restart
-  sends no requests to an account whose usage ran out.
+- **Quota blocks, rate limits and cooldowns survive a restart** with their errors, when they have
+  more than 30 seconds left, so a restart sends no requests to an account whose usage ran out, or
+  that a provider rate limited or refused. Quota blocks are checked at once when pluxy starts.
 - **Window ignition checks the window started.** A minute (`hold_ms`) after the request that
   starts a window, pluxy reads the account's usage again; a window that still does not run counts
   as a failed ignition. A rate limit is retried with the backoff, where Lamplighter paused until

@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import type { LoginMethodsExtension } from "../kit/api/logins";
-import { goTo, openPanel, signIn, useCore } from "./support";
+import { goTo, goToId, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -178,7 +178,7 @@ test("secret file selection clears the file control and refuses files over one M
   const secret = page.getByLabel("API key", { exact: true });
   await expect(secret).toBeFocused();
   await expect(secret).toHaveAttribute("autocomplete", "new-password");
-  const file = page.locator('input[type="file"]');
+  const file = page.getByLabel("Choose file", { exact: true });
   await file.setInputFiles({ name: "key.txt", mimeType: "text/plain", buffer: Buffer.from("file-key") });
   await expect(secret).toHaveValue("file-key");
   await expect(file).toHaveValue("");
@@ -198,12 +198,12 @@ async function captureSignInStates(page: Page) {
   mkdirSync(dir, { recursive: true });
   for (const theme of ["default", "terminal", "paper"]) {
     await openPanel(page, core);
-    await page.locator('nav a[href="#/themes"]').click();
+    await goToId(page, "themes");
     await page
       .getByRole("radiogroup", { name: "Theme" })
       .getByRole("radio", { name: theme, exact: false })
       .check();
-    await page.locator('nav a[href="#/add-account"]').click();
+    await goToId(page, "add-account");
     await expect(page.getByRole("heading", { level: 1, name: "Add Account" })).toBeVisible();
     const shot = (state: string) =>
       page.screenshot({ path: join(dir, theme.concat("-", state, ".png")), fullPage: true });
@@ -274,7 +274,7 @@ test("device sign-in shows its code and adds the account", async ({ page }) => {
   await expect(page.getByRole("button", { name: "View accounts" })).toBeFocused();
   await page.getByRole("button", { name: "View accounts" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "device-added", exact: true })).toBeVisible();
+  await expect(page.locator('a.account-name[href="#/accounts/device-added"]')).toBeVisible();
 });
 
 test("browser sign-in accepts a callback and reports provider failures", async ({ page }) => {

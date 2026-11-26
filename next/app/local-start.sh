@@ -19,6 +19,11 @@ refuse() {
   exit 1
 }
 
+# A refusal of the home folder --real-home was given, with the way around it.
+refuse_home() {
+  refuse "not starting: $*, or run start without --real-home to use the build's own home folder."
+}
+
 here=$(cd "$(dirname "$0")" && pwd -P)
 program="$here/bin/pluxy-app-local"
 tools="$here/lib/pluxy Local/app-tools"
@@ -49,16 +54,18 @@ fi
 
 if [ -n "$real" ]; then
   home=${HOME-}
-  case $home in /*) ;; *) refuse "HOME is not an absolute path: not starting" ;; esac
-  [ -d "$home" ] && [ ! -L "$home" ] || refuse "HOME ($home) is not a folder (a link to one is not enough): not starting"
-  [ "$(stat -c %u "$home")" = "$(id -u)" ] || refuse "HOME ($home) is not owned by you: not starting"
+  case $home in /*) ;; *) refuse_home "your home folder ($home) is not an absolute path" ;; esac
+  [ "$home" = / ] || home=${home%/}
+  [ -d "$home" ] && [ ! -L "$home" ] || refuse_home "your home folder $home is a link or not a folder"
+  [ "$(stat -c %u "$home")" = "$(id -u)" ] || refuse_home "your home folder $home belongs to another user"
   mode=$(stat -c %a "$home")
   case $mode in
     *00) ;;
-    *) refuse "HOME ($home) has mode $mode, so other users may use it. The trust profile is accepted only in a home no one else may use (chmod 700 \"$home\"): not starting" ;;
+    *) refuse_home "other users can open your home folder $home (mode $mode). The add-ons are trusted only from a home only you can open: run chmod 700 \"$home\"" ;;
   esac
 else
   home="$here/home"
+  [ ! -L "$home" ] || refuse "not starting: $home is a link: move it away, and start makes a new home folder there"
   mkdir -p "$home"
   chmod 700 "$home"
   # Everything the app and the tools it starts keep goes under that home, not yours.
@@ -69,19 +76,24 @@ else
   export XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME
 fi
 home=$(cd "$home" && pwd -P)
-plain "$home" || refuse "the home folder's path ($home) holds a quote, backslash or control character: not starting"
-plain "$index" || refuse "the build's path ($here) holds a quote, backslash or control character: not starting"
+if ! plain "$home"; then
+  if [ -n "$real" ]; then
+    refuse_home "the path of your home folder ($home) holds a quote, backslash or control character"
+  fi
+  refuse "not starting: the build's path ($here) holds a quote, backslash or control character: build it into another folder with make app-local LOCAL=<folder>"
+fi
+plain "$index" || refuse "not starting: the build's path ($here) holds a quote, backslash or control character: build it into another folder with make app-local LOCAL=<folder>"
 config="${XDG_CONFIG_HOME:-$home/.config}/$identifier"
 data="${XDG_DATA_HOME:-$home/.local/share}/$identifier"
 for f in "$home/$marker" "$home/$roots"; do
   if [ -e "$f" ] || [ -L "$f" ]; then
-    [ -f "$f" ] && [ ! -L "$f" ] || refuse "$f is not a plain file: not starting"
+    [ -f "$f" ] && [ ! -L "$f" ] || refuse "not starting: $f is not a plain file: move it away, then start again"
   fi
 done
 
 if [ -n "$real" ]; then
   cat >&2 <<EOF
-start: starting pluxy Local on your own home folder, $home.
+start: starting pluxy (local build) on your own home folder, $home.
 It writes:
   $home/$marker
   $home/$roots
@@ -89,10 +101,11 @@ It writes:
   $config/
       the app's settings, with device-registries.json naming this build's add-ons
   $data/
-      the app's data: its cores, providers, installed add-ons, and the backups the tool pages keep
-and, only when you confirm Apply (or Clear, Restore backup) on a tool's page, that tool's own
-settings, such as ~/.claude/settings.json or ~/.codex/config.toml.
-To remove it: first press Clear on each tool page you applied (its backups are in the app's data),
+      the app's data: its pluxy, providers, installed add-ons, and the backups the tool pages keep
+and, only when you confirm Connect, Disconnect or Restore backup on a tool's page, that tool's own
+settings, such as ~/.claude/settings.json or ~/.codex/config.toml. Connect points that tool at
+this build's pluxy, away from any other pluxy it used.
+To remove it: press Disconnect on each tool page you connected (its backups are in the app's data),
 quit the app, then:
   rm -f "$home/$marker" "$home/$roots"
   rm -rf "$config" "$data"
@@ -125,7 +138,7 @@ mkdir -p "$config"
 if [ ! -e "$config/device-registries.json" ]; then
   printf '{"version":0,"registries":[{"name":"local-build","url":"%s"}]}\n' "$index" >"$config/device-registries.json"
 elif ! grep -qF "\"$index\"" "$config/device-registries.json"; then
-  printf 'start: %s does not name this build'"'"'s add-ons (%s): add it there to install them\n' \
+  printf 'start: this build'"'"'s add-ons will not show in Add-ons: %s lists other add-on sources. Add {"name":"local-build","url":"%s"} to its "registries", then start again.\n' \
     "$config/device-registries.json" "$index" >&2
 fi
 

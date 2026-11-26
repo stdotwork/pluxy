@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { expect, type Page, test } from "@playwright/test";
-import { openPanel, signIn, useCore } from "./support";
+import { goToId, openPanel, signIn, useCore } from "./support";
 
 // panelcore compiles core and the fixture extensions before announcing readiness.
 test.setTimeout(300_000);
@@ -16,7 +16,7 @@ async function screenshot(page: Page, name: string) {
 }
 
 async function goTo(page: Page, id: string, title: string) {
-  await page.locator(`[data-part="nav-item"][href="#/${id}"]`).click();
+  await goToId(page, id);
   await expect(page.locator('[data-part="page-title"]')).toHaveText(title);
 }
 
@@ -131,10 +131,10 @@ for (const theme of ["default", "terminal"]) {
       core.key = newKey;
       await management.getByRole("button", { name: "Close", exact: true }).click();
       await expect(value).toHaveCount(0);
-      await goTo(page, "status", "Dashboard");
+      await goTo(page, "status", "Home");
       await expect(page.getByRole("button", { name: "Sign in", exact: true })).toHaveCount(0);
       await page.reload();
-      await expect(page.locator('[data-part="page-title"]')).toHaveText("Dashboard");
+      await expect(page.locator('[data-part="page-title"]')).toHaveText("Home");
     });
   });
 }

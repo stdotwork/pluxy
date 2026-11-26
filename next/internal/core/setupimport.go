@@ -223,7 +223,7 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 		// The import is done: a record that cannot be saved is logged, not an error of the import.
 		rec := management.SetupLastImport{At: time.Now().UTC(), Brought: len(rep.Brought), Changed: len(rep.Changed), NotBrought: len(rep.NotBrought)}
 		if err := c.setup.recordImport(path, rec); err != nil {
-			log.Printf("setup: saving %s: %v", c.setup.statePath, err)
+			log.Printf("error: setup: saving %s: %v", c.setup.statePath, err)
 		}
 	}
 	return rep, nil

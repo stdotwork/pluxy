@@ -8,8 +8,8 @@ pages in the same places. Core keeps the themes a person adds and which theme is
 
 | Folder | What it holds |
 | --- | --- |
-| `kit/` | What both builds share: the host-services interface (`host.ts`), the management API calls by area (`api/`), the string layer (`strings.ts`), privacy mode's masks (`privacy.ts`), components (`ui.tsx`, `ui.css`), the shell and its layouts (`shell.tsx`, `shell.css`), the stylesheet that puts the kit's CSS in order (`kit.css`), the theme engine (`theme/`) and the pages core offers (`pages/`, listed in `pages/core.ts`) |
-| `panel/` | The browser build: its entry page, and `browserHost.ts`, the kit's host in a browser |
+| `kit/` | What both builds share: the host-services interface (`host.ts`), the management API calls by area (`api/`), the string layer (`strings.ts`), privacy mode's masks (`privacy.ts`), components (`ui.tsx`, `ui.css`), the parts every page shows an account, a request, a setting, a coding tool and a loading, empty or failed pane with (`parts/`), its icons (`icons.tsx`), the shell (`shell.tsx`) and the application frame it shows its pages in (`frame.tsx`, `shell.css`, with the page model in `destinations.ts`), the stylesheet that puts the kit's CSS in order (`kit.css`), the typefaces the default theme names (`fonts/`, declared in `fonts.css`), the theme engine (`theme/`) and the pages core offers (`pages/`, listed in `pages/core.ts`) |
+| `panel/` | The browser build: its entry page, `browserHost.ts`, the kit's host in a browser, and `status.ts`, what its status block says |
 | `themes/` | The theme contract and the built-in themes, as theme files |
 | `extension-pages/` | The extension pages contract, and `pluxy-page.js`, the module an extension's page loads to talk to the panel |
 | `tests/` | Unit tests (`bun test`) |
@@ -39,23 +39,75 @@ const privacy = prefsPrivacy(host);
 render(<Shell host={host} themes={themes} privacy={privacy} pages={corePages()} />, document.body);
 ```
 
-The navigation's **Privacy mode** toggle hides account e-mail addresses and identifiers while the
-person shares their screen (`kit/privacy.ts`). It changes only what pages show: a page passes a
+The **Hide names** setting in General hides account e-mail addresses and
+identifiers while the person shares their screen (`kit/privacy.ts`); while it is on, the header
+strip's end shows a **Names hidden** button that turns it off. It changes only what pages show: a page passes a
 value through `usePrivacy()`'s masks where it shows it (text, `title`, `aria-label`) and keeps the
-real value for calls, search, filters, copying and downloads. Keys never go through the masks;
-they keep their own handling in both states. Where the desktop app says it saved a file, privacy
+real value for calls, search, filters, copying and downloads. A key's name (its label) goes through
+them; a key's value, even masked, never does: it keeps its own handling in both states. Where the desktop app says it saved a file, privacy
 mode names the file and its folder only (`shownPath` in `kit/save.tsx`): the folders above hold
 the person's user name. The panel keeps the choice in the host's prefs
 (`prefsPrivacy`); the desktop app keeps it natively. Extension pages get it as `privacy` in the
 theme snapshot (`extension-pages/README.md`); the kit cannot hide what a page shows itself.
 
-A page is a `PageDef`: a stable ID (its address is `#/<id>`), a title, a short label for the rail
-navigation, its navigation group, an optional tooltip, and a render function. The navigation shows
-the groups Operate, Gateway, Observe, Control and Extension pages, in that order, each holding its
-pages in the order the build lists them; a group with no page is not shown. `corePages()`
-(`kit/pages/core.ts`) is the pages core offers: the panel shows exactly these, and the desktop app
-adds its own after them. A build only bundles the pages it imports, so pages for the desktop app
-add nothing to the panel.
+### The frame, and where a page sits in it
+
+The window is a frame that does not scroll (`kit/frame.tsx`). It has four fixed parts and one
+that scrolls:
+
+- **The navigation** holds five destinations, Home, Accounts, Activity, Tools and Settings, each
+  with a line icon; Settings sits at its foot. A destination no page belongs to is not shown.
+- **The status block** at the navigation's foot says whether pluxy runs and where. The host fills
+  it (`status` on the shell, a `FrameStatus`): a state (`running`, `down` for not answering,
+  `stopped`, `unknown`), a word for it, a line saying where pluxy runs, and optionally a menu of
+  items: an address with a Copy button, an action that shows while it runs and why it failed, or
+  a link. Escape and a click outside close the menu, and focus returns to the block. With no menu,
+  the status can give an `href`, and the block is then a link to it. The panel
+  says what it knows, the address it was served from and whether its last call was answered
+  (`panel/status.ts`); the desktop app reads its connection: a pluxy it runs says Running, one it only
+  connects to says Connected, and a state it cannot show pages in links to Where pluxy runs.
+- **The header strip** over the page holds the page's one `h1`, the destination's tabs, and at
+  its end the page's main actions, then the Names hidden button while names are hidden. Sign out is
+  a row of General where the host can sign out; the desktop app turns that row off
+  (`corePages({ general: { signOut: false } })`) because its Sign out is on Where pluxy runs. A
+  page gives its title and actions with `PageHead`, as before: inside the
+  frame the strip draws them, and a page shown outside a frame draws them in place.
+- **Topics**: a destination whose pages are topics (Settings) lists them beside the page, in the
+  groups This device (General, Themes and the desktop app's pages), pluxy and From extensions,
+  in that order; Settings opens on General. In a window under 820 pixels wide the list is a
+  select above the page.
+- **The pane** shows the page, and is the only part that scrolls. A change of page opens the new
+  page at its top; a change inside a page keeps the position.
+
+The theme's `nav` option draws the navigation as a sidebar, a rail of icons or a row on top; a
+narrow window overrides it ([layout options](themes/README.md#layout-options)).
+
+A page is a `PageDef` (`kit/destinations.ts`): a stable ID (its address is `#/<id>`), a title, a
+render function, and where it sits:
+
+| Field | What it says |
+| --- | --- |
+| `dest` | The destination the page belongs to |
+| `kind` | `"tab"`: one of the destination's tabs in the header strip. `"topic"`: one of its topics beside the page. Left out: the page is reached from the navigation entry itself or from another page |
+| `under` | The ID of the page it sits under. The header strip then shows the way back (`Accounts / Add Account`), and no tabs |
+| `addresses` | Other addresses the page answers: an exact old ID (All accounts answers `quota`, the Quota page it replaced), or a prefix ending in `/` for whatever follows it (an account's page answers `accounts/`, so `#/accounts/<id>` opens it). Where several pages match, the longest match wins |
+| `label` | Its name in its tab or topic entry, when the title does not fit there (Routing's tab reads "Order & fallback") |
+| `section` | The group a topic is listed in: `core` (the default), `device` or `extensions` |
+| `tip` | The tooltip of its tab or topic entry |
+
+The pages are one flat list in which each page names its destination and, if it has one, its
+parent, the way a route names its parent in TanStack Router's code-based routes. A nested tree,
+as VS Code declares its settings sections, would have to be merged from three sources that arrive
+at different times: core's pages, the host build's and the running extensions'. A destination's
+navigation entry opens its first page that sits under no other, and the page of a tabbed
+destination is headed by the destination's name, with the tabs saying which page it is.
+`corePages()` (`kit/pages/core.ts`) is the pages core offers: the panel shows exactly these, and
+the desktop app adds its own. A build only bundles the pages it imports, so pages for the desktop
+app add nothing to the panel.
+
+A host with no session to show pages for can show the frame by itself (`Frame`), with the
+destinations visible but not choosable and one pane of its own. The desktop app does, around the
+pane that says what happened (and Where pluxy runs, opened in it), until a core is connected.
 
 With `extensionPages` set, the shell adds the pages of the extensions that run, after the
 build's own: each is a `PageDef` (address `#/ext/<publisher>/<name>/<page>`) whose render shows
@@ -67,27 +119,37 @@ settings form from its schema. The contract for both, and the module pages use, 
 
 ## The panel's pages
 
-The pages core offers, in navigation order, and the page of the old web panel (the React/Vite
+The pages core offers, by destination, and the page of the old web panel (the React/Vite
 panel that `extensions/panel` held) that each one replaces. A page's ID is its address
 (`#/<id>`) and its theme hook `data-page`. Why the pages have these names, and the other
 decisions behind them, is in [docs/panel.md](../../docs/panel.md).
 
-A change of page opens the new page at its top: the shell scrolls the window there, so a page
+The shell matches an address to a page by its ID or one of the other addresses the page answers
+(an exact old ID, or a prefix ending in `/`), the longest match, and ignores what follows a `?`
+(`#/status?x=1` opens Home; `#/quota`, the retired Quota page's address, opens All accounts).
+An address whose first part names a destination that has no page of that ID, such as `#/activity` or `#/activity?trace=<id>`, opens that destination's first page.
+Any other unknown address opens the first page.
+
+A change of page opens the new page at its top: the frame scrolls the pane there, so a page
 opened from a button far down another one shows from its start. A change inside a page (a tab or
 a filter in its address) keeps the place.
 
-Two pages add to their address. `#/logs/<trace ID>` opens that request's log in the Logs Viewer.
+Three pages add to their address. `#/accounts/<id>` opens that account's own page (the page
+`account`, which answers that prefix), and `#/accounts/<id>/sign-in` opens it with its sign-in in
+place. `#/logs/<trace ID>` opens that
+request's log in the Logs Viewer.
 `#/config/<tab>` opens a tab of the Config Panel: `common` (what `#/config` opens),
 `connectivity`, `network`, `logging`, `advanced` or `source`. `#/config/source?account=<id>`
-opens the Source tab with that account's ID selected; an account's "Edit in Config Panel" leads
+opens the Source tab with that account's ID selected; an account's "Open the settings file" leads
 there. An account from a provider key section of `config.yaml` opens the Source tab with nothing
 selected, because the file does not hold its ID: core makes the ID when it reads the file.
 
 The Setup page (`#/setup`) is the one page the panel opens by itself. Once signed in, the
 shell asks core for `GET /setup`: on a first run (`first_run`), when the address names no page,
-Setup opens in place of the Dashboard. The shell does not wait for the answer, so the Dashboard
+Setup opens in place of Home. The shell does not wait for the answer, so Home
 may show for an instant. A core without the call (it answers 404) gets no Setup page and nothing
-opens by itself. The page stays in the navigation after setup, as a status of the same things.
+opens by itself. The page stays among the Settings topics after setup, as a status of the same
+things.
 
 When core's scan found a CLIProxyAPI setup, its row on the page has "Bring it across". The button
 sends `POST /setup/import` as a dry run and shows core's report in its three lists (what comes
@@ -110,22 +172,45 @@ one sentence shown while a client has a button. A client whose settings file was
 button: the page says to paste the text there. The panel passes none; the desktop app offers
 "Set up" for the clients it can set up on its own computer.
 
-| Page (ID) | Group | Replaces (old route) |
-| --- | --- | --- |
-| Dashboard (`status`) | Operate | Dashboard (`/`) |
-| Accounts (`accounts`) | Gateway | Auth Files (`/auth-files`) and AI Providers (`/ai-providers`), with the OAuth excluded models and OAuth model alias pages (`/auth-files/oauth-excluded`, `/auth-files/oauth-model-alias`) |
-| Add Account (`add-account`) | Gateway | OAuth Login (`/oauth`) |
-| Routing (`routing`) | Gateway | Routing (`/routing`) |
-| Quota Management (`quota`) | Observe | Quota Management (`/quota`) |
-| Logs Viewer (`logs`) | Observe | Logs Viewer (`/logs`) |
-| Usage (`usage`) | Observe | No old panel page: the old desktop app's list of recorded requests |
-| Set up pluxy (`setup`) | Control | No old page |
-| Config Panel (`config`) | Control | Config Panel (`/config`; `/settings` and `/api-keys` led there) |
-| System (`system`) | Control | Management Center Info (`/system`) |
-| Extensions (`extensions`) | Control | Plugins (`/plugins`) and Plugin Store (`/plugin-store`) |
-| Themes (`themes`) | Control | No old page |
+The Tools page (`#/tools`, `kit/pages/tools.tsx`) is where a person connects a coding tool and
+manages the keys tools send. It lists the tools core's scan found (Claude Code, Codex, OpenCode, Pi,
+Oh My Pi, and the three only the desktop app sets up, shown as `Not checked`), connected ones first,
+and `Set up` on a row opens three steps under it: make a key for that tool, put the text in its
+settings file, start the tool again. The key made in step 1 is named for the tool and is in that
+row's text only; its value is held in the page's memory, never in prefs, storage or the address, and
+goes when its notice is closed, the key is deleted or the page is left. Under the tools the page
+shows the address programs reach pluxy at and the keys: `New key` asks for a name, `Rename` and
+`Delete` (which asks first, and is off for the last key) work on each one. `ToolList`, the list
+of tools with its steps and no address or keys, is exported for the guided setup.
 
-The pages of running extensions (`#/ext/<publisher>/<name>/<page>`, group Extension pages) take
+A host adds to the page through `corePages({ tools })` (`ToolsOptions` in `kit/pages/tools.tsx`),
+and the panel passes nothing: `toolAction(client)` is what goes at the end of a row in place of
+`Set up`; `extraTools` are rows core's scan does not give; `keyOwners` reads the tool each key
+was made for, by key ID or masked key, for a key with no name; `isRemote` says the tools listed are
+on another computer than the one showing the page; `localPages` are links to the host's own pages
+for this computer's tools; `onRefresh` runs on `Refresh`. The page reads a key's name from its
+`label`, `PATCH /client-keys/{id}` renames it (a pluxy that answers 405 loses `Rename` for the
+visit), and `POST /client-keys` sends the name with the new key.
+
+| Page (ID) | Where it sits | Replaces (old route) |
+| --- | --- | --- |
+| Home (`status`) | Home | Dashboard (`/`) |
+| Accounts (`accounts`) | Accounts, the tab "All accounts"; `#/quota` opens it too | Auth Files (`/auth-files`) and AI Providers (`/ai-providers`), with the OAuth excluded models and OAuth model alias pages (`/auth-files/oauth-excluded`, `/auth-files/oauth-model-alias`) |
+| An account's page (`account`) | Accounts, under All accounts: `#/accounts/<id>`, and `#/accounts/<id>/sign-in` with its sign-in open | The details of one auth file on Auth Files |
+| Add Account (`add-account`) | Accounts, under the Accounts page | OAuth Login (`/oauth`) |
+| Routing (`routing`) | Accounts, the tab "Order & fallback" | Routing (`/routing`) |
+| Logs Viewer (`logs`) | Settings, a topic | Logs Viewer (`/logs`) |
+| Usage (`usage`) | Activity | No old panel page: the old desktop app's list of recorded requests |
+| Tools (`tools`) | Tools | No old page |
+| General (`settings`) | Settings, the first topic | No old page |
+| Set up pluxy (`setup`) | Settings, a topic | No old page |
+| Config Panel (`config`) | Settings, a topic | Config Panel (`/config`; `/settings` and `/api-keys` led there) |
+| System (`system`) | Settings, a topic | Management Center Info (`/system`) |
+| Extensions (`extensions`) | Settings, a topic | Plugins (`/plugins`) and Plugin Store (`/plugin-store`) |
+| Themes (`themes`) | Settings, a topic | No old page |
+
+The pages of running extensions (`#/ext/<publisher>/<name>/<page>`, Settings topics in the group
+"From extensions") take
 the place of the old plugin pages (`/plugin-pages/...`). The Extensions and Themes pages and the
 extension pages were built before the old panel's features were compared page by page, and the
 lists below do not cover them.
@@ -136,10 +221,17 @@ These are the old panel's features that the new pages leave out on purpose. Wher
 feature, it keeps the old label, unless the label named something this core does differently or
 [docs/terms.md](../../docs/terms.md) gives another word for it.
 
-**Dashboard**
+**Home** (the old Dashboard)
 
 - The "Live" badge: the old page showed it whenever it was connected, but did not refresh on its
-  own. The Dashboard refreshes every 60 seconds while it is visible and shows when it last did.
+  own. Home reads again every 60 seconds while it is visible, and says when a read failed and what
+  it still shows.
+- The "Reload config" button and the Config summary: Config reloads on save. Home says only when
+  core refused the last change to its settings, with a link to Config.
+- The "Running extensions" table, the models count, the upstream proxy and the other settings
+  facts: the Extensions, System and Config pages show them.
+- The 10-minute traffic chart and its table: Home shows the last 7 local days, and the Usage page
+  has the numbers behind them.
 - "Management keys", a count of client keys: the Config Panel lists the client keys.
 - "Debug" and "WebSocket auth": core has neither setting (see the config.yaml table in
   [`next/README.md`](../README.md#what-each-setting-does-here)).
@@ -147,23 +239,26 @@ feature, it keeps the old label, unless the label named something this core does
 - "Provider keys", a count of the keys in the config's provider sections: "Credentials" counts
   every account, from the config or from a sign-in.
 - The six "Where to go from here" cards, and the "Manage providers" and "Inspect logs" links: the
-  navigation leads to the same pages.
+  navigation, with its tabs and topics, leads to the same pages.
 
 **Accounts**
 
 - "Download", "Download selected" and "Auth file JSON (preview)": core never hands a credential
   back out. Only the extension that created an account receives its credential.
-- "Delete All", "Delete filtered results" and "Delete Problem Files": "Select filtered" and then
-  "Remove" do the same, with the status filter set to "Problem" for problem accounts.
-- Provider tabs for providers this core has no extension for (Qwen, iFlow, AIStudio, "Empty"): the
-  tabs are the running extensions.
-- "Card layout": a theme's `list` layout option (`table` or `cards`) sets it.
+- "Delete All", "Delete filtered results" and "Delete Problem Files": "Select", ticking the accounts
+  (the ones that need you are grouped at the top) and "Remove…" do the same.
+- Provider tabs, the status, source and sort filters, and paging: "Find an account" matches a
+  name, an ID, a provider's name, a condition or the last error, and the groups keep accounts in a
+  fixed order (soonest back, then by name).
+- "Card layout": every account is one row, the same on every page and every theme.
+- "Upload file" on the list: importing CLIProxyAPI auth files is at the end of Add Account,
+  "Import files…".
 - OpenAI-compatible provider groups (one name and base URL holding several keys): each key is an
   account of its own, with the same base URL.
 - The connection test "Hi" with its "Test model" field: the old test built the upstream request
   in the browser, with the account's key in it, and sent it through a general relay call that
-  this core does not have. The account's "Test" sends the request from core, and its label says
-  that it spends a request.
+  this core does not have. An account's "Send a test request" sends the request from core, and
+  says under it that it uses one request.
 - "Use SIWC": a Sign in with ChatGPT account is added with the Codex extension's own sign-in
   method for it.
 - "Note" and tags: core keeps no note or tags on an account.
@@ -176,8 +271,8 @@ feature, it keeps the old label, unless the label named something this core does
   joined by lines: the System page's "Available models" lists each extension's models with their
   aliases and the accounts that serve them. A sign-in's own aliases are changed in "Account model
   aliases" on its Edit form.
-- "Invert page", which flipped the selection on the current page: "Select page", "Select
-  filtered" and "Deselect" cover the selections the batch actions need.
+- "Invert page", which flipped the selection on the current page: with "Select" on, each row has
+  its own checkbox.
 
 **Add Account**
 
@@ -198,19 +293,22 @@ feature, it keeps the old label, unless the label named something this core does
 - The route preview for a model: the browser guessed the route without seeing cooldowns or session
   bindings, so it could be wrong.
 
-**Quota Management**
+**Quota Management** (now each account's limits)
 
+- The page itself: every account's row on All accounts shows its two shortest limits, what is
+  left and when each resets, and its own page shows every limit, the manual resets left and when
+  the subscription ends.
 - "Reset quota" with Claude's reset grants, and xAI's paid one-token refresh: both spend from the
-  account. Nothing in the panel spends from an account behind a click, except an account's "Test".
+  account. Nothing in the panel spends from an account behind a click, except an account's "Send
+  a test request".
 - The DEV tier preview: a preview for the old panel's developers.
 - The quota timeline, which drew each account's quota windows over the next days: a richer view of
-  the same data. The desktop app does not have it either. Each card shows every limit's use and
-  when it resets.
+  the same data. The desktop app does not have it either.
 
 **Logs Viewer**
 
 - The "Method", "Status" and "Path" filters, and "Show Raw Logs": core's log holds no request
-  lines. Requests are on the Usage page and in the request logs.
+  lines. Requests are on the Activity page and in the request logs.
 - "Full Screen": a theme's `width` layout option `full` does it.
 - New lines every second: "Continuous reading" reads new lines every 2 seconds while the page is
   visible.
@@ -228,8 +326,7 @@ feature, it keeps the old label, unless the label named something this core does
   [`next/README.md`](../README.md#what-each-setting-does-here)): "Debug Mode", "Commercial Mode",
   "Redis Usage Queue Retention (seconds)", "Auth Auto-refresh Workers", "Pass Through Upstream
   Headers", "WebSocket Authentication", "Subagent session affinity", "Persist cooldown status"
-  (core saves quota blocks and bans to `state/routing.json` by itself, and other cooldowns last in
-  memory through a config reload), "GPT Image 2 Base
+  (core saves quota blocks, rate limits, cooldowns and bans to `state/routing.json` by itself), "GPT Image 2 Base
   Model", "Video result credential cache TTL", the "LAN discovery" section, every Streaming field
   (so there is no Streaming tab), every payload rule (so there is no Payload tab), Claude's and
   Codex's cloaking and header defaults, Codex's response steering and live media relay, the
@@ -302,12 +399,12 @@ side touch shared files only by one line each:
 
 - **The page and its strings:** `kit/pages/<page>.tsx` declares its texts with
   `strings("<page>", {...})` and exports its `PageDef` as a function, such as
-  `export const routingPage = (): PageDef => ({ id: "routing", group: "gateway", title: t("title"), short: t("short"), tip: t("tip"), render: () => <RoutingPage /> })`.
+  `export const routingPage = (): PageDef => ({ id: "routing", dest: "accounts", kind: "tab", label: t("tab"), title: t("title"), tip: t("tip"), render: () => <RoutingPage /> })`.
   A part with texts of its own declares its own namespace. A page as large as two files splits
-  along a typed interface, as Accounts does (`accounts.tsx` the list, `accountDetail.tsx` one
-  account's details, joined by `AccountDetailProps`).
+  along what each part works out, as Accounts does (`accounts.tsx` the list, `account.tsx` one
+  account's page, and `accounts.helpers.ts` the groups, counts and search both use).
 - **The page list:** one entry in `corePages()` (`kit/pages/core.ts`), in the order the page
-  shows within its group. The page ID never changes: it is the address and the theme hook
+  shows among its destination's tabs or topics. The page ID never changes: it is the address and the theme hook
   `data-page`.
 - **Management calls:** the area's calls and reply types in `kit/api/<area>.ts`, as
   `export const <area>Api = (host: Host) => ({...})`, and two lines in `kit/api/index.ts` (the

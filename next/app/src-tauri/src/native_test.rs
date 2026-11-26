@@ -21,7 +21,8 @@
 //!    (`admission_native.rs`) and quits; with `PLUXY_APP_TEST_PROGRAM`, only the program host
 //!    (`program_native.rs`, then `swap_native.rs`); with `PLUXY_APP_TEST_VAULT`, only the vault,
 //!    secret delivery and references and journal recovery (`vault_native.rs`), then native
-//!    client-key capture (`client_key_native.rs`); with
+//!    client-key capture (`client_key_native.rs`), then on Windows and macOS a model alias made in
+//!    core (`core_alias_native.rs`); with
 //!    `PLUXY_APP_TEST_SPAWN`, only the host's spawn service, managed runtimes and launch
 //!    environment (`spawn_native.rs`), then a launch's client keys (`spawn_keys_native.rs`); with
 //!    `PLUXY_APP_TEST_SESSIONS`, only the read-only Codex session reader (`sessions_native.rs`);
@@ -98,6 +99,12 @@ mod client_key;
 #[cfg(target_os = "linux")]
 #[path = "codex_native.rs"]
 mod codex;
+// Off Linux, a model alias made in core (on Linux, the Claude Desktop session's alias step). Built
+// on Linux too, so the checks there build what Windows and macOS run.
+#[cfg(native_stack)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[path = "core_alias_native.rs"]
+mod core_alias;
 #[path = "native_core.rs"]
 mod core_updates;
 #[path = "device_native.rs"]
@@ -385,6 +392,7 @@ fn every_command() -> Vec<String> {
 const ACTING: &[&str] = &[
     "sign_out",
     "core_start",
+    "core_stop",
     "core_restart",
     "core_adopt",
     "key_entry",
@@ -621,7 +629,7 @@ fn shrunk_page(app: &AppHandle, main: &Webview, label: &str) -> Value {
     };
     let _ = main.eval(
         "{ document.getElementById('pluxy-test-spacer')?.remove(); \
-         document.scrollingElement.scrollTop = 0; }",
+         document.querySelector('[data-part=main]').scrollTop = 0; }",
     );
     if let (Some(size), Some(w)) = (size, app.get_window(WINDOW)) {
         let _ = w.set_size(size);
@@ -709,7 +717,7 @@ fn shrunk_page_steps(
         "{{ const s = document.createElement('div'); s.id = 'pluxy-test-spacer'; \
          s.style.height = (2 * innerHeight) + 'px'; \
          document.querySelector('[data-part=extension-frame]').after(s); \
-         document.scrollingElement.scrollTop = {scroll}; }}"
+         document.querySelector('[data-part=main]').scrollTop = {scroll}; }}"
     ))
     .map_err(|e| e.to_string())?;
     within(10, || {
@@ -717,7 +725,7 @@ fn shrunk_page_steps(
             .as_f64()
             .filter(|now| (now - (y - scroll)).abs() <= 1.0)
     })
-    .ok_or("the window did not scroll")?;
+    .ok_or("the pane did not scroll")?;
     r["scroll"] = json!(scroll);
     let scrolled = settled(&mut *r, "scrolled");
     if top && scrolled {
@@ -765,7 +773,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
     }
     let main = wait_for("the window", || app.get_webview(MAIN))?;
     // The core steps (native_core.rs), in a session of their own. They come before the window's
-    // shell: until a core is installed the window shows only the Connection page.
+    // shell: until a core is installed the window shows the not-running pane.
     if std::env::var_os("PLUXY_APP_TEST_CORE_SOURCE").is_some() {
         wait_for("the window's IPC", || {
             eval(
@@ -811,6 +819,10 @@ fn run(app: &AppHandle) -> Result<(), String> {
         vault::run(app, &main, dir.clone().into())?;
         // Native one-time client-key capture (client_key_native.rs), with the same tools.
         client_key::run(app, &main, dir.into())?;
+        // Off Linux, a model alias made in core through the same connection
+        // (core_alias_native.rs); on Linux the Claude Desktop session checks it.
+        #[cfg(not(target_os = "linux"))]
+        core_alias::run(app, &main)?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
@@ -1314,12 +1326,13 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
         }
     }
     if let Some(main) = app.get_webview(MAIN) {
-        // Until a core is installed the window shows only the Connection page, which is all
-        // there is to see where the app runs no managed core (Windows and macOS for now).
+        // Where the app runs no managed core (Windows and macOS for now), the window shows the
+        // first-launch question while no place is chosen, and the not-running pane until a core
+        // answers: all there is to see there.
         let ready = if cfg!(target_os = "linux") {
             "document.querySelector('[data-part=nav]') !== null"
         } else {
-            "document.querySelector('[data-part=nav]') !== null || document.body.innerText.includes('Save')"
+            "document.querySelector('[data-part=nav]') !== null || document.querySelector('[data-part=state-pane]') !== null || document.querySelector('[data-part=first-launch]') !== null"
         };
         wait_for("startup window shell", || {
             eval(&main, ready).filter(|v| v == true)

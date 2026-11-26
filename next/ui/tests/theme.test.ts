@@ -332,9 +332,13 @@ describe("resolving", () => {
 
   test("the newer colour tokens follow the older ones until a theme sets them", () => {
     const plain = resolve(ok(base).theme, DEFAULT_CHOICES, env).tokens;
-    expect(plain["color.nav"]).toBe("var(--px-color-surface)");
+    expect(plain["color.nav"]).toBe("color-mix(in srgb, var(--px-color-surface) 97%, black)");
+    expect(plain["color.input-border"]).toBe(
+      "color-mix(in srgb, var(--px-color-text-muted) 70%, var(--px-color-surface))",
+    );
     expect(plain["color.code-bg"]).toBe("var(--px-color-surface-raised)");
-    expect(plain["color.danger-surface"]).toBe("color-mix(in srgb, var(--px-color-danger) 8%, transparent)");
+    // A notice is a bar, not a tinted box, unless a theme sets its background.
+    expect(plain["color.danger-surface"]).toBe("transparent");
     const set = resolve(ok({ ...base, tokens: { "color.nav": "#102030" } }).theme, DEFAULT_CHOICES, env);
     expect(set.tokens["color.nav"]).toBe("#102030");
     expect(tokensCss(set.tokens)).toContain("--px-color-nav:#102030;");
@@ -569,7 +573,7 @@ describe("T3 Code themes", () => {
     expect(dark.tokens["color.surface"]).toBe("#241f1a");
     expect(dark.tokens["color.text"]).toBe("#efe6d8");
     expect(dark.tokens["color.accent"]).toBe("#f0a36b");
-    expect(dark.tokens["color.nav"]).toBe(TOKENS["color.nav"].light);
+    expect(dark.tokens["color.nav"]).toBe(TOKENS["color.nav"].dark);
     expect(dark.tokens["color.border"]).toBe(TOKENS["color.border"].dark);
     expect(dark.variables).toEqual({
       "--app-theme-canvas": "#1c1814",

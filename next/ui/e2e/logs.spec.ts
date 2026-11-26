@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { goTo, openPanel, signIn, useCore } from "./support";
+import { goTo, goToId, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -59,7 +59,7 @@ test("logs show failures, trace lookup, continuous reading and clearing", async 
   }, trace);
   await expect(page.getByLabel("Trace ID", { exact: true })).toHaveValue(trace);
   await expect(requestLog).toContainText("=== REQUEST INFO ===");
-  await goTo(page, "Quota Management");
+  await goTo(page, "Accounts");
   await page.evaluate((id) => {
     location.hash = `#/logs/${id}`;
   }, trace);
@@ -139,7 +139,7 @@ test("filters, downloads and logging-off guidance follow the selected theme", as
     ).toBe(200);
     await goTo(page, "Themes");
     await page.getByRole("radio", { name: new RegExp(`^${theme}`, "i") }).check();
-    await page.locator('nav a[href="#/logs"]').click();
+    await goToId(page, "logs");
     await expect(page.getByRole("heading", { level: 1, name: "Logs Viewer" })).toBeVisible();
     await expect(log.locator('[data-part="log-line"]').first()).toBeVisible();
     if (process.env.LOGS_SHOTS)

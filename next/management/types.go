@@ -223,6 +223,12 @@ type Account struct {
 	// starts, its state and when core starts it next. Absent when ignition does not run for the
 	// account.
 	Ignition *AccountIgnition `json:"ignition,omitempty"`
+
+	// Quota is the last quota reply core read for the account, when it read it and what it
+	// said, as GET /accounts/{id}/quota replies. It is kept in memory, so it is gone after a
+	// restart, and absent while core has none (an account never read, or one with no reading).
+	// Core reads nothing to fill it: it comes from that call and from routing's own readings.
+	Quota *QuotaReply `json:"quota,omitempty"`
 }
 
 // AccountIgnition is an account's window ignition, in Account.
@@ -453,6 +459,8 @@ type ClientKey struct {
 	// Masked is the key with all but its first and last two characters hidden; a key shorter
 	// than 8 characters is hidden whole.
 	Masked string `json:"masked"`
+	// Label is the key's name, such as the tool it was made for; absent for a key with none.
+	Label string `json:"label,omitempty"`
 }
 
 // ClientKeysReply is GET /client-keys's reply.
@@ -584,6 +592,9 @@ const (
 	ClientStateNeedsUpdate   = "needs-update"
 	// ClientStateRefused is a config file the tool's writer would refuse to change.
 	ClientStateRefused = "refused"
+	// ClientStateUnchecked is a tool whose settings core does not read, so whether they point at
+	// this core is not known. Core's scan reports it for Claude Desktop, Grok Build and Hermes Agent.
+	ClientStateUnchecked = "unchecked"
 )
 
 // Setup apply outcomes (SetupApplyResult.Status).

@@ -76,7 +76,7 @@ const found: Setup = {
       },
       ...noClients.slice(1),
     ],
-    sign_ins: [{ provider: "pluxy/codex", from: "codex", label: "Codex is signed in on this machine" }],
+    sign_ins: [{ provider: "pluxy/codex", from: "codex", label: "Codex is signed in on this computer" }],
     imports: [
       {
         kind: "cliproxyapi",
@@ -88,8 +88,8 @@ const found: Setup = {
     core: { listen: "0.0.0.0:8317", reachable_from_network: true },
   },
   picks: [
-    pick("pluxy/codex", "Codex", { suggested: true, because: "Codex is signed in on this machine" }),
-    pick("pluxy/claude", "Claude", { suggested: true, because: "Claude Code is installed on this machine" }),
+    pick("pluxy/codex", "Codex", { suggested: true, because: "Codex is signed in on this computer" }),
+    pick("pluxy/claude", "Claude", { suggested: true, because: "Claude Code is installed on this computer" }),
     pick("pluxy/gemini", "Gemini"),
     { ...pick("pluxy/claude-code", "Claude Code settings", { suggested: true }), kind: "client" },
   ],
@@ -260,20 +260,20 @@ test("found clients, a sign-in and a CLIProxyAPI setup are named, and what they 
   expect(page).toContain("Found on the machine pluxy runs on");
   expect(page).toContain("<strong>Claude Code 2.4.1</strong>");
   expect(page).toContain("Does not point at pluxy yet");
-  expect(page).toContain("<strong>Codex is signed in on this machine</strong>");
+  expect(page).toContain("<strong>Codex is signed in on this computer</strong>");
   expect(page).toContain("<strong>A CLIProxyAPI setup with 7 accounts</strong>");
   expect(page).toContain("pluxy import cpa ~/.cli-proxy-api/config.yaml");
   expect(page).toContain("Other machines on the network can reach pluxy at this address.");
   // The two suggested providers are ticked, with why; the client pick is no checkbox at all.
   expect(ticked(page)).toBe(2);
-  expect(page).toContain("Claude Code is installed on this machine");
+  expect(page).toContain("Claude Code is installed on this computer");
   expect(page).not.toContain("Claude Code settings");
   expect(toInstall(found, {}, {})).toEqual(["pluxy/codex", "pluxy/claude"]);
   expect(page).toContain("Start installs: Codex, Claude.");
   expect(primary(page)).toEqual(["Start"]);
   expect(page).toContain("Other clients (4)");
   // With its provider installed and no account, the sign-in found is named above the sign-in.
-  const named = "Codex is signed in on this machine. You can sign in to the same account here.";
+  const named = "Codex is signed in on this computer. You can sign in to the same account here.";
   expect(page).not.toContain(named);
   expect(view(found, { results: { "pluxy/claude": { status: "done" } } })).not.toContain(named);
   expect(view(found, { results: { "pluxy/codex": { status: "done" } } })).toContain(named);
@@ -296,6 +296,42 @@ test("a client's state is said in words, and a refused file says why that is fin
   expect(withState("needs-update")).toContain("Its settings need an update to work with this pluxy");
   expect(withState("refused")).toContain("pluxy would not change ~/.claude/settings.json");
   expect(withState("refused")).toContain("you paste the text yourself");
+});
+
+test("a tool whose settings core does not read says Not checked, with no badge and nothing to paste", () => {
+  const desktop = {
+    id: "claude-desktop",
+    name: "Claude Desktop",
+    installed: true,
+    config: "~/.config/Claude-3p/claude_desktop_config.json",
+    state: "unchecked" as const,
+  };
+  const page = view({
+    ...found,
+    found: {
+      ...found.found,
+      clients: [...found.found.clients.slice(0, 1), desktop, ...found.found.clients.slice(1)],
+    },
+  });
+  const row = page.match(/<li data-part="setup-client" data-state="unchecked">.*?<\/li>/s)?.[0] ?? "";
+  expect(row).toContain("Claude Desktop");
+  expect(row).toContain('<span class="muted">Not checked</span>');
+  expect(row).not.toContain("badge");
+  expect(row).not.toContain("Does not point at pluxy yet");
+  expect(row).not.toContain("<button");
+  // Claude Code, whose settings core reads, keeps its paste button.
+  expect(page).toContain("Show what to paste");
+  // Found too: the line for the tool says no more than that.
+  expect(page).toContain('Claude Desktop</strong><span class="muted">Not checked</span>');
+
+  // Not installed, it is still one of the other clients: Not found, and nothing to paste either.
+  const absent = view({
+    ...nothingFound,
+    found: { ...nothingFound.found, clients: [{ ...desktop, installed: false }] },
+  });
+  const other = absent.match(/<li data-part="setup-client" data-state="not-found">.*?<\/li>/s)?.[0] ?? "";
+  expect(other).toContain("Not found on this machine");
+  expect(other).not.toContain("<button");
 });
 
 test("the first scan says pluxy is looking, and the person's ticks survive the replies that follow", () => {

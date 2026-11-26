@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -405,7 +406,7 @@ func TestSavedBlocks(t *testing.T) {
 	h := newHarness(t, Config{}, accts("a", "b", "c")...)
 	changes := h.r.state.Changes()
 	h.on("a", quotaOut(3*time.Hour))
-	h.on("b", rateLimited(time.Hour)) // not a quota block: not saved
+	h.on("b", rateLimited(20*time.Second)) // 30 seconds or less left: not saved
 	h.on("c", fail(llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeModel, RetryAfterMS: (30 * 24 * time.Hour).Milliseconds()}), ok())
 	h.run(h.req("m")) // a, b and c refuse
 	select {
@@ -466,6 +467,138 @@ func TestSavedBlocks(t *testing.T) {
 	if s := h2.r.state.Saved(h2.now); len(s) != 0 {
 		t.Errorf("saved after a reset: %+v", s)
 	}
+}
+
+// Rate limits and cooldowns on an account's credential or one of its models with more than 30
+// seconds left are saved with their kind and the failure that set them, and read back into their
+// kind at start, with the account's last error: a restart sends no request to an account a rate
+// limit, a refused sign-in or a missing model holds. Clearing a block is saved too, and a file an
+// older core wrote, whose blocks have no kind, reads as quota blocks.
+func TestSavedBlocksOfEveryKind(t *testing.T) {
+	h := newHarness(t, Config{}, accts("a", "b", "c", "d", "e")...)
+	changes := h.r.state.Changes()
+	long := strings.Repeat("é", 200) // 400 bytes
+	h.on("a", rateLimited(6831*time.Second))
+	h.on("b", fail(llm.Error{Code: llm.CodeAuth, Status: 401, Retryable: true, Scope: llm.ScopeCredential, Message: "Incorrect API key provided"}))
+	h.on("c", fail(llm.Error{Code: llm.CodeNotFound, Status: 404, Retryable: true, Scope: llm.ScopeModel, Message: long}))
+	h.on("d", rateLimited(20*time.Second))
+	h.runOK("m") // a, b, c and d refuse; e serves
+	h.wantAttempts("a", "b", "c", "d", "e")
+	select {
+	case <-changes:
+	default:
+		t.Fatal("no change signalled after a rate limit and cooldowns")
+	}
+	b, err := json.Marshal(h.r.state.Saved(h.now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back []SavedBlock
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	at := h.now.UTC()
+	want := []SavedBlock{
+		{Account: "a", Scope: "credential", Kind: "rate_limit", Until: h.now.Add(6831 * time.Second).UTC(), Source: SourceProvider,
+			Error: &SavedError{Code: llm.CodeRateLimit, Status: 429, At: &at}},
+		{Account: "b", Scope: "credential", Kind: "cooldown", Until: h.now.Add(30 * time.Minute).UTC(), Source: SourceBackoff,
+			Error: &SavedError{Code: llm.CodeAuth, Status: 401, Message: "Incorrect API key provided", At: &at}},
+		{Account: "c", Scope: "model", Model: "m", Kind: "cooldown", Until: h.now.Add(12 * time.Hour).UTC(), Source: SourceBackoff,
+			Error: &SavedError{Code: llm.CodeNotFound, Status: 404, Message: strings.Repeat("é", 128), At: &at}},
+	}
+	if g, w := indented(t, back), indented(t, want); g != w {
+		t.Fatalf("saved\n%s\nwant\n%s", g, w)
+	}
+
+	// A new core, ten minutes later: the blocks hold, in their kinds, with their errors, and the
+	// rate limit is checked an interval on, not at once.
+	h2 := newHarness(t, Config{}, accts("a", "b", "c", "d", "e")...)
+	h2.now = h.now.Add(10 * time.Minute)
+	changes = h2.r.state.Changes()
+	h2.r.state.Load(back, h2.now, nil)
+	for _, w := range []struct {
+		id, scope, model, kind, code, message string
+		until                                 time.Duration
+		health                                string
+	}{
+		{"a", "credential", "", "rate_limit", llm.CodeRateLimit, "", 6831 * time.Second, HealthCooling},
+		{"b", "credential", "", "cooldown", llm.CodeAuth, "Incorrect API key provided", 30 * time.Minute, HealthCooling},
+		{"c", "model", "m", "cooldown", llm.CodeNotFound, strings.Repeat("é", 128), 12 * time.Hour, HealthOK},
+	} {
+		rt := h2.r.state.Runtime(Account{ID: w.id}, h2.now)
+		if len(rt.Cooldowns) != 1 {
+			t.Fatalf("%s after the restart: cooldowns %+v, want one", w.id, rt.Cooldowns)
+		}
+		cd := rt.Cooldowns[0]
+		if cd.Scope != w.scope || cd.Model != w.model || cd.Kind != w.kind || !cd.Until.Equal(h.now.Add(w.until)) ||
+			cd.Error == nil || cd.Error.Code != w.code || cd.Error.Message != w.message {
+			t.Errorf("%s after the restart: cooldown %+v (error %+v), want %s %s %s until %v with %s %q", w.id, cd, cd.Error, w.scope, w.model, w.kind, h.now.Add(w.until), w.code, w.message)
+		}
+		if rt.LastError == nil || rt.LastError.Code != w.code || rt.LastError.Message != w.message || !rt.LastErrorAt.Equal(h.now) {
+			t.Errorf("%s after the restart: last error %+v at %v, want %s %q at %v", w.id, rt.LastError, rt.LastErrorAt, w.code, w.message, h.now)
+		}
+		if got := h2.healthOf(w.id); got.State != w.health {
+			t.Errorf("%s after the restart: health %+v, want %s", w.id, got, w.health)
+		}
+	}
+	if got := h2.healthOf("b"); got.Why != "Incorrect API key provided" {
+		t.Errorf("b after the restart: health %+v, want the provider's words", got)
+	}
+	if rt := h2.r.state.Runtime(Account{ID: "d"}, h2.now); len(rt.Cooldowns) != 0 || rt.LastError != nil {
+		t.Errorf("d after the restart: %+v, want nothing (its block had 20 seconds left)", rt)
+	}
+	rd := &fakeReadings{read: func(string) (*protocol.Quota, *llm.Error) {
+		return windows(h2.now, 10, 2*time.Hour, 5, 100*time.Hour), nil
+	}}
+	h2.r.UseReadings(rd)
+	h2.r.Check(context.Background())
+	if len(rd.calls) != 0 {
+		t.Errorf("checks at start = %v, want none", rd.calls)
+	}
+	h2.runOK("m")
+	h2.runOK("m")
+	h2.wantAttempts("d", "e")
+
+	// Clearing a's cooldown is signalled, and a's block is no longer saved.
+	select {
+	case <-changes:
+	default:
+	}
+	h2.r.state.Reset(Account{ID: "a"}, h2.now)
+	select {
+	case <-changes:
+	default:
+		t.Error("no change signalled after a's cooldown was cleared")
+	}
+	if s := h2.r.state.Saved(h2.now); len(s) != 2 || s[0].Account != "b" || s[1].Account != "c" {
+		t.Errorf("saved after clearing a: %+v, want b's and c's", s)
+	}
+
+	// A file an older core wrote: a block with no kind and no error is a quota block.
+	h3 := newHarness(t, Config{}, accts("a")...)
+	var old []SavedBlock
+	if err := json.Unmarshal([]byte(`[{"account": "a", "scope": "credential", "until": "`+h3.now.Add(3*time.Hour).UTC().Format(time.RFC3339)+`", "source": "provider"}]`), &old); err != nil {
+		t.Fatal(err)
+	}
+	h3.r.state.Load(old, h3.now, nil)
+	rt := h3.r.state.Runtime(Account{ID: "a"}, h3.now)
+	if len(rt.Cooldowns) != 1 || rt.Cooldowns[0].Kind != "quota" || rt.Cooldowns[0].Error == nil ||
+		rt.Cooldowns[0].Error.Message != "a usage window was used up before pluxy restarted" || rt.LastError != nil {
+		t.Errorf("a from an older file: %+v, want a quota block with the restart's reason and no last error", rt)
+	}
+	if got := h3.healthOf("a"); got.State != HealthExhausted {
+		t.Errorf("a from an older file: health %+v, want exhausted", got)
+	}
+}
+
+// indented returns v as indented JSON.
+func indented(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 // A check holds a block only on a full usage window that covers it: a block on the account's

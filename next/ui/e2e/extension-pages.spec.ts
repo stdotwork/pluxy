@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { expect, type Frame, type Page, test } from "@playwright/test";
+import { goTo } from "./support";
 
 let core: ChildProcess | undefined;
 let base = "";
@@ -72,7 +73,7 @@ async function signIn(page: Page, remember = false) {
   await page.getByLabel("Management key").fill(key);
   if (remember) await page.getByLabel("Remember on this device").check();
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
 }
 
 /** Saves a screenshot when PANEL_SHOTS_DIR is set, as e2e/panel.spec.ts does. */
@@ -82,8 +83,6 @@ async function shot(page: Page, name: string) {
   mkdirSync(dir, { recursive: true });
   await page.screenshot({ path: join(dir, `${test.info().project.name}-${name}`), animations: "disabled" });
 }
-
-const nav = (page: Page) => page.getByRole("navigation", { name: "Main" });
 
 /** The frame of the extension page titled title, as the panel shows it now. */
 async function frameOf(page: Page, title: string): Promise<Frame> {
@@ -202,7 +201,7 @@ test("a hostile extension page cannot reach the key, the panel, core or the outs
   });
 
   await signIn(page, true); // remembered: the key is in the panel's localStorage too
-  await nav(page).getByRole("link", { name: "Hostile" }).click();
+  await goTo(page, "Hostile");
   await expect(page.getByRole("heading", { level: 1, name: "Hostile" })).toBeVisible();
   const hostileUrl = page.url();
   await expect(page.frameLocator('iframe[title="Hostile"]').locator("#state")).toHaveText("done", {
@@ -265,7 +264,7 @@ test("a benign extension page works through the channel and follows the theme", 
   ).toBe(200);
   await page.emulateMedia({ colorScheme: "light" });
   await signIn(page);
-  await nav(page).getByRole("link", { name: "Alpha usage" }).click();
+  await goTo(page, "Alpha usage");
   const f = page.frameLocator('iframe[title="Alpha usage"]');
   await expect(f.locator("#state")).toHaveText("connected as test/alpha, page usage");
   await expect(f.locator("#greeting")).toHaveText("set by the test");
@@ -304,7 +303,7 @@ test("the panel draws an extension's settings form from its schema, and saves th
   page,
 }) => {
   await signIn(page);
-  await nav(page).getByRole("link", { name: "Extensions" }).click();
+  await goTo(page, "Extensions");
   await expect(page.getByRole("heading", { level: 1, name: "Extensions" })).toBeVisible();
   await page.getByRole("row", { name: /test\/alpha/ }).click();
   const form = page.getByRole("form", { name: "Settings of test/alpha" });

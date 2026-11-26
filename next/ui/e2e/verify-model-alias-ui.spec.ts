@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { openPanel, signIn, useCore } from "./support";
+import { openAccount as openAccountPage, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 const id = "verify-alias";
@@ -13,7 +13,7 @@ async function addAccount() {
     id,
     extension: "test/alpha",
     method: "api_key",
-    input: { api_key: "verify-model-alias-ui-key" },
+    input: { api_key: "verify-model-alias-ui-key", label: id },
   });
   expect(r.status).toBe(202);
   await expect
@@ -24,15 +24,16 @@ async function addAccount() {
     .toBe("done");
 }
 
+/** The account's own page, with its settings, models and test request open. */
 async function openAccount(page: Page) {
-  await page.locator('nav a[href="#/accounts"]').click();
-  await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
-  await page.getByRole("button", { name: id, exact: true }).click();
-  return page.getByRole("complementary", { name: `Details: ${id}`, exact: true });
+  await openAccountPage(page, id);
+  const main = page.getByRole("main");
+  await main.getByText("Settings, models and a test request", { exact: true }).click();
+  return main;
 }
 
 async function edit(page: Page, detail: Locator) {
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
+  await detail.getByRole("button", { name: "Edit settings", exact: true }).click();
   const form = page.getByRole("dialog", { name: `Edit ${id}`, exact: true });
   const aliases = form.getByRole("group", { name: "Account model aliases", exact: true });
   return { form, aliases };
@@ -68,11 +69,9 @@ test("an account model alias is saved, followed through GET /models, edited, and
   // form kept in the browser.
   expect(await names("fake-model")).toEqual(["panel-alias"]);
   await expect(detail.locator('[data-part="account-settings"]')).toContainText("fake-model → panel-alias");
-  await detail.getByRole("button", { name: "Show models", exact: true }).click();
+  // The models it serves say the name tools now ask for it by.
   const listed = detail.locator('[data-part="account-models"]');
-  const model = listed.locator('[data-part="item"]').filter({ hasText: "fake-model" });
-  await expect(model).toContainText("panel-alias");
-  await expect(model).not.toContainText("fake-model, ");
+  await expect(listed).toContainText("fake-model → panel-alias");
 
   // A reload and a reopened Edit show the saved alias; editing it changes the names clients see.
   await page.reload();

@@ -237,7 +237,7 @@
 // pluxy/claude as a pick (core-steps.ts firstRunSource) and a stand-in claude on its PATH
 // (first-run.ts). The window opens on Setup by itself, shows Claude Code found and the pick
 // ticked, offers Set up for it, Start installs the pick and Finish ends the first run; the next
-// launch opens on the Dashboard, and Setup then says it is finished, light and dark.
+// launch opens on Home, and Setup then says it is finished, light and dark.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
@@ -668,7 +668,7 @@ async function runApp(
       );
       rmSync(trustHome, { recursive: true, force: true });
     }
-    // The main checks close the window to the tray; the window suite starts with Ask every time.
+    // The main checks close the window to the tray; the window suite starts with Ask.
     if (!suite)
       writeFileSync(
         join(dirs.config, artifact.identifier, "window.json"),
@@ -2062,7 +2062,7 @@ function checkRelease(
   const ex = release.expand ?? {};
   check(
     ex.first_follows === true && ex.collapse_closed === true && ex.expand_follows === true,
-    `Expand/Collapse: ${JSON.stringify(ex)}`,
+    `Show/Hide: ${JSON.stringify(ex)}`,
   );
   const sc = release.scrolled ?? {};
   const g = (step: string) => sc[step]?.geometry ?? {};
@@ -2078,7 +2078,9 @@ function checkRelease(
   );
   const off = release.offline ?? {};
   check(
-    off.kept === true && off.same_time === true && /Could not reach the release feed/.test(off.message ?? ""),
+    off.kept === true &&
+      off.same_time === true &&
+      /Could not reach the update source/.test(off.message ?? ""),
     `offline: ${JSON.stringify(off)}`,
   );
   // The notice moved the notes area (so the check below is not vacuous), and the webview followed.

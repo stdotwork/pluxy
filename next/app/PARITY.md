@@ -18,8 +18,9 @@ Linux is the only platform the app supports now. Windows, macOS and WSL are late
 does not support them, and none of the Linux checks on this page says anything about them. Some
 groundwork for them is merged and runs in CI, such as the native key entry and confirmation
 dialogs, login items and one app per profile; [the README's Platforms section](README.md#platforms)
-lists it and what still refuses there, which includes every native tool, so every client, usage
-source and the launcher on this page.
+lists it and what still refuses there. Native tools run there in test builds, and the native test
+checks the launcher and Claude Desktop's model alias there; the clients and usage sources on this
+page are later work there, as their tables say.
 
 On Linux, every native tool's manifest but `pluxy/wsl`'s names programs for `linux/amd64` and
 `linux/arm64`. The native test runs on GitHub's `ubuntu-24.04` runner, which is x86-64, so it
@@ -30,16 +31,18 @@ builds and runs only the amd64 programs; no CI job runs the Linux arm64 ones.
 The app sets up eight agent clients, each from a page in the window and a curated native tool,
 which has full access to your user account. Every client page works the same way:
 
-- **Refresh** previews the client's files: its default place in your home folder, a file you select
-  or a folder you select. A link to the file or folder, as stow and chezmoi make, is followed and
-  kept as a link.
-- **Apply**, **Clear** and **Restore backup** write only the files that
-  preview pinned, after a native confirmation that names them and the key's label. Clear keeps the
-  edits you made since Apply; Restore backup puts the original bytes back.
-- **Backup and restore** keeps up to 10 manual backups of the client's files in the app's vault.
+- The page reads the client's files as it opens: its default place in your home folder, or, with
+  **Read this file**, a file or folder you select. A link to the file or folder, as stow and
+  chezmoi make, is followed and kept as a link.
+- **Connect** (or **Update**, **Save**), **Disconnect** and **Restore backup** write only the files
+  that reading pinned, after a native confirmation that names them and the key's label. Disconnect
+  keeps the edits you made since Connect; Restore backup puts the original bytes back. Pi's plugin
+  folder is not pinned yet: installing, updating and removing Pi's plugin act on the plugin folder
+  as the tool finds it when it runs ([README](README.md#pi)).
+- **Backups** keeps up to 10 manual backups of the client's files in the app's vault.
 - The key comes from the vault and goes to the tool on its private pipe. It is written into the
   client's own config file, and never into a launch's arguments or environment.
-- **Start CLI** (and Start app, where the client has one) starts the client through the launcher
+- **Start** (and the client's app, where it has one) starts the client through the launcher
   (`pluxy/execution`), after the launcher's native confirmation.
 
 ### Files each client's tool writes
@@ -68,7 +71,7 @@ original back. The exact keys each tool writes are in the [app tools README](../
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | `claude` in a terminal | Done | `claude-code` | Later | Later | Later |
 | Codex | `codex` in a terminal; Codex App: a program you name (Codex has no Linux app); `codex app-server daemon restart` | Done | `codex` | Later | Later | Later |
-| Claude Desktop | `claude-desktop`, run directly; **Create alias in core** adds a model alias in the core | Done | `claude-desktop` | Later | Later | Later |
+| Claude Desktop | `claude-desktop`, run directly; **Create alias in core** adds a model alias in the core | Done | `claude-desktop` | Setup and start: Later. The alias: Done, checked by `src-tauri/src/core_alias_native.rs` | Setup and start: Later. The alias: Done, checked by `src-tauri/src/core_alias_native.rs` | Later |
 | OpenCode | `opencode` in a terminal; OpenCode Desktop (`/opt/OpenCode/ai.opencode`) run directly | Done | `opencode` | Later | Later | Later |
 | Oh My Pi | `omp` in a terminal | Done | `omp` | Later | Later | Later |
 | Grok Build | `grok` in a terminal | Done | `grok` | Later | Later | Later |
@@ -138,9 +141,9 @@ so that is not support.
   is refused.
 - **Enabled:** no process until something calls it. The app starts it for a call and stops it 30
   seconds after its last call ends, with every process in its group. Opening the Launcher page, or
-  a client page with a Start CLI card (all but Claude Desktop's), asks the launcher for its terminal
-  list, so it starts `pluxy/execution` for that one call when the launcher is enabled. A client
-  page's Start CLI card asks again each time this device's packages change while it is open.
+  a client page whose Start starts in a terminal (all but Claude Desktop's), asks the launcher for
+  its terminal list, so it starts `pluxy/execution` for that one call when the launcher is enabled.
+  A client page's Start asks again each time this device's packages change while it is open.
 - **The usage hub** syncs only while its page is open. **The Codex session reader** reads only when
   its page asks.
 - **Launches are not the tool's.** A detached launch runs on after its tool stops and after the app
@@ -161,8 +164,8 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | --- | --- | --- | --- |
 | Claude Code, Codex, Claude Desktop, OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi setup and launch | Kept | The main clients | A window page and a tool for each ([above](#agent-clients)) |
 | Kimi Code, OpenClaw, ZCode, DeepSeek Harness, WorkBuddy, Antigravity CLI, Copilot CLI and VSCode Copilot setup and launch | Deferred | The rebuild covers the main clients first; these follow later | Not in the app yet |
-| Client setup inside WSL distributions | Deferred | Part of the later Windows work; the Claude Code page is the first, in part | On the Claude Code page: its Linux build runs in a WSL distribution and user the app knows (`pluxy/wsl` lists, checks and prepares them), and Start CLI starts it there; Apply does not work there yet (the vault's secrets and client keys are Linux only), and the other clients follow later ([README](README.md), "In WSL") |
-| Executable and folder overrides, terminal choice and recent working folders | Kept | They let a launch use the person's own install and folders | Each client's Start CLI and the Launcher page |
+| Client setup inside WSL distributions | Deferred | Part of the later Windows work; the Claude Code page is the first, in part | On the Claude Code page: its Linux build runs in a WSL distribution and user the app knows (`pluxy/wsl` lists, checks and prepares them), and **Start Claude Code** starts it there; **Connect** makes and keeps the key on Windows, and the tool's write in the distribution gets it after its confirmation; the other clients follow later ([README](README.md), "In WSL") |
+| Executable and folder overrides, terminal choice and recent working folders | Kept | They let a launch use the person's own install and folders | Each tool page's Start section and the Launcher page |
 | Showing, hiding, searching and resetting the list of clients | Kept | The person chooses which clients the navigation shows | The Manage Clients page ([README](README.md#manage-clients)): by default the navigation lists the clients whose tool is installed |
 | Codex's OAuth sign-in method and its OpenAI provider-identity switch | Deferred | Not built now: the core takes no ChatGPT login from a client, so the sign-in could not reach it. A later change could add a separate Codex profile for it | Codex uses a client key |
 | Codex model catalog fetched silently | Dropped | The catalog changes only when the person asks | **Import models from core** on the Codex page |
@@ -201,11 +204,11 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Managed-core recovery and the tray's Start, Stop and Restart | Kept | | [README](README.md#the-window-and-the-tray) |
 | One app per profile, startup preferences, close and window preferences | Kept | | [README](README.md#one-app-per-profile) |
 | Privacy mode | Kept | | [README](README.md#privacy-mode) |
-| Release feed, release notes, channels, signed app update and rollback | Kept | | [README](README.md#version-management-and-release-notes) |
+| Release feed, release notes, channels, signed app update and rollback | Kept | | [README](README.md#updates-and-release-notes) |
 | Portable replacement helper, upstream release addresses, the kernel version picker and preset mirrors | Dropped | The app updates only through the signed updater, from a feed address the person sets, which replaces the old app's core-version page (its `versions` page) | — |
 | MCP server and skills management | Dropped | The owner's decision; app packages are not agent skills | — |
 | Windows installers: the old app's NSIS setup and MSI package (`bundle.targets` `all`), which its updater ran to update | Replaced | One per-user NSIS setup program, no administrator rights; the MSI is dropped: it installs machine-wide, for managed deployment, which is not a goal. The app updates the installed program set itself and never runs the setup, and the setup refuses while the app runs instead of closing it by force. Test package only until release signing | [README](README.md#packages) |
-| Windows and macOS | Deferred | Later platform work. Some groundwork is merged (native key entry and confirmations, login items, one app per profile, test packages), but no native tool runs there | [README](README.md#platforms) |
+| Windows and macOS | Deferred | Later platform work. Some groundwork is merged (native key entry and confirmations, login items, one app per profile, test packages, and native tools in test builds, with the launcher and Claude Desktop's model alias checked there), but the clients and usage sources are later work there | [README](README.md#platforms) |
 
 ### Smaller old features not carried
 
@@ -222,7 +225,7 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Installed and version badges on clients | Deferred | The client list says which clients can be set up; badges for what is installed come later | [README](README.md#beginner-mode) |
 | Languages (English, Simplified and Traditional Chinese, Japanese) | Deferred | English only for now; the string layer is ready for more | — |
 | Allow-LAN switch | Deferred | Exposing a service that holds provider credentials to the network is a choice that should be a visible edit. By hand: set `listen` to `0.0.0.0:<port>` in the Source tab and restart; the management API stays on this machine | `listen` in core's config |
-| Usage page of core requests (ranges, trend, analysis, request details, data management) | Kept in part | Totals and chart are on the Dashboard, and the panel's Usage page lists requests with a CSV export; prices and the storage cap are dropped, and analysis is not built | Dashboard and Usage in the panel |
+| Usage page of core requests (ranges, trend, analysis, request details, data management) | Kept in part | Totals and chart are on Home, and Activity's Requests tab lists them and saves them as a spreadsheet, and its Usage tab adds them up over 24 hours, 7 days or 30 days by provider, model, account or key; prices and the storage cap are dropped, and analysis is not built | Home and Activity in the panel |
 
 ## Evidence
 

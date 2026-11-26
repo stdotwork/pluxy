@@ -17,7 +17,7 @@ import {
 
 const t = strings("routing", {
   title: "Routing",
-  short: "Route",
+  tab: "Order & fallback",
   tip: "Priority tiers and failover",
   refresh: "Refresh",
   loading: "Loading routing…",
@@ -442,9 +442,10 @@ export function RoutingPage() {
 }
 export const routingPage = (): PageDef => ({
   id: "routing",
-  group: "gateway",
+  dest: "accounts",
+  kind: "tab",
+  label: t("tab"),
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <RoutingPage />,
 });

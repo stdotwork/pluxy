@@ -4,7 +4,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 
 /** A running core. Its fields are filled once the spec's `beforeAll` has started it. */
 export interface Core {
@@ -102,8 +102,99 @@ export async function signIn(page: Page, core: Core) {
   await expect(nav(page)).toBeVisible();
 }
 
-/** Goes to a page by its navigation entry and waits for its heading. */
+/** The tabs a destination shows in the header strip. */
+export const headerTabs = (page: Page) => page.locator('[data-part="header-tabs"]');
+
+/** The topics listed beside a Settings page. */
+export const topics = (page: Page) => page.locator('[data-part="topics"]');
+
+/** The page's heading, in the header strip. */
+export const pageTitle = (page: Page) => page.locator('[data-part="page-title"]');
+
+/**
+ * Where the pages that are not a Settings topic sit: the destination to choose, and the tab or
+ * link to choose after it. A name that is not listed is a topic under Settings.
+ */
+const PLACES: Record<string, { dest: string; tab?: string; link?: string }> = {
+  Home: { dest: "Home" },
+  Accounts: { dest: "Accounts" },
+  "Add Account": { dest: "Accounts", link: "Add an account" },
+  Routing: { dest: "Accounts", tab: "Order & fallback" },
+  Requests: { dest: "Activity" },
+  Usage: { dest: "Activity", tab: "Usage" },
+  Tools: { dest: "Tools" },
+};
+
+/**
+ * Goes to a page by its title, the way a person does: its destination in the navigation, then
+ * its tab, its topic or the link that leads to it. Waits for its heading.
+ */
 export async function goTo(page: Page, name: string) {
-  await nav(page).getByRole("link", { name }).click();
+  const place = PLACES[name] ?? { dest: "Settings" };
+  const destination = nav(page).getByRole("link", { name: place.dest, exact: true });
+  if (place.tab) {
+    // Already among the destination's tabs: the tab alone, as a person would.
+    const tab = headerTabs(page).getByRole("link", { name: place.tab, exact: true });
+    if (!(await tab.isVisible())) await destination.click();
+    await tab.click();
+  } else if (place.link) {
+    await destination.click();
+    await page.locator('[data-part="header-actions"]').getByRole("link", { name: place.link }).click();
+  } else if (place.dest === "Settings") {
+    const topic = topics(page).getByRole("link", { name, exact: true });
+    // In a narrow window the topics are a select above the page.
+    const select = page.locator('[data-part="topics-select"] select');
+    if (!(await topic.isVisible()) && !(await select.isVisible())) {
+      await destination.click();
+      // The topics draw after the destination opens: wait for the list or the select.
+      await expect(topic.or(select)).toBeVisible();
+    }
+    if (await select.isVisible()) await select.selectOption({ label: name });
+    else await topic.click();
+  } else await destination.click();
   await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+}
+
+/** The titles of core's pages, by page ID. */
+const TITLES: Record<string, string> = {
+  status: "Home",
+  accounts: "Accounts",
+  "add-account": "Add Account",
+  routing: "Routing",
+  usage: "Requests",
+  "activity/usage": "Usage",
+  settings: "General",
+  setup: "Set up pluxy",
+  config: "Config Panel",
+  system: "System",
+  extensions: "Extensions",
+  themes: "Themes",
+  logs: "Logs Viewer",
+  tools: "Tools",
+};
+
+/** Goes to one of core's pages by its ID, as goTo does by title. */
+export async function goToId(page: Page, id: string) {
+  const title = TITLES[id];
+  if (!title) throw new Error(`goToId: no core page has the ID ${id}`);
+  await goTo(page, title);
+}
+
+/**
+ * An account's row on All accounts (the shared AccountRow), by the account's ID: its name's link
+ * leads to #/accounts/<id>. A row shows the account's name, which is its label when it has one.
+ */
+export function accountRow(scope: Page | Locator, id: string) {
+  const page = "frames" in scope ? scope : scope.page();
+  return scope
+    .locator('[data-part="account-row"]')
+    .filter({ has: page.locator(`a.account-name[href="#/accounts/${encodeURIComponent(id)}"]`) });
+}
+
+/** Opens an account's own page from All accounts, the way a person does: by its name's link. */
+export async function openAccount(page: Page, id: string) {
+  await goTo(page, "Accounts");
+  await accountRow(page, id).locator("a.account-name").click();
+  await expect(page).toHaveURL(new RegExp(`#/accounts/${encodeURIComponent(id)}$`));
+  await expect(page.locator('[data-part="account-page"]')).toBeVisible();
 }

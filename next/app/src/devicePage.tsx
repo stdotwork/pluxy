@@ -1,169 +1,168 @@
-// The app's page for extensions on this device: app packages installed on this computer, apart
-// from the connected core's Extensions page. The person installs a package from a file they
-// choose in the native file chooser or from a registry named in device-registries.json, and
-// enables, disables, rolls back or removes it. A package is Unverified unless a curated
-// first-party key signed it; only such a package may be a native tool, which has full access to
-// the person's user account and is enabled only through a native confirmation. A curated web
-// package's calls of native tools' operations (its imports) are allowed only through a native
-// confirmation too, and can be revoked here. A web package signed by a signer the person approved
-// can be granted files and folders it declares (Access); each grant asks natively.
+// The app's page for add-ons on this computer: pages and coding-tool add-ons installed here, apart
+// from pluxy's own extensions. The person installs one from a file they choose in the native file
+// chooser or from a source named in device-registries.json, and turns it on or off, goes back to
+// the copy before, or removes it. An add-on is Unverified unless pluxy's own publisher key signed
+// it; only a verified one may be a coding-tool add-on, which runs as the person and is turned on
+// only through a native confirmation. A verified page add-on's use of coding-tool add-ons
+// (tool access) is allowed only through a native confirmation too, and can be taken back here. A
+// page add-on whose publisher the person approved can be given files and folders it declares; each
+// one asks natively.
 
 import type { ComponentChildren } from "preact";
-import { useState } from "preact/hooks";
+import { useLayoutEffect, useRef, useState } from "preact/hooks";
+import { Phases } from "../../ui/kit/parts";
 import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
 import {
   Badge,
   Button,
-  Card,
   ConfirmButton,
-  Detail,
   Empty,
   Facts,
   List,
-  MasterDetail,
+  type Loaded,
   Notice,
   PageHead,
-  StateBadge,
   useAction,
   useLoad,
   when,
 } from "../../ui/kit/ui";
-import { type AccessGrant, access, type DevicePackage, type DeviceRelease, device } from "./device";
+import { Section } from "./clientPage";
+import {
+  type AccessGrant,
+  access,
+  type DevicePackage,
+  type DeviceRegistry,
+  type DeviceRelease,
+  device,
+} from "./device";
+import { askFirst, Intro } from "./pageBits";
 
-const t = strings("device", {
-  title: "Device extensions",
-  short: "Device",
-  tip: "Extension pages installed on this computer",
+const t = strings("addons", {
+  title: "Add-ons",
+  tip: "Pages and coding-tool add-ons installed on this computer",
+  reading: "Reading add-ons…",
+  readFailed: "Could not read the add-ons on this computer",
   intro:
-    "Local extensions on this computer, separate from core's. Pages get no app commands, settings, or files unless granted. Native tools come from curated sources and need native confirmation.",
-  safeMode:
-    "Safe mode: local pages and native tools are off. Disable or remove packages here, then restart without --safe-mode.",
-  installFile: "Install from file…",
+    "Add-ons add pages and coding-tool connections to this app. They run on this computer, apart from pluxy's own extensions.",
   refresh: "Refresh",
-  extension: "Extension",
+  installFile: "Install from file…",
+  safeMode:
+    "Safe mode is on: add-on pages and coding-tool add-ons are paused. Turn off or remove the one that caused trouble, then quit the app and open it again the usual way.",
+  installed: "Installed",
+  name: "Name",
   version: "Version",
   trust: "Trust",
-  source: "Source",
   state: "State",
+  verified: "Verified",
   unverified: "Unverified",
-  unverifiedWhy:
-    "Not from a curated source, so the publisher is unverified. Pages get no app commands, settings, or files unless you approve its signer.",
-  curated: "Curated",
-  curatedWhy:
-    "Signed by a curated first-party key and installed from the curated source that key belongs to.",
-  kind: "Kind",
-  web: "Pages",
-  native: "Native tool",
-  fullAccess:
-    "This native tool has full access to your user account. Enabling it opens a native confirmation that shows its source, digest and signer.",
-  operations: "Operations",
-  imports: "Imports",
-  importValue: "{package} (contract {contract}, {required}): {operations}",
-  required: "required",
-  optional: "optional",
-  exports: "Exports",
-  exportsValue: "contract {contract}: {operations}",
-  nativeImports: "Native imports",
-  importsAllowed: "allowed for this release",
-  importsNotAllowed: "not allowed",
-  importsWhy:
-    "This package calls native tools. pluxy blocks calls until you allow them in a native confirmation; writes, launches, and content views still ask each time.",
-  importsUnverified: "Only curated packages can call native tools, so pluxy blocks these calls.",
-  allowImports: "Allow native imports…",
-  revokeImports: "Revoke native imports",
-  local: "File {name}",
-  registry: "Registry {name}",
-  registryAt: "Registry {name} ({index})",
+  on: "On",
+  off: "Turned off",
+  none: "No add-ons installed on this computer.",
+  choose: "Choose an add-on to see its details and what you can do with it.",
+  close: "Close",
+  toolKind: "Coding-tool add-on",
+  toolKindAbout:
+    "Runs as you, with your permissions. Turning it on opens a confirmation window that shows who published it.",
+  pageKind: "Page add-on",
+  pageKindAbout: "Its pages get no settings, files or tools unless you allow them.",
+  verifiedAbout: "Signed by pluxy's publisher and installed from its source.",
+  unverifiedAbout: "Not from a verified source, so the publisher is not checked.",
+  fromSource: "From {source}",
+  fromFile: "Installed from a file",
+  turnOn: "Turn on",
+  turnOff: "Turn off",
+  allowTools: "Allow tool access…",
+  removeTools: "Remove tool access",
+  toolsAbout: "Its pages ask to use coding-tool add-ons. pluxy blocks that until you allow it.",
+  toolsAllowed: "Its pages may use coding-tool add-ons.",
+  toolsBlocked: "Its pages ask to use coding-tool add-ons, but only verified add-ons may.",
+  goBack: "Go back to {version}",
+  remove: "Remove",
+  files: "Files",
+  approved: "Publisher approved",
+  notApproved: "Publisher not approved",
+  approve: "Approve publisher…",
+  cannotGive: "Files cannot be given to this add-on: {why}",
+  unsigned: "it is not signed.",
+  signatureUnusable: "its signature cannot be used for files.",
+  chooseFile: "Choose a file…",
+  chooseFolder: "Choose a folder…",
+  chooseAgain: "Choose again…",
+  removeFile: "Remove",
+  untilQuit: "Until the app quits",
+  changed: "File changed",
+  otherVersion: "Given to another version",
+  sendWarning: "An add-on's pages can send what they read anywhere they can reach.",
+  technical: "Technical details",
   digest: "Digest",
-  installed: "Installed",
-  contracts: "Formats",
-  contractsValue: "manifest {manifest}, app {app}, pages {ui}; host contract {host}",
+  installedOn: "Installed",
+  formats: "Formats",
+  formatsValue: "manifest {manifest}, app {app}, pages {ui}; host contract {host}",
   pages: "Pages",
-  lastGood: "Last good release",
-  resources: "Asks for files",
-  resourcesValue: "{ids}",
-  access: "Access",
+  asksFiles: "Asks for files",
   signer: "Signer",
   signerValue: "{publisher} key {key}",
   signerKey: "Public key",
-  approved: "approved",
-  notApproved: "not approved",
-  unsigned: "Unsigned: you cannot grant files to this package.",
-  approveSigner: "Approve signer…",
-  signerWhy:
-    "Approving a signer lets packages it signs from this source ask you for files and folders. A signature says who signed a package, not that it is safe.",
-  resourceKind: "{kind}: {ops}",
-  file: "file",
-  folder: "folder",
-  notGranted: "not granted",
-  grantedTo: "{selected}",
-  grantedVia: "{selected} → {target}",
-  sessionOnly: "until the app quits",
-  changedBadge: "changed: grant again",
-  otherRelease: "granted to another release",
-  grant: "Grant…",
-  grantAgain: "Grant again…",
-  revoke: "Revoke",
-  readWarning: "A package's pages can send what they read anywhere they can reach.",
-  settings: "Settings",
-  settingsValue: "declared, not available on this device yet",
-  enabled: "enabled",
-  disabled: "disabled",
-  enable: "Enable",
-  disable: "Disable",
-  rollBack: "Roll back to {version}",
-  remove: "Remove",
-  noInstalled: "No extensions installed on this device. Install one below or use Install from file….",
-  loading: "Loading…",
-  installedList: "Extensions on this device",
-  available: "Not installed",
-  noRegistries: "No registries configured. Add one to device-registries.json in the app's config folder.",
-  registryError: "Registry {name}: {error}",
-  nothingMore: "Nothing more to install from these registries.",
-  availableList: "Extensions not installed",
+  signerSource: "Signer's source",
+  operations: "Operations",
+  imports: "Uses",
+  importValue: "{package} (contract {contract}, {required}): {operations}",
+  required: "required",
+  optional: "optional",
+  exports: "Offers",
+  exportsValue: "contract {contract}: {operations}",
+  lastGood: "Copy kept before",
+  available: "Available to install",
+  checking: "Checking add-on sources…",
+  couldNotRead: "Could not read {source}: {reason}",
+  noSources:
+    "No add-on sources are set up in this copy of the app. You can still install an add-on file with Install from file….",
+  allInstalled: "Everything these sources offer is installed.",
   install: "Install",
   update: "Update to {version}",
-  refused: "Refused",
+  blocked: "Blocked",
+  source: "Source",
 });
 
 function sourceText(p: DevicePackage): string {
-  return p.source.kind === "local"
-    ? t("local", { name: p.source.name })
-    : p.source.index
-      ? t("registryAt", { name: p.source.name, index: p.source.index })
-      : t("registry", { name: p.source.name });
+  if (p.source.kind === "local") return t("fromFile");
+  return t("fromSource", { source: p.source.index ? `${p.source.name} (${p.source.index})` : p.source.name });
 }
 
-function trustBadge(p: DevicePackage) {
-  return p.trust === "curated" ? (
-    <Badge tone="ok">{t("curated")}</Badge>
+const trustBadge = (p: DevicePackage) =>
+  p.trust === "curated" ? (
+    <Badge tone="ok">{t("verified")}</Badge>
   ) : (
     <Badge tone="warn">{t("unverified")}</Badge>
   );
-}
 
-function releaseFacts(r: DeviceRelease): [string, ComponentChildren][] {
+const stateBadge = (p: DevicePackage) =>
+  p.enabled ? <Badge tone="ok">{t("on")}</Badge> : <Badge tone="muted">{t("off")}</Badge>;
+
+/** Digest, formats, operations, imports and exports: every fact stays one click away. */
+function technicalFacts(r: DeviceRelease, p: DevicePackage): [string, ComponentChildren][] {
   return [
     [t("version"), <span class="mono">{r.version}</span>],
     [t("digest"), <span class="mono">{r.sha256.slice(0, 16)}</span>],
-    [t("installed"), when(r.installed_at)],
+    [t("installedOn"), when(r.installed_at)],
     [
-      t("contracts"),
-      t("contractsValue", {
+      t("formats"),
+      t("formatsValue", {
         manifest: r.manifest_version,
         app: r.app_version,
         ui: r.ui_version ?? "-",
         host: r.host_versions.join(", "),
       }),
     ],
-    [t("pages"), r.pages.map((p) => p.title).join(", ") || undefined],
-    [t("resources"), r.resources.length ? t("resourcesValue", { ids: r.resources.join(", ") }) : undefined],
-    [t("settings"), r.settings ? t("settingsValue") : undefined],
+    [t("pages"), r.pages.map((x) => x.title).join(", ") || undefined],
+    [t("asksFiles"), r.resources.join(", ") || undefined],
     [
       t("signer"),
       r.signer ? t("signerValue", { publisher: r.signer.publisher, key: r.signer.key_id }) : undefined,
     ],
+    [t("signerKey"), r.signer && <span class="mono">{r.signer.public_key}</span>],
+    [t("signerSource"), r.signer && <span class="mono">{r.signer.source}</span>],
     [
       t("operations"),
       r.operations.map(([id, what, effect]) => `${id}: ${what} (${effect})`).join("; ") || undefined,
@@ -187,17 +186,12 @@ function releaseFacts(r: DeviceRelease): [string, ComponentChildren][] {
         ? t("exportsValue", { contract: r.exports.contract, operations: r.exports.operations.join(", ") })
         : undefined,
     ],
+    [t("lastGood"), p.last_good && <span class="mono">{p.last_good.version}</span>],
   ];
 }
 
-function grantText(g: AccessGrant): string {
-  return g.selected === g.target
-    ? t("grantedTo", { selected: g.selected })
-    : t("grantedVia", { selected: g.selected, target: g.target });
-}
-
-/** The package's signer, and each resource it declares with what is granted. */
-function AccessDetail(props: { p: DevicePackage }) {
+/** What a page add-on may be given: who published it, and each file or folder it asks for. */
+function Files(props: { p: DevicePackage }) {
   const { p } = props;
   const grants = useLoad(access.list);
   const act = useAction(grants.reload);
@@ -205,123 +199,135 @@ function AccessDetail(props: { p: DevicePackage }) {
   const signer = p.active.signer?.access ? p.active.signer : null;
   if (p.active.declared.length === 0) return null;
   const mine = (grants.data?.grants ?? []).filter((g) => g.package === p.id);
+  const rows = p.active.declared
+    .map((r) => ({ r, g: mine.find((x) => x.resource === r.id) }))
+    .filter(({ g }) => signer?.approved || g);
   return (
-    <>
-      <h3>{t("access")}</h3>
-      <Facts
-        rows={[
-          [
-            t("signer"),
-            signer ? (
-              <>
-                {t("signerValue", { publisher: signer.publisher, key: signer.key_id })}{" "}
-                <Badge tone={signer.approved ? "ok" : "warn"}>
-                  {signer.approved ? t("approved") : t("notApproved")}
-                </Badge>
-              </>
-            ) : (
-              t("unsigned")
-            ),
-          ],
-          [t("source"), signer && <span class="mono">{signer.source}</span>],
-          [t("signerKey"), signer && <span class="mono">{signer.public_key}</span>],
-          ...p.active.declared.map((r): [string, ComponentChildren] => {
-            const g = mine.find((x) => x.resource === r.id);
-            const current = g && g.sha256 === p.active.sha256;
-            return [
-              `${r.id} (${t("resourceKind", { kind: r.kind === "file" ? t("file") : t("folder"), ops: r.operations.join(", ") })})`,
-              <>
-                {g ? (
-                  <span class="mono">{grantText(g)}</span>
-                ) : grants.data ? (
-                  <span class="muted">{t("notGranted")}</span>
-                ) : (
-                  grants.phase === "loading" && <span class="muted">{t("loading")}</span>
-                )}{" "}
-                {g?.session_only && <Badge tone="warn">{t("sessionOnly")}</Badge>}{" "}
-                {g?.changed && <Badge tone="danger">{t("changedBadge")}</Badge>}{" "}
-                {g && !current && <Badge tone="warn">{t("otherRelease")}</Badge>}{" "}
+    <div class="addon-block">
+      <h4>{t("files")}</h4>
+      {signer ? (
+        <p class="addon-line">
+          <Badge tone={signer.approved ? "ok" : "warn"}>
+            {signer.approved ? t("approved") : t("notApproved")}
+          </Badge>
+          <span class="muted">{t("signerValue", { publisher: signer.publisher, key: signer.key_id })}</span>
+          {!signer.approved && (
+            <Button disabled={act.busy} onClick={() => act.run(askFirst(() => access.approveSigner(p.id)))}>
+              {t("approve")}
+            </Button>
+          )}
+        </p>
+      ) : (
+        <p class="muted">{t("cannotGive", { why: t(p.active.signer ? "signatureUnusable" : "unsigned") })}</p>
+      )}
+      {rows.length > 0 && (
+        <ul class="addon-grants">
+          {rows.map(({ r, g }) => (
+            <li key={r.id}>
+              <span class="mono">{r.id}</span>
+              {g && (
+                <span class="mono addon-path">
+                  {g.selected === g.target ? g.selected : `${g.selected} → ${g.target}`}
+                </span>
+              )}
+              {g?.session_only && <Badge tone="warn">{t("untilQuit")}</Badge>}
+              {g?.changed && <Badge tone="danger">{t("changed")}</Badge>}
+              {g && g.sha256 !== p.active.sha256 && <Badge tone="warn">{t("otherVersion")}</Badge>}
+              <span class="actions">
                 {signer?.approved && (
-                  <Button disabled={act.busy} onClick={() => act.run(() => access.grant(p.id, r.id))}>
-                    {g ? t("grantAgain") : t("grant")}
+                  <Button
+                    disabled={act.busy}
+                    onClick={() => act.run(askFirst(() => access.grant(p.id, r.id)))}
+                  >
+                    {g ? t("chooseAgain") : t(r.kind === "file" ? "chooseFile" : "chooseFolder")}
                   </Button>
-                )}{" "}
+                )}
                 {g && (
                   <Button
                     variant="quiet"
                     disabled={act.busy}
-                    onClick={() => act.run(() => access.revoke(g.id))}
+                    label={`${t("removeFile")} ${r.id}`}
+                    onClick={() => act.run(() => access.revoke((g as AccessGrant).id))}
                   >
-                    {t("revoke")}
+                    {t("removeFile")}
                   </Button>
                 )}
-              </>,
-            ];
-          }),
-        ]}
-      />
-      <p class="muted">{signer?.approved ? t("readWarning") : t("signerWhy")}</p>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {signer?.approved && <p class="muted">{t("sendWarning")}</p>}
       {(grants.error ?? act.error) && <Notice tone="danger">{grants.error ?? act.error}</Notice>}
       {grants.data?.warning && <Notice tone="warn">{grants.data.warning}</Notice>}
-      {signer && !signer.approved && (
-        <div class="actions">
-          <Button disabled={act.busy} onClick={() => act.run(() => access.approveSigner(p.id))}>
-            {t("approveSigner")}
-          </Button>
-        </div>
-      )}
-    </>
+    </div>
   );
 }
 
-function PackageDetail(props: { p: DevicePackage; onClose: () => void; onChanged: () => void }) {
+/** The chosen add-on, under the list: what it is, what it may do, and what the person can do with it. */
+function AddonDetail(props: { p: DevicePackage; onClose: () => void; onChanged: () => void }) {
   const { p } = props;
-  const webImports = p.tier === "web" && p.active.imports.length > 0;
+  const ref = useRef<HTMLElement>(null);
+  useLayoutEffect(() => ref.current?.focus(), [p.id]);
+  const tool = p.tier === "native";
+  const usesTools = p.tier === "web" && p.active.imports.length > 0;
   const act = useAction(props.onChanged);
   const remove = useAction(() => {
     props.onClose();
     props.onChanged();
   });
   return (
-    <Detail title={p.id} onClose={props.onClose}>
-      <Facts
-        rows={[
-          [t("trust"), trustBadge(p)],
-          [t("kind"), t(p.tier === "native" ? "native" : "web")],
-          [t("source"), sourceText(p)],
-          [t("state"), <StateBadge state={p.enabled ? "enabled" : "disabled"} />],
-          ...releaseFacts(p.active),
-          [t("lastGood"), p.last_good && <span class="mono">{p.last_good.version}</span>],
-          [
-            t("nativeImports"),
-            webImports ? t(p.imports_allowed ? "importsAllowed" : "importsNotAllowed") : undefined,
-          ],
-        ]}
-      />
-      <p class="muted">{t(p.trust === "curated" ? "curatedWhy" : "unverifiedWhy")}</p>
-      {p.tier === "native" && <Notice tone="warn">{t("fullAccess")}</Notice>}
-      {webImports && <p class="muted">{t(p.trust === "curated" ? "importsWhy" : "importsUnverified")}</p>}
-      {p.tier === "web" && <AccessDetail p={p} />}
+    <section
+      class="addon-detail"
+      aria-label={p.id}
+      tabIndex={-1}
+      ref={ref}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && !e.defaultPrevented) props.onClose();
+      }}
+    >
+      <header class="addon-detail-head">
+        <h3 class="mono">{p.id}</h3>
+        <Button variant="ghost" label={t("close")} onClick={props.onClose}>
+          ✕
+        </Button>
+      </header>
+      <div class="addon-block">
+        <p>
+          <strong>{t(tool ? "toolKind" : "pageKind")}</strong>
+        </p>
+        <p class="muted">{t(tool ? "toolKindAbout" : "pageKindAbout")}</p>
+        <p class="addon-line">
+          {trustBadge(p)}
+          <span class="muted">{t(p.trust === "curated" ? "verifiedAbout" : "unverifiedAbout")}</span>
+        </p>
+        <p class="muted">{sourceText(p)}</p>
+        {usesTools && (
+          <p class="muted">
+            {t(p.trust !== "curated" ? "toolsBlocked" : p.imports_allowed ? "toolsAllowed" : "toolsAbout")}
+          </p>
+        )}
+      </div>
       {(act.error ?? remove.error) && <Notice tone="danger">{act.error ?? remove.error}</Notice>}
       <div class="actions">
         <Button
           variant={p.enabled ? "quiet" : "primary"}
           disabled={act.busy}
-          onClick={() => act.run(() => device.setEnabled(p.id, !p.enabled))}
+          onClick={() => act.run(askFirst(() => device.setEnabled(p.id, !p.enabled)))}
         >
-          {p.enabled ? t("disable") : t("enable")}
+          {p.enabled ? t("turnOff") : t("turnOn")}
         </Button>
-        {webImports && p.trust === "curated" && (
+        {usesTools && p.trust === "curated" && (
           <Button
             disabled={act.busy}
-            onClick={() => act.run(() => device.setImports(p.id, !p.imports_allowed))}
+            onClick={() => act.run(askFirst(() => device.setImports(p.id, !p.imports_allowed)))}
           >
-            {p.imports_allowed ? t("revokeImports") : t("allowImports")}
+            {p.imports_allowed ? t("removeTools") : t("allowTools")}
           </Button>
         )}
         {p.last_good && (
           <Button disabled={act.busy} onClick={() => act.run(() => device.rollback(p.id))}>
-            {t("rollBack", { version: p.last_good.version })}
+            {t("goBack", { version: p.last_good.version })}
           </Button>
         )}
         <ConfirmButton
@@ -331,7 +337,12 @@ function PackageDetail(props: { p: DevicePackage; onClose: () => void; onChanged
           {t("remove")}
         </ConfirmButton>
       </div>
-    </Detail>
+      {p.tier === "web" && <Files p={p} />}
+      <details class="page-details">
+        <summary>{t("technical")}</summary>
+        <Facts rows={technicalFacts(p.active, p)} />
+      </details>
+    </section>
   );
 }
 
@@ -343,8 +354,13 @@ interface Offer {
   installed?: DevicePackage;
 }
 
-function Available(props: { installed: DevicePackage[]; onInstalled: () => void }) {
-  const registries = useLoad(device.registries);
+/** What the sources offer that is not installed, or is installed from there and has a newer version. */
+function Available(props: {
+  registries: Loaded<DeviceRegistry[]>;
+  installed: DevicePackage[];
+  onInstalled: () => void;
+}) {
+  const { registries } = props;
   const install = useAction(props.onInstalled);
   const offers: Offer[] = [];
   for (const r of registries.data ?? []) {
@@ -358,63 +374,67 @@ function Available(props: { installed: DevicePackage[]; onInstalled: () => void 
   }
   const broken = (registries.data ?? []).filter((r) => r.error);
   return (
-    <Card
-      title={t("available")}
-      actions={
-        <Button onClick={registries.reload} disabled={registries.loading}>
-          {t("refresh")}
-        </Button>
-      }
-    >
-      {registries.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
-      {registries.error && <Notice tone="danger">{registries.error}</Notice>}
-      {broken.map((r) => (
-        <Notice key={r.name} tone="warn">
-          {t("registryError", { name: r.name, error: r.error ?? "" })}
-        </Notice>
-      ))}
-      {install.error && <Notice tone="danger">{install.error}</Notice>}
-      {registries.data?.length === 0 ? (
-        <Empty>{t("noRegistries")}</Empty>
-      ) : registries.data && offers.length === 0 ? (
-        <Empty>{t("nothingMore")}</Empty>
-      ) : (
-        <List<Offer>
-          label={t("availableList")}
-          items={offers}
-          id={(o) => `${o.registry}:${o.id}`}
-          columns={[
-            { label: t("extension"), value: (o) => o.id, mono: true },
-            { label: t("version"), value: (o) => o.version, mono: true },
-            { label: t("source"), value: (o) => t("registry", { name: o.registry }) },
-            {
-              label: t("install"),
-              value: (o) =>
-                o.refused ? (
-                  <span class="muted" title={o.refused}>
-                    {t("refused")}
-                  </span>
-                ) : (
-                  <Button
-                    disabled={install.busy}
-                    onClick={() => install.run(() => device.install(o.registry, o.id, o.version))}
-                  >
-                    {o.installed ? t("update", { version: o.version }) : t("install")}
-                  </Button>
-                ),
-            },
-          ]}
-        />
-      )}
-    </Card>
+    <Section title={t("available")}>
+      <div class="addon-section-body">
+        {registries.phase === "loading" && (
+          <p class="muted" role="status">
+            {t("checking")}
+          </p>
+        )}
+        {registries.error && <Notice tone="danger">{registries.error}</Notice>}
+        {broken.map((r) => (
+          <Notice key={r.name} tone="warn">
+            {t("couldNotRead", { source: r.name, reason: r.error ?? "" })}
+          </Notice>
+        ))}
+        {install.error && <Notice tone="danger">{install.error}</Notice>}
+        {registries.data?.length === 0 ? (
+          <p class="muted">{t("noSources")}</p>
+        ) : registries.data && offers.length === 0 ? (
+          broken.length === 0 && <p class="muted">{t("allInstalled")}</p>
+        ) : (
+          offers.length > 0 && (
+            <List<Offer>
+              label={t("available")}
+              items={offers}
+              id={(o) => `${o.registry}:${o.id}`}
+              columns={[
+                { label: t("name"), value: (o) => o.id, mono: true },
+                { label: t("version"), value: (o) => o.version, mono: true },
+                { label: t("source"), value: (o) => o.registry },
+                {
+                  label: "",
+                  value: (o) =>
+                    o.refused ? (
+                      <span class="addon-blocked">
+                        <strong>{t("blocked")}</strong>
+                        <span class="muted">{o.refused}</span>
+                      </span>
+                    ) : (
+                      <Button
+                        disabled={install.busy}
+                        onClick={() => install.run(() => device.install(o.registry, o.id, o.version))}
+                      >
+                        {o.installed ? t("update", { version: o.version }) : t("install")}
+                      </Button>
+                    ),
+                },
+              ]}
+            />
+          )
+        )}
+      </div>
+    </Section>
   );
 }
 
 export function DevicePage(props: { onChanged: () => void }) {
   const catalog = useLoad(device.list);
+  const registries = useLoad(device.registries);
   const [selected, setSelected] = useState<string>();
   const changed = () => {
     catalog.reload();
+    registries.reload();
     props.onChanged();
   };
   const file = useAction(changed);
@@ -426,67 +446,84 @@ export function DevicePage(props: { onChanged: () => void }) {
         title={t("title")}
         actions={
           <>
-            <Button onClick={catalog.reload} disabled={catalog.loading}>
+            <Button
+              onClick={() => {
+                catalog.reload();
+                registries.reload();
+              }}
+              disabled={catalog.loading || registries.loading}
+            >
               {t("refresh")}
             </Button>
-            <Button variant="primary" disabled={file.busy} onClick={() => file.run(device.installFile)}>
+            <Button
+              variant="primary"
+              disabled={file.busy}
+              onClick={() => file.run(askFirst(device.installFile))}
+            >
               {t("installFile")}
             </Button>
           </>
         }
       />
-      <p class="muted">{t("intro")}</p>
-      {catalog.data?.safe_mode && <Notice tone="warn">{t("safeMode")}</Notice>}
-      {catalog.data?.warning && <Notice tone="warn">{catalog.data.warning}</Notice>}
-      {catalog.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
-      {(catalog.error ?? file.error) && <Notice tone="danger">{catalog.error ?? file.error}</Notice>}
-      <div class="stack">
-        <MasterDetail
-          list={
-            catalog.data && list.length === 0 ? (
-              <Empty>{t("noInstalled")}</Empty>
-            ) : (
-              <List<DevicePackage>
-                label={t("installedList")}
-                items={list}
-                id={(p) => p.id}
-                selected={selected}
-                onSelect={setSelected}
-                columns={[
-                  { label: t("extension"), value: (p) => p.id, mono: true },
-                  { label: t("version"), value: (p) => p.active.version, mono: true },
-                  { label: t("trust"), value: trustBadge },
-                  { label: t("source"), value: sourceText },
-                  {
-                    label: t("state"),
-                    value: (p) => <StateBadge state={p.enabled ? "enabled" : "disabled"} />,
-                  },
-                ]}
-              />
-            )
-          }
-          detail={
-            chosen && (
-              <PackageDetail
-                key={`${chosen.id} ${chosen.active.sha256} ${chosen.enabled} ${chosen.imports_allowed} ${chosen.active.signer?.approved}`}
-                p={chosen}
-                onClose={() => setSelected(undefined)}
-                onChanged={changed}
-              />
-            )
-          }
-        />
-        <Available installed={list} onInstalled={changed} />
-      </div>
+      <Intro>{t("intro")}</Intro>
+      <Phases
+        load={catalog}
+        loading={t("reading")}
+        failed={{ title: t("readFailed") }}
+        isEmpty={() => false}
+        empty={null}
+      >
+        {(c) => (
+          <div class="addons">
+            {c.safe_mode && <Notice tone="warn">{t("safeMode")}</Notice>}
+            {c.warning && <Notice tone="warn">{c.warning}</Notice>}
+            {file.error && <Notice tone="danger">{file.error}</Notice>}
+            <Section title={t("installed")}>
+              <div class="addon-section-body">
+                {list.length === 0 ? (
+                  <Empty>{t("none")}</Empty>
+                ) : (
+                  <>
+                    <p class="muted">{t("choose")}</p>
+                    <List<DevicePackage>
+                      label={t("installed")}
+                      items={list}
+                      id={(p) => p.id}
+                      selected={selected}
+                      onSelect={setSelected}
+                      columns={[
+                        { label: t("name"), value: (p) => p.id, mono: true },
+                        { label: t("version"), value: (p) => p.active.version, mono: true },
+                        { label: t("trust"), value: trustBadge },
+                        { label: t("state"), value: stateBadge },
+                      ]}
+                    />
+                  </>
+                )}
+                {chosen && (
+                  <AddonDetail
+                    key={`${chosen.id} ${chosen.active.sha256} ${chosen.enabled} ${chosen.imports_allowed} ${chosen.active.signer?.approved}`}
+                    p={chosen}
+                    onClose={() => setSelected(undefined)}
+                    onChanged={changed}
+                  />
+                )}
+              </div>
+            </Section>
+            <Available registries={registries} installed={list} onInstalled={changed} />
+          </div>
+        )}
+      </Phases>
     </>
   );
 }
 
 export const devicePage = (onChanged: () => void): PageDef => ({
   id: "device",
-  group: "control",
+  dest: "settings",
+  kind: "topic",
+  section: "device",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <DevicePage onChanged={onChanged} />,
 });

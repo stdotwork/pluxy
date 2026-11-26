@@ -301,12 +301,15 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 	}
 	r.Credential = c
 	r.Disabled = boolean(m["disabled"])
-	r.Label = text(m, "label")
-	if r.Label == "" {
-		r.Label = text(m, "email")
+	// The file's own label is a name a person gave the account; its e-mail (Devin's: its user
+	// name) is the provider's label, which the account shows when the file gives no label.
+	r.ProviderLabel = text(m, "email")
+	if r.ProviderLabel == "" && typ == "devin" {
+		r.ProviderLabel = text(m, "user_name")
 	}
-	if r.Label == "" && typ == "devin" {
-		r.Label = text(m, "user_name")
+	r.Label, r.Named = text(m, "label"), true
+	if r.Label == "" {
+		r.Label, r.Named = r.ProviderLabel, false
 	}
 	r.Account = route.Account{Priority: number(m["priority"])}
 	if _, ok := m["weight"]; ok {

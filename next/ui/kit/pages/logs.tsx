@@ -23,8 +23,7 @@ import {
 
 const t = strings("logs", {
   title: "Logs Viewer",
-  short: "Logs",
-  tip: "Request tracing",
+  tip: "pluxy's log and failed requests",
   core: "Core logs",
   content: "Log content",
   continuous: "Continuous reading",
@@ -49,8 +48,7 @@ const t = strings("logs", {
   actions: "Actions",
   open: "Open",
   download: "Download",
-  downloadReal:
-    "Privacy mode hides names on this page only. A downloaded log holds the text as core wrote it.",
+  downloadReal: "Names are hidden on this page only. A downloaded log holds the text as core wrote it.",
   errorDetail: "Error request log details",
   requestId: "Trace ID",
   request: "Request log",
@@ -466,9 +464,9 @@ export function LogsPage() {
 
 export const logsPage = (): PageDef => ({
   id: "logs",
-  group: "observe",
+  dest: "settings",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <LogsPage />,
 });

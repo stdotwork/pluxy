@@ -76,6 +76,54 @@ func TestClientKeyRefusalSaysDoNotRetry(t *testing.T) {
 	}
 }
 
+// exhaustedError is core's error for a request no account could take, marked with the soonest
+// account back in wait (0: none comes back until a person acts).
+func exhaustedError(code string, status int, wait time.Duration) *llm.Error {
+	at := time.Now()
+	x := &llm.Exhausted{At: at}
+	if wait > 0 {
+		x.Until = at.Add(wait)
+	}
+	return &llm.Error{Code: code, Status: status, Message: "no account can serve the request", RetryAfterMS: wait.Milliseconds(), Exhausted: x}
+}
+
+// A request no account can serve for more than five minutes, or until a person acts, tells the
+// client to stop (X-Should-Retry false) instead of when to retry, in every client format; a
+// shorter wait keeps today's Retry-After. Status and body are the same as without the mark.
+func TestExhaustedReplySaysWhetherToRetry(t *testing.T) {
+	formats := map[string]clientFormat{"chat": chatFormat, "responses": responsesFormat, "messages": messagesFormat, "gemini": geminiFormat}
+	for name, f := range formats {
+		for _, c := range []struct {
+			what string
+			e    *llm.Error
+			stop bool
+		}{
+			{"soonest in 6831s", exhaustedError(llm.CodeRateLimit, http.StatusTooManyRequests, 6831*time.Second), true},
+			{"every account needs a sign-in", exhaustedError(llm.CodeNotFound, http.StatusNotFound, 0), true},
+			{"no provider runs", exhaustedError(llm.CodeExtensionUnavailable, http.StatusServiceUnavailable, 0), true},
+			{"soonest in 30s", exhaustedError(llm.CodeRateLimit, http.StatusTooManyRequests, 30*time.Second), false},
+			{"soonest in 5m", exhaustedError(llm.CodeQuota, http.StatusTooManyRequests, 5*time.Minute), false},
+		} {
+			w := httptest.NewRecorder()
+			status := f.writeError(w, c.e)
+			plain := *c.e
+			plain.Exhausted = nil
+			want := httptest.NewRecorder()
+			wantStatus := f.writeError(want, &plain)
+			if status != wantStatus || w.Code != want.Code || w.Body.String() != want.Body.String() {
+				t.Errorf("%s, %s: reply %d %s, want %d %s as without the mark", name, c.what, w.Code, w.Body, want.Code, want.Body)
+			}
+			retry, after := w.Header().Get("X-Should-Retry"), w.Header().Get("Retry-After")
+			switch {
+			case c.stop && (retry != "false" || after != ""):
+				t.Errorf("%s, %s: X-Should-Retry %q, Retry-After %q; want false and none", name, c.what, retry, after)
+			case !c.stop && (retry != "" || after != want.Header().Get("Retry-After") || after == ""):
+				t.Errorf("%s, %s: X-Should-Retry %q, Retry-After %q; want none and %q", name, c.what, retry, after, want.Header().Get("Retry-After"))
+			}
+		}
+	}
+}
+
 type swapSource struct{ g atomic.Pointer[Generation] }
 
 func (s *swapSource) Acquire() (*Generation, func()) { return s.g.Load(), func() {} }

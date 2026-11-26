@@ -156,11 +156,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// A request as the stand-in core took it: method, path under the management API, JSON body.
-type Seen = Arc<Mutex<Vec<(String, String, Value)>>>;
+pub(crate) type Seen = Arc<Mutex<Vec<(String, String, Value)>>>;
 
 /// Serves each request with answer(method, path, body, n) (n: the requests so far), one per
-/// connection; gives a caller of it and what it was sent.
-fn core(
+/// connection; gives a caller of it and what it was sent. `client_keys.rs`'s tests use it too.
+pub(crate) fn core(
     answer: impl Fn(&str, &str, &Value, usize) -> (u16, Value) + Send + 'static,
 ) -> (Caller, Seen) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

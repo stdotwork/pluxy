@@ -2,8 +2,7 @@ import { strings } from "../strings";
 
 export const configText = strings("config", {
   title: "Config Panel",
-  short: "Config",
-  tip: "Gateway configuration",
+  tip: "Network, logging, keys and pluxy's settings file",
   common: "Common",
   connectivity: "Connectivity",
   network: "Network",

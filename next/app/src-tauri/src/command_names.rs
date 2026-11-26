@@ -6,6 +6,7 @@ pub const COMMANDS: &[&str] = &[
     "connection_get",
     "connection_set",
     "core_start",
+    "core_stop",
     "core_restart",
     "core_call",
     "core_versions",

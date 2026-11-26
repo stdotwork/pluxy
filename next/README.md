@@ -97,23 +97,95 @@ tick the providers you use, or install one by ID from the terminal with
 `./pluxy setup apply --pick pluxy/claude`.
 
 `pluxy -config config.json -bundled dist/bundled/index.json`, with no subcommand, serves too.
-With no file at the config's path, `pluxy serve -bundled dist/bundled/index.json` writes a first
-config there and starts on it: it listens on `127.0.0.1` port 8317, or a free port when 8317 is
+Without `-config`, pluxy uses `config.json` in the folder it runs in when there is one, and
+otherwise `config.json` in [pluxy's home](#pluxys-home). With no file at the config's path,
+`pluxy serve -bundled dist/bundled/index.json` writes a first config there and starts on it: it listens on `127.0.0.1` port 8317, or a free port when 8317 is
 taken, with one new client key and a new management key, in a file only its user can read. Core
 logs the file's path and the address, never the keys; read them in the file. `pluxy init
 [-config file] [-port n]` writes the same config without starting core (`-port 0`: a free port),
-and never replaces a file. A test that starts a first core sets `PLUXY_INIT_PORT=<port>` to choose
+and never replaces a file; without `-config` it writes the one in pluxy's home. A test that starts a first core sets `PLUXY_INIT_PORT=<port>` to choose
 that port instead, so a test never takes 8317 on the machine it runs on (`0` is a free port); a
 value that is not a port stops core, and no real run sets it. A config with no management key is
 refused at start, with a message saying how to add one. A first start installs no package: install
 the providers you use from the bundled registry ([Packages](#packages)) or the panel. Flags:
 
-- `-config`: the config file (default `config.json`).
+- `-config`: the config file (default: `config.json` in the current folder when there is one, else in [pluxy's home](#pluxys-home)).
 - `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. A build that recorded no commit or date (one made with `go run`, with `-buildvcs=false` or outside a git checkout) says so instead: `pluxy dev (no commit or build date recorded)`. It does not read the config. Core logs the same line when it starts.
 - `-safe-mode`: start with no extensions: client requests fail, the management API works.
 - `-watch-interval`: how often core looks for changes to the config file; `0` turns the watch off (default `1s`).
 - `-bundled`: the index of the bundled packages (default `bundled/index.json` beside the program, when it exists); see [Packages](#packages).
 - `-listen-fd`: serve on the listening TCP socket inherited at this file descriptor instead of binding `listen` (which must still be set). A program that starts core, such as the desktop app in managed mode, binds the socket, hands it over and keeps its own copy, so no other program can take the port while core stops or after it exits.
+
+### pluxy's home
+
+pluxy's home is the one folder where a pluxy run by your user account keeps its files:
+`config.json` and, beside it, the `credentials`, `packages`, `logs` and `state` folders core
+makes. It is:
+
+| System | Folder |
+| --- | --- |
+| Linux and other Unix systems | `$XDG_DATA_HOME/pluxy`, which is `~/.local/share/pluxy` when `XDG_DATA_HOME` is unset or not an absolute path |
+| macOS | `~/Library/Application Support/pluxy` |
+| Windows | `%LOCALAPPDATA%\pluxy` |
+
+`PLUXY_HOME` names another folder in its place, as an absolute path. `pluxy help` prints the
+folder it finds.
+
+Without `-config` (or `--config`), every `pluxy` command reads `config.json` in the folder it
+runs in when there is one, and otherwise the one in pluxy's home:
+
+- `pluxy serve` serves it. With no config in either place, its first start writes pluxy's home's
+  config (and, when the folder is not there yet, makes it so only your user can read it; a folder
+  that is already there, such as one `PLUXY_HOME` names, keeps its permissions), so the next `pluxy serve`, from
+  any folder, finds the same one. A start that found its config this way logs which:
+  `config: <path> (pluxy's home)` or `config: <path> (config.json in the current folder)`.
+- `pluxy init` writes pluxy's home's config and never replaces it. In a folder with a
+  `config.json`, it says that file exists, as before.
+- The client commands take core's address and management key, each, from the first of: `--url`
+  and `--key`; `PLUXY_URL` and `PLUXY_MANAGEMENT_KEY`; the config file, which is `--config`, else
+  `config.json` in the current folder, else pluxy's home's. `--verbose` says on standard error
+  which core a command called and where its address and key came from, and names pluxy's home's
+  config when a `config.json` in the current folder was read instead. With no config anywhere,
+  the error names each place it looked in and what to run. A key from `--key` or
+  `PLUXY_MANAGEMENT_KEY` is not sent to an address that only the current folder's `config.json`
+  names, unless that file holds exactly the same key: when the file loads and has an address, the
+  command refuses, exits 2 and calls nothing. A file with no management key, or one listening on
+  port 0, keeps its own error (exit 1) and sends nothing either. When the current folder is pluxy's
+  home, its `config.json` is the current folder's and is checked too. To use that pluxy, leave out
+  the key the message names, so the key in its `config.json` is used; to use another, add `--url`.
+
+pluxy moves and copies nothing into its home. A core started with `-config`, such as the desktop
+app's own core or the [container](#run-it-in-a-container), keeps its files beside that config,
+as before.
+
+The desktop app's own core is a separate pluxy, with its own keys and accounts, whose config is
+`core/config.json` in the app's data folder (on Linux
+`~/.local/share/dev.pluxy.desktop/core/config.json`). While pluxy's home has no config and that
+one exists, a plain `pluxy serve` writes no first config, since that would make a second pluxy
+beside the app's: it says so and names the two ways on, `pluxy serve -config <the app's config>`
+(while the app is not running that core) and `pluxy init` (a new pluxy in pluxy's home, which
+init writes when asked, naming the app's). The client commands never read the app's core's config
+unless given it with `--config`; when they find no other config, their error names it and offers
+those same ways on.
+
+The management key is the config's `management_key`. `pluxy key management` says where the key
+the commands use came from, and prints it only with `--show-key`. `pluxy key rotate-management`
+replaces it through the management API in two steps, so that, one rotation at a time, a lost reply
+does not lock anyone out: core makes a new key and keeps it in memory only, naming the config file
+it runs on, while the old key keeps working; the command makes sure the person can get the new key,
+and only then has core write it to that file and put it into use. The person gets the new key from
+the command's standard output with `--show-key`, which must be written before the key is put into
+use. Without `--show-key` the command works only with a pluxy at a loopback address, on this
+machine, and only when the config file it read is the very file pluxy runs on, the same directory
+entry (a symbolic link to it counts): a copy of it, even one with the same contents, or a hard link
+to it elsewhere is refused and nothing changes. A pluxy at any other address needs `--show-key`.
+Two rotations at the same time are not covered: the later one's key replaces the earlier one's. The command says what must be given the new key
+([details](management/README.md#core)). A reply lost before the key is put into use changes
+nothing, and the command says the old key still works; when the last reply is lost, the command
+asks core once more and exits 0 if the new key is in use, otherwise 1, saying which key to try.
+
+[docs/design.md](../docs/design.md#where-a-pluxy-keeps-its-files) gives the reasons for this
+folder.
 
 ### Environment variables
 
@@ -121,8 +193,9 @@ Core itself takes no runtime configuration from its environment: everything is s
 
 | Variable | What it does | Default | Example |
 | --- | --- | --- | --- |
-| `PLUXY_URL` | Core's base URL for `pluxy` client subcommands; `--url` overrides it. | Read from `--config` (`config.json`) | `http://127.0.0.1:8400` |
-| `PLUXY_MANAGEMENT_KEY` | Management API key for `pluxy` client subcommands; `--key` overrides it. | Read from `--config` (`config.json`) | `<management-key>` |
+| `PLUXY_URL` | Core's base URL for `pluxy` client subcommands; `--url` overrides it. | Read from the config file (`--config`, else `config.json` in the current folder, else in pluxy's home) | `http://127.0.0.1:8400` |
+| `PLUXY_MANAGEMENT_KEY` | Management API key for `pluxy` client subcommands; `--key` overrides it. | Read from the config file, as `PLUXY_URL` | `<management-key>` |
+| `PLUXY_HOME` | [pluxy's home](#pluxys-home): the folder whose `config.json` `pluxy serve`, `pluxy init` and the client commands use when given no config file and the current folder has no `config.json`. An absolute path. | `$XDG_DATA_HOME/pluxy` (`~/.local/share/pluxy`) on Linux, `~/Library/Application Support/pluxy` on macOS, `%LOCALAPPDATA%\pluxy` on Windows | `/srv/pluxy` |
 | `PLUXY_INIT_PORT` | Tests only: port written into the auto-generated config on a first start (`0` picks a free port); a non-port value stops core. | Unset (`8317`, or a free port if taken) | `0` |
 | `PLUXY_TEST_LOGIN_HOSTS` | Tests only: when set to `1`, core forwards it to extensions so account settings may point login, token and quota endpoints at a test server. | Unset | `1` |
 
@@ -399,7 +472,8 @@ at least one key: core does not start on a config without one, and a reload or a
 change that would leave none is refused, keeping the running config. Today's core serves anyone
 who reaches it when it has no client keys. A missing or wrong client key gets a 401 with
 `X-Should-Retry: false`, in every client format and in the error message of an open Responses
-WebSocket; an upstream's own 401 does not carry that header.
+WebSocket; an upstream's own 401 carries that header only when no account can take the request
+for more than 5 minutes (see "Telling a client to stop" below).
 
 The example config's client keys (`your-api-key-1`, `your-api-key-2` and `your-api-key-3`) are
 public, so as in today's core (its example API-key safe mode) core starts with one in
@@ -469,11 +543,14 @@ an upstream's refusal carries them too: they name the last account tried. A WebS
 has none of them, as its turns choose their accounts later.
 
 An account's **public ID** is what replies name it by: `acc_` and 8 hex digits, a keyed digest of
-the account's ID. The ID an account has in the config or the store can be an email address or a
+the account's ID. An ID of that shape, `acc_` and 8 lower-case hex digits, is its own public ID, so
+such an account has one ID everywhere. An account added by login without an ID gets one core makes,
+8 random digits that are no other account's ID or public ID; a login or import that names an ID
+itself is refused (409) while that ID or its public ID is another account's ID or public ID. The ID an account has in the config or the store can be an email address or a
 label someone typed (an import of today's auth files names an account by its file, which holds the
 email address), so it never leaves core in a reply, and no error `message` names an account either (a message says "the account was removed"; the header and the member say which). The digest's key is made at the first start and
 kept in `state/account-key` beside the config, so an account keeps its public ID across restarts
-and a reload; deleting the file gives every account a new one. `GET /accounts` and `pluxy account list`
+and a reload; deleting the file gives every account a new one, except those whose ID is their own public ID. `GET /accounts` and `pluxy account list`
 show each account's `public_id`, and a request may pin an account (`X-Pluxy-Account`, below) by it.
 
 A request that ends in an error without a reply says what was tried and why the rest were left
@@ -503,7 +580,8 @@ Core's log line for such an error says the same to the operator, after the error
 2026-11-09T17:00:00Z; old-key: banned]`. It names each account by its ID in the config, as the line's
 `account` and core's other log lines do (the client's member has the public ID), and the first 8
 accounts of each list, counting the rest (`+3 more`). It is written when `routing.explain` is
-`false` too, since the log is the operator's, not the client's.
+`false` too, since the log is the operator's, not the client's. The request's usage event records
+the first 8 entries of `left_out` the same way, by public ID, whatever `routing.explain` says.
 
 An upstream's error keeps the fields the client's format shares with the upstream's. A Messages
 client keeps `request_id` and the text `error_code` of `error.details` from a Messages upstream
@@ -511,7 +589,8 @@ client keeps `request_id` and the text `error_code` of `error.details` from a Me
 keeps `param` from an OpenAI-format upstream, and a Gemini client keeps `details` from a Google
 upstream; no field is copied into a format that does not define it. `param` is the upstream's own
 path, so on a translated request it can name a field in the upstream's shape. A 429, 503 or 529
-carries `Retry-After` when the upstream said how long to wait. A Google upstream's error names the
+carries `Retry-After` when the upstream said how long to wait, unless no account can take the
+request for more than 5 minutes (see "Telling a client to stop" below). A Google upstream's error names the
 Google project, organization, folder, billing account or person behind the pluxy account (in its
 message, and in its details); the Gemini extension — and the OpenAI-compatible extension for a
 `googleapis.com` host or a Google-shaped error — replace those names with `[redacted]` in what a
@@ -1818,9 +1897,16 @@ extension says which; see `protocol/README.md`, "quota"). When no window that co
 full, the block ends; otherwise it lasts until the covering full window that resets last resets. An account with no usage reading, such as an API key, lets one
 request through at the check instead, and that request's outcome decides. A real request is never
 the check where a reading exists. A check that cannot be made leaves the block and is made again
-15 minutes later. Quota blocks are saved to `state/routing.json` beside the config file (mode
-0600) and read back at start, where each is checked at once, so a restart sends no requests to
-accounts whose usage ran out. Bans are saved in the same file and read back at start too: for
+15 minutes later. Blocks of every kind (quota, rate limit and cooldown) on an account or one of its
+models with more than 30 seconds left are saved to `state/routing.json` beside the config file
+(mode 0600), each with its kind and the failure that set it (code, status and message, the message
+cut to 256 bytes), and read back at start, with the account's last error when one of them set it, so
+a restart sends no requests to accounts whose usage ran out, that a provider rate limited, or that
+it refused. A quota block read back is checked at once; a rate limit with more than 15 minutes left
+is checked 15 minutes on, as it would have been had core kept running. Endpoint blocks are not
+saved. A file an older core wrote, whose blocks have
+no kind, still loads: they are quota blocks, with the reason "a usage window was used up before
+pluxy restarted". Bans are saved in the same file and read back at start too: for
 each, the account, the provider's reason and when it was banned. A saved ban whose account the
 config no longer has is dropped, at start and on a reload; one for an account that is only out of
 routing for now, such as an extension that is stopped or a login still due, is kept. A ban has no
@@ -1828,8 +1914,8 @@ expiry: it ends when the account signs in again, is removed, or is turned back o
 enable`), and `pluxy account clear` does not lift it. A file core cannot read, or that another
 version wrote, is not loaded and is left as it is until a block must be saved; it is then moved to
 `routing.json.bad`. `pluxy account clear` (`POST /accounts/{id}/cooldown/reset`) still clears an
-account's blocks at once. Each account's `health` in `GET /accounts` sums this up in one word (see
-`management/README.md`, "Accounts").
+account's blocks at once, and `state/routing.json` is written again without them. Each account's
+`health` in `GET /accounts` sums this up in one word (see `management/README.md`, "Accounts").
 
 When every account is blocked, the reply tells the client how long is left in whole seconds,
 rounded up and at least 1 while anything is left: the message's "try again in 1s" (or `1m1s`),
@@ -1838,6 +1924,16 @@ come from the same rounding, so they agree. `retry_after_ms` keeps the exact wai
 rounds `Retry-After` and `reset_seconds` up, but shows `reset_time` and "reset after" to the
 nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next to
 `reset_seconds` 2; core says "2s" in all of them. That is an intended difference.
+
+**Telling a client to stop.** When a request ends because no account that serves its model can
+take it for more than 5 minutes (the usage-limit reply's threshold below), or because none can
+until a person acts (every one is turned off, waits for a new sign-in, was closed by its provider
+or has no running provider), the reply says `X-Should-Retry: false` and carries no `Retry-After`,
+so a coding tool stops at once and shows the message instead of retrying in silence or sleeping
+through a long wait. Its status, body and message are the same as otherwise. A shorter wait keeps
+`Retry-After`, so a client still retries a brief overload; a request that failed while an account
+could still take it keeps today's reply too. Today's core sends `Retry-After` on these replies.
+A Responses WebSocket turn that fails this way closes the socket as before.
 
 ```json
 {
@@ -1869,7 +1965,7 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
 | `request_retry` | When set, rounds run as today's `request-retry` runs them: at most this many after the first, each trying every eligible account again. A round starts at once when no account is blocked, or else when the first block ends if that is within `max_wait_ms`; an account refused for rate or quota in the request waits at least 10 seconds; a refused key (401) or a missing model (404) starts none. An account's own `request_retry` counts for it instead. Unset (here and on every account): rounds are bounded by `max_attempts` and `max_wait_ms`, and each needs a wait. |
 | `disable_cooling` | `true`: failures leave no block, so every account stays eligible. |
 | `transient_error_cooldown_ms` | How long a failing upstream or endpoint (a 5xx or a broken connection) is blocked when it gave no `Retry-After`: 0 (default) backs off from a second to a minute, above 0 that long, below 0 not at all, `Retry-After` or not. |
-| `quota_response_mode` | What a client gets when every account that serves its model is out of quota until a reset the upstream named, the first of them more than 5 minutes away: `retryable` (default) a retryable 429 with `Retry-After`, as for any block; `usage-limit` the final usage-limit reply below. |
+| `quota_response_mode` | What a client gets when every account that serves its model is out of quota until a reset the upstream named, the first of them more than 5 minutes away: `retryable` (default) the 429 any block gets, which, the wait being over 5 minutes, says `X-Should-Retry: false` and has no `Retry-After` (see "Telling a client to stop"); `usage-limit` the final usage-limit reply below. |
 | `explain` | `false` leaves out of replies the headers that name the account (`X-Pluxy-Account`, `X-Pluxy-Provider`, `X-Pluxy-Model`, `X-Pluxy-Attempts`) and the `pluxy` member of errors (see [Run it](#run-it)), for a core whose client keys go to people who should not see which accounts serve them. The trace ID stays. Default `true`. |
 | `session_affinity` | On by default, with no setting needed: requests of one session go to the same account while it is eligible, so a coding agent's conversation keeps its provider-side prompt cache. `{"enabled": false}` turns it off; `{"ttl_ms": 1800000}` sets how long a session stays bound after its last request (default one hour, 3600000). The session comes from the `X-Claude-Code-Session-Id`, `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`; a request with none takes turns as usual. Bindings are per client key and model. A `config.yaml` keeps today's default, off (below). |
 | `timeouts` | Upstream HTTP request timeouts in milliseconds: `header_ms` (default 60000) for response headers and `idle_ms` (default 300000) between raw upstream bytes on streamed requests, and `total_ms` (default 600000) in all on non-streamed requests; `0` turns a limit off. For an extension that speaks protocol 0.23, core also ends an attempt on which the extension sent it nothing at all for as long as the SDK may wait on the upstream plus a minute (the longer of `header_ms` and `idle_ms` when streamed, the longest of the three when not) with `extension_timeout`, which moves the request to another account when no reply has started; with any limit it needs at `0`, there is no such deadline. A timeout before any reply byte (this one or an upstream limit's) moves a request to one more account, once: a second timeout ends the request with that error, so a stuck upstream costs a client two limits and not one per account. |
@@ -2402,16 +2498,16 @@ at start and on a reload. Send it as a bearer token. The config may set no accou
 | Request | Does |
 | --- | --- |
 | `GET /accounts` | Lists every account (`source` `config` or `login`), its credential `kind`, `state` (`active`, or `reauth_required` when the provider refused the grant), `disabled`, `expires_at`, the last renewal error and the last [account check](#account-checks); its routing fields (`priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `endpoint`, `timeouts`), its own `proxy_url`, with `redacted` in place of a user name and password, and its
-[`headers`](#upstream-headers), with a placeholder in place of each secret value; its `health` (`state` `ok`, `cooling`, `exhausted`, `needs_login`, `banned`, `disabled` or `broken`, with `until`, `why`, `source` and `next_check`; see `management/README.md`, "Accounts"); and what routing knows about it now: `cooldowns` (each live block's `scope`, `credential`, `model` with its `model`, or `endpoint`; `kind`, `rate_limit`, `quota` or `cooldown` for failures without a reset time; `until`; `backoff_level`; and the `error` that set it), `cooldown_until` (when the latest block on the whole account ends; model blocks do not count), `last_error` and `last_error_at` (the latest failure that set a block, until a request on the account that started after it succeeds; like a cooldown, it is not cleared by a request that started earlier, and a failure from a request that started before a success on the account sets none) and `active_requests`. An account that gets no requests (disabled, broken, or waiting for a login) has no routing state. An account added by login also shows its `settings`, with each secret replaced by a placeholder in the same form as `GET /config` (see [Changing the config through management](#changing-the-config-through-management)), by the same rules made stricter: everything below a key named like a secret is a secret, however deep; `settings_inexact` is `true` when they hold a number that a client reading numbers as float64 and writing back the shortest decimal for each, as a browser does, would change (such as `0.10000000000000001`, `1e-400` or `9007199254740993`). Never a secret. |
-| `POST /accounts` | Starts a login that adds an account: `{"id": "work", "extension": "pluxy/codex", "method": "device", "input": {...}, ...}` plus any account fields from the config (`settings`, `models`, `priority`, ...). `extension` names the extension that signs in and owns the account; it may be left out while only one extension runs. Replies 202 with the login, usually carrying its first prompt (a URL or a device code). |
+[`headers`](#upstream-headers), with a placeholder in place of each secret value; its `health` (`state` `ok`, `cooling`, `exhausted`, `needs_login`, `banned`, `disabled` or `broken`, with `until`, `why`, `source` and `next_check`; see `management/README.md`, "Accounts"); and what routing knows about it now: `cooldowns` (each live block's `scope`, `credential`, `model` with its `model`, or `endpoint`; `kind`, `rate_limit`, `quota` or `cooldown` for failures without a reset time; `until`; `backoff_level`; and the `error` that set it), `cooldown_until` (when the latest block on the whole account ends; model blocks do not count), `last_error` and `last_error_at` (the latest failure that set a block, until a request on the account that started after it succeeds; like a cooldown, it is not cleared by a request that started earlier, and a failure from a request that started before a success on the account sets none) and `active_requests`. An account that gets no requests (disabled, broken, or waiting for a login) has no routing state. An account added by login also shows its `settings`, with each secret replaced by a placeholder in the same form as `GET /config` (see [Changing the config through management](#changing-the-config-through-management)), by the same rules made stricter: everything below a key named like a secret is a secret, however deep; `settings_inexact` is `true` when they hold a number that a client reading numbers as float64 and writing back the shortest decimal for each, as a browser does, would change (such as `0.10000000000000001`, `1e-400` or `9007199254740993`). Never a secret. `quota`, when core has read the account's quota since it started: `{"fetched_at", "quota"}`, the last reply of `GET /accounts/{id}/quota` as it was, whoever asked for it (that call or routing's own readings for `soonest-reset`); it is kept in memory until the account is removed, and absent for an account never read (an API key without a plan, an account no reading was made for). The list reads nothing from providers to fill it. |
+| `POST /accounts` | Starts a login that adds an account: `{"id": "work", "label": "Work laptop", "extension": "pluxy/codex", "method": "device", "input": {...}, ...}` plus any account fields from the config (`settings`, `models`, `priority`, ...). `id` may be left out: core then makes one, `acc_` and 8 hex digits, which is also the account's public ID, the one client replies name it by, and the login's `account` names it. An `id` is refused (409 `conflict`) while it or its public ID is another account's ID or public ID (an `id` of that shape is its own public ID); when the config comes to give an account that ID or public ID while the login runs, the login ends `failed` with code `invalid_request` and a message that says it conflicts. `label` (optional) names the account for people: trimmed, one line of at most 64 characters (else 400); it wins over the label the provider's login gives (often an e-mail address), which core keeps apart for the check of a new login below; without one, the account has the provider's. `extension` names the extension that signs in and owns the account; it may be left out while only one extension runs. Replies 202 with the login, usually carrying its first prompt (a URL or a device code). |
 | `GET /logins/{id}` | The login's state (`pending`, `done`, `failed`, `cancelled`), prompt or error. |
 | `POST /logins/{id}/input` | `{"input": {...}}`: what the user entered for the prompt, such as the redirect URL of a browser login. |
 | `DELETE /logins/{id}` | Cancels the login. |
-| `POST /accounts/{id}/login` | Signs in to an existing account again (`{"method": ..., "input": ...}`), replacing its credential. The login must sign in to the same upstream account: when the provider reports who signed in (the grant's [`identity`](protocol/README.md#login), such as an e-mail address and an account ID), every field core stored for the account must match, letter case aside; an account stored without one is checked by its `label`. Otherwise the login ends `failed` with code `invalid_request` and the account keeps its credential, as today's core refuses with "Authenticated account does not match target credential". To use the other account, add it as a new one. |
+| `POST /accounts/{id}/login` | Signs in to an existing account again (`{"method": ..., "input": ...}`), replacing its credential. The login must sign in to the same upstream account: when the provider reports who signed in (the grant's [`identity`](protocol/README.md#login), such as an e-mail address and an account ID), every field core stored for the account must match, letter case aside; an account stored without one is checked by the last label its provider gave it (for an account imported from a credential file, the file's e-mail), when there is one and the new login carries one, never by a label a person gave it; an account stored before core kept the two apart is checked by its old label, whoever gave it. A label a person gave the account stays; the provider's follows the new login. Otherwise the login ends `failed` with code `invalid_request` and the account keeps its credential, as today's core refuses with "Authenticated account does not match target credential". To use the other account, add it as a new one. |
 | `POST /accounts/{id}/refresh` | Renews the account's credential now. |
 | `POST /vertex/import` | Adds a Vertex AI account from a Google service account key file, as today's `POST /v0/management/vertex/import` does: `multipart/form-data` with the key in `file` and an optional `location` (a form field, else a query parameter; default `us-central1`), at most 1 MiB in all. It runs the Gemini extension's [`service_account` login](#gemini) with the account ID `vertex-<project_id>` (`/`, `\` and `:` in the project ID become `_`, spaces `-`), the settings `vertex.project` and `vertex.location`, and the label `<project_id> (<client_email>)`, waits for it (one token fetch, at the key's `token_uri`) and answers once: 200 `{"status": "ok", "account", "project_id", "email", "location"}`. Errors have the usual `{"error": {"code", "message"}}` shape: 400 `file_required`, `invalid_json`, `project_id_missing` and `invalid_service_account` (also when the token endpoint refuses the key), 400 `invalid_request` for a location or project ID the extension refuses, 409 `conflict` for an account of that ID in the config, 413 for a larger request, 502 with the login's code (`unavailable`) when the token endpoint cannot be reached or fails, and 504 when it does not answer in 45 seconds. When a login added an account of that ID before, the import signs in to it again, so the key replaces the old one only when its `client_email` is the same service account (else 400 `invalid_request`, the account keeps its key) and a `location` the account does not have is a 409; today's core overwrote the file silently. It does not repair a key damaged by pasting (today's core rebuilds a mangled PEM); it takes the file Google gives. |
-| `POST /accounts/import` | Adds the accounts of one credential file of today's auth folder to the running core, read and added as [`pluxy import cpa`](#moving-from-cliproxyapi-pluxy-import-cpa) reads and adds each file of the folder: `{"name": "<file name>.json", "content": "<the file's text>"}`. The content is the file itself, never a path on core's machine; `name` (a `.json` file name, no folder) gives the account ID, as the file's name does. The accounts serve at once, like an account a login adds. 200 `{"imported": [{"id", "extension", "ignored"}], "skipped": [...]}`: each account added, with the file's settings not supported yet that it left out (`ignored`), and why any other account of the file was skipped (a Codex file can hold two). Nothing added: 400 `invalid_request` for a file that is not JSON, of a type the import does not take or holding no token, with routing fields routing refuses once read (such as a `prefix` with a `/` inside, `a/b`; surrounding spaces and slashes are trimmed first), or a bad `name`; 409 `conflict` when the store or the config already has the account's ID, or a sign-in still running will take it (letter case aside); 413 for a file larger than 1 MiB. The message says why. Neither the reply nor core's log holds anything from the file but the account's ID. |
-| `PATCH /accounts/{id}` | `disabled` (`true` or `false`; disabled accounts get no requests) and any of the routing fields `priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `timeouts`, `proxy_url` and `headers`, checked as the config's are (a `proxy_url` sent back as `GET /accounts` shows it keeps the password it hides, and a header's placeholder sent back keeps its value; a placeholder that stands for no value the account has is a 400); `null` sets one back to its default. `settings` replaces the account's settings as a whole: an object, or `null` for none. A placeholder from `GET /accounts` keeps the secret it stands for: it is accepted only where that secret is now (an item of a list may move within its list; elsewhere 400), and only while the account's settings still hold that secret and core has not restarted (else 409, read the account again); to change a secret, send the new value. Core passes the settings to the extension as they are. An account whose `settings` change starts with fresh routing state, as on a reload: its blocks, cooldowns, last error and session bindings are dropped, while a ban stands (only signing in again, removing the account or turning it back on lifts it). A bad field changes nothing (400). Replies with the account. |
+| `POST /accounts/import` | Adds the accounts of one credential file of today's auth folder to the running core, read and added as [`pluxy import cpa`](#moving-from-cliproxyapi-pluxy-import-cpa) reads and adds each file of the folder: `{"name": "<file name>.json", "content": "<the file's text>"}`. The content is the file itself, never a path on core's machine; `name` (a `.json` file name, no folder) gives the account ID, as the file's name does. The accounts serve at once, like an account a login adds. 200 `{"imported": [{"id", "extension", "ignored"}], "skipped": [...]}`: each account added, with the file's settings not supported yet that it left out (`ignored`), and why any other account of the file was skipped (a Codex file can hold two). Nothing added: 400 `invalid_request` for a file that is not JSON, of a type the import does not take or holding no token, with routing fields routing refuses once read (such as a `prefix` with a `/` inside, `a/b`; surrounding spaces and slashes are trimmed first), or a bad `name`; 409 `conflict` when the store or the config already has the account's ID, or a sign-in still running will take it (letter case aside), or when the ID or its public ID is another account's ID or public ID; 413 for a file larger than 1 MiB. The message says why. Neither the reply nor core's log holds anything from the file but the account's ID. |
+| `PATCH /accounts/{id}` | `disabled` (`true` or `false`; disabled accounts get no requests), `label` (the account's name for people, as `POST /accounts` takes it; `""` or `null` takes it away, leaving the last label the provider gave the account (for an account imported from a credential file, the file's e-mail), or none when it never gave one; an account stored before core kept the two apart keeps its old label as the provider's) and any of the routing fields `priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `timeouts`, `proxy_url` and `headers`, checked as the config's are (a `proxy_url` sent back as `GET /accounts` shows it keeps the password it hides, and a header's placeholder sent back keeps its value; a placeholder that stands for no value the account has is a 400); `null` sets one back to its default. `settings` replaces the account's settings as a whole: an object, or `null` for none. A placeholder from `GET /accounts` keeps the secret it stands for: it is accepted only where that secret is now (an item of a list may move within its list; elsewhere 400), and only while the account's settings still hold that secret and core has not restarted (else 409, read the account again); to change a secret, send the new value. Core passes the settings to the extension as they are. An account whose `settings` change starts with fresh routing state, as on a reload: its blocks, cooldowns, last error and session bindings are dropped, while a ban stands (only signing in again, removing the account or turning it back on lifts it). A bad field changes nothing (400). Replies with the account. |
 | `POST /accounts/{id}/cooldown/reset` | Clears the account's cooldowns, on its credential, its models and its endpoint (which accounts naming the same endpoint share), with their backoff steps and its last error, so it serves again at once unless it is banned: a ban, and the last error of a banned account, stay (see [Accounts and routing](#accounts-and-routing)). Works for config accounts too. Replies with `cleared`, the number of live blocks it cleared, and the account. |
 | `GET /accounts/{id}/models` | The models the account serves: its config's `models` when it lists them, else the ones its extension lists for it (the protocol's [`models`](protocol/README.md#models)). Each has its upstream `id`, what the extension says about it, `names` (the names clients use for it after the account's exclusions, aliases and prefix, and its extension's defaults for logins) and `excluded` when `excluded_models` leaves it out. `from` says where the list came from: `account` (read from the provider with the account's credential) or `extension` (its built-in list); it is left out when the config lists the models. The list is the one routing keeps (see the model lists above), not a fresh read: the call asks the extension itself only when routing has none for the account. |
 | `POST /accounts/{id}/test` | Sends the account one small request (`Hi`, at most 16 tokens of reply), straight to its extension: its cooldowns are ignored and its routing state is left as it is. `{"model": ...}` names the model by its upstream name; without it, the first the account serves. Replies 200 with `result`: `ok`, `model`, `served_model`, `latency_ms`, the start of the `reply`, `finish_reason` and `usage`, or `error`. The request spends what a request that size costs. |
@@ -2491,8 +2587,10 @@ config can still be checked and reloaded through management.
 ### Management API
 
 [`management/README.md`](management/README.md) is the API's contract and describes the `pluxy`
-command, its client: `pluxy serve` runs core, and the other subcommands (`pluxy status`,
-`pluxy account list`, `pluxy help` for the rest) call a running core's management API.
+command, its client: `pluxy serve` runs core, `pluxy help` lists the other subcommands without
+calling core, and those (`pluxy status`, `pluxy account list` and the rest) call a running core's
+management API, except `pluxy init`, which writes a first config, and `pluxy key management`,
+which reads one.
 
 Beside the account calls [above](#accounts-added-by-login), management serves these. Every call
 needs `Authorization: Bearer <management_key>`.
@@ -2552,10 +2650,13 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets (names are compared in lower case whatever joins their words, or none, so `accessToken` and `accesstoken` are `access_token`, with letters folded as core matches a JSON key to a setting, so `client_keyſ` is `client_keys`; `aws_secret_access_key`, `client_secrets` and `passwords` are ones too, and so is a name that ends in a number or a word saying how the value is written, such as `apiKey2`, `api_key_value` or `privateKeyPem`), header values about authentication (`Authorization`, `X-Api-Key`, cookies) or named like a secret in any mapping whose name holds `header` (`extra_headers`, `headers_override`), and any URL with a user name, password or query, or with a parameter named like a secret in its fragment. Everything below a key named like a secret is a secret, however deep, also when given through a YAML alias (as a value, or as a key's name), as `GET /accounts` shows a login account's settings, except in today's core's provider sections at the top of a `config.yaml` (the sections of the v8 `api-keys` mapping, such as `codex`, and the older lists such as `codex-api-key`), whose entries are read by these rules; any other key of the v8 `api-keys` mapping is read as a secret key. A string secret of 8 bytes or more written again as a whole value anywhere else in the file (a note holding a key) is hidden there too; a shorter copy, or a number, is shown, and so is a copy of a value that is a secret only for being in a mapping below a secret key. `true`, `false`, `null` and the empty string never are secrets, as they carry none. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
 | `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything, placeholders put back as `PUT /config` puts them (below). 200 with `valid: true` and the `notices` a load logs (such as a `config.yaml`'s unsupported settings or a JSON config's unknown keys), or `valid: false` and `error`, such as for a placeholder where its secret is not. |
 | `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. Each placeholder goes back only where its own secret is in the file now: the same account or list item (by its `id` or `name` when it holds that item's secrets, else by its secrets), and the same keys, also where a YAML alias or merge key reads it (below). 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document, such as for a placeholder anywhere else, naming its line; a refused document writes nothing. |
-| `GET /v0/management/client-keys` | The client keys: each one's `id` (a keyed hash whose key is kept in `state/key-id.key` beside the config file, mode `0600`, so IDs stay the same across restarts) and `masked` form (first and last two characters, as the old panel showed them; a key shorter than 8 characters is hidden whole). |
-| `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
-| `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
-| `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
+| `GET /v0/management/client-keys` | The client keys: each one's `id` (a keyed hash whose key is kept in `state/key-id.key` beside the config file, mode `0600`, so IDs stay the same across restarts) and `masked` form (first and last two characters, as the old panel showed them; a key shorter than 8 characters is hidden whole), and its `label` when it has one. |
+| `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). An optional body `{"label": "..."}` names it (see `PATCH`). 201 with the key's `id`, `masked` form and `label` and its `value`, which no later call shows. |
+| `PATCH /v0/management/client-keys/{id}` | `{"label": "..."}` names a client key, such as the tool it was made for, so Activity can show a name instead of a masked key; `""` or `null` removes the name. A label is trimmed, one line and at most 64 characters, as an account's is (400 otherwise), and it is never a client key or the management key (400). 200 with the key's `id`, `masked` form and the `label` now stored; 404 when no key has the ID; 422 `refused`, with nothing written, when a `config.yaml` sets the key's label through a YAML alias or a merge key (`<<`), which core cannot change in place: edit the file. The names are kept in the config file, apart from the keys: `client_key_labels` maps a key's `id` to its label (top level, in a `config.yaml` too), so `client_keys` stays a list of strings. A person may edit it by hand; a label that is not one line of at most 64 characters, or is a client key or the management key, makes core refuse the file. `GET /config` shows the labels, which are not secrets. |
+| `DELETE /v0/management/client-keys/{id}` | Removes the client key and its label. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
+| `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent, so a lost reply leaves the caller with neither key: the two calls below avoid that. |
+| `POST /v0/management/management-key/rotate/stage` | Makes a new random management key and keeps it in memory only: one at a time (another stage replaces it), for 10 minutes, and not across a restart. Returns it as `value`, with `config`, the absolute path of the config file core runs on. The old key keeps working and the file is not touched. |
+| `POST /v0/management/management-key/rotate/commit` | `{"value": "<staged key>"}`: writes the staged key to the config file and puts it into use; the old key stops working. 204. Decided under the config-write lock: the key already in use also answers 204 and changes nothing, so a commit sent again after a lost reply is safe. Any other value answers 409 and changes nothing. |
 | `GET /v0/management/models` | The models `GET /v1/models` lists, as one list in the same order: `models`, each with `id` (the name clients use), what the account, the catalogue and the extension say about the model (`owned_by`, `display_name`, `context_length`, `max_output_tokens`, `capabilities`, `from`, ...), `upstream` (its name upstream), `extension` (the extension of the account whose entry the list shows) and `accounts` (the IDs of the accounts a request for the name uses, as routing chooses them: one provider's, or with a fallback chain each step's in step order, highest priority first within a step). An account that serves any model because its list is not known adds no name, but is among the accounts of the names its provider serves; a fallback chain that only such accounts serve is listed as the first of them, with its step's model as `upstream`. Under the `weighted` strategy an account of `weight` 0 is in no entry. A name whose accounts all wait for a login or are turned off is left out. Never a credential. |
 | `POST /v0/management/models/refresh` | Ask providers for their model lists again now; optional JSON body `{"account": "<id>"}` for one account. Returns the updated `models` list and per-account `accounts` results (`models`, `kept`, `error`). A read that fails, times out, comes back empty or falls back to the extension's built-in list keeps the last good list (the last live one, when it was read from the provider). |
 | `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate`, `routing.timeouts` and `routing.ignition`, this core's own, under their own names (below). |
@@ -2645,7 +2746,7 @@ when it arrived, the `endpoint`, whether it streamed, the `model` the client ask
 thinking suffix), the account's own name for it when that differs (`upstream_model`: an alias
 or prefix resolved) and the model the upstream reply says served it when the reply names one
 (`served_model`), the `provider` (extension) and `account` its last attempt went to, the
-client key's `key_id` (the `id` `GET /client-keys` lists it under, never the key), the
+client key's `key_id` (the `id` `GET /client-keys` lists it under, never the key) and its `label` at that time (absent when it had none), the
 `client_ip` it came from (the connection's peer, or the client a trusted proxy names; see
 `trusted_proxies`), whether it `failed` with which `error_code`, the HTTP `status` of the reply, `latency_ms`, and the `tokens`
 the upstream reported: `input_tokens` (cached ones included), `output_tokens` (reasoning
@@ -2713,7 +2814,7 @@ line with its time and level in front as today's core writes them:
 [2026-11-09 12:00:01.456] [warn ] warning: no client_keys set; anyone who can reach ...
 ```
 
-Lines are `info`, or `warn` for warnings; core has no debug lines, so today's `debug` setting is
+Lines are `info`, `warn` for warnings (lines that start with `warning: `) or `error` for something the person must fix (lines that start with `error: `: a config change that was not applied, an extension that crashed or was stopped after crashes, an account a provider closed or that needs a new sign-in, a failed write of core's own state); a failed client request stays a warning. Core has no debug lines, so today's `debug` setting is
 dropped. Today's core writes only to the file while the setting is on; this core keeps writing
 to standard error too. `main.log` is rotated when it reaches 10 MB, as in today's core: it is
 renamed `main-<time>.log` and a new one begins. `logs.max_total_size_mb` (today's
@@ -3035,7 +3136,7 @@ does not bring the file's management key, plain or hashed: core keeps its own (s
 [moving from CLIProxyAPI](#moving-from-cliproxyapi-pluxy-import-cpa)).
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
-`extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir` and `cors`
+`extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir`, `cors` and `client_key_labels`
 (today's core has no CORS setting: it allows every origin). Provider accounts set in
 the file go to the installed package of their provider (`pluxy/codex`, `pluxy/claude`,
 `pluxy/gemini`, `pluxy/xai`, `pluxy/openai-compatible`), so those packages must be installed:
@@ -3114,7 +3215,7 @@ are accepted silently.
 | `routing.cooldown.disable-cooling` (`disable-cooling`) | `routing.disable_cooling`. | Supported |
 | `routing.cooldown.transient-error-cooldown-seconds` (`transient-error-cooldown-seconds`) | `routing.transient_error_cooldown_ms`: above 0 that many seconds, below 0 none. 0 is this core's backoff, from a second doubling to a minute, where today's core waits a fixed minute. | Supported |
 | `routing.cooldown.quota-response-mode` (`quota-cooldown-response-mode`) | `routing.quota_response_mode`: `retryable` (default) or `usage-limit`, letter case aside; another value fails the load, as in today's core. | Supported |
-| `routing.cooldown.save-cooldown-status` (`save-cooldown-status`) | Core saves quota blocks and bans to `state/routing.json` by itself; other blocks live in memory and carry over reloads. | Dropped: no need found |
+| `routing.cooldown.save-cooldown-status` (`save-cooldown-status`) | Core saves bans, and blocks with more than 30 seconds left on accounts and their models, to `state/routing.json` by itself; shorter blocks and endpoint blocks live in memory and carry over reloads. | Dropped: no need found |
 | `quota-exceeded.switch-project`, `quota-exceeded.switch-preview-model` | | Dead |
 | `requests.proxy-url` (`proxy-url`) | `proxy_url`: the [outbound proxy](#outbound-proxy) of every account. A value that is not an `http`, `https`, `socks5` or `socks5h` URL, `direct` or `none` fails the load, where today's core logs it and goes without the proxy. | Supported |
 | Every `proxy-url` on a group or key | The account's `proxy_url`: a key's own, else its group's. | Supported |
@@ -3222,7 +3323,7 @@ Each file of the auth folder becomes an account added by login, with the file's 
 nor is a file larger than 1 MiB, nor anything but a `.json` file at the top of the folder.
 
 To add one file to a running core instead, send it to the management API's
-[`POST /accounts/import`](#accounts-added-by-login) (the panel's "Upload file" on Accounts): it
+[`POST /accounts/import`](#accounts-added-by-login) (the panel's "Import files…" on Add Account): it
 reads the file the same way and the account serves at once.
 
 Both cores renewing the same login signs one of them out: the provider replaces the refresh
@@ -3244,7 +3345,7 @@ use it from one core only, or sign in again in the other.
 From every file: `disabled: true` imports the account disabled, `priority` and `weight` are the
 account's, `disable_cooling` (or `disable-cooling`) is its `disable_cooling`, `request_retry`
 (or `request-retry`, a number or numeric text; a negative one inherits routing's) is its
-`request_retry`, and `label` (else `email`) is its label. A file's `prefix` is the account's `prefix`,
+`request_retry`, and `label` is its label, a name a person gave it; `email` (in a Devin file without one, `user_name`) is the provider's label, which the account shows when the file has no `label` and a new sign-in is checked against. A file's `prefix` is the account's `prefix`,
 its `excluded_models` (a list, or one comma-separated string) its `excluded_models`, and the
 entries of its `model_aliases` (or `models`) with a `name` and an `alias` its `model_alias`, as
 today's core reads them. A file's `proxy_url` (or `proxy-url`) is the account's `proxy_url`; a file

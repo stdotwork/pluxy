@@ -52,8 +52,10 @@ go build -o ~/pluxy/pluxy ./cmd/pluxy
 
 `go generate` builds the web panel, which the program carries inside it. `pluxy-pack` packs the
 provider extensions into `~/pluxy/bundled`, where pluxy looks for them. `go build` builds pluxy
-itself. The source stays in `pluxy-src`; everything pluxy needs or writes from here on is in
-`~/pluxy`.
+itself. The source stays in `pluxy-src`, and the program is in `~/pluxy`. What pluxy writes from
+here on (its config, accounts, logs and usage record) goes in its home folder: on Linux
+`~/.local/share/pluxy`, on macOS `~/Library/Application Support/pluxy`, on Windows
+`%LOCALAPPDATA%\pluxy`.
 
 ### 2. Start it
 
@@ -62,18 +64,23 @@ cd ~/pluxy
 ./pluxy serve
 ```
 
-With no config file in the folder, pluxy writes `config.json` and prints its address:
+The first time, pluxy writes its config, `config.json`, in its home folder, and prints, among
+other lines, where it is and its address:
 
 ```text
+pluxy: config: /home/you/.local/share/pluxy/config.json (pluxy's home)
+pluxy: first start: wrote a new config, /home/you/.local/share/pluxy/config.json, listening on 127.0.0.1:8317; its client key and management key are in that file
 pluxy: listening on http://127.0.0.1:8317
 ```
 
 The port is 8317, or a free one when 8317 is taken. `config.json` holds two keys that pluxy made
-for you. The `management_key` signs you in to the panel. The one under `client_keys` is what a
-client sends with each request. Only your user can read the file.
+for you. The `management_key` signs you in to the panel; `./pluxy key management --show-key`
+prints it. The one under `client_keys` is what a client sends with each request. Only your user
+can read the file.
 
 Leave pluxy running and open a second terminal in `~/pluxy` for the rest. The `pluxy` commands
-read the address and the management key from the `config.json` in the folder they run in.
+find the address and the management key in pluxy's home from any folder; a `config.json` in the
+folder they run in comes first ([pluxy's home](next/README.md#pluxys-home) has the rules).
 
 ### 3. Install a provider
 
@@ -121,7 +128,7 @@ has each one's settings, and the base URLs for any other client.
 ### 6. Send a request and see it counted
 
 `./pluxy model list` prints the models your accounts serve. Send one of them a request with the
-client key from `config.json`:
+client key from pluxy's `config.json`:
 
 ```bash
 curl http://127.0.0.1:8317/v1/chat/completions \
@@ -136,7 +143,7 @@ Then look at the usage record:
 ./pluxy usage
 ```
 
-It shows one request with its tokens, under the model you asked for. The panel's Usage page shows
+It shows one request with its tokens, under the model you asked for. The panel's Activity page shows
 the same record. `./pluxy help` lists every command.
 
 ## Where to read more

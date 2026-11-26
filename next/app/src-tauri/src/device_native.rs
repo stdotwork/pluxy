@@ -5,7 +5,7 @@
 //! (computed there, not by the app). Each denial has a positive control on the same route:
 //!
 //! - registry: `pluxy/notes` (a reserved publisher) is refused; `example/notes` 1.0.0 installs,
-//!   is listed Unverified (the Device extensions page names its registry's index) and its page
+//!   is listed Unverified (the Add-ons page names its registry's index) and its page
 //!   answers through the channel; 2.0.0 replaces it while its
 //!   page is open (the old page webview closes, the new one shows 2.0.0); 3.0.0, which needs a
 //!   host contract this app lacks, is refused and 2.0.0 keeps working; the page webview's request
@@ -154,6 +154,21 @@ fn nav_entry(main: &Webview, route: &str) -> bool {
     ) == Some(json!(true))
 }
 
+/// Waits until route's link is in the navigation. Device extension pages are Settings topics,
+/// and the frame lists a destination's topics only while one of its pages is open, so a window
+/// that is on Home (as the Windows and macOS sessions start) has no such link. When the link is
+/// not there yet, this opens the Settings device topic first, as the person would, so the wait
+/// does not depend on the page the window was on. A window already showing the link is left alone.
+pub(super) fn wait_for_nav_entry(main: &Webview, route: &str) -> Result<(), String> {
+    if !nav_entry(main, route) {
+        main.eval("location.hash = '#/device'")
+            .map_err(|e| e.to_string())?;
+    }
+    wait_for(&format!("{route} in the navigation"), || {
+        nav_entry(main, route).then_some(())
+    })
+}
+
 /// Opens route in the window and returns the page webview showing digest, once its page
 /// reported marker through the channel.
 pub(super) fn open_page(
@@ -163,9 +178,7 @@ pub(super) fn open_page(
     digest: &str,
     marker: &str,
 ) -> Result<String, String> {
-    wait_for("the page in the navigation", || {
-        nav_entry(main, route).then_some(())
-    })?;
+    wait_for_nav_entry(main, route)?;
     main.eval(format!("location.hash = {}", json!(format!("#/{route}"))))
         .map_err(|e| e.to_string())?;
     showing(app, digest, marker)
@@ -327,16 +340,17 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             && p["enabled"] == true,
         format!("example/notes 1.0.0 as listed: {p}"),
     )?;
-    // The Device extensions page names the registry by its index too, not only its name.
+    // The Add-ons page names the registry by its index too, not only its name, in the add-on's
+    // detail (opened by choosing its row).
     let index = fixtures.join("index.json").display().to_string();
     main.eval("location.hash = '#/device'")
         .map_err(|e| e.to_string())?;
-    wait_for("the registry's index on the Device extensions page", || {
+    wait_for("the registry's index on the Add-ons page", || {
         eval(
             main,
             &format!(
-                "document.body.innerText.includes({})",
-                json!(format!("Registry fixture ({index})"))
+                "(() => {{ const b = [...document.querySelectorAll('button.item-name')].find((b) => b.textContent === 'example/notes'); if (b) b.click(); return document.body.innerText.includes({}); }})()",
+                json!(format!("From fixture ({index})"))
             ),
         )
         .filter(|v| v == true)

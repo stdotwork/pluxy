@@ -34,8 +34,8 @@ Tauri commands. A non-curated source is Unverified. Core refuses this manifest w
 to install it in the desktop app.
 
 To install it, pack the folder as a release archive (`tar -czf notes-0.1.0.tar.gz -C package .`),
-open **Device extensions** in the desktop app and choose **Install from file…**. The page
-appears in the navigation, labelled Unverified on the Device extensions page.
+open **Add-ons** in the desktop app and choose **Install from file…**. The page
+appears in the navigation, labelled Unverified on the Add-ons page.
 
 For settings, add versioned `config` inside `app`, using the existing
 [settings schema](../../ui/extension-pages/README.md#config). To request a file later, declare

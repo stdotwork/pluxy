@@ -69,6 +69,7 @@ func ownHome(dir string) error {
 	}
 	os.Setenv("HOME", home)
 	os.Setenv("USERPROFILE", home)
+	os.Unsetenv("PLUXY_HOME") // pluxy's home is found from HOME and XDG_DATA_HOME, below
 	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"} {
 		os.Setenv(k, filepath.Join(home, strings.ToLower(strings.TrimPrefix(k, "XDG_"))))
 	}
@@ -358,6 +359,12 @@ func testHomeEnv(home string) []string {
 // folder of the test's own) that also returns a stop, which ends core before the test does.
 func startCoreEnv(t *testing.T, env []string, bin string, argv ...string) (string, *coreLog, func(), error) {
 	t.Helper()
+	return startCoreDir(t, env, "", bin, argv...)
+}
+
+// startCoreDir is startCoreEnv run in the folder dir ("": this process's).
+func startCoreDir(t *testing.T, env []string, dir, bin string, argv ...string) (string, *coreLog, func(), error) {
+	t.Helper()
 	if env == nil {
 		env = append(os.Environ(), testHomeEnv(t.TempDir())...)
 	}
@@ -365,6 +372,7 @@ func startCoreEnv(t *testing.T, env []string, bin string, argv ...string) (strin
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Env = env
+	cmd.Dir = dir
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 10 * time.Second
 	addr := make(chan string, 1)

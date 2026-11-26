@@ -303,7 +303,7 @@ func (s *Store) writeSeqMark() {
 		err = writeFileAtomic(s.dir, seqFile, append(b, '\n'))
 	}
 	if err != nil {
-		log.Printf("usage: recording seq %d in %s failed: %v", seq, filepath.Join(s.dir, seqFile), err)
+		log.Printf("error: usage: recording seq %d in %s failed: %v", seq, filepath.Join(s.dir, seqFile), err)
 	}
 }
 
@@ -441,7 +441,7 @@ func (s *Store) countWriteError(ev Event, err error) {
 	if day.IsZero() {
 		day = ev.recorded
 	}
-	log.Printf("usage: writing event %d to %s failed: %v", ev.Seq, day.UTC().Format(dayLayout), err)
+	log.Printf("error: usage: writing event %d to %s failed: %v", ev.Seq, day.UTC().Format(dayLayout), err)
 }
 
 func (s *Store) writeEvent(w *dayWriter, e Event) error {
@@ -808,7 +808,7 @@ func (s *Store) loadOrBuildDaySummaryLocked(day string) *daySummaryFile {
 	// The rows are right whatever happens to the file: keep them in memory and rebuild the file
 	// on the next read.
 	if err := writeSummaryFileAtomic(filepath.Join(s.dir, summarySubdir), sumPath, ds); err != nil {
-		log.Printf("usage: writing the summary of %s failed: %v", day, err)
+		log.Printf("error: usage: writing the summary of %s failed: %v", day, err)
 	}
 	s.summaries[day] = ds
 	return ds

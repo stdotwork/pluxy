@@ -613,6 +613,10 @@ type Error struct {
 	// request is out of quota until a reset the upstream named (routing's usage-limit quota
 	// response mode). It never travels over the protocol.
 	UsageLimit *UsageLimit `json:"-"`
+	// Exhausted, set only by core, marks the error that ends a request no account that serves
+	// its model could take: when the soonest of them can take one again. It never travels over
+	// the protocol.
+	Exhausted *Exhausted `json:"-"`
 	// Explain, set only by core, says what routing tried for the request and which accounts it
 	// left out, for the `pluxy` member of the error a client gets. It never travels over the
 	// protocol.
@@ -621,6 +625,15 @@ type Error struct {
 	// every error that ends a request, also when routing.explain keeps Explain from the client.
 	// It never travels over the protocol or reaches a client.
 	Routed *Explain `json:"-"`
+}
+
+// Exhausted says when an account that serves a request's model can take a request again, for the
+// error of a request none could take. Until is when the soonest of them is eligible again; the
+// zero time when none will be until a person acts, because every one is turned off, waits for a
+// new sign-in, was closed by its provider or has no running provider. At is when routing found
+// it.
+type Exhausted struct {
+	At, Until time.Time
 }
 
 // Explain is the `pluxy` member of a client's error: what routing did for the request. It holds

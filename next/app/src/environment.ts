@@ -105,9 +105,6 @@ export function linuxPath(value: string, distro: string): Checked {
 export const linuxBuildMissing = (e?: string) =>
   !!e && e.includes("Linux build") && e.includes("is not installed");
 
-/** The host's refusal of an environment for a package that does not run in WSL. */
-export const notInWsl = (e?: string) => !!e && e.includes("does not run in WSL");
-
 /** Users as the block lists them: in pluxy/wsl's order, root last. */
 export const usersInOrder = (users: WslUser[]) => [
   ...users.filter((u) => !u.root),

@@ -24,9 +24,11 @@ func TestMain(m *testing.M) {
 		"XDG_STATE_HOME":  filepath.Join(xdg, "state"),
 		"XDG_CACHE_HOME":  filepath.Join(xdg, "cache"),
 		"CODEX_HOME":      filepath.Join(home, ".codex"),
+		"LOCALAPPDATA":    filepath.Join(home, "AppData", "Local"),
 	} {
 		os.Setenv(k, v)
 	}
+	os.Unsetenv("PLUXY_HOME") // pluxy's home is found from the folders above
 	code := m.Run()
 	os.RemoveAll(home)
 	os.Exit(code)
