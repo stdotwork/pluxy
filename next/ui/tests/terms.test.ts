@@ -37,8 +37,8 @@ const BASELINE: { file: string; key: string; banned: string }[] = [
 ];
 
 /** Banned terms that are wrong only as a standalone label: a text holds one when the whole text, trimmed
- * and compared without regard to case, is the term. `Active` is banned as the status of a credential
- * (docs/terms.md, "Credentials and status": `Available` / `Unavailable` / `Disabled` instead), but
+ * and compared without regard to case, is the term. `Active` is banned as the condition of an account
+ * (docs/terms.md, "Credentials and status": `Serving` and the other condition words instead), but
  * "Active revision", "Least active" and "No active cooldowns" are correct English and are not that status. */
 const WHOLE_TEXT_ONLY = ["Active"];
 

@@ -24,9 +24,12 @@ const SIZES = [
 const AA = 4.5;
 const SHOTS = process.env.PLUXY_PARTS_SHOTS;
 
-const bundle = join(import.meta.dirname, "..", "test-results", "specimen", "specimen.js");
+// The specimen's bundle, in Playwright's output folder: the checkout may be read-only (CI mounts it
+// so), and the output folder is the one place a run writes.
+let bundle = "";
 
 test.beforeAll(() => {
+  bundle = join(test.info().project.outputDir, "specimen", "specimen.js");
   mkdirSync(join(bundle, ".."), { recursive: true });
   execFileSync(
     "bun",

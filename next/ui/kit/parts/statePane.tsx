@@ -135,9 +135,9 @@ export function StaleNotice(props: { at?: number; error?: string; onRetry: () =>
 
 /**
  * A pane by useLoad's phase. loading: StatePane loading with the loading title. failed with no
- * data: StatePane failed with core's error as its details and Try again. failed over data: the
- * rows (or the empty pane, for an empty list), under a StaleNotice. ready: empty when isEmpty
- * says so, else the rows.
+ * data, or over a list that was empty: StatePane failed with core's error as its details and Try
+ * again (whether the list is still empty is not known). failed over rows: the rows, under a
+ * StaleNotice. ready: empty when isEmpty says so, else the rows.
  */
 export function Phases<T>(props: {
   load: Loaded<T>;
@@ -153,7 +153,7 @@ export function Phases<T>(props: {
   const seen = useRef<{ data?: T; at?: number }>({});
   if (l.phase === "ready" && seen.current.data !== l.data) seen.current = { data: l.data, at: Date.now() };
   if (l.phase === "loading") return <StatePane kind="loading" title={props.loading} rows={props.rows} />;
-  if (l.phase === "failed" && l.data === undefined) {
+  if (l.phase === "failed" && (l.data === undefined || props.isEmpty(l.data))) {
     return (
       <StatePane
         kind="failed"

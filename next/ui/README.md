@@ -42,8 +42,8 @@ render(<Shell host={host} themes={themes} privacy={privacy} pages={corePages()} 
 The **Privacy mode** toggle at the header strip's end hides account e-mail addresses and
 identifiers while the person shares their screen (`kit/privacy.ts`). It changes only what pages show: a page passes a
 value through `usePrivacy()`'s masks where it shows it (text, `title`, `aria-label`) and keeps the
-real value for calls, search, filters, copying and downloads. Keys never go through the masks;
-they keep their own handling in both states. Where the desktop app says it saved a file, privacy
+real value for calls, search, filters, copying and downloads. A key's name (its label) goes through
+them; a key's value, even masked, never does: it keeps its own handling in both states. Where the desktop app says it saved a file, privacy
 mode names the file and its folder only (`shownPath` in `kit/save.tsx`): the folders above hold
 the person's user name. The panel keeps the choice in the host's prefs
 (`prefsPrivacy`); the desktop app keeps it natively. Extension pages get it as `privacy` in the

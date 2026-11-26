@@ -4,6 +4,8 @@
 
 import type { ComponentChildren } from "preact";
 import type { SetupClient } from "../api/setup";
+import { usePrivacy } from "../privacy";
+import { shownPath } from "../save";
 import { stateText, stateTone } from "../states";
 import { strings } from "../strings";
 
@@ -25,8 +27,9 @@ export function toolState(client: Pick<SetupClient, "installed" | "state">, unch
 /**
  * One tool. client is the tool as GET /setup found it; unchecked marks a row whose setup pluxy
  * cannot read (the app's, for a tool core does not scan); reason is why pluxy will not change its
- * settings, for a refused one. action is the page's one action; children, when given, show under
- * the row (the page's own content, such as what to paste).
+ * settings, for a refused one; the reason and the settings path are masked in privacy mode.
+ * action is the page's one action; children, when given, show under the row (the page's own
+ * content, such as what to paste).
  */
 export function ToolRow(props: {
   client: SetupClient;
@@ -35,10 +38,17 @@ export function ToolRow(props: {
   action?: ComponentChildren;
   children?: ComponentChildren;
 }) {
+  const p = usePrivacy();
   const c = props.client;
   const state = toolState(c, props.unchecked);
   const title =
-    state === "unchecked" ? t("unchecked", { tool: c.name }) : state === "refused" ? props.reason : undefined;
+    state === "unchecked"
+      ? t("unchecked", { tool: c.name })
+      : state === "refused"
+        ? p.text(props.reason)
+        : undefined;
+  // In privacy mode, the file and its folder only: the folders above hold the person's user name.
+  const path = c.config && shownPath(c.config, p.on);
   return (
     <div class="tool-row" data-part="tool-row" data-state={state} data-open={props.children ? "" : undefined}>
       <div class="tool-line">
@@ -57,8 +67,8 @@ export function ToolRow(props: {
             {stateText(state, "tool")}
           </span>
         </span>
-        <span class="tool-path" title={c.config}>
-          {c.config}
+        <span class="tool-path" title={path}>
+          {path}
         </span>
         <span class="tool-action">{props.action}</span>
       </div>

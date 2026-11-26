@@ -308,12 +308,18 @@ export const accountName = (a: Pick<Account, "id" | "label">) => a.label?.trim()
 
 /**
  * A client key's name: its label, else its masked value ("Key sk…48"). keys are the keys as
- * GET /client-keys lists them; label is the event's own copy of the key's name.
+ * GET /client-keys lists them; label is the event's own copy of the key's name. mask is for the
+ * label, a name a person gave (usePrivacy().id); the masked value never goes through it.
  */
-export function keyName(keyId: string | undefined, keys?: ClientKey[], label?: string): string | undefined {
+export function keyName(
+  keyId: string | undefined,
+  keys?: ClientKey[],
+  label?: string,
+  mask: (label: string) => string = (l) => l,
+): string | undefined {
   const key = keyId ? keys?.find((k) => k.id === keyId) : undefined;
   const named = label?.trim() || key?.label?.trim();
-  if (named) return named;
+  if (named) return mask(named);
   if (key) return t("keyMasked", { masked: key.masked.replace(/\*+/, "…") });
   return undefined;
 }

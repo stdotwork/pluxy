@@ -5,27 +5,24 @@
 import { useContext, useEffect, useRef, useState } from "preact/hooks";
 import { type Account, problem, type QuotaLimit, type QuotaReply } from "../api";
 import type { Reply } from "../host";
-import { accountIdentities, usePrivacy } from "../privacy";
+import { usePrivacy } from "../privacy";
 import { KitContext, useKit } from "../ui";
 import { accountCondition, accountName, resetPassed } from "./account";
 
 /**
- * An account's name, masked in privacy mode: its label (often an e-mail address) as an
- * identifier, else its ID with any e-mail address or identity in it hidden. byId names an account
- * a usage record gives by its ID or public ID; one the list does not hold shows its ID, masked
- * the same way.
+ * An account's name, masked in privacy mode as an identifier: its label (often an e-mail
+ * address), else its ID (a name the person typed, or one made from a file name holding an
+ * address). byId names an account a usage record gives by its ID or public ID; one the list does
+ * not hold shows that ID, masked the same way.
  */
 export function useNaming(accounts?: Account[]) {
   const p = usePrivacy();
-  const of = (a: Account) => {
-    const label = a.label?.trim();
-    return label ? p.id(label) : p.text(accountName(a), accountIdentities(a));
-  };
+  const of = (a: Account) => p.id(accountName(a));
   return {
     of,
     byId: (id: string) => {
       const a = accounts?.find((x) => x.id === id || x.public_id === id);
-      return a ? of(a) : p.text(id, accounts?.flatMap(accountIdentities));
+      return a ? of(a) : p.id(id);
     },
   };
 }
@@ -111,10 +108,12 @@ export function windowsFresh(w: Windows, now: number): boolean {
  * WINDOWS_PER_VIEW accounts, WINDOWS_AT_ONCE at a time; each reply is kept WINDOWS_KEEP_MS, or
  * until a reset it names has passed. The limits GET /accounts carries (quota) show at once and
  * are read again only when out of date. An account being read again keeps showing its last reply.
+ * refreshed is the page's Refresh: each time it changes, the reads that failed are made again.
  */
 export function useWindows(
   accounts: Account[] | undefined,
   running?: ReadonlySet<string>,
+  refreshed?: unknown,
 ): Map<string, Windows> {
   const { api, unauthorized } = useKit();
   const [now, setNow] = useState(() => Date.now());
@@ -144,11 +143,17 @@ export function useWindows(
   }
   const ids = wanted.map((a) => a.id);
   const key = ids.join("\n");
+  // The Refresh the failed reads were last made for.
+  const retried = useRef(refreshed);
   useEffect(() => {
     let live = true;
+    const again = !Object.is(retried.current, refreshed);
+    retried.current = refreshed;
     const due = (key ? key.split("\n") : []).filter((id) => {
       const have = kept.get(id);
-      return !reading.has(id) && !(have && windowsFresh(have, Date.now()));
+      if (reading.has(id)) return false;
+      if (again && have?.state === "failed") return true;
+      return !(have && windowsFresh(have, Date.now()));
     });
     let next = 0;
     const work = async () => {
@@ -174,7 +179,7 @@ export function useWindows(
     return () => {
       live = false;
     };
-  }, [key, now, api, unauthorized]);
+  }, [key, now, refreshed, api, unauthorized]);
   const out = new Map<string, Windows>();
   for (const id of ids) out.set(id, kept.get(id) ?? READING);
   return out;

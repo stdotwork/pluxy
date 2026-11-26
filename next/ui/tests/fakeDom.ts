@@ -97,6 +97,11 @@ export class FakeNode {
     );
   }
 
+  /** Takes focus: the document's activeElement is then this node. */
+  focus() {
+    this.ownerDocument.activeElement = this;
+  }
+
   dispatchEvent(event: Event) {
     Object.defineProperty(event, "target", { configurable: true, value: this });
     Object.defineProperty(event, "currentTarget", { configurable: true, value: this });
@@ -128,6 +133,8 @@ export class FakeDocument {
   nodeType = 9;
   visibilityState: DocumentVisibilityState = "visible";
   body = new FakeNode(this, "body");
+  /** The node that last took focus (FakeNode.focus), else the body. */
+  activeElement: FakeNode = this.body;
   private listeners = new Map<string, Set<() => void>>();
 
   get hidden() {

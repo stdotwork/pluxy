@@ -254,7 +254,7 @@ function Specimen() {
         <SettingRow
           name="Allow other computers"
           description="Lets other computers on your network use pluxy."
-          error="Not saved: core returned HTTP 500; check Logs Viewer and try again"
+          error="Not saved: pluxy returned HTTP 500; check Logs Viewer and try again"
         >
           <Switch label="Off" checked={false} onChange={() => {}} />
         </SettingRow>

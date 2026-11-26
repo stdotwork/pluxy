@@ -77,15 +77,28 @@ test("an account's badge is its plain state: turned off first, then what keeps r
     extension: "test/alpha",
     ...fields,
   });
+  const html = (fields: Partial<Account>, running?: ReadonlySet<string>) =>
+    renderToString(<AccountState a={account(fields)} running={running} />);
   const badge = (fields: Partial<Account>, running?: ReadonlySet<string>) =>
-    renderToString(<AccountState a={account(fields)} running={running} />).replace(/<[^>]+>/g, "");
+    html(fields, running).replace(/<[^>]+>/g, "");
+  const tone = (fields: Partial<Account>, running?: ReadonlySet<string>) =>
+    /data-tone="(\w+)"/.exec(html(fields, running))?.[1];
+  const later = new Date(Date.now() + 3_600_000).toISOString();
   expect(badge({})).toBe("Serving");
-  expect(badge({ health: { state: "cooling" } })).toBe("Serving");
+  // The badge says what AccountRow's mark says (accountCondition): a whole account cooling down
+  // waits; one cooling down on some models still serves.
+  expect(badge({ cooldowns: [{ scope: "account", kind: "rate_limit", until: later }] })).toBe("Cooling down");
+  expect(tone({ cooldowns: [{ scope: "account", kind: "rate_limit", until: later }] })).toBe("warn");
+  expect(badge({ health: { state: "cooling", until: later } })).toBe("Cooling down");
+  expect(badge({ cooldowns: [{ scope: "model", model: "m", kind: "rate_limit", until: later }] })).toBe(
+    "Serving",
+  );
   expect(badge({ state: "reauth_required" })).toBe("Needs sign-in");
   expect(badge({ health: { state: "needs_login" } })).toBe("Needs sign-in");
   expect(badge({ health: { state: "exhausted" } })).toBe("Limit used up");
   expect(badge({ health: { state: "banned" } })).toBe("Closed by provider");
   expect(badge({ health: { state: "broken" } })).toBe("Cannot be read");
   expect(badge({ disabled: true, health: { state: "banned" } })).toBe("Turned off");
-  expect(badge({}, new Set(["test/other"]))).toBe("No provider");
+  expect(badge({}, new Set(["test/other"]))).toBe("Provider stopped");
+  expect(tone({}, new Set(["test/other"]))).toBe("danger");
 });

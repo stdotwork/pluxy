@@ -6,7 +6,7 @@ import { useEffect, useState } from "preact/hooks";
 import type { Account } from "../api/accounts";
 import { Icon, type IconName } from "../icons";
 import { Meter } from "../meter";
-import { usePrivacy } from "../privacy";
+import { accountIdentities, usePrivacy } from "../privacy";
 import { strings } from "../strings";
 import { shortDuration } from "../time";
 import { Button } from "../ui";
@@ -36,6 +36,8 @@ const t = strings("parts.accountRow", {
   reading: "Reading limits…",
   none: "No limits reported",
   unavailable: "Limits unavailable",
+  notRead: "Limits not read",
+  notReadTitle: "Open the account to see its limits.",
   titleLeft: "{name}: {percent}% left",
   titleUsedUp: "{name}: used up",
   titleNoLimit: "{name}: no limit",
@@ -86,12 +88,26 @@ function useNow(every = 30_000) {
 /**
  * An account's limits on one line: each of the two shortest request windows as its short name, a
  * gauge of what is left, the share left and the countdown to its reset ("5h ▬ 58% left 1h 25m").
- * Or, muted, what is known in their place.
+ * Or, muted, what is known in their place: Limits not read when the page read none for it (a view
+ * reads WINDOWS_PER_VIEW accounts' at most). identities are the account's, for masking a failed
+ * read's error.
  */
-export function Limits(props: { windows?: Windows; account: string; now?: number }) {
+export function Limits(props: {
+  windows?: Windows;
+  account: string;
+  identities?: readonly string[];
+  now?: number;
+}) {
+  const p = usePrivacy();
   const w = props.windows;
   const now = props.now ?? Date.now();
-  if (!w) return <span class="limits" data-part="limits" />;
+  if (!w) {
+    return (
+      <span class="limits" data-part="limits" data-state="unread" title={t("notReadTitle")}>
+        {t("notRead")}
+      </span>
+    );
+  }
   if (w.state !== "read" || rowWindows(w.limits).length === 0) {
     const word = w.state === "reading" ? t("reading") : w.state === "failed" ? t("unavailable") : t("none");
     return (
@@ -99,7 +115,7 @@ export function Limits(props: { windows?: Windows; account: string; now?: number
         class="limits"
         data-part="limits"
         data-state={w.state === "read" ? "none" : w.state}
-        title={w.error}
+        title={p.text(w.error, props.identities)}
       >
         {word}
       </span>
@@ -154,6 +170,7 @@ function FixButton(props: {
   account: Account;
   c: Condition;
   name: string;
+  identities: readonly string[];
   onTurnOn: (id: string) => Promise<Outcome> | Outcome;
   onClearCooldown: (id: string) => Promise<Outcome> | Outcome;
 }) {
@@ -188,8 +205,8 @@ function FixButton(props: {
     <span class="fix">
       {button}
       {error && (
-        <span class="fix-error" role="alert" title={p.text(error)}>
-          {p.text(error)}
+        <span class="fix-error" role="alert" title={p.text(error, props.identities)}>
+          {p.text(error, props.identities)}
         </span>
       )}
     </span>
@@ -220,6 +237,8 @@ export function AccountRow(props: {
   const a = props.account;
   const c = accountCondition(a, props.running, now);
   const name = naming.of(a);
+  // What names the account in text about it (a reason, an error): its label and its ID.
+  const ids = [...accountIdentities(a), a.id];
   const href = accountHref(a.id);
   const tall = conditionTall(c);
   const reason = tall ? accountReason(a, c, now) : undefined;
@@ -230,6 +249,7 @@ export function AccountRow(props: {
       account={a}
       c={c}
       name={name}
+      identities={ids}
       onTurnOn={props.onTurnOn}
       onClearCooldown={props.onClearCooldown}
     />
@@ -264,13 +284,17 @@ export function AccountRow(props: {
             </span>
           </span>
           {reason && (
-            <span class="account-reason" title={p.text(reason)}>
-              {p.text(reason)}
+            <span class="account-reason" title={p.text(reason, ids)}>
+              {p.text(reason, ids)}
             </span>
           )}
         </span>
         <span class="account-side">
-          {limited ? <Limits windows={props.windows} account={name} now={now} /> : !props.wide && fix}
+          {limited ? (
+            <Limits windows={props.windows} account={name} identities={ids} now={now} />
+          ) : (
+            !props.wide && fix
+          )}
         </span>
         {props.wide && (
           <span class="account-week">

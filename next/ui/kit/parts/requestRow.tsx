@@ -31,7 +31,7 @@ const t = strings("parts.requestRow", {
 
 const n = (v: number | undefined) => (v ?? 0).toLocaleString();
 
-/** How long a request took, as a person reads a wait: 420 ms, 2.2 s, 1 min 5 s. */
+/** How long a request took, as a person reads a wait: 420 ms, 2.2 s, 1m 5s. */
 export function timeTaken(ms: number): string {
   if (ms < 1000) return t("ms", { count: Math.round(ms) });
   if (ms < 60_000) return t("seconds", { count: (ms / 1000).toFixed(1) });
@@ -69,10 +69,12 @@ export const requestHref = (id?: string) =>
 
 /**
  * One request. name turns an account's ID or public ID into its name, masked (useNaming().byId);
- * keys are the client keys (GET /client-keys), for the key's name. note is the page's few words on
- * a detour ("after 2 others"), story the page's routing story, both masked by the page. compact
- * (Home) makes the row a link to the request on Activity, with no expanding. open and onToggle
- * make the expanding the page's own.
+ * without it the ID shows, masked. keys are the client keys (GET /client-keys), for the key's
+ * name. note is the page's few words on a detour ("after 2 others"), story the page's routing
+ * story, both masked by the page. trace is how the facts show the request's trace: a link to its
+ * log (the default), or copyable text only, for a request whose log is not kept. compact (Home)
+ * makes the row a link to the request on Activity, with no expanding. open and onToggle make the
+ * expanding the page's own.
  */
 export function RequestRow(props: {
   event: UsageEvent;
@@ -80,6 +82,7 @@ export function RequestRow(props: {
   keys?: ClientKey[];
   note?: string;
   story?: ComponentChildren;
+  trace?: "link" | "text";
   compact?: boolean;
   open?: boolean;
   onToggle?: (open: boolean) => void;
@@ -87,7 +90,7 @@ export function RequestRow(props: {
   const p = usePrivacy();
   const [ownOpen, setOwnOpen] = useState(false);
   const e = props.event;
-  const name = props.name ?? ((id: string) => p.text(id));
+  const name = props.name ?? ((id: string) => p.id(id));
   const account = e.account ? name(e.account) : undefined;
   const when = new Date(e.timestamp);
   const full = Number.isNaN(when.getTime()) ? e.timestamp : when.toLocaleString();
@@ -110,7 +113,8 @@ export function RequestRow(props: {
           {e.failed ? failureWord(e) : account}
         </span>
         <span class="request-result" data-result={e.failed ? "failed" : "ok"}>
-          <Icon name={e.failed ? "needsYou" : "check"} label={e.failed ? failureWord(e) : t("succeeded")} />
+          {/* A failed row says its failure word in the account's place: the mark adds nothing to hear. */}
+          <Icon name={e.failed ? "needsYou" : "check"} label={e.failed ? undefined : t("succeeded")} />
         </span>
       </a>
     );
@@ -120,7 +124,7 @@ export function RequestRow(props: {
     setOwnOpen(!open);
     props.onToggle?.(!open);
   };
-  const key = keyName(e.key_id, props.keys, e.label);
+  const key = keyName(e.key_id, props.keys, e.label, p.id);
   const tokens = e.tokens ?? {};
   const tried = e.tried ?? [];
   return (
@@ -160,7 +164,13 @@ export function RequestRow(props: {
               <ol>
                 {tried.map((x, i) => (
                   <li key={i}>
-                    <span>{name(x.account)}</span>{" "}
+                    <a href={accountHref(x.account)}>{name(x.account)}</a>{" "}
+                    <span class="request-attempt-provider">{providerName(x.provider)}</span>{" "}
+                    {x.model && (
+                      <>
+                        <span class="request-attempt-model mono">{x.model}</span>{" "}
+                      </>
+                    )}
                     <span class="request-attempt-result" data-result={x.result === "ok" ? "ok" : "failed"}>
                       {x.result === "ok" ? t("succeeded") : failureWord(x.result)}
                     </span>
@@ -191,7 +201,15 @@ export function RequestRow(props: {
                       cached: n(tokens.cached_tokens),
                     }),
               ],
-              [t("trace"), e.id && <TraceId id={e.id} href={`#/logs/${encodeURIComponent(e.id)}`} />],
+              [
+                t("trace"),
+                e.id && (
+                  <TraceId
+                    id={e.id}
+                    href={props.trace === "text" ? undefined : `#/logs/${encodeURIComponent(e.id)}`}
+                  />
+                ),
+              ],
             ]}
           />
         </div>

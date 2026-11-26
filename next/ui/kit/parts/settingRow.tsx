@@ -16,15 +16,23 @@ const t = strings("parts.settingRow", {
 /**
  * A setting's value for a row that saves on change. saved is the value core holds; set shows the
  * new value at once and saves it with save, which gives back the reply, an error to show, or
- * nothing. A save that fails puts the value back to saved and keeps the error until the next set.
- * Only the last set's answer counts.
+ * nothing. One save at a time, so core keeps the newest value: a value set while a save is on its
+ * way is sent after it ends, and of several set meanwhile only the newest. The last save's answer
+ * counts: when it fails, the value goes back to saved and the error stays until the next set.
  */
 export function useSetting<T>(saved: T, save: (value: T) => Promise<Outcome> | Outcome) {
   const outcome = useOutcome();
   const [value, setValue] = useState(saved);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
-  const turn = useRef(0);
+  // The newest value not sent yet, and the saves on their way, one after another.
+  const waiting = useRef<{ value: T } | undefined>(undefined);
+  const sending = useRef<Promise<void> | undefined>(undefined);
+  // The newest render's saved value and save, for a save sent after a later render.
+  const savedNow = useRef(saved);
+  savedNow.current = saved;
+  const saveNow = useRef(save);
+  saveNow.current = save;
   const live = useRef(true);
   useEffect(() => {
     live.current = true;
@@ -36,23 +44,31 @@ export function useSetting<T>(saved: T, save: (value: T) => Promise<Outcome> | O
   useEffect(() => {
     if (!saving) setValue(saved);
   }, [saved]);
-  const set = async (next: T) => {
-    const mine = ++turn.current;
+  const send = async () => {
+    let why: string | undefined;
+    for (let next = waiting.current; next; next = waiting.current) {
+      waiting.current = undefined;
+      try {
+        why = outcome(await saveNow.current(next.value));
+      } catch (err) {
+        why = err instanceof Error ? err.message : String(err);
+      }
+    }
+    sending.current = undefined;
+    if (!live.current) return;
+    setSaving(false);
+    if (why !== undefined) {
+      setValue(savedNow.current);
+      setError(why);
+    }
+  };
+  const set = (next: T): Promise<void> => {
     setValue(next);
     setSaving(true);
     setError(undefined);
-    let why: string | undefined;
-    try {
-      why = outcome(await save(next));
-    } catch (err) {
-      why = err instanceof Error ? err.message : String(err);
-    }
-    if (!live.current || mine !== turn.current) return;
-    setSaving(false);
-    if (why !== undefined) {
-      setValue(saved);
-      setError(why);
-    }
+    waiting.current = { value: next };
+    sending.current ??= send();
+    return sending.current;
   };
   return { value, set, saving, error };
 }
@@ -61,7 +77,8 @@ export function useSetting<T>(saved: T, save: (value: T) => Promise<Outcome> | O
  * One setting. name is the setting's name, description one sentence of what it does, configKey
  * (on Config only) its key in the settings file. children is the control: a Switch, Choices, a
  * select, an input or a Button. saving shows Saving… beside it; disabled, a sentence, dims the
- * control and says why under it; error, a save that failed, shows under the row.
+ * control and says why under it; error, a save that failed, shows under the row. The reason and
+ * the error are masked in privacy mode.
  */
 export function SettingRow(props: {
   name: string;
@@ -97,7 +114,7 @@ export function SettingRow(props: {
           </span>
           {props.disabled && (
             <span class="setting-why" id={`${id}-why`}>
-              {props.disabled}
+              {p.text(props.disabled)}
             </span>
           )}
         </div>

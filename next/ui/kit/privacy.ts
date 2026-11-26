@@ -1,9 +1,10 @@
 // Privacy mode: the person hides account e-mail addresses and identifiers while sharing their
 // screen. It changes only how the UI shows them: pages keep the real values for requests,
 // search, filters, copying and downloads, and pass a value through these masks only where it is
-// shown (text, title, aria-label). Keys never go through them: they are not privacy fields and
-// keep their own handling, in both states. Extension pages are told through the theme event; the
-// kit cannot hide what an extension's own page shows.
+// shown (text, title, aria-label). A key's name (its label) goes through them; a key's value,
+// even masked, never does: it is not a privacy field and keeps its own handling, in both states.
+// Extension pages are told through the theme event; the kit cannot hide what an extension's own
+// page shows.
 
 import { createContext } from "preact";
 import { useContext, useEffect, useState } from "preact/hooks";

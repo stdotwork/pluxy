@@ -336,6 +336,10 @@
     font-weight: var(--px-font-weight-strong);
   }
 
+  .request-attempt-provider {
+    color: var(--px-color-text-muted);
+  }
+
   .request-attempts ol {
     margin: 0;
     padding-inline-start: calc(var(--s) * 5);

@@ -1,6 +1,8 @@
 // The shared parts (kit/parts): what each says and offers in each state, by the rules of the K3
 // spec. Static output is read with renderToString; presses go through Preact's DOM renderer.
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import type { ComponentChildren } from "preact";
+import { useState } from "preact/hooks";
 import { act } from "preact/test-utils";
 import { renderToString } from "preact-render-to-string";
 import type { Account, QuotaLimit, SetupClient, UsageEvent } from "../kit/api";
@@ -18,6 +20,7 @@ import {
   SettingRow,
   StatePane,
   ToolRow,
+  useNaming,
   useSetting,
   useWindows,
   type Windows,
@@ -57,6 +60,14 @@ function buttons(html: string) {
       href: /href="([^"]*)"/.exec(m[2] ?? "")?.[1],
     }));
 }
+
+/** Some HTML in privacy mode. */
+const hidden = (tree: ComponentChildren) =>
+  renderToString(<PrivacyContext.Provider value={privacyMasks(true)}>{tree}</PrivacyContext.Provider>);
+
+/** What some HTML shows a person: its text, and every title and aria-label. Not its links' addresses. */
+const shown = (html: string) =>
+  [plain(html), ...[...html.matchAll(/(?:title|aria-label)="([^"]*)"/g)].map((m) => m[1])].join("\n");
 
 const attr = (html: string, name: string) => new RegExp(`${name}="([^"]*)"`).exec(html)?.[1];
 const plain = (html: string) => html.replace(/<[^>]+>/g, "").replaceAll("&amp;", "&");
@@ -671,6 +682,11 @@ test("a pane never says it is empty while it loads or failed", () => {
   expect(stale).toMatch(/Could not refresh\. Showing what pluxy said at .+\./);
   expect(stale).toContain("alpha and beta");
   expect(stale).not.toContain("No accounts yet");
+  // A refresh that failed over an empty list: what is there now is not known, so not "No … yet".
+  const failedEmpty = pane(loaded({ phase: "failed", error: "timeout", data: [] }));
+  expect(failedEmpty).not.toContain("No accounts yet");
+  expect(failedEmpty).toContain("pluxy did not answer");
+  expect(failedEmpty).toContain("Try again");
   expect(pane(loaded({ phase: "ready", data: [] }))).toBe("No accounts yet");
   expect(pane(loaded({ phase: "ready", data: ["alpha"] }))).toBe("alpha");
 });
@@ -680,7 +696,10 @@ test("a loading pane shows its placeholder only after 150 ms", async () => {
   const bars = () => all(m.root, "i").length;
   expect(m.text()).toBe("Loading accounts…");
   expect(bars()).toBe(0);
-  await Bun.sleep(200);
+  await Bun.sleep(100);
+  await settle();
+  expect(bars()).toBe(0);
+  await Bun.sleep(100);
   await settle();
   expect(bars()).toBe(3);
   await m.unmount();
@@ -760,4 +779,293 @@ test("a setting that worked keeps its value; a disabled one says why", async () 
   );
   expect(off).toContain("<fieldset disabled");
   expect(plain(off)).toContain("pluxy runs as a service, so its port is set there.");
+});
+
+// ---- privacy: everything a part shows about a person is masked ---------------------------------
+
+test("in privacy mode an unlabelled account's ID is masked wherever the row shows it", () => {
+  const a = account({
+    id: "work-laptop",
+    cooldowns: [{ scope: "account", kind: "rate_limit", until: later }],
+  });
+  const windows: Windows = {
+    state: "read",
+    limits: [{ id: "five", window_seconds: 18000, used_percent: 10 }],
+  };
+  const html = hidden(<AccountRow account={a} windows={windows} onTurnOn={noop} onClearCooldown={noop} />);
+  expect(shown(html)).not.toContain("work-laptop");
+  expect(plain(html)).toContain("wo***op");
+  // The fix's and the gauge's names say it the same way.
+  expect(attr(html, "aria-label")).not.toContain("work-laptop");
+  expect(html).toContain('aria-label="Clear cooldown: wo***op"');
+});
+
+function Named(props: { accounts?: Account[]; id: string }) {
+  return <p>{useNaming(props.accounts).byId(props.id)}</p>;
+}
+
+test("in privacy mode an account a list does not hold is named by its ID, masked", () => {
+  const listed = [account({ id: "acc_1", label: "alice@example.com" })];
+  expect(plain(hidden(<Named accounts={listed} id="work-laptop" />))).toBe("wo***op");
+  expect(plain(hidden(<Named id="work-laptop" />))).toBe("wo***op");
+  expect(plain(hidden(<Named accounts={listed} id="acc_1" />))).toBe("al***@e***.com");
+});
+
+test("in privacy mode a request row masks its accounts and its key's label, never the key's masked value", () => {
+  const e = event({
+    account: "work-laptop",
+    key_id: "k1",
+    label: "Alice laptop key",
+    tried: [
+      { account: "home-desktop", provider: "pluxy/claude", model: "opus-5", result: "rate_limit" },
+      { account: "work-laptop", provider: "pluxy/claude", model: "opus-5", result: "ok" },
+    ],
+  });
+  const html = hidden(<RequestRow event={e} open />);
+  for (const real of ["work-laptop", "home-desktop", "Alice laptop key"])
+    expect(shown(html)).not.toContain(real);
+  expect(plain(html)).toContain("Al***ey");
+  const unnamed = hidden(
+    <RequestRow event={event({ key_id: "k1" })} keys={[{ id: "k1", masked: "sk-****48" }]} open />,
+  );
+  expect(plain(unnamed)).toContain("Key sk-…48");
+});
+
+test("in privacy mode a failed limits read keeps the account's name out of its title", () => {
+  const html = hidden(
+    <AccountRow
+      account={account({ label: "Work laptop" })}
+      windows={{ state: "failed", limits: [], error: "Work laptop: the provider did not answer" }}
+      onTurnOn={noop}
+      onClearCooldown={noop}
+    />,
+  );
+  expect(shown(html)).not.toContain("Work laptop");
+  expect(attr(html.slice(html.indexOf('data-part="limits"')), "title")).toBe(
+    "Wo***op: the provider did not answer",
+  );
+});
+
+test("in privacy mode a fix that fails names the account masked", async () => {
+  const m = await mountIn(
+    <PrivacyContext.Provider value={privacyMasks(true)}>
+      <AccountRow
+        account={account({ label: "Work laptop", disabled: true })}
+        onTurnOn={() => "could not turn on Work laptop"}
+        onClearCooldown={noop}
+      />
+    </PrivacyContext.Provider>,
+  );
+  const b = all(m.root, "button").find((n) => n.textContent === "Turn on");
+  await act(async () => {
+    b?.dispatchEvent(new Event("click"));
+  });
+  await settle();
+  expect(m.text()).toContain("could not turn on Wo***op");
+  expect(m.text()).not.toContain("Work laptop");
+  await m.unmount();
+});
+
+test("in privacy mode a tool's refusal and its settings path are masked", () => {
+  const html = hidden(
+    <ToolRow
+      client={tool({ state: "refused", config: "/home/alice/.claude/settings.json" })}
+      reason="The file belongs to alice@example.com."
+    />,
+  );
+  expect(shown(html)).not.toContain("alice@example.com");
+  expect(shown(html)).not.toContain("/home/alice");
+  expect(plain(html)).toContain("…/.claude/settings.json");
+  // Shown as it is while privacy mode is off.
+  expect(
+    plain(renderToString(<ToolRow client={tool({ config: "/home/alice/.claude/settings.json" })} />)),
+  ).toContain("/home/alice/.claude/settings.json");
+});
+
+test("in privacy mode a setting's disabled reason is masked", () => {
+  const html = hidden(
+    <SettingRow name="Port" disabled="Set by the service file of bob@example.com.">
+      <input />
+    </SettingRow>,
+  );
+  expect(shown(html)).not.toContain("bob@example.com");
+  expect(plain(html)).toContain("Set by the service file of b***@e***.com.");
+});
+
+// ---- RequestRow: attempts and the trace ---------------------------------------------------------
+
+test("an opened request lists each attempt's account, provider, model and result", () => {
+  const html = renderToString(
+    <RequestRow
+      event={event({
+        account: "acc_b",
+        tried: [
+          { account: "acc_a", provider: "pluxy/codex", model: "gpt-5", result: "rate_limit" },
+          { account: "acc_b", provider: "pluxy/claude", model: "opus-5", result: "ok" },
+        ],
+      })}
+      name={(id) => (id === "acc_a" ? "Alpha" : "Beta")}
+      open
+    />,
+  );
+  const attempts = html.slice(html.indexOf('class="request-attempts"'), html.indexOf("</ol>"));
+  const items = attempts.split("<li").slice(1);
+  expect(items).toHaveLength(2);
+  expect(items[0]).toContain('href="#/accounts/acc_a"');
+  expect(plain(`<li${items[0]}`)).toMatch(/^Alpha\W*Codex\W*gpt-5\W*Rate limited$/);
+  expect(items[1]).toContain('href="#/accounts/acc_b"');
+  expect(plain(`<li${items[1]}`)).toMatch(/^Beta\W*Claude\W*opus-5\W*Succeeded$/);
+});
+
+test("a request's trace is a link to its log, or copyable text only when the page says so", () => {
+  const linked = renderToString(<RequestRow event={event()} open />);
+  expect(linked).toContain('href="#/logs/trace-abc"');
+  const text = renderToString(<RequestRow event={event()} open trace="text" />);
+  expect(text).not.toContain('href="#/logs/');
+  expect(plain(text)).toContain("trace-abc");
+  expect(text).toContain('data-part="trace-id"');
+});
+
+test("a compact failed row says its failure once to a screen reader", () => {
+  const html = renderToString(
+    <RequestRow event={event({ failed: true, error_code: "rate_limit", status: 429 })} compact />,
+  );
+  expect(shown(html).split("Rate limited").length - 1).toBe(1);
+  // A request that worked still names its mark.
+  expect(renderToString(<RequestRow event={event()} compact />)).toContain('aria-label="Succeeded"');
+});
+
+// ---- SettingRow: one save at a time ------------------------------------------------------------
+
+test("a setting changed again while it saves sends the newer value only after the first save ends", async () => {
+  const sent: boolean[] = [];
+  const answers: ((r: Reply<unknown>) => void)[] = [];
+  let set: (v: boolean) => Promise<void> = async () => {};
+  function Probe() {
+    const s = useSetting(false, (v) => {
+      sent.push(v);
+      return new Promise<Reply<unknown>>((resolve) => answers.push(resolve));
+    });
+    set = s.set;
+    return (
+      <SettingRow name="Mode" saving={s.saving} error={s.error}>
+        <span>{String(s.value)}</span>
+      </SettingRow>
+    );
+  }
+  const m = await mountIn(<Probe />);
+  await act(async () => {
+    void set(true);
+  });
+  await act(async () => {
+    void set(false);
+  });
+  await act(async () => {
+    void set(true);
+  });
+  await settle();
+  // The first save is on its way; the later ones wait for it, and only the newest is sent.
+  expect(sent).toEqual([true]);
+  expect(m.text()).toContain("Saving…");
+  await act(async () => answers[0]?.({ status: 200, body: {} }));
+  await settle();
+  expect(sent).toEqual([true, true]);
+  expect(m.text()).toContain("Saving…");
+  await act(async () => answers[1]?.({ status: 200, body: {} }));
+  await settle();
+  expect(sent).toEqual([true, true]);
+  expect(m.text()).not.toContain("Saving…");
+  expect(m.text()).toContain("true");
+  await m.unmount();
+});
+
+// ---- ConfirmButton: the question is announced, focus comes back ---------------------------------
+
+test("ConfirmButton's answers are described by its question, and focus comes back after a confirm", async () => {
+  let confirmed = 0;
+  const m = await mountIn(
+    <ConfirmButton onConfirm={() => confirmed++} question="Delete the key Claude Code?">
+      Delete
+    </ConfirmButton>,
+  );
+  const press = async (label: string) => {
+    const b = all(m.root, "button").find((n) => n.textContent === label);
+    if (!b) throw new Error(`no ${label}`);
+    await act(async () => {
+      b.dispatchEvent(new Event("click"));
+    });
+    await settle();
+  };
+  await press("Delete");
+  const question = all(m.root, "span").find((n) => n.textContent === "Delete the key Claude Code?");
+  const id = question?.attributes.find((a) => a.name === "id")?.value;
+  expect(id).toBeTruthy();
+  for (const answer of ["Yes, delete", "Cancel"]) {
+    const b = all(m.root, "button").find((n) => n.textContent === answer);
+    expect(b?.attributes.find((a) => a.name === "aria-describedby")?.value).toBe(id);
+  }
+  expect(m.document.activeElement.textContent).toBe("Cancel");
+  // A confirm that returns at once: focus goes back to the button that asked, not to the page.
+  await press("Yes, delete");
+  expect(confirmed).toBe(1);
+  expect(m.document.activeElement.textContent).toBe("Delete");
+  expect(m.document.activeElement.localName).toBe("button");
+  await m.unmount();
+});
+
+// ---- limits not read, and read again on Refresh -------------------------------------------------
+
+test("a row whose limits were not read says so, rather than nothing", () => {
+  const html = row(account());
+  expect(plain(html.slice(html.indexOf('data-part="limits"')))).toContain("Limits not read");
+});
+
+test("a failed limits read is read again when the page refreshes, and not before", async () => {
+  const calls: string[] = [];
+  let fail = true;
+  const kit = {
+    api: {
+      quota: (id: string) => {
+        calls.push(id);
+        return Promise.resolve(
+          fail
+            ? { status: 500, error: { code: "internal", message: "no answer" } }
+            : {
+                status: 200,
+                body: {
+                  quota: { limits: [{ id: "five", window_seconds: 18000, used_percent: 40 }] },
+                  fetched_at: iso(Date.now()),
+                },
+              },
+        );
+      },
+    },
+    unauthorized: noop,
+  } as unknown as Kit;
+  const accounts = [account({ id: "one" })];
+  let refresh: () => void = noop;
+  let seen = new Map<string, Windows>();
+  function Probe() {
+    const [n, setN] = useState(0);
+    refresh = () => setN((x) => x + 1);
+    seen = useWindows(accounts, undefined, n);
+    return <p>{n}</p>;
+  }
+  const m = await mountIn(
+    <KitContext.Provider value={kit}>
+      <Probe />
+    </KitContext.Provider>,
+  );
+  expect(calls).toEqual(["one"]);
+  expect(seen.get("one")?.state).toBe("failed");
+  fail = false;
+  await act(async () => refresh());
+  await settle();
+  expect(calls).toEqual(["one", "one"]);
+  expect(seen.get("one")?.state).toBe("read");
+  // A reply that worked is kept: Refresh does not read it again.
+  await act(async () => refresh());
+  await settle();
+  expect(calls).toEqual(["one", "one"]);
+  await m.unmount();
 });
