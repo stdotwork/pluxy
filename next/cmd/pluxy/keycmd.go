@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/stdotwork/pluxy/next/internal/server"
 	"github.com/stdotwork/pluxy/next/management"
 )
 
@@ -71,150 +68,124 @@ func runKeyManagement(x *invocation) error {
 	return nil
 }
 
-// runKeyRotate is pluxy key rotate-management: core makes a new management key and writes it to
-// its config file, and the old one stops working at once. That cannot be undone, so the command
-// first makes sure the person can get the new key afterwards: from the config file it read, when
-// core's own config file has the same contents (GET /config's hash), so core will write the new
-// key there; else only from standard output, with --show-key. After the rotation it checks that
-// the file holds the new key, and prints the key when it does not: a file with core's file's
-// contents need not be core's file. When core's reply is lost, or holds no key, it finds out from
-// core and the file whether the key was rotated and where the new one is. It exits 0 only when
-// the new key was delivered or is in the file.
+// runKeyRotate is pluxy key rotate-management: pluxy changes its management key in two steps,
+// so a lost reply never leaves the person without a key that works. Stage makes a new key that
+// pluxy keeps in memory only, and names the config file pluxy runs on; the old key still works.
+// The command then makes sure the person can get the new key: on standard output with
+// --show-key, where a failed write ends it, else in the config file it read, when that is the
+// file pluxy names (os.SameFile: a copy with the same contents is another file). Only then does
+// commit put the key into use: pluxy writes it to its config file, and the old key stops working.
+// Pluxy decides a commit under its config-write lock and answers 204 for the key already in use,
+// so after a lost commit reply one more commit with the old key tells whether the key changed.
 func runKeyRotate(x *invocation) error {
 	t := x.target
 	viaConfig := t.urlFrom == fromConfig && t.keyFrom == fromConfig
 	switch {
 	case !x.opts.showKey && !viaConfig:
-		return usageError{"this command did not find core through a config file, so it cannot tell where core keeps the new key: add --show-key to print the new key once rotated"}
+		return usageError{"this command did not find pluxy through a config file, so it cannot tell where pluxy keeps the new key: add --show-key to print the new key"}
 	case !x.opts.showKey && x.json:
 		return usageError{"--json prints the API's reply, which holds the new key: add --show-key"}
 	case !x.opts.yes && !x.prompts():
-		return usageError{"rotating the management key stops every program that uses the old one: pass --yes, or run it on a terminal to be asked"}
+		return usageError{"changing the management key stops every program that uses the old one: pass --yes, or run it on a terminal to be asked"}
 	}
-	// inFile: the config file read has core's config file's contents, so core writes the new key
-	// to it. A file with other contents is another file, and core would write the new key elsewhere.
-	inFile := false
-	if t.config != "" {
-		var cur management.Config
-		if _, err := x.client.Call(x.ctx, http.MethodGet, "/config", nil, nil, &cur); err != nil {
-			return err
-		}
-		b, err := os.ReadFile(t.config)
-		inFile = err == nil && cur.Hash == contentHash(b)
-		if !inFile && !x.opts.showKey {
-			why := "its own config file has other contents, so the new key would not be written to this one"
-			if err != nil {
-				why = fmt.Sprintf("this file could not be read (%v)", err)
-			}
-			return usageError{fmt.Sprintf("core at %s does not run on %s: %s. "+
-				"Pass --config with the file core was started with, or add --show-key to print the new key once rotated", t.url, t.configName(), why)}
-		}
-	}
-	if !x.opts.yes && !confirm(x.stdin, x.stderr, fmt.Sprintf("Replace the management key of core at %s? Every program that uses the old key stops reaching core until it is given the new one. [y/N]: ", x.errCell(t.url))) {
-		x.eprintf("The management key was not rotated.\n")
+	if !x.opts.yes && !confirm(x.stdin, x.stderr, fmt.Sprintf("Replace the management key of pluxy at %s? Every program that uses the old key stops reaching pluxy until it is given the new one. [y/N]: ", x.errCell(t.url))) {
+		x.eprintf("The management key was not changed.\n")
 		return nil
 	}
-	var r struct {
-		Value string `json:"value"`
+	var staged struct {
+		Value  string `json:"value"`
+		Config string `json:"config"`
 	}
-	body, err := x.client.Call(x.ctx, http.MethodPost, "/management-key/rotate", nil, nil, &r)
+	body, err := x.client.Call(x.ctx, http.MethodPost, "/management-key/rotate/stage", nil, nil, &staged)
 	var ae *management.APIError
 	switch {
+	case errors.As(err, &ae) && ae.Status == http.StatusNotFound:
+		return fmt.Errorf("%s is an older pluxy that cannot change its key in two steps. Nothing changed. Use the pluxy command of the same version as it", t.url)
 	case errors.As(err, &ae):
-		return err // core refused, and changed nothing
+		return err // pluxy refused, and changed nothing
+	case err == nil && (staged.Value == "" || staged.Config == ""):
+		err = errors.New("its reply held no new key")
+	}
+	if err != nil {
+		return fmt.Errorf("%s did not answer the key change (%v). Nothing changed: your management key still works. Run the command again", t.url, err)
+	}
+	inFile := t.config != "" && sameFile(t.config, staged.Config)
+	if !x.opts.showKey && !inFile {
+		return usageError{fmt.Sprintf("%s runs on %s, not on %s, so the new key would not be written where this command looks. Nothing changed. Pass --config %s, or add --show-key to print the new key",
+			t.url, staged.Config, t.configName(), staged.Config)}
+	}
+	if x.opts.showKey {
+		var werr error
+		if x.json {
+			_, werr = x.stdout.Write(body)
+		} else {
+			werr = x.emit("%s\n", staged.Value)
+		}
+		if werr != nil {
+			return fmt.Errorf("the new key could not be printed (%v), so it was not put into use. Nothing changed: your management key still works", werr)
+		}
+	}
+	commit := map[string]string{"value": staged.Value}
+	_, err = x.client.Call(x.ctx, http.MethodPost, "/management-key/rotate/commit", nil, commit, nil)
+	switch {
+	case errors.As(err, &ae) && ae.Status == http.StatusConflict:
+		return x.notInUse(ae)
+	case errors.As(err, &ae):
+		return err
 	case err != nil:
-		return x.rotateUnanswered(err, inFile)
-	case r.Value == "":
-		return x.rotateUnanswered(errors.New("its reply held no new key"), inFile)
+		if err := x.commitAgain(commit, staged.Config); err != nil {
+			return err
+		}
 	}
-	// held: the config file read holds the new key. When it does not, the key is printed even
-	// without --show-key, since no file this command knows holds it.
-	held := inFile && fileKey(t.config) == r.Value
-	var werr error
+	x.eprintf("The management key is changed: the old one no longer works.\n")
+	x.eprintf("pluxy at %s wrote the new key to %s, the config file it runs on.\n", x.errCell(t.url), x.errCell(staged.Config))
 	switch {
-	case x.json:
-		_, werr = x.stdout.Write(body)
-	case x.opts.showKey || !held:
-		werr = x.emit("%s\n", r.Value)
-	}
-	x.eprintf("The management key is rotated: the old one no longer works.\n")
-	switch {
-	case held:
-		x.eprintf("Core wrote the new key to %s; pluxy commands that read that file use it from now on.\n", x.errCell(t.configName()))
-	case !x.opts.showKey:
-		x.eprintf("The new key is printed on standard output because %s does not hold it: core wrote it to the config file it runs on, which had the same contents.\n", x.errCell(t.configName()))
+	case inFile:
+		x.eprintf("pluxy commands that read %s use it from now on.\n", x.errCell(t.configName()))
 	case t.config != "":
-		x.eprintf("%s does not hold the new key: core at %s runs on another config file, which does.\n", x.errCell(t.configName()), x.errCell(t.url))
+		x.eprintf("%s does not hold the new key: it is another file.\n", x.errCell(t.configName()))
 	}
 	x.giveNewKey()
-	switch {
-	case werr != nil && held:
-		return fmt.Errorf("the new key could not be written to standard output (%v); it is in %s", werr, t.configName())
-	case werr != nil:
-		return fmt.Errorf("the new key could not be written to standard output (%v), and this command knows no file that holds it: it is in the config file core at %s runs on", werr, t.url)
-	}
 	return nil
 }
 
-// rotateUnanswered is the end of a rotation whose reply did not arrive or held no key (callErr):
-// core may have made the new key and written it to its config file before the reply was lost.
-// The old key says whether it did; the config file read, when core runs on it, holds the new key, which is
-// checked with core before it is named or, with --show-key, printed.
-func (x *invocation) rotateUnanswered(callErr error, inFile bool) error {
+// notInUse is the end of a key change whose commit pluxy answered 409: the staged key was not
+// put into use, and the old key still works.
+func (x *invocation) notInUse(err error) error {
+	return fmt.Errorf("%s did not put the new key into use (%v). Nothing changed: your management key still works. Run the command again", x.target.url, err)
+}
+
+// commitAgain sends commit once more, with the old key, after the first commit's reply was
+// lost: pluxy ran the first one, if at all, before this one. 204: this commit put the key into
+// use, or found it in use. 401: the old key no longer works, so the first one did, which the new
+// key's answer confirms. 409: neither put it into use. config is the file pluxy runs on.
+func (x *invocation) commitAgain(commit map[string]string, config string) error {
 	t := x.target
-	_, err := x.client.Call(x.ctx, http.MethodGet, "/status", nil, nil, nil)
+	_, err := x.client.Call(x.ctx, http.MethodPost, "/management-key/rotate/commit", nil, commit, nil)
 	var ae *management.APIError
 	switch {
 	case err == nil:
-		return fmt.Errorf("core at %s did not answer the rotation (%v), and the old key still works: the key was not rotated, or not yet. Run pluxy key management or pluxy status to check", t.url, callErr)
-	case !errors.As(err, &ae) || ae.Status != http.StatusUnauthorized:
-		where := "the config file core runs on"
-		if inFile {
-			where = t.configName() + ", if core rotated it"
-		}
-		return fmt.Errorf("core at %s did not answer the rotation (%v) and cannot be asked whether it rotated the key (%v). If the old key no longer works, the new one is in %s", t.url, callErr, err, where)
-	}
-	// The old key is refused: the key was rotated.
-	if inFile {
-		key := fileKey(t.config)
-		check := management.Client{URL: t.url, Key: key, HTTP: t.http}
-		var cur management.Config
-		b, rerr := os.ReadFile(t.config)
-		if _, cerr := check.Call(x.ctx, http.MethodGet, "/config", nil, nil, &cur); key != "" && cerr == nil && rerr == nil && cur.Hash == contentHash(b) {
-			x.eprintf("Core rotated the management key, but its reply was lost (%v); the old key no longer works.\n", callErr)
-			x.eprintf("Core wrote the new key to %s; pluxy commands that read that file use it from now on.\n", x.errCell(t.configName()))
-			var werr error
-			if x.opts.showKey {
-				if x.json {
-					var j []byte
-					if j, werr = json.Marshal(map[string]string{"value": key}); werr == nil {
-						werr = x.emit("%s\n", j)
-					}
-				} else {
-					werr = x.emit("%s\n", key)
-				}
-			}
-			x.giveNewKey()
-			if werr != nil {
-				return fmt.Errorf("the new key could not be written to standard output (%v); it is in %s", werr, t.configName())
-			}
+		return nil
+	case errors.As(err, &ae) && ae.Status == http.StatusConflict:
+		return x.notInUse(ae)
+	case errors.As(err, &ae) && ae.Status == http.StatusUnauthorized:
+		check := management.Client{URL: t.url, Key: commit["value"], HTTP: t.http}
+		if _, err = check.Call(x.ctx, http.MethodGet, "/status", nil, nil, nil); err == nil {
 			return nil
 		}
+		// The old key is refused, so the new one is the key unless something else changed it.
+		if x.opts.showKey {
+			return fmt.Errorf("%s refuses the old key now, but did not answer the new one (%v). Try the new key printed above", t.url, err)
+		}
+		return fmt.Errorf("%s refuses the old key now, but did not answer the new one (%v). Use the key in %s", t.url, err, config)
 	}
-	x.giveNewKey()
-	var known string
-	switch {
-	case t.config == "":
-		known = "this command read no config file"
-	case !inFile:
-		known = t.configName() + " is another file"
-	default:
-		known = t.configName() + " did not hold a key core accepts when this command checked it"
+	if x.opts.showKey {
+		return fmt.Errorf("%s stopped answering while changing the key (%v). Try the new key printed above; if it is refused, your old key still works", t.url, err)
 	}
-	return fmt.Errorf("core at %s rotated the management key, but its reply, which held the new key, was lost (%v), and the old key no longer works. The new key is in the config file core runs on; %s", t.url, callErr, known)
+	return fmt.Errorf("%s stopped answering while changing the key (%v). Use the key in %s: it holds whichever key works", t.url, err, config)
 }
 
-// giveNewKey says, after a rotation, who must be given the new key.
+// giveNewKey says, after a key change, who must be given the new key.
 func (x *invocation) giveNewKey() {
 	switch x.target.keyFrom {
 	case "PLUXY_MANAGEMENT_KEY":
@@ -223,23 +194,18 @@ func (x *invocation) giveNewKey() {
 		x.eprintf("The key given with --key was the old one: give the new one from now on.\n")
 	}
 	x.eprintf("Give the new key to every other program that used the old one: sign in to the web panel again; " +
-		"in the desktop app, enter it on the Connection page when the app connects to this core, or quit and reopen the app when it runs this core itself; " +
+		"in the desktop app, enter it on the Connection page when the app connects to this pluxy, or quit and reopen the app when it runs this pluxy itself; " +
 		"and update PLUXY_MANAGEMENT_KEY or --key wherever scripts set them.\n")
 }
 
-// contentHash is a config file's hash as GET /config shows it.
-func contentHash(b []byte) string {
-	sum := sha256.Sum256(b)
-	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
-// fileKey is the management key in the config file at path, "" when it cannot be read.
-func fileKey(path string) string {
-	cfg, err := server.LoadConfig(path)
+// sameFile reports whether the paths a and b name the same file.
+func sameFile(a, b string) bool {
+	fa, err := os.Stat(a)
 	if err != nil {
-		return ""
+		return false
 	}
-	return cfg.ManagementKey
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
 }
 
 // absPath is path made absolute, or path when that fails.

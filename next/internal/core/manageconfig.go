@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
@@ -216,6 +218,49 @@ func readStrictJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
+// stagedKeyFor is how long a staged management key can be put into use.
+const stagedKeyFor = 10 * time.Minute
+
+// stagedKey is the management key POST /management-key/rotate/stage made, kept in memory only:
+// one at a time, until it is put into use, another stage replaces it, it is stagedKeyFor old, or
+// core stops.
+type stagedKey struct {
+	mu      sync.Mutex
+	value   string
+	expires time.Time
+}
+
+func (s *stagedKey) set(value string, expires time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.value, s.expires = value, expires
+}
+
+// holds reports whether value is the staged key and has not expired at now.
+func (s *stagedKey) holds(value string, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.value != "" && now.Before(s.expires) && sameSecret(value, s.value)
+}
+
+// drop forgets the staged key when it is value: it is in use now.
+func (s *stagedKey) drop(value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sameSecret(value, s.value) {
+		s.value, s.expires = "", time.Time{}
+	}
+}
+
+// sameSecret compares two secrets in constant time, length included.
+func sameSecret(a, b string) bool {
+	x, y := sha256.Sum256([]byte(a)), sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(x[:], y[:]) == 1
+}
+
+// errKeyInUse ends a commit's edit of the config file when the key sent is already in use.
+var errKeyInUse = errors.New("the management key is already in use")
+
 // newKey returns a new random key: 26 characters, 130 random bits.
 func newKey() string { return rand.Text() }
 
@@ -419,6 +464,50 @@ func (c *Core) handleConfig(m *server.Management) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"value": key})
+	})
+
+	// The two-step change: stage makes a new key and keeps it in memory only, so the old key
+	// works until commit puts the new one into use, and a reply lost in between changes nothing.
+	// Its reply names the config file core runs on, where commit writes the key.
+	m.Handle("POST /management-key/rotate/stage", func(w http.ResponseWriter, r *http.Request) {
+		key := newKey()
+		c.staged.set(key, c.keyNow().Add(stagedKeyFor))
+		config, err := filepath.Abs(c.opts.ConfigPath)
+		if err != nil {
+			config = c.opts.ConfigPath
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"value": key, "config": config})
+	})
+
+	// Commit decides under the config-write lock, as the write itself: a commit sent again after
+	// a lost reply waits for the first, then finds its key in use and answers 204 too, so one
+	// retry tells whether the key changed.
+	m.Handle("POST /management-key/rotate/commit", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Value string `json:"value"`
+		}
+		if !readStrictJSON(w, r, &req) {
+			return
+		}
+		set := c.edit(func(d *configdoc.Doc) error { return d.SetManagementKey(req.Value) })
+		err := c.WriteConfig("management API: management key changed", func(cur []byte) ([]byte, error) {
+			switch {
+			case sameSecret(req.Value, c.Config().ManagementKey):
+				return nil, errKeyInUse
+			case !c.staged.holds(req.Value, c.keyNow()):
+				return nil, &editError{http.StatusConflict, "conflict", "this is not the staged management key: none was staged, a later stage replaced it, it is more than 10 minutes old, or pluxy restarted since. Nothing changed"}
+			}
+			return set(cur)
+		})
+		switch {
+		case errors.Is(err, errKeyInUse):
+		case err != nil:
+			c.writeChangeError(w, err)
+			return
+		default:
+			c.staged.drop(req.Value)
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	m.Handle("GET /settings", func(w http.ResponseWriter, r *http.Request) {

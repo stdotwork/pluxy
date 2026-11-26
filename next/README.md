@@ -164,19 +164,16 @@ those same ways on.
 
 The management key is the config's `management_key`. `pluxy key management` says where the key
 the commands use came from, and prints it only with `--show-key`. `pluxy key rotate-management`
-replaces it through the management API: core writes the new key to its config file, and the
-command says what must be given the new key
-([details](management/README.md#the-pluxy-command)). The old key stops working at once, so the
-command rotates only when the person can get the new one afterwards: from its standard output with
-`--show-key`, or from the config file it read, when that file has the same contents as the one
-core runs on (the `hash` core's `GET /config` shows). Matching contents do not show it is the
-same file: when the file read does not hold the new key after the rotation, the command prints the
-new key on standard output, says why, and exits 0. When core's reply is lost or holds no key, the
-command asks core with the old key whether it rotated; when it did and the file read still has
-core's file's contents and a key core accepts, the command names that file, prints the key with
-`--show-key`, and exits 0.
-Otherwise, and when the key cannot be written to standard output, it exits 1 and says what it
-knows: that the old key still works, or which file holds the new key.
+replaces it through the management API in two steps, so a lost reply never locks anyone out: core
+makes a new key and keeps it in memory only, naming the config file it runs on, while the old key
+keeps working; the command makes sure the person can get the new key, and only then has core write
+it to that file and put it into use. The person gets the new key from the command's standard output
+with `--show-key`, which must be written before the key is put into use, or from the config file
+the command read when that is the very file core runs on: a copy of it, even one with the same
+contents, is refused and nothing changes. The command says what must be given the new key
+([details](management/README.md#core)). A reply lost before the key is put into use changes
+nothing, and the command says the old key still works; when the last reply is lost, the command
+asks core once more and exits 0 if the new key is in use, otherwise 1, saying which key to try.
 
 [docs/design.md](../docs/design.md#where-a-pluxy-keeps-its-files) gives the reasons for this
 folder.
@@ -2647,7 +2644,9 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `GET /v0/management/client-keys` | The client keys: each one's `id` (a keyed hash whose key is kept in `state/key-id.key` beside the config file, mode `0600`, so IDs stay the same across restarts) and `masked` form (first and last two characters, as the old panel showed them; a key shorter than 8 characters is hidden whole). |
 | `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
-| `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
+| `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent, so a lost reply leaves the caller with neither key: the two calls below avoid that. |
+| `POST /v0/management/management-key/rotate/stage` | Makes a new random management key and keeps it in memory only: one at a time (another stage replaces it), for 10 minutes, and not across a restart. Returns it as `value`, with `config`, the absolute path of the config file core runs on. The old key keeps working and the file is not touched. |
+| `POST /v0/management/management-key/rotate/commit` | `{"value": "<staged key>"}`: writes the staged key to the config file and puts it into use; the old key stops working. 204. Decided under the config-write lock: the key already in use also answers 204 and changes nothing, so a commit sent again after a lost reply is safe. Any other value answers 409 and changes nothing. |
 | `GET /v0/management/models` | The models `GET /v1/models` lists, as one list in the same order: `models`, each with `id` (the name clients use), what the account, the catalogue and the extension say about the model (`owned_by`, `display_name`, `context_length`, `max_output_tokens`, `capabilities`, `from`, ...), `upstream` (its name upstream), `extension` (the extension of the account whose entry the list shows) and `accounts` (the IDs of the accounts a request for the name uses, as routing chooses them: one provider's, or with a fallback chain each step's in step order, highest priority first within a step). An account that serves any model because its list is not known adds no name, but is among the accounts of the names its provider serves; a fallback chain that only such accounts serve is listed as the first of them, with its step's model as `upstream`. Under the `weighted` strategy an account of `weight` 0 is in no entry. A name whose accounts all wait for a login or are turned off is left out. Never a credential. |
 | `POST /v0/management/models/refresh` | Ask providers for their model lists again now; optional JSON body `{"account": "<id>"}` for one account. Returns the updated `models` list and per-account `accounts` results (`models`, `kept`, `error`). A read that fails, times out, comes back empty or falls back to the extension's built-in list keeps the last good list (the last live one, when it was read from the provider). |
 | `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate`, `routing.timeouts` and `routing.ignition`, this core's own, under their own names (below). |
