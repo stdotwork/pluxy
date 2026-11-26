@@ -663,6 +663,9 @@ func TestRequestsConcurrentStartEndCancel(t *testing.T) {
 	stop := make(chan struct{})
 	var readers sync.WaitGroup
 	var cancelled atomic.Int64
+	// cancelSeen is closed when the first cancel has landed on a request that is still held.
+	cancelSeen := make(chan struct{})
+	var seen sync.Once
 	readers.Add(2)
 	go func() { // lists, and cancels every third request it sees
 		defer readers.Done()
@@ -676,6 +679,7 @@ func TestRequestsConcurrentStartEndCancel(t *testing.T) {
 				if (i+j)%3 == 0 {
 					if _, ok := c.q.Cancel(r.ID); ok {
 						cancelled.Add(1)
+						seen.Do(func() { close(cancelSeen) })
 					}
 				}
 			}
@@ -714,9 +718,16 @@ func TestRequestsConcurrentStartEndCancel(t *testing.T) {
 			_, _ = io.Copy(io.Discard, resp.Body)
 		}()
 	}
-	// Let the requests that were not cancelled finish, a few at a time, while more start.
+	// Nothing ends before release, so a request that is listed is still running. Hold them all
+	// until a cancel has landed on one, however long the scheduler takes to start the clients and
+	// the lister: a timer could fire before any request had started. Then let the requests that
+	// were not cancelled finish, a few at a time, while more start. If no cancel ever lands the
+	// release still comes, so the check below fails instead of the test hanging.
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-cancelSeen:
+		case <-time.After(10 * time.Second):
+		}
 		close(h.release)
 	}()
 	clients.Wait()
