@@ -3,6 +3,7 @@
 // leaves (the command itself, with stand-in commands that fail or wait), and its version.
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -19,7 +20,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkOutDir, LOCAL_RECORD, localVersion, swapIn } from "../package";
+import { checkOutDir, LOCAL_RECORD, localVersion, signAppTools, swapIn } from "../package";
 
 /** A test that needs file modes to hold: root reads and removes past them. */
 const asUser = test.skipIf(process.getuid?.() === 0);
@@ -590,5 +591,114 @@ describe("localVersion", () => {
     expect(a).toMatch(form);
     expect(b).toMatch(form);
     expect(a).not.toBe(b);
+  });
+});
+
+describe("signAppTools", () => {
+  /** What pluxy-pack -app-tools writes: app-tools/index.json and the archives it lists. */
+  function packed(): { dir: string; archives: Record<string, Buffer> } {
+    const dir = tempDir();
+    mkdirSync(join(dir, "app-tools"));
+    const archives: Record<string, Buffer> = {};
+    const packages: Record<string, unknown> = {};
+    for (const [id, extra] of [
+      ["pluxy/claude-code", { title: "Claude Code", kind: "client", tier: "pick" }],
+      ["pluxy/agent-usage", { tier: "verified" }],
+    ] as const) {
+      const url = `${id.replace("/", "-")}-0.1.0-linux-amd64.tar.gz`;
+      const bytes = randomBytes(4096);
+      archives[url] = bytes;
+      writeFileSync(join(dir, "app-tools", url), bytes);
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      packages[id] = {
+        ...extra,
+        releases: [{ version: "0.1.0", artifacts: { "linux/amd64": { url, sha256, size: bytes.length } } }],
+      };
+    }
+    writeFileSync(join(dir, "app-tools", "index.json"), JSON.stringify({ registry_version: 0, packages }));
+    return { dir, archives };
+  }
+
+  /** An Ed25519 public key from its 32 bytes in hex. */
+  const ed25519 = (hex: string) =>
+    createPublicKey({
+      key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), Buffer.from(hex, "hex")]),
+      format: "der",
+      type: "spki",
+    });
+
+  test("signs each archive's descriptor, in the verifier's field order, with a key it names", () => {
+    const { dir, archives } = packed();
+    const dest = join(tempDir(), "app-tools");
+    const r = signAppTools(dir, dest);
+    expect(r.packages).toEqual(["pluxy/agent-usage", "pluxy/claude-code"]);
+    expect(r.keyId).toMatch(/^local-build-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const publisher = JSON.parse(readFileSync(join(dest, "publisher.json"), "utf8"));
+    expect(Object.keys(publisher)).toEqual(["key_id", "public_key"]);
+    expect(publisher.key_id).toBe(r.keyId);
+    expect(publisher.public_key).toMatch(/^[0-9a-f]{64}$/);
+    // start reads publisher.json line by line: one field a line, two spaces in.
+    expect(readFileSync(join(dest, "publisher.json"), "utf8")).toBe(
+      `{\n  "key_id": "${r.keyId}",\n  "public_key": "${publisher.public_key}"\n}\n`,
+    );
+    const index = JSON.parse(readFileSync(join(dest, "index.json"), "utf8"));
+    expect(index.packages["pluxy/claude-code"].title).toBe("Claude Code");
+    type Artifact = Record<"url" | "sha256" | "key_id" | "public_key" | "descriptor" | "signature", string>;
+    type Listed = { releases: { artifacts: Record<string, Artifact> }[] };
+    for (const [id, p] of Object.entries(index.packages as Record<string, Listed>)) {
+      const a = p.releases[0]?.artifacts["linux/amd64"] as Artifact;
+      const bytes = archives[a.url] as Buffer;
+      expect(readFileSync(join(dest, a.url)).equals(bytes)).toBe(true);
+      expect(a.key_id).toBe(r.keyId);
+      expect(a.public_key).toBe(publisher.public_key);
+      expect(a.descriptor).toBe(
+        `{"id":"${id}","version":"0.1.0","tier":"native","platform":"linux/amd64","size":${bytes.length},"sha256":"${a.sha256}"}`,
+      );
+      expect(
+        verify(null, Buffer.from(a.descriptor), ed25519(a.public_key), Buffer.from(a.signature, "hex")),
+      ).toBe(true);
+    }
+    expect(readdirSync(dest).sort()).toEqual(
+      [...Object.keys(archives), "index.json", "publisher.json"].sort(),
+    );
+  });
+
+  test("writes no private key, in PEM or JWK form, into any file", () => {
+    const dest = join(tempDir(), "app-tools");
+    signAppTools(packed().dir, dest);
+    for (const name of readdirSync(dest)) {
+      const text = readFileSync(join(dest, name), "latin1");
+      expect(text).not.toContain("PRIVATE KEY");
+      expect(text).not.toMatch(/"d"\s*:/);
+    }
+  });
+
+  test("makes a new key each time", () => {
+    const { dir } = packed();
+    const a = signAppTools(dir, join(tempDir(), "a"));
+    const b = signAppTools(dir, join(tempDir(), "b"));
+    expect(a.keyId).not.toBe(b.keyId);
+  });
+
+  test("refuses an archive whose bytes are not the ones the index lists", () => {
+    const { dir, archives } = packed();
+    const url = Object.keys(archives)[0] as string;
+    const bytes = Buffer.from(archives[url] as Buffer);
+    bytes[100] = (bytes[100] as number) ^ 1;
+    writeFileSync(join(dir, "app-tools", url), bytes);
+    expect(() => signAppTools(dir, join(tempDir(), "app-tools"))).toThrow(
+      `${url}: its size or SHA-256 differs from the index pluxy-pack wrote`,
+    );
+  });
+
+  test("refuses an archive named outside the index's folder", () => {
+    const { dir } = packed();
+    const path = join(dir, "app-tools", "index.json");
+    const index = JSON.parse(readFileSync(path, "utf8"));
+    index.packages["pluxy/agent-usage"].releases[0].artifacts["linux/amd64"].url = "../elsewhere.tar.gz";
+    writeFileSync(path, JSON.stringify(index));
+    expect(() => signAppTools(dir, join(tempDir(), "app-tools"))).toThrow(
+      "pluxy/agent-usage 0.1.0: its archive is not named as a file beside the index",
+    );
   });
 });

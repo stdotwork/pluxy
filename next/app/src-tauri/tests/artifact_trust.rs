@@ -692,3 +692,161 @@ fn updater_gate_passes_only_the_test_package() {
     let error = trust::updater_gate(&package, &f.dir).unwrap_err();
     assert!(error.contains("updater trust not configured"), "{error}");
 }
+
+/// The local build's add-ons as `start` (local-start.sh) sets the app up to trust them: the trust
+/// profile and add-on source it writes let the app install an add-on signed the way package.ts
+/// signs them (signAppTools), and one flipped byte in that add-on's archive is refused. With
+/// PLUXY_LOCAL_BUILD naming a built local build's folder, the same runs with that build's own
+/// `start`, signed index and every one of its archives (copies of them: the build is not changed).
+#[cfg(all(feature = "artifact-test-trust", target_os = "linux"))]
+#[test]
+fn local_build_start_trusts_its_add_ons_and_refuses_a_flipped_byte() {
+    use std::os::unix::fs::PermissionsExt;
+    if isolated("local_build_start_trusts_its_add_ons_and_refuses_a_flipped_byte") {
+        return;
+    }
+    let base = PathBuf::from(std::env::var_os("HOME").unwrap());
+    fs::create_dir(&base).unwrap();
+    let build = base.join("build");
+    let tools = build.join("lib").join("pluxy Local").join("app-tools");
+    fs::create_dir_all(build.join("bin")).unwrap();
+    fs::create_dir_all(&tools).unwrap();
+    let executable = |p: &std::path::Path| {
+        fs::set_permissions(p, fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    // A stand-in for the app: it writes down the HOME and nonce start gave it.
+    let app = build.join("bin").join("pluxy-app-local");
+    fs::write(
+        &app,
+        "#!/bin/sh\nprintf '%s\\n%s\\n' \"$HOME\" \"$PLUXY_TEST_TRUST_NONCE\" >\"$0.ran\"\n",
+    )
+    .unwrap();
+    executable(&app);
+    let real = std::env::var_os("PLUXY_LOCAL_BUILD").map(PathBuf::from);
+    let start = match &real {
+        Some(r) => r.join("start"),
+        None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../local-start.sh"),
+    };
+    fs::copy(start, build.join("start")).unwrap();
+    executable(&build.join("start"));
+    match &real {
+        Some(r) => {
+            for e in fs::read_dir(r.join("lib").join("pluxy Local").join("app-tools")).unwrap() {
+                let e = e.unwrap();
+                fs::copy(e.path(), tools.join(e.file_name())).unwrap();
+            }
+        }
+        None => signed_like_package_ts(&base, &tools),
+    }
+    let index: serde_json::Value =
+        serde_json::from_slice(&fs::read(tools.join("index.json")).unwrap()).unwrap();
+    let ids: Vec<String> = index["packages"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    assert!(!ids.is_empty());
+
+    let out = std::process::Command::new(build.join("start"))
+        .env("HOME", &base)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("PLUXY_TEST_TRUST_NONCE")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "start failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let ran = fs::read_to_string(build.join("bin").join("pluxy-app-local.ran")).unwrap();
+    let (home, nonce) = ran.trim_end().split_once('\n').unwrap();
+    assert_eq!(
+        PathBuf::from(home),
+        build.join("home").canonicalize().unwrap()
+    );
+    // What the app does at its start: the trust of its process HOME, and its add-on sources.
+    std::env::set_var("HOME", home);
+    std::env::set_var("PLUXY_TEST_TRUST_NONCE", nonce);
+    let store = TrustStore::load(std::path::Path::new(home)).unwrap();
+    store.require_native().unwrap();
+    let identifier = "dev.pluxy.desktop.local";
+    let dirs = || pluxy_app::device::Dirs {
+        root: PathBuf::from(home)
+            .join(".local/share")
+            .join(identifier)
+            .join("device-packages"),
+        registries: PathBuf::from(home)
+            .join(".config")
+            .join(identifier)
+            .join("device-registries.json"),
+    };
+    for id in &ids {
+        pluxy_app::device::stage_from_registry(&dirs(), &store, "local-build", id, None)
+            .unwrap_or_else(|e| panic!("{id} from this build was refused: {e}"));
+    }
+    for id in &ids {
+        let release = &index["packages"][id]["releases"][0];
+        let url = release["artifacts"]["linux/amd64"]["url"].as_str().unwrap();
+        let path = tools.join(url);
+        let mut bytes = fs::read(&path).unwrap();
+        let at = bytes.len() / 2;
+        bytes[at] ^= 1;
+        fs::write(&path, &bytes).unwrap();
+        let refused =
+            pluxy_app::device::stage_from_registry(&dirs(), &store, "local-build", id, None)
+                .err()
+                .unwrap_or_else(|| panic!("{id} was installed with one byte of {url} flipped"));
+        assert!(refused.contains("SHA-256"), "{id}: {refused}");
+    }
+}
+
+/// A coding-tool add-on, pluxy/notes, packed and signed into tools as package.ts's signAppTools
+/// writes them: the archive, index.json listing it with its descriptor (the same bytes, in the
+/// same field order) and signature, and publisher.json with the key's ID and public key.
+#[cfg(all(feature = "artifact-test-trust", target_os = "linux"))]
+fn signed_like_package_ts(base: &std::path::Path, tools: &std::path::Path) {
+    use sha2::{Digest, Sha256};
+    let package = base.join("package");
+    fs::create_dir(&package).unwrap();
+    fs::write(package.join("pluxy-extension.json"), br#"{"manifest_version":1,"id":"pluxy/notes","version":"0.1.0","app":{"version":0,"tier":"native","host_versions":[0],"programs":{"linux/amd64":"tool"},"operations":[{"id":"inspect","description":"Inspect fixture","input_schema":{},"output_schema":{}}],"state":{"version":0,"readable_versions":[0]}}}"#).unwrap();
+    fs::write(package.join("tool"), b"#!/bin/sh\nexit 0\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(package.join("tool"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let url = "pluxy-notes-0.1.0-linux-amd64.tar.gz";
+    assert!(std::process::Command::new("tar")
+        .arg("-czf")
+        .arg(tools.join(url))
+        .arg("-C")
+        .arg(&package)
+        .args(["pluxy-extension.json", "tool"])
+        .status()
+        .unwrap()
+        .success());
+    let archive = fs::read(tools.join(url)).unwrap();
+    let sha256 = artifact::hex(&Sha256::digest(&archive));
+    let mut seed = [0; 32];
+    getrandom::fill(&mut seed).unwrap();
+    let key = SigningKey::from_bytes(&seed);
+    let key_id = "local-build-00000000-0000-4000-8000-000000000000";
+    let public_key = artifact::hex(key.verifying_key().as_bytes());
+    let descriptor = format!(
+        r#"{{"id":"pluxy/notes","version":"0.1.0","tier":"native","platform":"linux/amd64","size":{},"sha256":"{sha256}"}}"#,
+        archive.len()
+    );
+    let signature = artifact::hex(&key.sign(descriptor.as_bytes()).to_bytes());
+    let index = json!({"registry_version": 0, "packages": {"pluxy/notes": {"tier": "pick", "releases": [{"version": "0.1.0", "artifacts": {"linux/amd64": {"url": url, "sha256": sha256, "size": archive.len(), "key_id": key_id, "public_key": public_key, "descriptor": descriptor, "signature": signature}}}]}}});
+    fs::write(
+        tools.join("index.json"),
+        serde_json::to_vec_pretty(&index).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        tools.join("publisher.json"),
+        format!("{{\n  \"key_id\": \"{key_id}\",\n  \"public_key\": \"{public_key}\"\n}}\n"),
+    )
+    .unwrap();
+}
