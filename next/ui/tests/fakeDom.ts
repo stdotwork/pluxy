@@ -97,6 +97,12 @@ export class FakeNode {
     );
   }
 
+  /** Whether node is this one or below it, as a page asks of the focused element. */
+  contains(node: FakeNode | null): boolean {
+    for (let at = node; at; at = at.parentNode) if (at === this) return true;
+    return false;
+  }
+
   /** Finds nothing: a page that looks for an element to focus finds none. */
   querySelector() {
     return null;
