@@ -40,7 +40,8 @@ const t = strings("omp", {
   models: "Models",
   model: "Default model",
   modelNote: "The model Oh My Pi starts with. Oh My Pi lists pluxy's other models itself.",
-  invalid: "Enter one model ID, with no spaces or commas, not starting with @ or *.",
+  invalid:
+    "Enter one model ID of at most 240 characters, with no spaces, commas or control characters, not starting with @ or *.",
 });
 
 interface Preview extends ToolPreview {
@@ -85,9 +86,15 @@ export function OmpPage() {
   const dirty = model !== read;
   const st = s.preview?.config.state === "refused" ? undefined : s.preview?.config;
   const pinned = s.preview?.targets.map((x) => x.target) ?? [];
-  const paths =
-    (where === "default" ? s.found?.config : undefined) ??
-    (pinned.length > 0 ? pinned : [where === "root" ? root.trim() : "~/.omp/agent/models.yml"]);
+  // Before a read, the head names what the person chose: the default file, the folder, or the two
+  // files typed.
+  const chosen =
+    where === "root"
+      ? [root.trim()]
+      : where === "files"
+        ? [modelsFile.trim(), settingsFile.trim()].filter(Boolean)
+        : ["~/.omp/agent/models.yml"];
+  const paths = (where === "default" ? s.found?.config : undefined) ?? (pinned.length > 0 ? pinned : chosen);
 
   return (
     <div class="tool-page" data-tool="omp">

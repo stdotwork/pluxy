@@ -59,7 +59,7 @@ const codexModel = (slug: string) => ({
   tool_search: false,
 });
 const codex = (state: string, applied = false) => ({
-  targets: pin("/home/me/.codex/config.toml"),
+  targets: [...pin("/home/me/.codex/config.toml"), ...pin("/home/me/.codex/pluxy-model-catalog.json")],
   applied,
   settings: {
     state,
@@ -74,7 +74,11 @@ const codex = (state: string, applied = false) => ({
   },
 });
 const desktop = (state: string, applied = false) => ({
-  targets: pin("/home/me/.config/Claude-3p/claude_desktop_config.json"),
+  targets: [
+    "claude_desktop_config.json",
+    "configLibrary/00000000-0000-4000-8000-000000831700.json",
+    "configLibrary/_meta.json",
+  ].flatMap((f) => pin(`/home/me/.config/Claude-3p/${f}`)),
   applied,
   settings: {
     state,
@@ -120,9 +124,9 @@ const plugin = (installed = true) => ({
   update: false,
   foreign: false,
 });
-const pi = (state: string, applied = false, adapter = plugin()) => ({
+const pi = (state: string, applied = false, adapter = plugin(), agent = "/home/me/.pi/agent") => ({
   targets: ["cliproxyapi.json", "settings.json", "cliproxyapi-models.json"].flatMap((f) =>
-    pin(`/home/me/.pi/agent/${f}`),
+    pin(`${agent}/${f}`),
   ),
   applied,
   pi: { state, key_set: state === "configured", model: "gpt-6.1-sol", adapter },
@@ -788,6 +792,34 @@ describe("the add-on list could not be read", () => {
   });
 });
 
+describe("the add-on list could not be read again", () => {
+  for (const tool of TOOLS) {
+    test(`${tool.name}: after a good read, nothing is read or written until the list is read again`, async () => {
+      let broken = false;
+      const ch = channel({
+        catalog: () => (broken ? new Error("the device catalog is locked") : catalogOf()),
+      });
+      const page = await mount(tool.page, ch.invoke);
+      ch.reads[0]?.answer(tool.read("not-configured"));
+      await settle();
+      expect(page.canPress(`Connect ${tool.name}`)).toBe(true);
+      // The native side says the add-ons changed, and reading them again fails: nobody knows
+      // whether the add-on is still on.
+      broken = true;
+      await ch.emit("pluxy-device");
+      expect(page.text()).toContain(
+        `Could not check the ${tool.name} add-on again, so nothing is read or written until it is. The device catalog is locked`,
+      );
+      expect(page.hasButton(`Connect ${tool.name}`)).toBe(false);
+      expect(page.text()).not.toContain(MORE);
+      broken = false;
+      await page.click("Try again");
+      expect(page.canPress(`Connect ${tool.name}`)).toBe(true);
+      expect(ch.writes).toEqual([]);
+    });
+  }
+});
+
 describe("a read that fails after a good one", () => {
   for (const tool of TOOLS) {
     test(`${tool.name}: the reading shown says it may be out of date, and every write waits`, async () => {
@@ -897,6 +929,55 @@ describe("privacy mode", () => {
       expect(backups?.textContent).not.toContain("alice");
     });
   }
+
+  test("OpenCode's model IDs and names, and Remove model's question, are masked", async () => {
+    const { ch, page } = await privately(TOOLS[3] as Tool);
+    const read = opencode("not-configured");
+    ch.reads[0]?.answer({
+      ...read,
+      config: {
+        ...read.config,
+        model: "team/alice@example.com",
+        models: [{ id: "team/alice@example.com", name: "alice@example.com's model", attachment: false }],
+      },
+    });
+    await settle();
+    // The row, the default model's choice and the line saying pluxy does not serve it.
+    expect(page.text()).toContain("Your accounts do not offer team/");
+    expect(page.text()).not.toContain("alice");
+    await page.click("Remove model");
+    expect(page.text()).toContain("from the list?");
+    expect(page.text()).not.toContain("alice");
+  });
+
+  test("Grok Build's model IDs and names are masked", async () => {
+    const { ch, page } = await privately(TOOLS[5] as Tool);
+    const read = grok("not-configured");
+    ch.reads[0]?.answer({
+      ...read,
+      settings: {
+        ...read.settings,
+        model: "alice@example.com-m",
+        models: [{ model: "alice@example.com-m", name: "alice@example.com M", context_window: null }],
+      },
+    });
+    await settle();
+    expect(page.text()).toContain("Your accounts do not offer ");
+    expect(page.text()).not.toContain("alice");
+  });
+
+  test("Start's failure to list terminals is masked", async () => {
+    const { ch, page } = await privately(TOOLS[6] as Tool, {
+      commands: {
+        launcher_terminals: () =>
+          new Error("cannot list the terminals in /home/alice/.local/share/applications"),
+      },
+    });
+    ch.reads[0]?.answer(hermes("not-configured"));
+    await settle();
+    expect(page.text()).toContain("cannot list the terminals in …/share/applications");
+    expect(page.text()).not.toContain("alice");
+  });
 
   test("Start's recent folders are masked", async () => {
     const { ch, page } = await privately(TOOLS[0] as Tool, {
@@ -1102,15 +1183,104 @@ describe("OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi", () => {
     expect(applies(ch).length).toBe(1);
   });
 
-  test("Oh My Pi: a list or a role is not one model, and Connect waits", async () => {
-    const { page } = await opened(rest[1] as Tool, "not-configured");
-    for (const bad of ["a,b", "@slow"]) {
+  test("Hermes Agent: an ID Hermes would read as a number, a date or yes/no holds Connect and says why", async () => {
+    const { ch, page } = await opened(rest[3] as Tool, "not-configured");
+    for (const bad of ["1.5", "yes", "2026-11-14", "0x1F", "1:30"]) {
       await page.type("Default model", bad);
       await settle();
       expect(page.text()).toContain(
-        "Enter one model ID, with no spaces or commas, not starting with @ or *.",
+        "Hermes Agent would read that as a number, a date or yes/no, not as a model ID.",
       );
-      expect(page.canPress("Connect Oh My Pi")).toBe(false);
+      expect(page.text()).not.toContain(`Your accounts do not offer ${bad}`);
+      expect([bad, page.canPress("Connect Hermes Agent")]).toEqual([bad, false]);
+    }
+    await page.type("Default model", "1.5-pro");
+    await settle();
+    expect(page.text()).not.toContain("Hermes Agent would read that");
+    await page.click("Connect Hermes Agent");
+    expect(applies(ch).map((w) => w.input.model)).toEqual(["1.5-pro"]);
+  });
+
+  test("Oh My Pi: a list, a role, a long ID or a control character is not one model, and Connect waits", async () => {
+    const { page } = await opened(rest[1] as Tool, "not-configured");
+    for (const bad of ["a,b", "@slow", "x".repeat(241), "a\u0007b"]) {
+      await page.type("Default model", bad);
+      await settle();
+      expect(page.text()).toContain(
+        "Enter one model ID of at most 240 characters, with no spaces, commas or control characters, not starting with @ or *.",
+      );
+      expect([bad, page.canPress("Connect Oh My Pi")]).toEqual([bad, false]);
+    }
+  });
+
+  test("Oh My Pi: before Other files are read, the head names the files typed, not the default one", async () => {
+    const { page } = await opened(rest[1] as Tool, "not-configured");
+    await page.open(MORE);
+    await page.pick("Other files");
+    await page.type("Models file", "/home/me/omp/models.yml");
+    await page.type("Settings file", "/home/me/omp/config.yml");
+    await settle();
+    const head = all(page.root, "header").find((h) => h.getAttribute("class") === "tool-head");
+    expect(head?.textContent).toContain("/home/me/omp/models.yml, /home/me/omp/config.yml");
+    expect(head?.textContent).not.toContain(".omp/agent");
+  });
+
+  test("Pi: a control character is not a model ID, and Connect waits", async () => {
+    const { page } = await opened(rest[4] as Tool, "not-configured");
+    await page.type("Default model", "a\u0000b");
+    await settle();
+    expect(page.text()).toContain(
+      "Enter one model ID of at most 240 characters, with no spaces or control characters.",
+    );
+    expect(page.canPress("Connect Pi")).toBe(false);
+  });
+
+  test("OpenCode: a model listed twice, or a name with a control character, holds Connect and says why", async () => {
+    const cases: [{ id: string; name: string; attachment: boolean }[], string][] = [
+      [
+        [
+          { id: "gpt-6.1-sol", name: "", attachment: false },
+          { id: "gpt-6.1-sol ", name: "", attachment: false },
+        ],
+        "A model is listed twice: remove one.",
+      ],
+      [
+        [{ id: "gpt-6.1-sol", name: "GPT\u0007", attachment: false }],
+        "Model IDs cannot be empty or hold # or control characters, names cannot hold control characters, and IDs and names are at most 240 characters.",
+      ],
+    ];
+    for (const [models, line] of cases) {
+      const ch = channel();
+      const page = await mount(() => <OpenCodePage />, ch.invoke);
+      const r = opencode("not-configured");
+      ch.reads[0]?.answer({ ...r, config: { ...r.config, models } });
+      await settle();
+      expect(page.text()).toContain(line);
+      expect(page.canPress("Connect OpenCode")).toBe(false);
+    }
+  });
+
+  test("Grok Build: model text the add-on refuses, or a model listed twice, holds Connect and says why", async () => {
+    const entry = (model: string, name: string | null = null) => ({ model, name, context_window: null });
+    const cases: [Record<string, unknown>, string][] = [
+      [
+        { models: [entry("gpt 6")], model: "gpt 6" },
+        "Each model listed needs an ID of 1 to 240 characters with no spaces or control characters, and a name of at most 240 characters with no control characters.",
+      ],
+      [
+        { models: [entry("gpt-6.1-sol", "GPT\u0000")] },
+        "Each model listed needs an ID of 1 to 240 characters with no spaces or control characters, and a name of at most 240 characters with no control characters.",
+      ],
+      [{ models: [entry("gpt-6.1-sol"), entry("gpt-6.1-sol ")] }, "A model is listed twice: turn one off."],
+    ];
+    for (const [settings, line] of cases) {
+      const ch = channel();
+      const page = await mount(() => <GrokPage />, ch.invoke);
+      const r = grok("not-configured");
+      ch.reads[0]?.answer({ ...r, settings: { ...r.settings, ...settings } });
+      await settle();
+      expect(page.text()).toContain(line);
+      expect(page.canPress("Connect Grok Build")).toBe(false);
     }
   });
 
@@ -1227,13 +1397,23 @@ describe("OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi", () => {
   test("Pi: Update plugin, offered only when a newer plugin is ready, updates the folder read; Uninstall plugin asks first", async () => {
     const current = await opened(rest[4] as Tool, "configured", {}, true);
     expect(current.page.hasButton("Update plugin")).toBe(false);
+    // The add-on says update for any other version; an installed copy newer than the add-on's is
+    // not offered the older one.
+    const newer = channel();
+    const ahead = await mount(() => <PiPage />, newer.invoke);
+    newer.reads[0]?.answer(pi("configured", true, { ...plugin(), version: "1.1.0", update: true }));
+    await settle();
+    expect(ahead.text()).toContain("Version 1.1.0 is installed. It lets Pi reach pluxy.");
+    expect(ahead.hasButton("Update plugin")).toBe(false);
     const ch = channel();
     const page = await mount(() => <PiPage />, ch.invoke);
-    ch.reads[0]?.answer(pi("configured", true, { ...plugin(), version: "0.9.0", update: true }));
+    // The reading found Pi's files in another agent folder than the default one.
+    const agent = "/home/me/profiles/work/agent";
+    ch.reads[0]?.answer(pi("configured", true, { ...plugin(), version: "0.9.0", update: true }, agent));
     await settle();
     expect(page.text()).toContain("Version 0.9.0 is installed. Update plugin installs version 1.0.0.");
     await page.click("Update plugin");
-    expect(op(ch, "update")?.args.input).toEqual({ folder: "/home/me/.pi/agent" });
+    expect(op(ch, "update")?.args.input).toEqual({ folder: agent });
     expect(typeof op(ch, "update")?.args.ticket).toBe("string");
     ch.pending()?.answer(pi("configured", true));
     await settle();

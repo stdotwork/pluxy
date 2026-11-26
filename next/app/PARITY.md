@@ -35,7 +35,9 @@ which has full access to your user account. Every client page works the same way
   chezmoi make, is followed and kept as a link.
 - **Connect** (or **Update**, **Save**), **Disconnect** and **Restore backup** write only the files
   that reading pinned, after a native confirmation that names them and the key's label. Disconnect
-  keeps the edits you made since Connect; Restore backup puts the original bytes back.
+  keeps the edits you made since Connect; Restore backup puts the original bytes back. Pi's plugin
+  folder is not pinned yet: installing, updating and removing Pi's plugin act on the plugin folder
+  as the tool finds it when it runs ([README](README.md#pi)).
 - **Backups** keeps up to 10 manual backups of the client's files in the app's vault.
 - The key comes from the vault and goes to the tool on its private pipe. It is written into the
   client's own config file, and never into a launch's arguments or environment.
@@ -161,7 +163,7 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | --- | --- | --- | --- |
 | Claude Code, Codex, Claude Desktop, OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi setup and launch | Kept | The main clients | A window page and a tool for each ([above](#agent-clients)) |
 | Kimi Code, OpenClaw, ZCode, DeepSeek Harness, WorkBuddy, Antigravity CLI, Copilot CLI and VSCode Copilot setup and launch | Deferred | The rebuild covers the main clients first; these follow later | Not in the app yet |
-| Client setup inside WSL distributions | Deferred | Part of the later Windows work; the Claude Code page is the first, in part | On the Claude Code page: its Linux build runs in a WSL distribution and user the app knows (`pluxy/wsl` lists, checks and prepares them), and Start CLI starts it there; Apply does not work there yet (the vault's secrets and client keys are Linux only), and the other clients follow later ([README](README.md), "In WSL") |
+| Client setup inside WSL distributions | Deferred | Part of the later Windows work; the Claude Code page is the first, in part | On the Claude Code page: its Linux build runs in a WSL distribution and user the app knows (`pluxy/wsl` lists, checks and prepares them), and **Start Claude Code** starts it there; **Connect** makes and keeps the key on Windows, and the tool's write in the distribution gets it after its confirmation; the other clients follow later ([README](README.md), "In WSL") |
 | Executable and folder overrides, terminal choice and recent working folders | Kept | They let a launch use the person's own install and folders | Each tool page's Start section and the Launcher page |
 | Showing, hiding, searching and resetting the list of clients | Kept | The person chooses which clients the navigation shows | The Manage Clients page ([README](README.md#manage-clients)): by default the navigation lists the clients whose tool is installed |
 | Codex's OAuth sign-in method and its OpenAI provider-identity switch | Deferred | Not built now: the core takes no ChatGPT login from a client, so the sign-in could not reach it. A later change could add a separate Codex profile for it | Codex uses a client key |

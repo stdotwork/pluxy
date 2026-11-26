@@ -73,6 +73,9 @@ const t = strings("grok", {
   heldTooMany: "Grok Build takes at most {max} models from here: turn some off.",
   heldWindow: "Each context window must be a whole number from 1 to {max}.",
   heldModel: "Choose a default model from the models listed.",
+  heldText:
+    "Each model listed needs an ID of 1 to 240 characters with no spaces or control characters, and a name of at most 240 characters with no control characters.",
+  heldTwice: "A model is listed twice: turn one off.",
 });
 
 interface Preview extends ToolPreview {
@@ -83,6 +86,8 @@ const HELD: Record<Held, () => string> = {
   none: () => t("heldNone"),
   "too-many": () => t("heldTooMany", { max: MODELS_MAX }),
   window: () => t("heldWindow", { max: WINDOW_MAX }),
+  text: () => t("heldText"),
+  twice: () => t("heldTwice"),
   model: () => t("heldModel"),
 };
 
@@ -182,7 +187,11 @@ export function GrokPage() {
             </div>
           )}
           {form.rows.map((r, i) => (
-            <SettingRow key={r.model} name={r.name} description={r.name === r.model ? undefined : r.model}>
+            <SettingRow
+              key={r.model}
+              name={shown.text(r.name)}
+              description={r.name === r.model ? undefined : shown.text(r.model)}
+            >
               <span class="tool-inline">
                 <Switch label={t("listed")} checked={r.on} onChange={(on) => setRow(i, { on })} />
                 <span class="muted">{t("window")}</span>
@@ -209,11 +218,11 @@ export function GrokPage() {
               onChange={(e) => edit({ model: e.currentTarget.value })}
             >
               {!names.includes(form.model) && (
-                <option value={form.model}>{form.model || t("chooseModel")}</option>
+                <option value={form.model}>{form.model ? shown.text(form.model) : t("chooseModel")}</option>
               )}
               {chosen.map((r) => (
                 <option key={r.model} value={r.model}>
-                  {r.name}
+                  {shown.text(r.name)}
                 </option>
               ))}
             </select>

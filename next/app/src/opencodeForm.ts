@@ -1,6 +1,8 @@
 // The OpenCode page's form logic (opencode.tsx), apart from the page so its unit tests need no
 // webview: the models' Attachments default, and why the form cannot be written yet.
 
+import { hasControl, length, trimText } from "./textRules";
+
 export const PACKAGE = "pluxy/opencode";
 /** The client label the tool's CLI recipe gives its launches, which the launcher keys recent
  * folders by. */
@@ -63,27 +65,23 @@ const TEXT_MAX = 240;
 /** The most models one apply writes (the tool's limit). */
 export const MODELS_MAX = 256;
 
-/** Why the form cannot be written yet: no models, more than the tool takes, an ID or name it
- * would refuse (empty, a control character or #, more than 240 characters), or a default that is
- * not one of the models. Empty when it can be written. */
-export type Held = "none" | "too-many" | "text" | "model";
+/** Why the form cannot be written yet, as the tool's apply would refuse it (opencode's
+ * `Settings::from_input`, which trims each ID and name first): no models, more than the tool takes,
+ * an ID or name it would refuse (an ID empty, with a control character or #, a name with a control
+ * character, either more than 240 characters), an ID listed twice, or a default that is not one of
+ * the models. Empty when it can be written. */
+export type Held = "none" | "too-many" | "text" | "twice" | "model";
+
+const idOk = (id: string) => id !== "" && length(id) <= TEXT_MAX && !hasControl(id) && !id.includes("#");
+const nameOk = (name: string) => length(name) <= TEXT_MAX && !hasControl(name);
 
 export function heldOf(models: Model[], model: string): Held[] {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it refuses
-  const bad = /[\u0000-\u001f\u007f#]/;
   const held: Held[] = [];
   if (models.length === 0) return ["none"];
   if (models.length > MODELS_MAX) held.push("too-many");
-  if (
-    !models.every(
-      (m) =>
-        m.id.trim() !== "" &&
-        m.id.trim().length <= TEXT_MAX &&
-        !bad.test(m.id) &&
-        m.name.trim().length <= TEXT_MAX,
-    )
-  )
-    held.push("text");
-  if (!models.some((m) => m.id === model)) held.push("model");
+  const ids = models.map((m) => trimText(m.id));
+  if (!models.every((m, i) => idOk(ids[i] as string) && nameOk(trimText(m.name)))) held.push("text");
+  if (new Set(ids).size < ids.length) held.push("twice");
+  if (!ids.includes(trimText(model))) held.push("model");
   return held;
 }

@@ -1177,7 +1177,8 @@ the page.
   tool's add-on missing it says so and links to Add-ons; with it off it offers **Turn on add-on**
   (the native confirmation enables it); in safe mode it says tool add-ons are paused. It reads no
   file then. When the packages cannot be read, it says so with **Try again**, and reads and offers
-  nothing until they are.
+  nothing until they are. A read of them that fails later (the native side says they changed, and
+  reading them again fails) does the same, even when an earlier read found the add-on on.
 - **Reading:** the default settings file is read as the page opens, again for another WSL
   environment, and again when the person comes back to **Default**. Another file is chosen under
   **Settings file, key and backups** and read with **Read this file**; choosing another file drops
@@ -1185,7 +1186,9 @@ the page.
   fails after a good one leaves the reading on screen with a line saying it may be out of date, and
   nothing is written until a read succeeds (**Try again**).
 - **Writes go to the file shown:** each write sends the pinned targets of the reading on screen
-  (the add-on refuses a file that changed since). While a write or its confirmation waits, the
+  (the add-on refuses a file that changed since). Pi's plugin folder is not pinned yet: installing,
+  updating and removing the plugin act on the plugin folder in Pi's agent folder as the add-on finds
+  it when it runs (see [Pi](#pi)). While a write or its confirmation waits, the
   file and environment choices are locked. Each write's `program_call` carries a ticket, and
   leaving the page withdraws a confirmation still open (`program_cancel`); a Connect whose key
   window closes after the page was left writes nothing.
@@ -1227,7 +1230,10 @@ the page.
   through `nativeReply`, which turns the native side's words into the page's (`core` becomes
   `pluxy`, a client key a key, the vault the app). In privacy mode the pages mask what they show
   of paths (the home folder's user name, and all but the last two parts), WSL users' names,
-  account IDs, and the errors and reasons the native side gives.
+  account IDs, the errors and reasons the native side gives (the Start section's too), and the
+  e-mail addresses, URL credentials and paths in model IDs and names shown as text (model lists,
+  default model choices, the unserved line and **Remove model**'s question). A field being edited
+  shows its value as typed.
 
 `readExtraTools` (`src/clientPage.tsx`) reads Claude Desktop, Grok Build and Hermes Agent for
 the Tools list in the app: each add-on that is on previews its tool's default settings; a reading
@@ -1319,8 +1325,10 @@ list**, the models OpenCode shows under the pluxy provider: **Import models from
 pluxy serves, only when pressed, and **Add model** one by ID; each has a display name, an
 **Attachments** switch (images and PDFs; a new model starts from the old app's list of model names
 that take images) and **Remove model**, which asks first. **Default model** is one of them. Connect
-is held, with each reason, until the list has 1 to 256 models whose IDs OpenCode takes (no `#` or
-control characters, at most 240 characters) and the default is one of them (`src/opencodeForm.ts`).
+is held, with each reason, until the list has 1 to 256 models, each listed once, whose IDs OpenCode
+takes (no `#` or control characters) and whose display names have no control characters, each at
+most 240 characters once trimmed (as the tool trims them), and the default is one of them
+(`src/opencodeForm.ts`).
 **Start OpenCode** asks the tool for its recipe (`opencode` in a terminal, no arguments;
 `~/.opencode/bin/opencode`, where OpenCode's install script puts it, when that exists). **Start
 OpenCode Desktop** starts the app (`/opt/OpenCode/ai.opencode`, or OpenCode 1's
@@ -1339,7 +1347,7 @@ followed and kept). The head notes the old desktop app's `easy-cliproxyapi` prov
 still there, which pluxy leaves alone. **Models** holds the **Default model**, the one model Oh My
 Pi starts with (pluxy's served models are suggested, and **Refresh suggestions** reads them again);
 Oh My Pi lists pluxy's other models itself. Connect is held, with the reason, until it is one model
-ID (no spaces or commas, not starting with `@` or `*`). Everything else in the files stays,
+ID (at most 240 characters, no spaces, commas or control characters, not starting with `@` or `*`). Everything else in the files stays,
 including the person's own models under the pluxy provider. **Start Oh My Pi** asks the tool for its
 recipe (`omp` in a terminal, no arguments; `~/.bun/bin/omp` or `~/.local/bin/omp`, where bun and
 Oh My Pi's install script put it, when one exists). Oh My Pi has no desktop app.
@@ -1355,8 +1363,9 @@ entries list: those the file has, and what pluxy serves, added (all listed, as t
 them all) when **Import models from pluxy** is pressed, never in the background. Each can be turned
 off or given its **Context window** (Grok Build compacts by it); the **Default model** is one of the
 models listed. Connect is held, with one line for each reason (no model listed, a window that is not
-a whole number from 1 to 100000000, no default model, more than 256 models listed;
-`src/grokForm.ts`). Entries pluxy wrote for models turned off are removed on Connect; the person's
+a whole number from 1 to 100000000, an ID with spaces or control characters or a name with control
+characters, either over 240 characters once trimmed, a model listed twice, no default model, more
+than 256 models listed; `src/grokForm.ts`). Entries pluxy wrote for models turned off are removed on Connect; the person's
 own entries stay. **Start Grok Build** asks the tool for its recipe (`~/.grok/bin/grok` when Grok
 Build's installer put it there, else `grok` from PATH, in a terminal with no arguments). Grok Build
 has no Linux desktop app.
@@ -1371,8 +1380,10 @@ be a link, as chezmoi can make) or a file (a link, as stow makes, is followed an
 notes the old desktop app's `cpa-gui` provider when it is still there, which pluxy leaves alone.
 **Models** holds the **Default model**, the model Hermes Agent starts with (pluxy's served models
 are suggested, and **Refresh suggestions** reads them again). Connect is held, with the reason,
-until it is one model ID with no spaces and no `${` (Hermes expands it). Everything else in the file
-stays, including the person's own settings under the pluxy provider. **Start Hermes Agent** asks
+until it is one model ID of at most 240 characters with no spaces, control characters or `${` (Hermes
+expands it), which YAML 1.1 (as Hermes reads the file) reads as text: an ID such as `1.5`,
+`2026-11-14` or `yes` would be a number, a date or yes/no, and has its own line. Everything else
+in the file stays, including the person's own settings under the pluxy provider. **Start Hermes Agent** asks
 the tool for its recipe (`hermes` in a terminal, no arguments, which starts a chat;
 `~/.local/bin/hermes`, where Hermes's installer puts it, when it exists). Hermes Agent's desktop app
 is not offered: its Linux packages are not released.
@@ -1393,10 +1404,14 @@ plugin is held until it is moved. The head also notes when `settings.json` still
 an older app installed, which Connect replaces. **Models** holds the **Default model**, the model Pi
 starts with (pluxy's served models are suggested, and **Refresh suggestions** reads them again; the
 plugin itself lists pluxy's Codex models in Pi; Connect is held until it is one model ID, with no
-spaces, of at most 240 characters), and the **Pi plugin**: its version, **Update plugin** (the
-tool's copy replaces the installed one) and **Uninstall plugin** (asks first; its entry and folder
-go, the connection settings stay). **Disconnect** and **Restore backup** also remove the plugin's
-folder once `settings.json` no longer lists it. **Start Pi** asks the tool for its recipe (`pi` in a
+spaces or control characters, of at most 240 characters), and the **Pi plugin**: its version,
+**Update plugin** (offered only when the tool carries a newer copy than the one installed, or the
+installed copy's version is unknown; the tool's copy replaces it) and **Uninstall plugin** (asks
+first; its entry and folder go, the connection settings stay). **Disconnect** and **Restore
+backup** also remove the plugin's folder once `settings.json` no longer lists it. Pi's three files
+are pinned as on every page, but the plugin's folder is not yet: Install plugin, Update plugin,
+Uninstall plugin and that removal act on the plugin folder in the agent folder as the tool finds it
+when it runs, not on one the reading pinned. **Start Pi** asks the tool for its recipe (`pi` in a
 terminal, no arguments; `~/.pi/agent/bin/pi` or `~/.local/bin/pi`, where Pi's installer puts it,
 when one exists). Pi has no desktop app.
 

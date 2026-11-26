@@ -26,7 +26,7 @@ import {
   useToolSetup,
 } from "./clientPage";
 import type { AgentPage } from "./easyMode";
-import { CLIENT, PACKAGE, selectionFor, validModel, type Where } from "./piForm";
+import { CLIENT, PACKAGE, pluginNewer, selectionFor, validModel, type Where } from "./piForm";
 
 const t = strings("pi", {
   title: "Pi",
@@ -46,7 +46,7 @@ const t = strings("pi", {
   models: "Models",
   model: "Default model",
   modelNote: "The model Pi starts with. The plugin lists pluxy's Codex models in Pi itself.",
-  invalid: "Enter one model ID, with no spaces, of at most 240 characters.",
+  invalid: "Enter one model ID of at most 240 characters, with no spaces or control characters.",
   install: "Install plugin",
   plugin: "Pi plugin",
   pluginIn: "Version {version} is installed. It lets Pi reach pluxy.",
@@ -64,6 +64,8 @@ interface Adapter {
   installed: boolean;
   version: string | null;
   bundled: string;
+  /** The add-on's word: true for any version but its own, older too (the page offers Update plugin
+   * only for a newer copy, pluginNewer). */
   update: boolean;
   foreign: boolean;
 }
@@ -111,6 +113,8 @@ export function PiPage() {
   const cfg = s.preview?.pi;
   const adapter = cfg?.adapter;
   const st = cfg?.state === "refused" ? undefined : cfg;
+  // Update plugin only when the add-on carries a newer copy than the one installed.
+  const newer = !!adapter?.installed && pluginNewer(adapter.version, adapter.bundled);
   const input = () => ({ model: model.trim() });
   const held = [
     ...(adapter?.foreign && !adapter.installed ? [t("heldForeign")] : []),
@@ -172,14 +176,14 @@ export function PiPage() {
             description={
               !adapter.installed
                 ? t("pluginOut")
-                : adapter.update
+                : newer
                   ? t("pluginNewer", { version: adapter.version ?? t("unknown"), bundled: adapter.bundled })
                   : t("pluginIn", { version: adapter.version ?? t("unknown") })
             }
           >
             {(adapter.installed || st.registered) && (
               <span class="tool-inline">
-                {adapter.installed && adapter.update && (
+                {newer && (
                   <Button
                     busy={s.working === "update"}
                     onClick={() => plugin("update", t("updated"))}

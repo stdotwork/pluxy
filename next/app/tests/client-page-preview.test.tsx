@@ -26,11 +26,39 @@ interface PageCase {
   field: string;
   /** The button that writes the settings. */
   write: string;
-  /** The tool's answer to a read of the path typed in the field. */
-  body: (path: string) => unknown;
+  /** Every file the tool's preview pins for the path typed in the field, as its add-on gives them. */
+  targets: (path: string) => Pin[];
+  /** The tool's reading of the settings in its answer to a read, apart from the pins. */
+  reading: unknown;
 }
 
-const pinned = (path: string) => [{ selected: path, target: `${path}/target.json`, link: null }];
+interface Pin {
+  selected: string;
+  target: string;
+  link: string | null;
+  path?: string;
+  root?: string;
+}
+
+// Each typed path resolves somewhere else (as a link the add-on follows and keeps), so a target
+// on screen or in a write can only have come from the reading, never from the field.
+const REAL = "/real";
+/** A typed file: one pin, its link followed. */
+const fileTarget = (path: string): Pin[] => [
+  { selected: path, target: `${REAL}${path}`, link: `${REAL}${path}` },
+];
+/** A typed folder holding the add-on's files: one pin per file, each a path in the folder. */
+const folderTargets =
+  (...files: string[]) =>
+  (root: string): Pin[] =>
+    files.map((path) => ({
+      selected: root,
+      path,
+      root: `${REAL}${root}`,
+      target: `${REAL}${root}/${path}`,
+      link: null,
+    }));
+const targetsOf = (c: PageCase, path: string) => c.targets(path).map((t) => t.target);
 const unconfigured = { state: "not-configured" };
 const codexRead = {
   ...unconfigured,
@@ -62,109 +90,117 @@ const codexRead = {
 const pages: PageCase[] = [
   {
     name: "Claude Code",
+    targets: fileTarget,
     page: () => <ClaudeCodePage />,
     pick: "A file",
     field: "File",
     write: "Connect Claude Code",
-    body: (path) => ({
-      targets: pinned(path),
+    reading: {
       applied: false,
       settings: { ...unconfigured, startup_model: null },
-    }),
+    },
   },
   {
     name: "Claude Desktop",
+    targets: folderTargets(
+      "claude_desktop_config.json",
+      "configLibrary/00000000-0000-4000-8000-000000831700.json",
+      "configLibrary/_meta.json",
+    ),
     page: () => <ClaudeDesktopPage />,
     pick: "In a folder",
     field: "Folder",
     write: "Connect Claude Desktop",
-    body: (path) => ({ targets: pinned(path), applied: false, settings: unconfigured }),
+    reading: { applied: false, settings: unconfigured },
   },
   {
     name: "Codex",
+    targets: folderTargets("config.toml", "pluxy-model-catalog.json"),
     page: () => <CodexPage />,
     pick: "In a folder",
     field: "Folder",
     write: "Connect Codex",
-    body: (path) => ({
-      targets: pinned(path),
+    reading: {
       applied: false,
       settings: { ...codexRead, model: "gpt-6.1-sol" },
-    }),
+    },
   },
   {
     name: "Grok Build",
+    targets: fileTarget,
     page: () => <GrokPage />,
     pick: "A file",
     field: "File",
     write: "Connect Grok Build",
-    body: (path) => ({
-      targets: pinned(path),
+    reading: {
       applied: false,
       settings: {
         ...unconfigured,
         model: "gpt-6.1-sol",
         models: [{ model: "gpt-6.1-sol", name: null, context_window: null }],
       },
-    }),
+    },
   },
   {
     name: "Hermes Agent",
+    targets: fileTarget,
     page: () => <HermesPage />,
     pick: "A file",
     field: "File",
     write: "Connect Hermes Agent",
-    body: (path) => ({
-      targets: pinned(path),
+    reading: {
       applied: false,
       config: { ...unconfigured, model: "gpt-6.1-sol" },
-    }),
+    },
   },
   {
     name: "Oh My Pi",
+    targets: folderTargets("models.yml", "config.yml"),
     page: () => <OmpPage />,
     pick: "In a folder",
     field: "Folder",
     write: "Connect Oh My Pi",
-    body: (path) => ({
-      targets: pinned(path),
+    reading: {
       applied: false,
       config: { ...unconfigured, model: "gpt-6.1-sol" },
-    }),
+    },
   },
   {
     name: "OpenCode",
+    targets: fileTarget,
     page: () => <OpenCodePage />,
     pick: "A file",
     field: "File",
     write: "Connect OpenCode",
-    body: (path) => ({
-      targets: pinned(path),
+    reading: {
       applied: false,
       config: {
         ...unconfigured,
         model: "gpt-6.1-sol",
         models: [{ id: "gpt-6.1-sol", name: "", attachment: false }],
       },
-    }),
+    },
   },
   {
     name: "Pi",
+    targets: folderTargets("cliproxyapi.json", "settings.json", "cliproxyapi-models.json"),
     page: () => <PiPage />,
     pick: "In a folder",
     field: "Folder",
     write: "Connect Pi",
-    body: (path) => ({
-      targets: pinned(path),
+    reading: {
       applied: false,
       pi: {
         ...unconfigured,
         model: "gpt-6.1-sol",
         adapter: { installed: true, version: "1.0.0", bundled: "1.0.0", update: false, foreign: false },
       },
-    }),
+    },
   },
 ];
+
+/** The tool's whole answer to a read of path: its reading, with every file its add-on pins. */
+const answerOf = (c: PageCase, path: string) => ({ targets: c.targets(path), ...(c.reading as object) });
 
 const A = "/home/me/A.json";
 const B = "/home/me/B.json";
@@ -203,11 +239,12 @@ for (const c of pages) {
   test(`${c.name}: a read of the path the field shows is kept`, async () => {
     const { ch, page } = await typedA(c);
     await page.click("Read this file");
-    ch.pending()?.answer(c.body(A));
+    ch.pending()?.answer(answerOf(c, A));
     await settle();
-    expect(page.text()).toContain(`${A}/target.json`);
-    // Connect writes to it.
-    expect(await writeIfOffered(c, ch, page)).toEqual([`${A}/target.json`]);
+    // Every file the reading pinned is named under "What Connect changes", and Connect writes to
+    // all of them.
+    for (const target of targetsOf(c, A)) expect(page.text()).toContain(target);
+    expect(await writeIfOffered(c, ch, page)).toEqual(targetsOf(c, A));
   });
 
   test(`${c.name}: a failed read of the path the field shows is shown`, async () => {
@@ -221,25 +258,25 @@ for (const c of pages) {
 
   test(`${c.name}: a read that answers after the path changed is dropped`, async () => {
     const { page, read } = await readThenEdit(c);
-    read?.answer(c.body(A));
+    read?.answer(answerOf(c, A));
     await settle();
     expect(page.shown(c.field)).toBe(B);
-    expect(page.text()).not.toContain(`${A}/target.json`);
+    for (const target of targetsOf(c, A)) expect(page.text()).not.toContain(target);
   });
 
   test(`${c.name}: the write never goes to a file the field no longer shows`, async () => {
     const { ch, page, read } = await readThenEdit(c);
-    read?.answer(c.body(A));
+    read?.answer(answerOf(c, A));
     await settle();
     // Before the pages kept the file they read, the late answer pinned A: the write was offered,
     // for A, beside a field showing B. Now nothing is offered until B is read; then the write goes to B.
     const sent = await writeIfOffered(c, ch, page);
     expect(sent).toEqual([]);
     await page.click("Read this file");
-    ch.pending()?.answer(c.body(B));
+    ch.pending()?.answer(answerOf(c, B));
     await settle();
     expect(page.canPress(c.write)).toBe(true);
-    expect(await writeIfOffered(c, ch, page)).toEqual([`${B}/target.json`]);
+    expect(await writeIfOffered(c, ch, page)).toEqual(targetsOf(c, B));
   });
 
   test(`${c.name}: a failed read that answers after the path changed is dropped`, async () => {
@@ -260,9 +297,9 @@ for (const c of pages) {
     const first = ch.reads[0];
     await page.open(MORE);
     await page.pick(c.pick);
-    first?.answer(c.body("/home/me/default"));
+    first?.answer(answerOf(c, "/home/me/default"));
     await settle();
-    expect(page.text()).not.toContain("/home/me/default/target.json");
+    for (const target of targetsOf(c, "/home/me/default")) expect(page.text()).not.toContain(target);
     expect(page.canPress(c.write)).toBe(false);
   });
 }

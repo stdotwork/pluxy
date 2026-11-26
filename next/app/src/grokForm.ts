@@ -2,6 +2,8 @@
 // webview: the catalog rows from what the config holds and from the models pluxy serves, and why
 // the form cannot be written yet.
 
+import { hasControl, hasSpaceOrControl, length, trimText } from "./textRules";
+
 export const PACKAGE = "pluxy/grok-setup";
 /** The client label the tool's recipe gives its launches, which the launcher keys recent folders by. */
 export const CLIENT = "Grok Build";
@@ -66,10 +68,19 @@ export function withServed(rows: Row[], served: { id: string; display_name?: str
 /** The largest context window the tool takes. */
 export const WINDOW_MAX = 100000000;
 
-/** Why the selected rows and default model cannot be written yet, every reason at once: no model
- * selected, more than the tool takes, a window that is not a whole number from 1 to WINDOW_MAX, a
- * default that is not one of the selected models. Empty when they can be written. */
-export type Held = "none" | "too-many" | "window" | "model";
+/** The longest model ID or name the tool takes. */
+const TEXT_MAX = 240;
+
+/** Why the selected rows and default model cannot be written yet, every reason at once, as the
+ * tool's apply would refuse them (grok-setup's `settings`, which trims each ID and name first): no
+ * model selected, more than the tool takes, a window that is not a whole number from 1 to
+ * WINDOW_MAX, an ID or name it would refuse (an ID empty, with white space or a control character, a
+ * name with a control character, either more than 240 characters), an ID selected twice, a default
+ * that is not one of the selected models. Empty when they can be written. */
+export type Held = "none" | "too-many" | "window" | "text" | "twice" | "model";
+
+const idOk = (id: string) => id !== "" && length(id) <= TEXT_MAX && !hasSpaceOrControl(id);
+const nameOk = (name: string) => length(name) <= TEXT_MAX && !hasControl(name);
 
 export function heldOf(rows: Row[], model: string): Held[] {
   const on = rows.filter((r) => r.on);
@@ -78,6 +89,9 @@ export function heldOf(rows: Row[], model: string): Held[] {
   if (on.length > MODELS_MAX) held.push("too-many");
   if (!on.every((r) => Number.isInteger(r.window) && r.window >= 1 && r.window <= WINDOW_MAX))
     held.push("window");
-  if (!on.some((r) => r.model === model.trim())) held.push("model");
+  const ids = on.map((r) => trimText(r.model));
+  if (!on.every((r, i) => idOk(ids[i] as string) && nameOk(trimText(r.name)))) held.push("text");
+  if (new Set(ids).size < ids.length) held.push("twice");
+  if (!ids.includes(trimText(model))) held.push("model");
   return held;
 }

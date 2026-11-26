@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { attachmentDefault, heldOf, MODELS_MAX, withModels } from "../src/opencodeForm";
 
 describe("models", () => {
-  const m = (id: string) => ({ id, name: "", attachment: false });
+  const m = (id: string, name = "") => ({ id, name, attachment: false });
 
   test("imported models add only IDs not listed yet, once each", () => {
     expect(withModels([m("a")], [m("a"), m("b"), m("b")]).map((x) => x.id)).toEqual(["a", "b"]);
@@ -23,5 +23,15 @@ describe("models", () => {
     expect(heldOf([m("x".repeat(241))], "x".repeat(241))).toEqual(["text"]);
     const many = Array.from({ length: MODELS_MAX + 1 }, (_, i) => m(`m${i}#`));
     expect(heldOf(many, "elsewhere")).toEqual(["too-many", "text", "model"]);
+  });
+
+  test("Connect is held for what the add-on refuses: control characters in an ID or a name, an ID listed twice once trimmed", () => {
+    // The add-on trims IDs and names before it checks them, as here.
+    expect(heldOf([m(" a "), m("b")], "a")).toEqual([]);
+    expect(heldOf([m("a\u0085b")], "a\u0085b")).toEqual(["text"]);
+    expect(heldOf([m("a", "A\u0007")], "a")).toEqual(["text"]);
+    expect(heldOf([m("a", "A\u009f")], "a")).toEqual(["text"]);
+    expect(heldOf([m("a", "x".repeat(241))], "a")).toEqual(["text"]);
+    expect(heldOf([m("a"), m("a ")], "a")).toEqual(["twice"]);
   });
 });

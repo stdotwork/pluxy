@@ -22,7 +22,7 @@ import {
   useToolSetup,
 } from "./clientPage";
 import type { AgentPage } from "./easyMode";
-import { CLIENT, modelOf, PACKAGE, type ReadBack, validModel } from "./hermesForm";
+import { CLIENT, modelOf, PACKAGE, plainModel, type ReadBack, validModel } from "./hermesForm";
 
 const t = strings("hermes", {
   title: "Hermes Agent",
@@ -41,6 +41,7 @@ const t = strings("hermes", {
   model: "Default model",
   modelNote: "The model Hermes Agent starts with.",
   invalid: 'Enter one model ID, with no spaces and no "${".',
+  notText: "Hermes Agent would read that as a number, a date or yes/no, not as a model ID.",
 });
 
 interface Preview extends ToolPreview {
@@ -75,7 +76,7 @@ export function HermesPage() {
     setModel(v);
   };
   const input = () => ({ model: model.trim() });
-  const held = validModel(model.trim()) ? [] : [t("invalid")];
+  const held = validModel(model.trim()) ? [] : [plainModel(model.trim()) ? t("notText") : t("invalid")];
   const dirty = model !== read;
   const st = s.preview?.config.state === "refused" ? undefined : s.preview?.config;
   const target = s.preview?.targets[0]?.target;

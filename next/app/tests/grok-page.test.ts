@@ -49,6 +49,20 @@ describe("Connect", () => {
     expect(heldOf([row("a", true, 1.5)], "a")).toEqual(["window"]);
   });
 
+  test("is held for model text the add-on refuses: spaces or control characters in an ID, control characters in a name, an ID listed twice once trimmed", () => {
+    expect(heldOf([row(" a ")], "a")).toEqual([]);
+    expect(heldOf([row("a b")], "a b")).toEqual(["text"]);
+    expect(heldOf([row("a\u0007")], "a\u0007")).toEqual(["text"]);
+    expect(heldOf([row("x".repeat(241))], "x".repeat(241))).toEqual(["text"]);
+    expect(heldOf([{ model: "a", name: "A\u0000", window: 1000, on: true }], "a")).toEqual(["text"]);
+    expect(heldOf([{ model: "a", name: "x".repeat(241), window: 1000, on: true }], "a")).toEqual(["text"]);
+    // A name with spaces is fine; only the ID is bare.
+    expect(heldOf([{ model: "a", name: "Model A", window: 1000, on: true }], "a")).toEqual([]);
+    expect(heldOf([row("a"), row("a ")], "a")).toEqual(["twice"]);
+    // A row turned off is not written, so it holds nothing.
+    expect(heldOf([row("a"), row("a b", false)], "a")).toEqual([]);
+  });
+
   test("says every reason at once", () => {
     const many = Array.from({ length: MODELS_MAX + 1 }, (_, i) => row(`m${i}`, true, i === 0 ? 0 : 200000));
     expect(heldOf(many, "elsewhere")).toEqual(["too-many", "window", "model"]);

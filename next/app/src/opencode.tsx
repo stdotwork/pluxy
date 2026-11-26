@@ -76,7 +76,8 @@ const t = strings("opencode", {
   heldNone: "Import models from pluxy or add one, then choose a default model.",
   heldTooMany: "OpenCode takes at most {max} models from here: remove some.",
   heldText:
-    "Model IDs cannot be empty or hold # or control characters, and IDs and names are at most 240 characters.",
+    "Model IDs cannot be empty or hold # or control characters, names cannot hold control characters, and IDs and names are at most 240 characters.",
+  heldTwice: "A model is listed twice: remove one.",
   heldModel: "Choose a default model from the list.",
   heldV2: "Connect waits until providers.pluxy is out of the file.",
   app: "OpenCode Desktop",
@@ -93,6 +94,7 @@ const HELD: Record<Held, () => string> = {
   none: () => t("heldNone"),
   "too-many": () => t("heldTooMany", { max: MODELS_MAX }),
   text: () => t("heldText"),
+  twice: () => t("heldTwice"),
   model: () => t("heldModel"),
 };
 
@@ -220,7 +222,7 @@ export function OpenCodePage() {
             </div>
           )}
           {form.models.map((m, i) => (
-            <SettingRow key={m.id} name={m.id}>
+            <SettingRow key={m.id} name={shown.text(m.id)}>
               <span class="tool-inline">
                 <input
                   type="text"
@@ -237,7 +239,7 @@ export function OpenCodePage() {
                   onChange={(on) => setRow(i, { attachment: on })}
                 />
                 <ConfirmButton
-                  question={t("removeAsk", { model: m.name.trim() || m.id })}
+                  question={t("removeAsk", { model: shown.text(m.name.trim() || m.id) })}
                   onConfirm={() => edit({ models: form.models.filter((_, j) => j !== i) })}
                 >
                   {t("removeModel")}
@@ -270,11 +272,11 @@ export function OpenCodePage() {
               onChange={(e) => edit({ model: e.currentTarget.value })}
             >
               {!ids.includes(form.model) && (
-                <option value={form.model}>{form.model || t("chooseModel")}</option>
+                <option value={form.model}>{form.model ? shown.text(form.model) : t("chooseModel")}</option>
               )}
               {form.models.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.name.trim() || m.id}
+                  {shown.text(m.name.trim() || m.id)}
                 </option>
               ))}
             </select>

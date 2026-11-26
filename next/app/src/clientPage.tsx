@@ -41,6 +41,7 @@ const t = strings("toolPage", {
   stale:
     "Could not read {tool}'s settings again, so what this page shows may be out of date. Nothing is written until they are read. {reason}",
   addonsUnread: "Could not check the {tool} add-on, so nothing is read yet. {reason}",
+  addonsAgain: "Could not check the {tool} add-on again, so nothing is read or written until it is. {reason}",
   noPluxy: "Connect waits until the app is connected to pluxy.",
   keyKept: "The key made for {tool} is kept: Connect uses it next time.",
   waiting: "Answer the confirmation window to go on.",
@@ -181,13 +182,14 @@ export function addonState(catalog: DeviceCatalog | undefined, pkg: string): Add
   return "on";
 }
 
-/** This device's catalog, read again when the native side says it changed. unread: it could not be
- * read and was never read before, so nobody knows whether an add-on is on. */
+/** This device's catalog, read again when the native side says it changed. unread: its last read
+ * failed, so nobody knows whether an add-on is on, even when an older read said it was; again: an
+ * older read is what failed to be read again. */
 function useCatalog() {
   const catalog = useLoad(() => device.list().then(plainReply));
   useDeviceChanged(catalog.reload);
-  const unread = catalog.phase === "failed" && !catalog.data;
-  return { catalog, data: unread ? undefined : catalog.data, unread };
+  const unread = catalog.phase === "failed";
+  return { catalog, data: unread ? undefined : catalog.data, unread, again: unread && !!catalog.data };
 }
 
 // ---- how the tool stands ---------------------------------------------------------------------
@@ -335,7 +337,7 @@ export function useToolSetup<P extends ToolPreview>(o: {
   onRead: (p: P) => void;
 }) {
   const { api } = useKit();
-  const { catalog, data, unread } = useCatalog();
+  const { catalog, data, unread, again } = useCatalog();
   const addon: AddonState = unread ? "unread" : addonState(data, o.pkg);
   const launcher: AddonState = unread ? "unread" : addonState(data, LAUNCHER);
   const [conn, setConn] = useState<Connection | null>();
@@ -560,6 +562,8 @@ export function useToolSetup<P extends ToolPreview>(o: {
     launcher,
     retryAddons: catalog.reload,
     addonsError: unread ? catalog.error : undefined,
+    /** The add-on list was read before, and reading it again failed. */
+    addonsAgain: again,
     turnOn,
     conn,
     core,
@@ -587,8 +591,9 @@ export function useToolSetup<P extends ToolPreview>(o: {
     locked: !!working || outside,
     /** The backups tell the page while one of their writes waits. */
     setOutside,
-    /** Whether a write can start: a reading of the file shown, not out of date, nothing under way. */
-    writable: !busy && !!preview && !stale && !o.env?.pending,
+    /** Whether a write can start: the add-on on, a reading of the file shown, not out of date,
+     * nothing under way. */
+    writable: addon === "on" && !busy && !!preview && !stale && !o.env?.pending,
     blocked,
     error,
     done,
@@ -708,7 +713,10 @@ export function ToolTop(props: {
   if (s.addon === "unread") {
     lines.push(
       <Notice key="addons" tone="danger">
-        {t("addonsUnread", { tool, reason: sentence(shown.text(s.addonsError) ?? "") })}
+        {t(s.addonsAgain ? "addonsAgain" : "addonsUnread", {
+          tool,
+          reason: sentence(shown.text(s.addonsError) ?? ""),
+        })}
       </Notice>,
     );
     actions.push(
@@ -1025,9 +1033,10 @@ export function DefaultModel(props: {
 /** The line under a model's field when pluxy's accounts do not offer it (nothing until what they
  * serve is read). Connect still writes the model, for an account added later. */
 export function Unserved(props: { model: string; served: Set<string> | undefined }) {
+  const shown = useShown();
   const model = props.model.trim();
   if (!props.served || model === "" || props.served.has(model)) return null;
-  return <small class="tool-unserved">{t("unserved", { model })}</small>;
+  return <small class="tool-unserved">{t("unserved", { model: shown.text(model) })}</small>;
 }
 
 // ---- Start -------------------------------------------------------------------------------------
@@ -1194,7 +1203,7 @@ export function StartSection(props: {
       </div>
       {props.children}
       {!start.wsl && start.terminals.error && (
-        <Notice tone="warn">{launcherProblem(start.terminals.error)}</Notice>
+        <Notice tone="warn">{shown.text(launcherProblem(start.terminals.error))}</Notice>
       )}
       {start.error && !cancelled(start.error) && (
         <Notice tone="danger">{shown.text(launcherProblem(start.error))}</Notice>
