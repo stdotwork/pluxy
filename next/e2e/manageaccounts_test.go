@@ -660,3 +660,140 @@ func TestReloginIdentityCheck(t *testing.T) {
 		t.Fatalf("the accepted login did not replace the credential: %+v", list.Accounts)
 	}
 }
+
+// addByDevice starts a device login with body, approves its code at the fake provider, waits for
+// it to end done and returns the ID of the account it added, as the login names it.
+func addByDevice(t *testing.T, base string, srv *oauthtest.Server, body map[string]any) string {
+	t.Helper()
+	var l struct {
+		Login struct {
+			ID, Account, State string
+			Prompt             *struct {
+				UserCode string `json:"user_code"`
+			}
+			Error *struct{ Code, Message string }
+		}
+	}
+	body["method"], body["settings"] = "device", map[string]string{"base_url": srv.URL}
+	if code := manage(t, base, "POST", "/accounts", body, &l); code != http.StatusAccepted || l.Login.Prompt == nil {
+		t.Fatalf("starting the login with %v: status %d, %+v", body, code, l.Login)
+	}
+	srv.ApproveDevice(l.Login.Prompt.UserCode)
+	for deadline := time.Now().Add(15 * time.Second); l.Login.State == "pending"; {
+		if time.Now().After(deadline) {
+			t.Fatal("the login did not finish")
+		}
+		time.Sleep(100 * time.Millisecond)
+		manage(t, base, "GET", "/logins/"+l.Login.ID, nil, &l)
+	}
+	if l.Login.State != "done" {
+		t.Fatalf("login ended %s: %+v", l.Login.State, l.Login.Error)
+	}
+	return l.Login.Account
+}
+
+type labelledAccount struct {
+	ID       string
+	PublicID string `json:"public_id"`
+	Label    string
+}
+
+func labelOf(t *testing.T, base, id string) labelledAccount {
+	t.Helper()
+	var list struct{ Accounts []labelledAccount }
+	manage(t, base, "GET", "/accounts", nil, &list)
+	for _, a := range list.Accounts {
+		if a.ID == id {
+			return a
+		}
+	}
+	t.Fatalf("no account %q in %+v", id, list.Accounts)
+	return labelledAccount{}
+}
+
+// An account added without an ID gets one core makes, acc_ and 8 hex digits, which is also its
+// public ID: the ID client replies name it by. A label the person sent is kept over the
+// provider's (the fake provider labels every sign-in with its e-mail address), stays through a
+// new sign-in to the account, and PATCH changes it; "" or null takes the person's label away,
+// leaving the provider's. A label longer than 64 characters or of more than one line is refused,
+// and an account set in the config takes no label.
+func TestManageAccountIDAndLabel(t *testing.T) {
+	srv := oauthtest.New(t)
+	base := startAccountsCore(t, srv)
+
+	id := addByDevice(t, base, srv, map[string]any{"label": "  Work laptop  "})
+	if !regexp.MustCompile(`^acc_[0-9a-f]{8}$`).MatchString(id) {
+		t.Fatalf("an account added without an ID has ID %q, want acc_ and 8 hex digits", id)
+	}
+	if a := labelOf(t, base, id); a.PublicID != id || a.Label != "Work laptop" {
+		t.Fatalf("listed as %+v, want public ID %q and label %q", a, id, "Work laptop")
+	}
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/chat/completions", strings.NewReader(`{"model":"m1","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer "+clientKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Pluxy-Account", id)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("X-Pluxy-Account") != id {
+		t.Fatalf("a request pinned to %s: %d, reply names account %q", id, resp.StatusCode, resp.Header.Get("X-Pluxy-Account"))
+	}
+
+	// Without a label, the provider's is the account's, as before.
+	plain := addByDevice(t, base, srv, map[string]any{})
+	if plain == id || labelOf(t, base, plain).Label != "user@example.test" {
+		t.Fatalf("a second account without ID or label: %q, %+v", plain, labelOf(t, base, plain))
+	}
+
+	if l := reauthDevice(t, base, srv, id); l.Login.State != "done" {
+		t.Fatalf("signing in again to the labelled account ended %s with %+v", l.Login.State, l.Login.Error)
+	}
+	if a := labelOf(t, base, id); a.Label != "Work laptop" {
+		t.Fatalf("after signing in again the label is %q, want %q", a.Label, "Work laptop")
+	}
+
+	var reply struct{ Account labelledAccount }
+	if code := manage(t, base, "PATCH", "/accounts/"+id, map[string]any{"label": " Personal "}, &reply); code != http.StatusOK || reply.Account.Label != "Personal" {
+		t.Fatalf("PATCH label: %d, %+v", code, reply.Account)
+	}
+	if a := labelOf(t, base, id); a.Label != "Personal" {
+		t.Fatalf("listed after PATCH: %+v", a)
+	}
+	long := strings.Repeat("é", 64)
+	if code := manage(t, base, "PATCH", "/accounts/"+id, map[string]any{"label": long}, &reply); code != http.StatusOK || reply.Account.Label != long {
+		t.Fatalf("PATCH a label of 64 characters: %d, %+v", code, reply.Account)
+	}
+	for _, clear := range []any{"", nil} {
+		manage(t, base, "PATCH", "/accounts/"+id, map[string]any{"label": "Personal"}, nil)
+		if code := manage(t, base, "PATCH", "/accounts/"+id, map[string]any{"label": clear}, &reply); code != http.StatusOK || reply.Account.Label != "user@example.test" {
+			t.Fatalf("PATCH label %#v: %d, %+v, want the provider's label back", clear, code, reply.Account)
+		}
+	}
+	if l := reauthDevice(t, base, srv, id); l.Login.State != "done" || labelOf(t, base, id).Label != "user@example.test" {
+		t.Fatalf("signing in again after the label was cleared ended %s, label %q", l.Login.State, labelOf(t, base, id).Label)
+	}
+
+	manage(t, base, "PATCH", "/accounts/"+id, map[string]any{"label": "Personal"}, nil)
+	for _, bad := range []any{strings.Repeat("x", 65), "two\nlines", "a\rb", 7} {
+		if code := manage(t, base, "PATCH", "/accounts/"+id, map[string]any{"label": bad, "priority": 5}, nil); code != http.StatusBadRequest {
+			t.Errorf("PATCH label %q: %d, want 400", bad, code)
+		}
+		if code := manage(t, base, "POST", "/accounts", map[string]any{"label": bad, "method": "device", "settings": map[string]string{"base_url": srv.URL}}, nil); code != http.StatusBadRequest {
+			t.Errorf("POST /accounts with label %q: %d, want 400", bad, code)
+		}
+	}
+	if a := getAccount(t, base, id); a.Priority != 0 || labelOf(t, base, id).Label != "Personal" {
+		t.Fatalf("a refused PATCH changed the account: %+v, label %q", a, labelOf(t, base, id).Label)
+	}
+
+	var e struct {
+		Error struct{ Code, Message string }
+	}
+	if code := manage(t, base, "PATCH", "/accounts/fine", map[string]any{"label": "Mine"}, &e); code != http.StatusConflict ||
+		!strings.Contains(e.Error.Message, "set in core's config; change it there") {
+		t.Fatalf("PATCH label of a config account: %d, %+v", code, e)
+	}
+}

@@ -2,9 +2,11 @@ package cred
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"maps"
 	"net"
@@ -28,14 +30,16 @@ const (
 
 // LoginRequest starts a login.
 type LoginRequest struct {
-	// Account is the account to add: its ID, routing fields and settings. For a new login to an
-	// existing account (Reauth) only the ID is read; the account keeps its fields.
+	// Account is the account to add: its ID, routing fields and settings. Without an ID, core
+	// makes one (newAccountID). For a new login to an existing account (Reauth) only the ID is
+	// read; the account keeps its fields.
 	Account route.Account
 	// Extension is the ID of the extension that signs in and owns the account. Empty: the one
 	// extension that runs (for a reauth, the account's own).
 	Extension string
-	// Label names the new account for people when the provider's grant carries none. A new
-	// login to an existing account (Reauth) keeps the account's label.
+	// Label is the label a person gave the new account. It wins over the provider's (the grant's),
+	// which the record keeps apart as ProviderLabel. A new login to an existing account (Reauth)
+	// ignores it.
 	Label string
 	// Registration, when set with Reauth, is the registration of the account the caller
 	// checked: the login is refused if the account was removed and added again since, so a
@@ -92,13 +96,15 @@ func (l *login) notifyFirst() {
 }
 
 // StartLogin starts a login and returns it once the provider has sent its first prompt or
-// finished, or ctx ends.
+// finished, or ctx ends. A new account without an ID gets one core makes, which the login's
+// view names (LoginView.Account).
 func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, error) {
 	id := req.Account.ID
-	if !ValidID(id) {
+	fresh := id == "" && !req.Reauth
+	if !fresh && !ValidID(id) {
 		return LoginView{}, fmt.Errorf("%w: account ID %q is not valid: use letters, digits, '.', '_' and '-' (at most 128)", ErrInvalid, id)
 	}
-	if m.reserved(id) {
+	if !fresh && m.reserved(id) {
 		return LoginView{}, fmt.Errorf("%w: account %q is set in core's config", ErrConflict, id)
 	}
 	ext := req.Extension
@@ -130,6 +136,10 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 	l := &login{account: id, extension: ext, method: req.Method, reauth: req.Reauth, fields: req.Account, label: req.Label, first: make(chan struct{}), state: LoginPending}
 	m.mu.Lock()
 	m.dropOldLogins()
+	if fresh {
+		id = m.newAccountID()
+		l.account, l.fields.ID = id, id
+	}
 	for _, o := range m.logins {
 		if o.account == id && o.state == LoginPending {
 			m.mu.Unlock()
@@ -236,7 +246,11 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 				r.Credential = *g.Credential
 				r.State, r.Reason = StateActive, ""
 				if g.Label != "" {
-					r.Label = g.Label
+					// A label a person gave stays; one that was the provider's follows it.
+					if r.Label == r.identityLabel() {
+						r.Label = g.Label
+					}
+					r.ProviderLabel = g.Label
 				}
 				if len(g.Identity) > 0 {
 					r.Identity = g.Identity
@@ -263,9 +277,9 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 	if m.reserved(l.account) {
 		return fmt.Errorf("account %q is now set in core's config", l.account)
 	}
-	label := g.Label
+	label := l.label
 	if label == "" {
-		label = l.label
+		label = g.Label
 	}
 	fields := l.fields
 	if len(g.Settings) > 0 {
@@ -276,8 +290,8 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 		maps.Copy(defaults, explicit)
 		fields.Settings, _ = json.Marshal(defaults)
 	}
-	_, err := m.store.Create(Record{ID: l.account, Extension: l.extension, State: StateActive, Label: label, Identity: g.Identity,
-		Account: fields, Credential: *g.Credential})
+	_, err := m.store.Create(Record{ID: l.account, Extension: l.extension, State: StateActive, Label: label, ProviderLabel: g.Label,
+		Identity: g.Identity, Account: fields, Credential: *g.Credential})
 	if err != nil {
 		return err
 	}
@@ -289,7 +303,8 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 // sameIdentity checks that grant g, from a new login to the account cur, signs in to the same
 // upstream account: every field of the account's stored identity must be in g's, with the same
 // value (letter case aside). An account stored without an identity (added before its extension
-// reported one) is checked by label instead, when both have one. Neither: nothing to check.
+// reported one) is checked by the provider's label instead (Record.identityLabel, never a label
+// a person gave it), when both have one. Neither: nothing to check.
 func sameIdentity(cur Record, g *protocol.Grant) error {
 	if len(cur.Identity) > 0 {
 		for _, k := range slices.Sorted(maps.Keys(cur.Identity)) {
@@ -299,10 +314,43 @@ func sameIdentity(cur Record, g *protocol.Grant) error {
 		}
 		return nil
 	}
-	if cur.Label != "" && g.Label != "" && !strings.EqualFold(cur.Label, g.Label) {
+	if want := cur.identityLabel(); want != "" && g.Label != "" && !strings.EqualFold(want, g.Label) {
 		return fmt.Errorf("%w (its label differs from account %q's); to use the other account, add it as a new one", ErrIdentity, cur.ID)
 	}
 	return nil
+}
+
+// newAccountID returns a new account ID: "acc_" and 8 lower-case hex digits from m.random, drawn
+// again while an account core knows, or a login still running, has it as its ID (letter case
+// aside, as the store compares IDs) or its public ID. route.State gives such an ID as its own
+// public ID, so the account has one ID everywhere. Call with m.mu held.
+func (m *Manager) newAccountID() string {
+	var known []string
+	for _, r := range m.store.List() {
+		known = append(known, r.ID)
+	}
+	for _, b := range m.store.Broken() {
+		known = append(known, b.ID)
+	}
+	for _, l := range m.logins {
+		if l.state == LoginPending {
+			known = append(known, l.account)
+		}
+	}
+	b := make([]byte, 4)
+	for {
+		if _, err := io.ReadFull(m.random, b); err != nil {
+			panic("cred: reading random bytes: " + err.Error()) // crypto/rand does not fail
+		}
+		id := "acc_" + hex.EncodeToString(b)
+		taken := m.taken != nil && m.taken(id)
+		for _, k := range known {
+			taken = taken || strings.EqualFold(k, id) || m.publicID != nil && m.publicID(k) == id
+		}
+		if !taken {
+			return id
+		}
+	}
 }
 
 // Login returns login id.

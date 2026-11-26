@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -621,7 +622,8 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 			c.discard(next, prev)
 			return nil, err
 		}
-		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved, OnReauth: func(id string) { c.state.Unban(id) }, OnRemove: func(id string) { c.state.Unban(id) }})
+		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved, PublicID: c.state.PublicID, Taken: c.takenByConfig,
+			OnReauth: func(id string) { c.state.Unban(id) }, OnRemove: func(id string) { c.state.Unban(id) }})
 	}
 	router.UseCredentials(c.creds)
 	router.UseReadings(readings{c})
@@ -830,6 +832,15 @@ func (c *Core) accountsChanged() {
 func (c *Core) reserved(id string) bool {
 	s := c.cur.Load()
 	return s != nil && slices.ContainsFunc(s.Config.Accounts(), func(a route.Account) bool { return a.ID == id })
+}
+
+// takenByConfig reports whether an account the active config sets has id as its ID or its public
+// ID, which an ID core makes for a new account may then not be.
+func (c *Core) takenByConfig(id string) bool {
+	s := c.cur.Load()
+	return s != nil && slices.ContainsFunc(s.Config.Accounts(), func(a route.Account) bool {
+		return strings.EqualFold(a.ID, id) || c.state.PublicID(a.ID) == id
+	})
 }
 
 // sameAccount reports whether an account with one ID is the same upstream account in two

@@ -968,7 +968,7 @@ func TestStoredCredentialDoesNotRenew(t *testing.T) {
 func TestRenewalUnderOldSettingsIsDropped(t *testing.T) {
 	newSettings := func(m *Manager, s string) {
 		t.Helper()
-		if _, err := m.SetAccount("acct", func(a *route.Account) error { a.Settings = json.RawMessage(s); return nil }, nil); err != nil {
+		if _, err := m.SetAccount("acct", func(a *route.Account) error { a.Settings = json.RawMessage(s); return nil }, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

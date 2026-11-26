@@ -24,7 +24,7 @@ in this package (`types.go`, `client.go`); core's handlers write the same types.
 - **Bodies.** JSON in, JSON out, UTF-8. These calls refuse unknown fields with 400 `invalid_request`:
   `POST /models/refresh`, `POST /config/validate`, `PUT /config`, `PATCH /settings`,
   `POST /setup/apply`, `POST /setup/import`, `PUT /chains/{name}`, `PUT /theme` and
-  `PATCH /accounts/{id}`, which takes `disabled`, `settings` and an account's routing fields (with `timeouts`). The
+  `PATCH /accounts/{id}`, which takes `disabled`, `label`, `settings` and an account's routing fields (with `timeouts`). The
   other calls that read a body ignore the fields they do not know: `POST /packages`,
   `PATCH /extensions/{id}/config`, `POST /accounts`, `POST /accounts/{id}/login`,
   `POST /logins/{id}/input`, `POST /accounts/{id}/test` and `POST /accounts/import`.
@@ -248,9 +248,9 @@ is not brought, plain or bcrypt: core keeps its own management key, and its row 
 | --- | --- | --- |
 | `GET /accounts` | `pluxy account list` | Every account, with its `timeouts` when it sets them, `health` (below) and `public_id`: the short stable ID client replies name the account by, never an email address or a label (below). An account that [window ignition](../README.md#window-ignition) runs for also has `ignition`: `{"windows": [{"id", "state", "next", "why", "failures", "last", "model", "error"}], "error"}`, each usage window core starts with its state (`running`, `waiting`, `starting` or `paused`) and when core starts it next; `pluxy account list --json` shows it |
 | `GET /login-methods` | `pluxy account methods` | How each running extension can add an account |
-| `POST /accounts`, `GET /logins/{id}`, `POST /logins/{id}/input`, `DELETE /logins/{id}` | `pluxy account add <provider> [--id id] [--method m] [--input name=value]... [--no-wait]` | Start a sign-in and follow it to the end; prints the address to open or the code to type. `--id` names the account (default: `account-` and 12 hex digits); `--no-wait` stops once it has started, with exit code 7, unless the sign-in waits on a prompt's value, which is exit code 2 and cancels it |
+| `POST /accounts`, `GET /logins/{id}`, `POST /logins/{id}/input`, `DELETE /logins/{id}` | `pluxy account add <provider> [--id id] [--method m] [--input name=value]... [--no-wait]` | Start a sign-in and follow it to the end; prints the address to open or the code to type. `--id` names the account (default: `account-` and 12 hex digits). The call also takes `label`, a name for people that wins over the provider's (as `PATCH` takes it), and makes the account's ID itself when `id` is left out (`acc_` and 8 hex digits, its own `public_id`); the command sends neither yet; `--no-wait` stops once it has started, with exit code 7, unless the sign-in waits on a prompt's value, which is exit code 2 and cancels it |
 | `POST /accounts/{id}/login` | `pluxy account login <id> [--method m] [--input name=value]... [--no-wait]` | Sign in again, followed as `account add` follows a sign-in |
-| `PATCH /accounts/{id}` | `pluxy account enable <id>`, `pluxy account disable <id>`, `pluxy account set <id> name=value...` | Turn on or off; change routing settings. `name` is `disabled`, `timeouts` (an object of `header_ms`, `idle_ms` and `total_ms`) or one of the fields below; its value is JSON, except `prefix` and `proxy_url`, which take their text as it is; `null` sets a field other than `disabled` back to its default |
+| `PATCH /accounts/{id}` | `pluxy account enable <id>`, `pluxy account disable <id>`, `pluxy account set <id> name=value...` | Turn on or off; change routing settings. `name` is `disabled`, `timeouts` (an object of `header_ms`, `idle_ms` and `total_ms`) or one of the fields below; its value is JSON, except `prefix` and `proxy_url`, which take their text as it is; `null` sets a field other than `disabled` back to its default. The call also takes `label`, the account's name for people (trimmed, one line of at most 64 characters, else 400; `""` or `null` takes it away, leaving the label its provider gave it), which `account set` does not send yet; an account set in the config takes none (409) |
 | `DELETE /accounts/{id}` | `pluxy account remove <id>` | Remove |
 | `POST /accounts/{id}/refresh` | `pluxy account refresh <id>` | Renew its credential now |
 | `POST /accounts/{id}/cooldown/reset` | `pluxy account clear <id>` | Forget the cooldowns routing holds against the account; a ban stays |
@@ -291,7 +291,7 @@ A `broken` account is one whose credential file cannot be read: core knows it on
 name, so `extension`, `kind` and `state` are empty and `why` names the file and the error. It never
 serves a request, `PATCH` on it is a 404, and `DELETE` removes the file.
 
-`public_id` is `acc_` and 8 hex digits, a keyed digest of the account's ID: an ID can be an email address or a label a person typed (an import of today's auth files names an account by its file), and an ID must not leave core in a client reply. The key is made at the first start and kept in `state/account-key` beside the config, so an account keeps its public ID across restarts. `X-Pluxy-Account`, the header a request pins an account by, takes either ID.
+`public_id` is `acc_` and 8 hex digits, a keyed digest of the account's ID: an ID can be an email address or a label a person typed (an import of today's auth files names an account by its file), and an ID must not leave core in a client reply. An account added with `POST /accounts` without an `id` gets one core makes, `acc_` and 8 random hex digits, and that ID is its own `public_id`, so it has one ID everywhere. The key is made at the first start and kept in `state/account-key` beside the config, so an account keeps its public ID across restarts. `X-Pluxy-Account`, the header a request pins an account by, takes either ID.
 
 ### Models
 

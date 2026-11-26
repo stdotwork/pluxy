@@ -50,8 +50,14 @@ type Record struct {
 	Disabled bool   `json:"disabled,omitempty"`
 	// Reason says why the account needs a new login.
 	Reason string `json:"reason,omitempty"`
-	// Label names the account for people (for example an e-mail address); not secret.
+	// Label names the account for people; not secret. It is the label a person gave the
+	// account, else the provider's (ProviderLabel).
 	Label string `json:"label,omitempty"`
+	// ProviderLabel is the label the provider's last login gave the account (protocol.Grant.Label,
+	// often an e-mail address), kept apart from a label a person gave it, so a new login is
+	// checked against it (sameIdentity). Empty in a record stored before core kept it apart, whose
+	// Label is then the provider's.
+	ProviderLabel string `json:"provider_label,omitempty"`
 	// Identity names the upstream account the credential signs in to, as the provider's login
 	// reported it (protocol.Grant.Identity); not secret. A new login to the account must sign
 	// in to the same one.
@@ -62,6 +68,26 @@ type Record struct {
 	Credential protocol.Credential `json:"credential"`
 	CreatedAt  time.Time           `json:"created_at"`
 	UpdatedAt  time.Time           `json:"updated_at"`
+}
+
+// identityLabel is the label a new login's is compared with when the record has no identity:
+// the provider's.
+func (r Record) identityLabel() string {
+	if r.ProviderLabel != "" {
+		return r.ProviderLabel
+	}
+	return r.Label
+}
+
+// setLabel sets the label a person gave the account; "" takes it away, leaving the provider's.
+func (r *Record) setLabel(label string) {
+	// A record stored before ProviderLabel holds its provider's label as Label: keep it apart
+	// first, so the new label does not take its place in the identity check.
+	r.ProviderLabel = r.identityLabel()
+	r.Label = label
+	if label == "" {
+		r.Label = r.ProviderLabel
+	}
 }
 
 // Usable reports whether requests may be routed to the account.

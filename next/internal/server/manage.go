@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
@@ -402,9 +404,11 @@ func (m *Management) list(w http.ResponseWriter, r *http.Request) {
 }
 
 // addRequest is the body of POST /accounts: the account's fields (as in the config, without a
-// credential) and how to log in.
+// credential; without an ID, core makes one), a label and how to log in.
 type addRequest struct {
 	route.Account
+	// Label is the label the person gives the account (checkLabel); it wins over the provider's.
+	Label string `json:"label"`
 	// Extension names the extension that signs in; empty while only one runs.
 	Extension string            `json:"extension"`
 	Method    string            `json:"method"`
@@ -447,7 +451,27 @@ func (m *Management) add(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	m.startLogin(w, r, cred.LoginRequest{Account: req.Account, Extension: req.Extension, Method: req.Method, Input: req.Input})
+	label, err := checkLabel(req.Label)
+	if err != nil {
+		writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	m.startLogin(w, r, cred.LoginRequest{Account: req.Account, Extension: req.Extension, Method: req.Method, Input: req.Input, Label: label})
+}
+
+// maxLabel is the most characters a label a person gives an account may have.
+const maxLabel = 64
+
+// checkLabel returns a label a person gives an account without its surrounding spaces, or an
+// error when it is not one line (it holds a control character or a line or paragraph separator)
+// or is longer than maxLabel characters. "" is no label.
+func checkLabel(label string) (string, error) {
+	label = strings.TrimSpace(label)
+	notOneLine := strings.ContainsFunc(label, func(r rune) bool { return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' })
+	if notOneLine || utf8.RuneCountInString(label) > maxLabel {
+		return "", fmt.Errorf("label must be one line of at most %d characters", maxLabel)
+	}
+	return label, nil
 }
 
 func (m *Management) reauth(w http.ResponseWriter, r *http.Request) {
@@ -622,9 +646,27 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var disabled *bool
+	var label *string
 	var settings json.RawMessage
 	var changes []func(*route.Account) error
 	for name, raw := range req {
+		if name == "label" {
+			var sent *string
+			if json.Unmarshal(raw, &sent) != nil {
+				writeManagementError(w, http.StatusBadRequest, "invalid_request", "label must be a string, or null for none")
+				return
+			}
+			l := ""
+			if sent != nil {
+				var err error
+				if l, err = checkLabel(*sent); err != nil {
+					writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
+					return
+				}
+			}
+			label = &l
+			continue
+		}
 		if name == "disabled" {
 			if err := json.Unmarshal(raw, &disabled); err != nil || disabled == nil {
 				writeManagementError(w, http.StatusBadRequest, "invalid_request", "disabled must be true or false")
@@ -650,7 +692,7 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			set = m.patchHeaders
 		}
 		if !ok {
-			writeManagementError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("%q cannot be changed here: send disabled, settings or any of %s",
+			writeManagementError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("%q cannot be changed here: send disabled, label, settings or any of %s",
 				name, strings.Join(slices.Sorted(maps.Keys(patchFields)), ", ")))
 			return
 		}
@@ -661,8 +703,8 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			return nil
 		})
 	}
-	if disabled == nil && settings == nil && len(changes) == 0 {
-		writeManagementError(w, http.StatusBadRequest, "invalid_request", "nothing to change: send disabled, settings or a routing field")
+	if disabled == nil && label == nil && settings == nil && len(changes) == 0 {
+		writeManagementError(w, http.StatusBadRequest, "invalid_request", "nothing to change: send disabled, label, settings or a routing field")
 		return
 	}
 	// Decode every field before changing anything, so a bad one changes nothing. The probe is
@@ -691,7 +733,7 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			return m.restoreSettings(a, settings)
 		}
 	}
-	rec, err := m.creds.SetAccount(id, change, disabled)
+	rec, err := m.creds.SetAccount(id, change, disabled, label)
 	if err != nil {
 		writeCredError(w, err)
 		return
