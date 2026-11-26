@@ -291,10 +291,7 @@ fn second(c: &mut Checks, app: &AppHandle) {
     ) == Some(json!(true));
     c.check(
         dashboard && stayed,
-        format!(
-            "the next launch opens on Home, not Setup ({})",
-            page(app)
-        ),
+        format!("the next launch opens on Home, not Setup ({})", page(app)),
     );
 
     let _ = main_eval(app, "(location.hash = '#/setup', true)");
