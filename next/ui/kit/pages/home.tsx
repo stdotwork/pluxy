@@ -356,8 +356,8 @@ export function HomePage() {
         <p>{t("noRequests")}</p>
         {line && (
           <p>
-            {line.text} {/* P5: these two links go to #/tools once the Tools page lands in the panel. */}
-            {line.link && <a href="#/setup">{line.link === "connect" ? t("connectIt") : t("connectTool")}</a>}
+            {line.text}{" "}
+            {line.link && <a href="#/tools">{line.link === "connect" ? t("connectIt") : t("connectTool")}</a>}
           </p>
         )}
       </div>

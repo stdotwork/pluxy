@@ -299,10 +299,9 @@ test.describe("a core with accounts and requests", () => {
     await signIn(page, core);
     await expect(page.getByText("No requests in the last 7 days.", { exact: true })).toBeVisible();
     await expect(page.getByText("Claude Code is installed but not connected to pluxy.")).toBeVisible();
-    // P5: this link goes to #/tools once the Tools page is in the panel.
     await expect(page.getByRole("link", { name: "Connect it", exact: true })).toHaveAttribute(
       "href",
-      "#/setup",
+      "#/tools",
     );
     await expect(page.locator('[data-part="days"]')).toHaveCount(0);
   });

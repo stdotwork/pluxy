@@ -23,7 +23,7 @@ import {
 import type { Windows } from "../kit/parts/hooks";
 import { forgetWindows } from "../kit/parts/hooks";
 import { type Kit, KitContext } from "../kit/ui";
-import { button, mountIn, restoreDom, settle } from "./fakeDom";
+import { all, button, mountIn, restoreDom, settle } from "./fakeDom";
 
 const counts = (c: Partial<Counts>): Counts => {
   const n = { needs: 0, waiting: 0, serving: 0, off: 0, ...c };
@@ -471,6 +471,8 @@ describe("the page", () => {
     expect(page.text()).toContain("No requests in the last 7 days.");
     expect(page.text()).toContain("No coding tool is connected to pluxy yet.");
     expect(page.text()).toContain("Connect a tool");
+    const connect = all(page.root, "a").find((a) => a.textContent === "Connect a tool");
+    expect(connect?.attributes.find((a) => a.name === "href")?.value).toBe("#/tools");
     expect(page.reads.filter((p) => p === "/setup")).toHaveLength(1);
     await page.refresh();
     expect(page.reads.filter((p) => p === "/setup")).toHaveLength(1);
