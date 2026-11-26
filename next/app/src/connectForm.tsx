@@ -16,8 +16,10 @@ function Field(props: {
 }) {
   const id = useId();
   return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
+    <div class="field" data-part="field">
+      <label class="label" for={id}>
+        {props.label}
+      </label>
       <input
         id={id}
         type="text"
@@ -33,7 +35,7 @@ function Field(props: {
           {props.hint}
         </small>
       )}
-    </label>
+    </div>
   );
 }
 

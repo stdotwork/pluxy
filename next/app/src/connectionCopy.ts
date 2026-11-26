@@ -188,6 +188,8 @@ export interface Pane {
     | "cannot-connect";
   tone: Tone;
   heading: string;
+  /** Where the app's own pluxy runs, and which version: said under every heading of that pluxy. */
+  about?: string;
   /** One or two lines under the heading. */
   lines: string[];
   /** An address or path shown in mono: the address of a pluxy that runs on its own, or a program. */
@@ -206,8 +208,8 @@ const fill = (text: string, values: Record<string, string>) =>
   );
 
 /** On this computer, version 0.1.0. — said under every heading of the app's own pluxy. */
-export function whereLine(version?: string): string[] {
-  return version ? [`On this computer, version ${version}.`] : [];
+export function whereLine(version?: string): string | undefined {
+  return version ? `On this computer, version ${version}.` : undefined;
 }
 
 /** The native text MISSING (conn.rs) says nothing the heading does not. */
@@ -258,7 +260,8 @@ function managedPane(c: Connection): Pane {
       key: "restarting",
       tone: "warn",
       heading: PANE.restarting,
-      lines: about,
+      about,
+      lines: [],
       details: detail,
       primary: "start-now",
       secondary: "where",
@@ -269,7 +272,8 @@ function managedPane(c: Connection): Pane {
       key: "paused",
       tone: "danger",
       heading: PANE.paused,
-      lines: about,
+      about,
+      lines: [],
       details: detail,
       primary: "start",
       secondary: "where",
@@ -280,7 +284,8 @@ function managedPane(c: Connection): Pane {
         key: "stopped-with-error",
         tone: "danger",
         heading: PANE.stoppedWithError,
-        lines: about,
+        about,
+        lines: [],
         details: detail,
         primary: "start",
         secondary: "where",
@@ -295,7 +300,8 @@ function managedPane(c: Connection): Pane {
       key: "stopped",
       tone: "neutral",
       heading: PANE.stopped,
-      lines: [...about, ...why],
+      about,
+      lines: why,
       primary: "start",
       secondary: "where",
     };
@@ -307,7 +313,8 @@ function managedPane(c: Connection): Pane {
     key: "not-answering-managed",
     tone: "danger",
     heading: PANE.managedSilent,
-    lines: about,
+    about,
+    lines: [],
     details: detail,
     primary: "restart",
     secondary: "where",

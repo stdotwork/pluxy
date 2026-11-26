@@ -87,8 +87,8 @@ async function mount(tree: ComponentChildren, handlers: Handlers = {}) {
     click: (label: string) => fire(button(label), "click"),
     fire,
     input: async (label: string, value: string) => {
-      const field = all(root, "label").find((l) => all(l, "span")[0]?.textContent === label);
-      const input = field && all(field, "input")[0];
+      const name = all(root, "label").find((l) => l.textContent === label);
+      const input = name?.parentNode && all(name.parentNode, "input")[0];
       if (!input) throw new Error(`no field ${label}`);
       input.value = value;
       await fire(input, "input");

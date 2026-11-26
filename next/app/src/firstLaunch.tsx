@@ -195,6 +195,7 @@ export function NotRunningPane(props: {
             <code class="mono">{pane.mono}</code>
           </p>
         )}
+        {pane.about && <p>{pane.about}</p>}
         {lines}
         {problem && problem !== pane.details && <Notice tone="danger">{problem}</Notice>}
       </StatePane>

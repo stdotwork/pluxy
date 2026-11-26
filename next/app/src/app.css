@@ -185,8 +185,13 @@
   }
 
   .where-section > .setting-row,
-  .where-section > .notice {
+  .where-section > .notice,
+  .where-section > [data-part="window-preferences"] {
     align-self: stretch;
+  }
+
+  .where-section > [data-part="window-preferences"]:last-child > .setting-row {
+    border-bottom: 0;
   }
 
   .where-section > .setting-row:last-child {
@@ -217,6 +222,13 @@
   .where-facts dd {
     margin: 0;
     min-width: 0;
+  }
+
+  .where-inline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2) calc(var(--s) * 3);
   }
 
   .where-facts:empty {
@@ -282,8 +294,28 @@
     cursor: pointer;
   }
 
-  .where-choice-head input {
-    margin-top: calc(var(--s) * 1);
+  /* A round mark of the theme's own colours: the browser's radio in the dark scheme is a grey dot
+     whether it is chosen or not. */
+  .where-choice-head input[type="radio"] {
+    appearance: none;
+    flex: none;
+    box-sizing: border-box;
+    width: calc(var(--s) * 4);
+    height: calc(var(--s) * 4);
+    margin: var(--s) 0 0;
+    border: calc(var(--px-shape-border) * 1.5) solid var(--px-color-input-border);
+    border-radius: 50%;
+    background: transparent;
+  }
+
+  .where-choice-head input[type="radio"]:checked {
+    border-color: var(--px-color-accent);
+    background: radial-gradient(circle, var(--px-color-accent) 0 38%, transparent 42%);
+  }
+
+  .where-choice-head input[type="radio"]:focus-visible {
+    outline: 2px solid var(--px-color-focus);
+    outline-offset: 2px;
   }
 
   .where-choice-head span {
@@ -394,6 +426,29 @@
 
   .where-owner .field {
     align-self: stretch;
+  }
+
+  /* ---- the close prompts ----------------------------------------------------------------------- */
+
+  dialog[data-part="close-prompt"] {
+    box-sizing: border-box;
+    width: min(30rem, calc(100% - var(--s) * 8));
+    padding: calc(var(--s) * 4);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-overlay);
+    color: var(--px-color-text);
+  }
+
+  dialog[data-part="close-prompt"]::backdrop {
+    background: color-mix(in srgb, black 40%, transparent);
+  }
+
+  dialog[data-part="close-prompt"] .card,
+  dialog[data-part="close-prompt"] [data-part="card"] {
+    padding: 0;
+    border: 0;
+    background: none;
   }
 
   /* 640 wide: the two choices stack, and the rows' controls sit under their names (SettingRow). */

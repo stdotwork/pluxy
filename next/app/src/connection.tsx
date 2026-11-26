@@ -405,18 +405,23 @@ function VersionList(props: { connection: Connection }) {
 function PathField(props: { label: string; hint: string; value: string; onInput: (v: string) => void }) {
   const id = useId();
   return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
+    <div class="field" data-part="field">
+      <label class="label" for={id}>
+        {props.label}
+      </label>
       <input
         id={id}
         type="text"
         value={props.value}
         autocomplete="off"
         spellcheck={false}
+        aria-describedby={`${id}-hint`}
         onInput={(e) => props.onInput(e.currentTarget.value)}
       />
-      <small class="hint">{props.hint}</small>
-    </label>
+      <small class="hint" id={`${id}-hint`}>
+        {props.hint}
+      </small>
+    </div>
   );
 }
 
@@ -506,8 +511,8 @@ function Advanced(props: { connection: Connection; onChange: (c: Connection) => 
         {(c.mode === "local" || c.mode === "remote") && (
           <dl class="where-facts">
             <dt>{VERSIONS.key}</dt>
-            <dd>
-              {c.remembered ? VERSIONS.keyKept : VERSIONS.keySession}{" "}
+            <dd class="where-inline">
+              {c.remembered ? VERSIONS.keyKept : VERSIONS.keySession}
               {c.signed_in && (
                 <Button disabled={busy} onClick={again}>
                   {busy ? ACTIONS.key.busy : VERSIONS.enterAgain}

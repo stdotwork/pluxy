@@ -209,7 +209,6 @@ export function ClosePrompt() {
       data-part="close-prompt"
       data-kind={kind}
       aria-label={title}
-      style={{ padding: 0, border: "none", background: "transparent", maxWidth: "30rem" }}
       onCancel={(e) => {
         e.preventDefault();
         if (busy === undefined) dismiss();
