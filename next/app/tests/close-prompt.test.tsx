@@ -183,15 +183,18 @@ async function settle() {
   }
 }
 
-/** The prompt on a page of its own; calls records every window command it sends. */
-async function mount() {
+/** The prompt on a page of its own; calls records every window command it sends. mode is how the app
+ * reaches pluxy, which the window command connection_get answers. */
+async function mount(mode: "managed" | "local" | "remote" = "managed") {
   const calls: { cmd: string; args: unknown }[] = [];
   const document = new FakeDocument();
   const win: { __TAURI_INTERNALS__: unknown; __pluxyClosePrompt?: (kind?: "no-tray") => boolean } = {
     __TAURI_INTERNALS__: {
       invoke: (cmd: string, args?: unknown) => {
         calls.push({ cmd, args });
-        return Promise.resolve(null);
+        return Promise.resolve(
+          cmd === "connection_get" ? { mode, signed_in: true, remembered: false } : null,
+        );
       },
       transformCallback: () => 1,
     },
@@ -258,7 +261,7 @@ test("with no tray, the prompt asks to close and stop pluxy, and only that sends
     "This desktop has no tray, so closing the window stops pluxy, and your coding tools stop getting answers.",
   );
   expect(p.switchLabel()).toBe("Don't ask again");
-  // No Minimize to tray: there is no tray to keep the app in.
+  // No Keep in the tray: there is no tray to keep the app in.
   expect(p.labels()).toEqual(["Keep open", "Close and stop pluxy"]);
   expect(p.variant("Keep open")).toBe("primary");
   expect(p.variant("Close and stop pluxy")).toBe("danger");
@@ -281,18 +284,21 @@ test("with no tray, the prompt asks to close and stop pluxy, and only that sends
   expect(p.dialog().open).toBe(false);
 });
 
-test("the Ask prompt keeps its choices, and sends its own kind after a no-tray prompt", async () => {
+test("the Ask prompt keeps pluxy in the tray or quits, and sends its own kind after a no-tray prompt", async () => {
   const p = await mount();
   await p.ask("no-tray");
   await p.click("Keep open");
   expect(await p.ask()).toBe(true);
-  expect(p.title()).toBe("What would you like to do?");
+  expect(p.title()).toBe("Keep pluxy in the tray?");
+  expect(p.text()).toContain("Keep in the tray keeps your coding tools working. Quit stops pluxy.");
   expect(p.switchLabel()).toBe("Remember this choice");
-  expect(p.labels()).toEqual(["Minimize to tray", "Exit app", "Cancel"]);
+  expect(p.labels()).toEqual(["Keep in the tray", "Quit (stops pluxy)", "Cancel"]);
+  expect(p.variant("Keep in the tray")).toBe("primary");
+  expect(p.variant("Quit (stops pluxy)")).toBe("danger");
   await p.toggle();
-  await p.click("Minimize to tray");
+  await p.click("Keep in the tray");
   await p.ask();
-  await p.click("Exit app");
+  await p.click("Quit (stops pluxy)");
   await p.ask();
   await p.click("Cancel");
   await p.ask();
@@ -301,4 +307,19 @@ test("the Ask prompt keeps its choices, and sends its own kind after a no-tray p
     { action: "minimize-to-tray", remember: true, kind: "ask" },
     { action: "exit", remember: false, kind: "ask" },
   ]);
+});
+
+test("when the app only connects to a pluxy, Quit does not say it stops pluxy", async () => {
+  for (const mode of ["local", "remote"] as const) {
+    const p = await mount(mode);
+    await p.ask();
+    expect(p.text()).toContain("pluxy keeps running either way.");
+    expect(p.text()).not.toContain("Quit stops pluxy");
+    expect(p.labels()).toEqual(["Keep in the tray", "Quit", "Cancel"]);
+    expect(p.variant("Quit")).toBe("danger");
+    await p.click("Quit");
+    expect(p.calls.filter((c) => c.cmd === "window_close").map((c) => c.args)).toEqual([
+      { action: "exit", remember: false, kind: "ask" },
+    ]);
+  }
 });

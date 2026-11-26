@@ -668,7 +668,7 @@ async function runApp(
       );
       rmSync(trustHome, { recursive: true, force: true });
     }
-    // The main checks close the window to the tray; the window suite starts with Ask every time.
+    // The main checks close the window to the tray; the window suite starts with Ask.
     if (!suite)
       writeFileSync(
         join(dirs.config, artifact.identifier, "window.json"),

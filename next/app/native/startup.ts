@@ -98,7 +98,7 @@ function liveParent(pid: number): number | undefined {
   }
 }
 let offCore: number | undefined; // the core coreOff left running, which must not outlive the app
-/** With Start core on launch off the app starts no core and recovers none, and says it was not
+/** With Start pluxy with the app off the app starts no core and recovers none, and says it was not
  * started. Positive controls on the same launch: the tray's Start pluxy starts one, and that core
  * is recovered after a crash. */
 async function coreOff(report: Report, lines: string[]) {
@@ -121,11 +121,11 @@ async function coreOff(report: Report, lines: string[]) {
   const idle = core();
   check(
     idle?.state === "stopped" && !idle.pid && attempts() === 0,
-    `Start core on launch off: a core started or was recovered: ${JSON.stringify(idle)}, ${attempts()} recovery attempts`,
+    `Start pluxy with the app off: a core started or was recovered: ${JSON.stringify(idle)}, ${attempts()} recovery attempts`,
   );
   check(
     idle?.stop_reason === "not_started",
-    `Start core on launch off: the stopped core does not say it was not started: ${JSON.stringify(idle)}`,
+    `Start pluxy with the app off: the stopped core does not say it was not started: ${JSON.stringify(idle)}`,
   );
   const click = spawnSync(probe as string, ["tray", String(report.app_pid), "Start pluxy"], {
     encoding: "utf8",
@@ -140,7 +140,7 @@ async function coreOff(report: Report, lines: string[]) {
     .pid;
   check(attempts() === 1, `${attempts()} recovery attempts after one crash, want 1`);
   console.log(
-    "native-recovery: Start core on launch off: no core started or recovered, and it says not_started; tray Start pluxy started one, and it was recovered after a crash",
+    "native-recovery: Start pluxy with the app off: no core started or recovered, and it says not_started; tray Start pluxy started one, and it was recovered after a crash",
   );
 }
 
@@ -155,7 +155,7 @@ if (noTray) {
   );
   console.log("startup no-host fallback passed: exactly one window/webview");
 } else {
-  // Silent launch keeps the app's own core in the tray; local and remote modes open normally.
+  // Start in the tray keeps the app's own core in the tray; local and remote modes open normally.
   const hidden = mode === "managed";
   const silent = await launch("observe", true);
   check(
@@ -173,11 +173,14 @@ if (noTray) {
   const menu = await launch("observe");
   check(
     menu.windows === 1 && menu.webviews === 1,
-    "app-menu launch must show one window even with Silent launch on",
+    "app-menu launch must show one window even with Start in the tray on",
   );
   prefs(false);
   const visible = await launch("observe", true);
-  check(visible.windows === 1 && visible.webviews === 1, "login with Silent launch off must show one window");
+  check(
+    visible.windows === 1 && visible.webviews === 1,
+    "login with Start in the tray off must show one window",
+  );
   prefs(true, false);
   const stopped = await launch("observe", true, hidden ? coreOff : undefined);
   if (hidden) {

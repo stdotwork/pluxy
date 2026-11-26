@@ -111,7 +111,7 @@ pub fn check(
     tray: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
     match (kind, action) {
-        (_, Close::Ask) => Err("choose Exit app or Minimize to tray".into()),
+        (_, Close::Ask) => Err("choose Quit or Keep in the tray".into()),
         (Prompt::NoTray, Close::MinimizeToTray) => {
             Err("with no tray, the window either stays open or closes and stops pluxy".into())
         }

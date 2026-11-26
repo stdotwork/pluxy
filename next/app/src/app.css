@@ -1,0 +1,415 @@
+/* The desktop app's own screens: the first launch choice, the not-running pane and Where pluxy runs.
+   Like the kit's styles it sits in the layer "kit", reads only theme tokens (--px-*) and leaves a
+   theme's custom CSS, which is unlayered, free to win. */
+
+@layer kit {
+  @keyframes app-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .spinner {
+    display: inline-flex;
+    color: var(--px-color-text-muted);
+    animation: app-spin 1.2s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .spinner,
+    .not-running[data-working] .state-pane-mark svg {
+      animation: none;
+    }
+  }
+
+  /* ---- first launch ------------------------------------------------------------------------- */
+
+  .first {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: calc(var(--s) * 8);
+    max-width: 48rem;
+    min-height: 100vh;
+    margin: 0 auto;
+    padding: calc(var(--s) * 8) calc(var(--s) * 6);
+  }
+
+  .first section {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--s) * 4);
+  }
+
+  .first-brand {
+    margin: 0;
+    font-size: calc(var(--px-font-size) * 2);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .first h1 {
+    font-size: calc(var(--px-font-size) * 1.75);
+  }
+
+  .first-lead,
+  .first-quiet,
+  .first-note {
+    margin: 0;
+    color: var(--px-color-text-muted);
+  }
+
+  .first-lead {
+    max-width: 34rem;
+    font-size: calc(var(--px-font-size) * 1.15);
+  }
+
+  .first-quiet,
+  .first-note {
+    font-size: var(--px-font-size-small);
+  }
+
+  .first-waiting {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+  }
+
+  .first-choices {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: calc(var(--s) * 4);
+    align-items: start;
+  }
+
+  .first-option {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .first-choice {
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: calc(var(--s) * 2);
+    width: 100%;
+    height: auto;
+    min-height: calc(var(--s) * 28);
+    padding: calc(var(--s) * 4);
+    text-align: start;
+    white-space: normal;
+  }
+
+  .first-choice b {
+    font-size: var(--px-font-size-title);
+  }
+
+  .first-choice span {
+    font-weight: normal;
+  }
+
+  /* ---- the address form ------------------------------------------------------------------- */
+
+  .connect-form {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--s) * 4);
+    max-width: 36rem;
+  }
+
+  .connect-form .hint[data-bad] {
+    color: var(--px-color-danger);
+  }
+
+  .connect-certificate summary {
+    cursor: pointer;
+    margin-bottom: calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+  }
+
+  .connect-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2);
+  }
+
+  .connect-note {
+    margin: 0;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  /* ---- the not-running pane --------------------------------------------------------------- */
+
+  .not-running[data-tone="warn"] .state-pane-mark {
+    color: var(--px-color-warn);
+  }
+
+  .not-running[data-working] .state-pane-mark svg {
+    animation: app-spin 1.2s linear infinite;
+  }
+
+  .not-running .mono {
+    overflow-wrap: anywhere;
+  }
+
+  .not-running-safe {
+    margin: 0;
+    padding: 0 calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+  }
+
+  /* ---- Where pluxy runs ------------------------------------------------------------------------ */
+
+  .where {
+    display: flex;
+    flex-direction: column;
+    max-width: var(--px-size-width-narrow, 48rem);
+  }
+
+  .where-section {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: calc(var(--s) * 2);
+    padding: calc(var(--s) * 4) calc(var(--s) * 2);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .where-section > h2,
+  .where-versions > h3 {
+    font-size: var(--px-font-size-title);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .where-section > .setting-row,
+  .where-section > .notice {
+    align-self: stretch;
+  }
+
+  .where-section > .setting-row:last-child {
+    border-bottom: 0;
+  }
+
+  .where-state,
+  .where-line {
+    margin: 0;
+  }
+
+  .where-line {
+    color: var(--px-color-text-muted);
+  }
+
+  .where-facts {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: calc(var(--s) * 2) calc(var(--s) * 4);
+    align-items: center;
+    margin: 0;
+  }
+
+  .where-facts dt {
+    color: var(--px-color-text-muted);
+  }
+
+  .where-facts dd {
+    margin: 0;
+    min-width: 0;
+  }
+
+  .where-facts:empty {
+    display: none;
+  }
+
+  .where-address {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+  }
+
+  .where-address code {
+    overflow-wrap: anywhere;
+  }
+
+  .where-action {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 3);
+  }
+
+  .where-message {
+    color: var(--px-color-danger);
+  }
+
+  .where-details summary {
+    cursor: pointer;
+    color: var(--px-color-text-muted);
+  }
+
+  .where-details pre {
+    margin: calc(var(--s) * 2) 0 0;
+    padding: calc(var(--s) * 2);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-code-bg);
+    color: var(--px-color-code-text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .where-choices {
+    display: flex;
+    flex-direction: column;
+    align-self: stretch;
+  }
+
+  .where-choice {
+    padding-block: calc(var(--s) * 2);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .where-choice:last-child {
+    border-bottom: 0;
+  }
+
+  .where-choice-head {
+    display: flex;
+    align-items: flex-start;
+    gap: calc(var(--s) * 3);
+    cursor: pointer;
+  }
+
+  .where-choice-head input {
+    margin-top: calc(var(--s) * 1);
+  }
+
+  .where-choice-head span {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s);
+  }
+
+  .where-choice-head small {
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size);
+  }
+
+  .where-choice-body {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: calc(var(--s) * 3);
+    margin-top: calc(var(--s) * 3);
+    padding-inline-start: calc(var(--s) * 6);
+  }
+
+  .where-choice-body .connect-form {
+    align-self: stretch;
+  }
+
+  /* A setting's control already has its name in the row, so the control's own label is only read aloud. */
+  .setting-control .field > .label,
+  .setting-control .switch .label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .setting-pending {
+    color: var(--px-color-text-muted);
+  }
+
+  .where-advanced {
+    padding: calc(var(--s) * 4) calc(var(--s) * 2);
+  }
+
+  .where-advanced summary {
+    cursor: pointer;
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .where-advanced-body {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--s) * 6);
+    margin-top: calc(var(--s) * 4);
+  }
+
+  .where-versions {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--s) * 2);
+  }
+
+  .where-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .where-list li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2) calc(var(--s) * 4);
+    padding-block: calc(var(--s) * 2);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .where-list-name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .where-list-name small {
+    color: var(--px-color-text-muted);
+  }
+
+  .where-list-name code {
+    overflow-wrap: anywhere;
+  }
+
+  .where-list-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2);
+  }
+
+  .where-owner {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: calc(var(--s) * 4);
+  }
+
+  .where-owner .field {
+    align-self: stretch;
+  }
+
+  /* 640 wide: the two choices stack, and the rows' controls sit under their names (SettingRow). */
+  @media (max-width: 719.98px) {
+    .first {
+      justify-content: flex-start;
+      gap: calc(var(--s) * 5);
+      padding: calc(var(--s) * 5) calc(var(--s) * 4);
+    }
+
+    .first-choices {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .first-choice {
+      min-height: 0;
+    }
+  }
+}

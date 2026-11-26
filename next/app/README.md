@@ -2,7 +2,7 @@
 
 The desktop app is the UI kit's second build ([`../ui`](../ui/README.md)), in a Tauri 2 window,
 with a tray icon. It shows core's pages in the same places and with the same themes as the web
-panel, then adds its own: Beginner Mode, Manage Clients and the client pages as the topics of Tools, and Connection, Version Management, Device
+panel, then adds its own: Beginner Mode, Manage Clients and the client pages as the topics of Tools, and Where pluxy runs, Version Management, Device
 extensions and Launcher among the Settings topics. Extension pages, from core and
 from packages installed on this device, open in webviews of their own.
 
@@ -13,7 +13,7 @@ what happened to each feature of the old desktop app.
 
 | Folder | What it holds |
 | --- | --- |
-| `src/` | The window: the kit's shell and pages, the app's host (`host.ts`), the Connection page, and how extension pages are drawn (`nativePage.tsx`) |
+| `src/` | The window: the kit's shell and pages, the app's host (`host.ts`), the first launch screen, the not-running pane and the Where pluxy runs page (`firstLaunch.tsx`, `connection.tsx`, every word of them in `connectionCopy.ts`), and how extension pages are drawn (`nativePage.tsx`) |
 | `page/` | The small document an extension page's webview loads, which holds the page's sandboxed frame, and the release notes' style sheet |
 | `src-tauri/` | The native side: commands, the connection to core, the app's own core, extension page webviews, the tray |
 | `native/` | The native test (`run.ts`), its sessions and fixtures |
@@ -22,7 +22,7 @@ what happened to each feature of the old desktop app.
 
 ## How the app reaches core
 
-The Connection page picks one of three modes. The app keeps the choice in `connection.json` in
+The first thing a new person sees is one question, **Where should pluxy run?**, with two answers: **On this computer** (the `managed` mode below; one click, nothing to type) and **Connect to a pluxy that is already running** (the address is typed, and the address decides between the `local` and `remote` modes below; the native key window then asks for its management key). The **Where pluxy runs** page (Settings, This device) shows the same two choices again later. The app keeps the choice in `connection.json` in
 its config folder (on Linux `~/.config/dev.pluxy.desktop/`), readable only by your user. On
 Windows it is in the local application data folder instead (`%LOCALAPPDATA%\dev.pluxy.desktop\`),
 and so is the app's own core's folder (`core/`), since both can hold a management key: the config
@@ -31,15 +31,15 @@ server and to the person's other computers.
 
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
-| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start has the core write that config (`pluxy init -port 0`): a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
-| Core on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address and management key. | Leaves it running. The app never starts or stops it. |
-| Remote core (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
+| On this computer (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start has the core write that config (`pluxy init -port 0`): a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
+| Connect to a pluxy that is already running, on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address (`http://` is accepted only here) and management key. | Leaves it running. The app never starts or stops it. |
+| Connect to a pluxy that is already running, on another computer (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
 Addresses are origins only (scheme, host and port). A key you give is checked against that core
 (`GET /v0/management/status`) before the app switches to it. It is kept in `connection.json` only
 when you tick "Keep the key on this device"; otherwise it lasts until the app quits.
 
-The native side holds the management key. "Enter management key" on the Connection page opens a
+The native side holds the management key. "Enter management key" (on the not-running pane and on Where pluxy runs), and Continue and Connect on the address form, open a
 native dialog with a hidden entry, "Keep the key on this device", and OK/Cancel: a GTK dialog on
 Linux, a Win32 dialog with a password edit control on Windows, and a sheet on the window with an
 `NSSecureTextField` on macOS. On Windows and macOS the dialog is modal to the app's window only:
@@ -75,8 +75,13 @@ A call that left with the old key during a rotation is sent once more with the n
 waits at most 30 seconds for core's reply to a rotation, since other calls and Quit wait for it;
 without a reply it says the key may have changed and where to find it.
 
-Until the app is connected and signed in, the window shows only the Connection page, so a wrong
-address or key can always be fixed there.
+Until the app is connected and signed in, the window shows no pages of core's. With no place chosen it
+shows the first launch screen. Once a place is chosen, it shows the frame with its destinations
+turned off and one pane that says what happened and offers the one way on (stopped, stopped with an
+error, restarting, stopped restarting, not installed, not signed in, not answering, or cannot
+connect; `firstLaunch.tsx`, the case chosen from the connection alone in `connectionCopy.ts`
+`paneOf`). **Where pluxy runs** opens inside that frame, so a wrong address or key can always be
+fixed there. In safe mode (`--safe-mode`) the pane also links to this device's add-ons.
 
 ## The app's own core
 
@@ -85,10 +90,11 @@ under `cores/versions/` in the app's data folder (on Windows the local applicati
 which stays on this computer; a store there that is not on a fixed local drive, such as a network
 share, is refused). A packaged app installs the core it comes with
 ([below](#the-core-the-app-comes-with)). Until one is installed, the app runs no core
-and the window shows only the Connection page, with **Core versions**. There, the app lists
-what is installed, which version runs and which ran before it, and what the core source offers.
+and the window shows the not-running pane (**No pluxy is installed**) and Where pluxy runs, which
+holds the versions under **Versions and advanced**. There, the app lists
+what is installed, which version runs and which ran before it, and what the release list offers.
 
-The **core source** is the full path of an index file. The app has no built-in source and reads
+The **release list** (the `core_source` setting; the app has no built-in one) is the full path of an index file. The app has no built-in source and reads
 nothing until you set one. The index has the release feed's format (format 1, `releases`); the
 app reads only releases with `product` `core`, their `version`, and their `artifacts`:
 
@@ -142,7 +148,7 @@ version again moves its old folder aside first, which Windows refuses while a pr
 so there the app stops the core first when it runs that version, and starts it again if the
 install fails.
 
-**Switching** to a version (an install, **Roll back to** an installed version, or an adoption)
+**Switching** to a version (an install, **Switch to this version** for an installed version, or an adoption)
 stops the running core, keeps a copy of `core/config.json` (or a mark that there was none) and
 records the new version as the candidate, then starts it. On Linux and macOS the app binds the
 `listen` address in `core/config.json` itself (an IP address and port, or `localhost` and a port)
@@ -157,7 +163,7 @@ anyway), before the app sends anything there, it answers
 version it was signed as, and the app has saved the new selection. If not, the app puts the
 config back as it was, removes a version it installed for this switch, and runs the version that
 worked before (when the switch was to the selected version itself, and reinstalled it, copied a
-damaged adopted program in again, or ran it with **Roll back to** and it failed, the one before it,
+damaged adopted program in again, or ran it with **Switch to this version** and it failed, the one before it,
 which is then selected once it runs); the page says why the new one did not start. If the config
 cannot be put back, no core runs: the candidate stays recorded with the copy, and the app tries
 again at its next start. Once it is put back, a mark beside the config says so, and a later start
@@ -191,8 +197,9 @@ starts holds it. The
 app keeps the running version, the one before it and the core it came with, and removes older
 ones after a switch. Rolling back reaches only an installed version.
 
-A **core program** you name on the Connection page (or `pluxy` beside the app, unless that is the
-core the app came with) is never run in place. **Adopt core** shows its path, size and the first 12 characters of its SHA-256 in the native confirmation;
+A **core program** you name as **Your own pluxy program** under Versions and advanced on Where pluxy runs (or
+`pluxy` beside the app, unless that is the core the app came with, which the not-running pane offers
+as **Use this program**) is never run in place. Using it shows its path, size and the first 12 characters of its SHA-256 in the native confirmation;
 once confirmed, the app copies it into a version of its own, `custom-<its SHA-256>`, if it is
 still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
 without being read; on Unix it must be executable, on Windows a program image named `.exe` or
@@ -243,10 +250,10 @@ own program. The app never runs the files beside it, only the copy, with the che
 gets before it starts. A copy that no longer passes them is copied in again at the next start.
 
 - A file that differs from the manifest, is missing or is a link: nothing is installed, and the
-  Connection page says that the core that came with the app is damaged, and to reinstall or
+  Where pluxy runs says that the core that came with the app is damaged, and to reinstall or
   update the app.
 - The app's cores already hold that version with other files (a release of the same number from
-  another core source): nothing is installed, the installed one stays, and the Connection page
+  another release list): nothing is installed, the installed one stays, and Where pluxy runs
   says that the app's cores hold that version with other files than the one that came with the
   app.
 
@@ -256,7 +263,7 @@ after the app's version changes (an update, or an older app), the app moves a se
 to its own core, with the switch above, which puts back the earlier version if the new one does
 not start. A core it came with that does not start is not tried again until the app's version
 changes. A version you chose stays: an install, an adoption, a rollback, also to the core an
-earlier app came with. **Roll back to** the core the app came with switches to it as any rollback
+earlier app came with. **Switch to this version** on the core the app came with switches to it as any rollback
 does, with the native confirmation. A selection made before the app recorded who made it counts
 as yours.
 
@@ -266,10 +273,10 @@ through Adopt.
 
 ## The window and the tray
 
-What closing the window does is the Connection page's **Close behavior**: **Minimize to tray**
-(the default), **Ask every time** or **Exit app**. Ask every time shows "What would you like to
-do?" with Minimize to tray, Exit app, Cancel and **Remember this choice**. Exit app quits as the
-tray's Quit does. Minimize to tray destroys the window and its webviews, so they hold no memory
+What closing the window does is the **When you close the window** row on Where pluxy runs: **Keep in the tray**
+(the default), **Quit** or **Ask**. Ask shows "Keep pluxy in the tray?" with Keep in the tray, Quit
+(which reads "Quit (stops pluxy)" when the app runs pluxy) and Cancel, and **Remember this choice**. Quit quits as the
+tray's Quit does. Keeping the app in the tray destroys the window and its webviews, so they hold no memory
 while the app sits in the tray. With a tray, a window that does not answer the question within
 three seconds (its page still loading, or busy) closes to the tray. In local and remote mode,
 quitting the app leaves pluxy running; only in managed mode does it stop the core the app runs.
@@ -296,7 +303,7 @@ window (`__pluxyClosePrompt("no-tray")`): "Close and stop pluxy?", saying that c
 pluxy and the coding tools stop getting answers, with **Keep open** (also Escape), which keeps the
 window and sends nothing, **Close and stop pluxy**, which quits, and **Don't ask again**. A window
 that does not answer within three seconds stays open. Don't ask again is kept as
-`ask_without_tray: false`, apart from the Close behavior, which stays as it was for a session
+`ask_without_tray: false`, apart from the close choice, which stays as it was for a session
 that has a tray. The answer is kept by the prompt the person answered, even if a tray shows by
 the time they answer.
 
@@ -304,11 +311,12 @@ When an owned core exits unexpectedly, the app retries after 2, 5 and 15 seconds
 three automatic recovery attempts in a rolling five-minute window. A successful recovery keeps
 that budget, so a core that keeps crashing still stops being restarted. After the third failed
 recovery or another crash within that window, the tray shows "pluxy: Stopped restarting" and the
-Connection page shows the reason. An explicit Start, Stop or Restart, from the tray or the
+not-running pane shows the reason. An explicit Start, Stop or Restart, from the tray or the
 window, or a mode change, cancels any scheduled recovery and clears the budget. A core you
-stopped stays stopped, and so does one that Start core on launch left unstarted; the
+stopped stays stopped, and so does one that **Start pluxy with the app** left unstarted; the
 connection's `core.stop_reason` tells them apart (`stopped_by_user` or `not_started`) until
-something starts it.
+something starts it, and the pane says which ("It was stopped from the tray." or "The app is set not
+to start it when it opens.").
 
 The window opens at the size and place it last had, kept when it closes and when the app quits:
 the size in logical pixels, the place in physical ones, never noted while minimized, maximized
@@ -325,7 +333,7 @@ runs only while its page is visible, stops until the window is restored.
 
 The app runs once per profile: your user and the app's data folder (on Linux
 `~/.local/share/dev.pluxy.desktop/`), not the place the program is installed. Launching it again
-on that profile, from the app menu, a shortcut or the login autostart entry (Silent launch applies
+on that profile, from the app menu, a shortcut or the login autostart entry (**Start in the tray** applies
 only to a login launch that is the first), shows the first app's window (a new one if it was
 closed to the tray) and exits with status 0, starting no core, tray icon or webview. Another `HOME` or `XDG_*` folder is another
 profile, with its own app and core.
@@ -381,25 +389,28 @@ new file gets ` (1)`, ` (2)` and so on before its extension.
 
 ## Startup preferences
 
-The Connection page has three startup choices:
+Where pluxy runs has three startup rows (**Open at sign-in**, **Start in the tray** and **Start pluxy
+with the app**), each saved the moment it is changed (the row says "Saving…", and puts the control
+back with the reason when the save fails). A row is not drawn until the native side has answered, and
+**Start in the tray** and **Start pluxy with the app** are drawn only when the app runs pluxy itself.
 
-- **Launch at startup** registers pluxy for your Linux login. Saving it writes
+- **Open at sign-in** registers pluxy for your Linux login. Turning it on writes
   `$XDG_CONFIG_HOME/autostart/dev.pluxy.desktop.desktop` (or
   `~/.config/autostart/dev.pluxy.desktop.desktop`). Its Exec command names the app by absolute
-  path with `--autostart`. Silent launch controls whether a login launch shows a window.
-  Turning Launch at startup off and saving removes pluxy's entry. Merely opening the app does
+  path with `--autostart`. Start in the tray controls whether a login launch shows a window.
+  Turning Open at sign-in off removes pluxy's entry (and turns Start in the tray off). Merely opening the app does
   not register it. The displayed choice is read from that entry, including desktop disable flags.
   A file without pluxy's ownership marker is shown as a conflict and left alone.
-- **Silent launch** suppresses the window only for an autostart launch in managed mode when
+- **Start in the tray** (disabled until Open at sign-in is on, and when there is no tray) suppresses the window only for an autostart launch in managed mode when
   the session has a StatusNotifier watcher and a registered tray host. Local and remote modes
   host no core, so they open normally. In that case no window or webview is
   created. Without a host the app logs why and opens a window. Opening the app from its menu
   or shortcut always shows the window.
-- **Start core on launch** starts the app's own core in managed mode. Turning it off leaves
-  the saved managed connection stopped until you press Start core. Local and remote modes
+- **Start pluxy with the app** starts the app's own core in managed mode. Turning it off leaves
+  the saved managed connection stopped until you press Start pluxy. Local and remote modes
   only connect; their core processes are never started or stopped by these choices.
 
-The defaults are login registration off, Silent launch off, and Start core on launch on.
+The defaults are login registration off, Start in the tray off, and Start pluxy with the app on.
 Preferences live in `startup.json` beside `connection.json`, readable only by your user.
 A malformed file is moved to `startup.damaged-<random>.json` and defaults are used; failure to
 read or keep it aside is logged and still does not prevent startup. Saving preferences does
@@ -430,8 +441,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `core_start` | Starts the app's own core only if it is not running (managed mode) |
 | `core_stop` | Stops the app's own core, as the tray's Stop does (managed mode); refused in local and remote modes, which it never stops |
 | `core_restart` | Starts the app's own core again (managed mode) |
-| `core_versions` | The app's own core versions, what the core source offers, and how the last change ended |
-| `core_install`, `core_rollback`, `core_adopt` | Asks to install a release from the core source, to run an installed version again, or to adopt the chosen core program; each opens a native confirmation and applies nothing itself |
+| `core_versions` | The app's own core versions, what the release list offers, and how the last change ended |
+| `core_install`, `core_rollback`, `core_adopt` | Asks to install a release from the release list, to run an installed version again, or to adopt the chosen core program; each opens a native confirmation and applies nothing itself |
 | `core_call` | One management API call to the connected core; refuses the management key's own routes |
 | `management_key_rotate` | Rotates the management key natively after the native confirmation, keeps and shows the new key natively, and returns only how it went (200 with how the key is kept, 204 when cancelled) |
 | `sign_out` | Forgets the key (local and remote modes) |
@@ -475,8 +486,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `app_update_start` | **Update now**: downloads, checks and installs the newer release, then restarts the app; the window hears `pluxy-app-update` as it goes |
 | `app_update_cancel` | **Cancel download** |
 | `app_update_rollback` | Rolls back to a version that ran here and was kept, by its digest, after the native confirmation |
-| `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray and whether closing without one asks first (`ask_without_tray`) |
-| `window_close` | Answers the close prompt of the kind it showed (`ask` or `no-tray`): Exit app or Minimize to tray (only `ask`), and whether to remember it (for `no-tray`, remembering only stops that prompt) |
+| `window_get`, `window_set` | Reads or saves **When you close the window**, and whether there is a usable tray and whether closing without one asks first (`ask_without_tray`) |
+| `window_close` | Answers the close prompt of the kind it showed (`ask` or `no-tray`): Quit or Keep in the tray (only `ask`), and whether to remember it (for `no-tray`, remembering only stops that prompt) |
 | `privacy_get`, `privacy_set` | Reads or saves privacy mode |
 | `file_save` | Saves a file one of the window's own pages made (a theme file, a log, the usage table) in the Downloads folder, never over another file, and returns its path |
 
@@ -1482,11 +1493,11 @@ as above, and reach their tools only through the router.
 
 ## Setup
 
-On a first run of a core (a new "Run core here" core is one), the window opens the kit's Setup
+On a first run of a core (a new "On this computer" core is one), the window opens the kit's Setup
 page ([`../ui`](../ui/README.md), `#/setup`) in place of the Dashboard when the window's address
 names no page, as the web panel does:
 what core found on its machine, the providers to install, an account, the clients, and Finish. It
-opens once the app is connected and signed in, so the Connection page still comes first. After
+opens once the app is connected and signed in, so the first launch screen still comes first. After
 Finish the page stays among the Settings topics and shows the same things as they are now.
 
 The app adds one thing to the page. Under "Point a client at pluxy", a client core found gets a
@@ -1597,8 +1608,8 @@ core does not outlive the app.
 In separate runs, the startup sequence enables login registration through the main webview command,
 checks the entry in its temporary XDG config folder, launches it with the real Desktop Entry consumer (gio launch), checks
 zero windows/webviews and no web process, and verifies that the app's real tray item belongs to
-its PID in the tray watcher's registered item list. It checks login with Silent launch on and
-off, an app-menu launch with Silent launch on, managed-core startup, core startup off, foreign
+its PID in the tray watcher's registered item list. It checks login with Start in the tray on and
+off, an app-menu launch with Start in the tray on, managed-core startup, core startup off, foreign
 core ownership, and removal. In the core-startup-off launch it waits past the first recovery
 delay and checks that no core started and no recovery ran, then starts the core with the
 tray's Start pluxy and crashes it: that core is recovered. A separate session with no watcher verifies that a silent login
@@ -1674,16 +1685,16 @@ file.
 In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
 the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
 one without. They close the window as its window manager would (a GTK delete event) and answer the prompt in the window:
-the default Minimize to tray closes it without asking; with Ask every time saved, Cancel keeps
-it, Minimize to tray and the remembered choices close it with no webview or web
+the default Keep in the tray closes it without asking; with Ask saved, Cancel keeps
+it, Keep in the tray and the remembered choices close it with no webview or web
 process left, and the app's own tray item (through the watcher and its menu, `session_probe tray`)
-opens it again at the size and place it had; Exit app, from the prompt or the setting, quits and
+opens it again at the size and place it had; Quit, from the prompt or the setting, quits and
 stops the app's own core; the next launch opens where the window was. A pending test sign-in's
 polls are counted while the window shows, while it is unmapped (as a window manager minimizes it;
 GDK then reports it minimized) and once it is mapped again. Without a tray watcher, closing asks
 the window first (as `no-tray`); a window that does not answer stays open with the core running,
-and Exit app with Remember this choice quits and saves `ask_without_tray: false` with the Close
-behavior unchanged; after that, closing quits without asking, with Minimize to tray or Ask saved.
+and Quit with Remember this choice quits and saves `ask_without_tray: false` with the close
+choice unchanged; after that, closing quits without asking, with Keep in the tray or Ask saved.
 
 One more session in managed mode (`native/privacy.ts`) runs the privacy mode checks
 (`src-tauri/src/native_privacy.rs`) and then the themes checks (`src-tauri/src/native_themes.rs`):
@@ -1710,7 +1721,7 @@ ends on that page in GTK's dark variant.
 Then, in a session of its own (`native/instances-session.ts`), with the core program adopted in
 each profile, it launches the app again and again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
 app and core processes), and has the first show its window, also after the window was hidden and
-after it was closed to the tray, and for a login launch (`--autostart` with Silent launch on) as
+after it was closed to the tray, and for a login launch (`--autostart` with Start in the tray on) as
 well; that the socket is in the runtime folder, where `instance/address`
 says; that a launch with other `HOME` and `XDG_*` folders is an app and
 core of its own; that after the first app is killed with SIGKILL (its lock file and socket stay)
@@ -1970,7 +1981,7 @@ The folder holds:
 | `local-build.json` | The app's path, the core's version and the IDs of the providers it carries. |
 
 Start it with `next/app/local-build/bin/pluxy-app-local` from the repository's root (or from the
-folder you gave). On first launch, choose **Run core here** and press **Connect** with both fields empty: the app copies the
+folder you gave). On first launch, choose **On this computer**: the app copies the
 core it came with into its own cores, starts it on a free loopback port and connects. Setup and
 Extensions then offer the providers; none is installed until you install it, and installing one
 needs no network, since the archives are in the folder.
@@ -1983,7 +1994,7 @@ How it differs from a release:
   `~/.local/share/dev.pluxy.desktop.local` (under `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` when
   set), and its login entry, if you turn one on, to its own file
   (`dev.pluxy.desktop.local.desktop`), so it never shares anything with an installed release. The
-  entry's name is written when you turn **Launch at startup** on, so an entry an earlier build
+  entry's name is written when you turn **Open at sign-in** on, so an entry an earlier build
   wrote keeps that build's name until you turn it off and on again.
 - **Marked as a local build.** The window's title, the tray's tooltip and its Open item, and the
   login item's name say "pluxy (local build)". The `local-build` Cargo feature also puts the test
@@ -2004,7 +2015,7 @@ To remove it, quit the app (its core stops with it), then delete the build folde
 
 ```bash
 rm -rf next/app/local-build ~/.config/dev.pluxy.desktop.local ~/.local/share/dev.pluxy.desktop.local
-rm -f ~/.config/autostart/dev.pluxy.desktop.local.desktop   # only if you turned on Launch at startup
+rm -f ~/.config/autostart/dev.pluxy.desktop.local.desktop   # only if you turned on Open at sign-in
 ```
 
 ### Building it again
@@ -2287,7 +2298,7 @@ installed, and as an app bundle on macOS
   then exits.
 - On macOS, deleting the app (dragging it to the Trash) leaves its login item behind: the file
   `~/Library/LaunchAgents/dev.pluxy.desktop.plist` stays and names a program that is gone. Turn
-  **Launch at startup** off before deleting the app, or delete that file.
+  **Open at sign-in** off before deleting the app, or delete that file.
 - Opening an address in the system's handler for https addresses (normally the default browser; an
   app that claims the address's domain may take it instead) works on all three systems: GIO on
   Linux, the `https` class's `open` verb (`ShellExecuteExW`) on Windows, `NSWorkspace` on macOS;

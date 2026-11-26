@@ -4,14 +4,14 @@
 //! - `first`: the default size; resizing and moving; a pending login polls while the window
 //!   shows, not while it is minimized (unmapped, as a window manager iconifies it), and again
 //!   once it is restored, and its "Open link" opens the sign-in page in the browser, no window
-//!   of the app's own; the default, Minimize to tray, closes the window without asking; with
-//!   Ask every time saved, closing asks, Cancel keeps the window, Minimize to Tray closes it and
+//!   of the app's own; the default, Keep in the tray, closes the window without asking; with
+//!   Ask saved, closing asks, Cancel keeps the window, Keep in the tray closes it and
 //!   leaves no webview or web process; the real tray item reopens it at the size and place it
-//!   had; Remember this choice keeps Minimize to tray, which then closes without asking; Exit
-//!   app, chosen in the settings, quits.
+//!   had; Remember this choice keeps Keep in the tray, which then closes without asking; Quit,
+//!   chosen in the settings, quits.
 //! - `second`: the next launch opens at the size and place the window last had and shows the
-//!   remembered choice; Ask every time, saved, asks again; Exit app with Remember quits.
-//! - `third`: the remembered Exit app quits without asking.
+//!   remembered choice; Ask, saved, asks again; Quit with Remember quits.
+//! - `third`: the remembered Quit quits without asking.
 //! - `no-tray-ask`: in a session with no tray watcher, with the default preferences, closing
 //!   asks first (`__pluxyClosePrompt("no-tray")`), since quitting stops the app's own pluxy; a
 //!   page that does not answer leaves the window open and pluxy running; the window's own prompt
@@ -287,14 +287,13 @@ fn shown_choice(app: &AppHandle) -> Option<String> {
     .and_then(|v| v.as_str().map(String::from))
 }
 
-/// Picks choice in the settings and saves it; whether the app then keeps it.
+/// Picks choice in the settings, which save when changed; whether the app then keeps it.
 fn save_choice(app: &AppHandle, choice: &str) -> bool {
     goto(app, "connection", "[data-part=window-preferences]")
         && click(
             app,
             &format!("[data-part=window-preferences] input[type=radio][value={choice}]"),
         )
-        && click(app, "[data-part=window-preferences] button[type=submit]")
         && within(5, || {
             (saved_choice(app).as_deref() == Some(choice)).then_some(())
         })
@@ -494,7 +493,7 @@ fn first(c: &mut Checks, app: &AppHandle) {
         goto(app, "connection", "[data-part=window-preferences]")
             && within(5, || shown_choice(app)).as_deref() == Some("minimize-to-tray"),
         format!(
-            "Close behavior is Minimize to tray at first: {:?}",
+            "the close choice is Keep in the tray at first: {:?}",
             shown_choice(app)
         ),
     );
@@ -510,23 +509,20 @@ fn first(c: &mut Checks, app: &AppHandle) {
     request_close(app);
     c.check(
         closed(app),
-        "the default Minimize to tray closes the window",
+        "the default Keep in the tray closes the window",
     );
     c.check(
         PROMPTS.load(SeqCst) == prompts,
-        "the default Minimize to tray does not ask",
+        "the default Keep in the tray does not ask",
     );
-    no_web_processes(c, "the default Minimize to tray");
+    no_web_processes(c, "the default Keep in the tray");
     reopen(c, app);
 
-    // Ask every time, saved in the settings: Cancel keeps the window.
+    // Ask, saved in the settings: Cancel keeps the window.
     ensure_open(c, app);
     c.check(
         save_choice(app, "ask"),
-        format!(
-            "Ask every time is saved in the settings: {:?}",
-            saved_choice(app)
-        ),
+        format!("Ask is saved in the settings: {:?}", saved_choice(app)),
     );
     let asked = request_close(app) && within(5, || prompt_open(app).then_some(())).is_some();
     c.check(asked, "closing the window asks what to do");
@@ -542,11 +538,11 @@ fn first(c: &mut Checks, app: &AppHandle) {
         );
     }
 
-    // Minimize to tray, not remembered.
+    // Keep in the tray, not remembered.
     ensure_open(c, app);
     let asked = answer(app, "minimize-to-tray", false);
-    c.check(asked, "closing asks again, and Minimize to tray is chosen");
-    c.check(closed(app), "Minimize to tray closes the window");
+    c.check(asked, "closing asks again, and Keep in the tray is chosen");
+    c.check(closed(app), "Keep in the tray closes the window");
     c.check(
         app.webviews().is_empty(),
         format!(
@@ -554,13 +550,10 @@ fn first(c: &mut Checks, app: &AppHandle) {
             app.webviews().keys().collect::<Vec<_>>()
         ),
     );
-    no_web_processes(c, "Minimize to tray");
+    no_web_processes(c, "Keep in the tray");
     c.check(
         saved_choice(app).as_deref() == Some("ask"),
-        format!(
-            "a choice not remembered keeps Ask every time: {:?}",
-            saved_choice(app)
-        ),
+        format!("a choice not remembered keeps Ask: {:?}", saved_choice(app)),
     );
     let item = tray("inspect");
     c.check(
@@ -583,21 +576,21 @@ fn first(c: &mut Checks, app: &AppHandle) {
         );
     }
 
-    // Minimize to tray, remembered: the next close does not ask.
+    // Keep in the tray, remembered: the next close does not ask.
     ensure_open(c, app);
     c.check(
         answer(app, "minimize-to-tray", true),
-        "closing asks, and Minimize to tray is chosen with Remember this choice",
+        "closing asks, and Keep in the tray is chosen with Remember this choice",
     );
-    c.check(closed(app), "Minimize to tray closes the window");
-    no_web_processes(c, "Minimize to tray");
+    c.check(closed(app), "Keep in the tray closes the window");
+    no_web_processes(c, "Keep in the tray");
     c.check(
         within(5, || {
             (saved_choice(app).as_deref() == Some("minimize-to-tray")).then_some(())
         })
         .is_some(),
         format!(
-            "Remember this choice keeps Minimize to tray: {:?}",
+            "Remember this choice keeps Keep in the tray: {:?}",
             saved_choice(app)
         ),
     );
@@ -606,11 +599,11 @@ fn first(c: &mut Checks, app: &AppHandle) {
     request_close(app);
     c.check(
         closed(app),
-        "the remembered Minimize to tray closes the window",
+        "the remembered Keep in the tray closes the window",
     );
     c.check(
         PROMPTS.load(SeqCst) == prompts,
-        "the remembered Minimize to tray does not ask",
+        "the remembered Keep in the tray does not ask",
     );
     c.check(
         app.state::<App>()
@@ -618,13 +611,13 @@ fn first(c: &mut Checks, app: &AppHandle) {
             .load(std::sync::atomic::Ordering::SeqCst),
         "the app is still in the tray",
     );
-    no_web_processes(c, "the remembered Minimize to tray");
+    no_web_processes(c, "the remembered Keep in the tray");
 
-    // Exit app, chosen in the settings, quits; the window's size and place are kept.
+    // Quit, chosen in the settings, quits; the window's size and place are kept.
     ensure_open(c, app);
     c.check(
         save_choice(app, "exit"),
-        format!("Exit app is saved in the settings: {:?}", saved_choice(app)),
+        format!("Quit is saved in the settings: {:?}", saved_choice(app)),
     );
     c.check(
         place(app, MOVED_AGAIN),
@@ -646,16 +639,13 @@ fn second(c: &mut Checks, app: &AppHandle) {
         goto(app, "connection", "[data-part=window-preferences]")
             && within(5, || shown_choice(app)).as_deref() == Some("exit"),
         format!(
-            "the settings show the remembered Exit app: {:?}",
+            "the settings show the remembered Quit: {:?}",
             shown_choice(app)
         ),
     );
     c.check(
         save_choice(app, "ask"),
-        format!(
-            "Ask every time is saved in the settings: {:?}",
-            saved_choice(app)
-        ),
+        format!("Ask is saved in the settings: {:?}", saved_choice(app)),
     );
     last_close(c, app, "second", || answer(app, "exit", true));
 }
@@ -762,11 +752,15 @@ fn no_tray_ask(c: &mut Checks, app: &AppHandle) {
 fn no_tray(c: &mut Checks, app: &AppHandle) {
     c.check(shell_ready(app, 60), "the window shows the app's shell");
     c.check(
-        goto(
-            app,
-            "connection",
-            "[data-part=window-preferences] [data-part=no-tray]",
-        ),
+        goto(app, "connection", "[data-part=window-preferences]")
+            && within(5, || {
+                (main_eval(
+                    app,
+                    "document.querySelector('[data-part=window-preferences]')?.innerText.includes('This desktop has no tray') === true",
+                ) == Some(json!(true)))
+                .then_some(())
+            })
+            .is_some(),
         "the settings say that with no system tray closing the window quits",
     );
     last_close(c, app, "no-tray", || request_close(app));

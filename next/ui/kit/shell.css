@@ -207,16 +207,20 @@
     text-align: start;
   }
 
-  button.status-block {
+  a.status-block {
+    text-decoration: none;
+  }
+
+  :is(button, a).status-block {
     cursor: pointer;
     transition: background var(--t);
   }
 
-  button.status-block:is(:hover, [aria-expanded="true"]) {
+  :is(button, a).status-block:is(:hover, [aria-expanded="true"]) {
     background: var(--px-color-nav-hover);
   }
 
-  button.status-block:focus-visible {
+  :is(button, a).status-block:focus-visible {
     outline-offset: -2px;
   }
 

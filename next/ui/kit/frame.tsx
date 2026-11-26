@@ -64,6 +64,8 @@ export interface FrameStatus {
   where: string;
   /** With items, the block is a button that opens them as a menu. */
   menu?: StatusItem[];
+  /** With no items, where a click on the block leads; without either it is not a control. */
+  href?: string;
 }
 
 /** A link in the frame: an entry of the tabs, the topics or the way back. */
@@ -447,6 +449,15 @@ function Status(props: { status: FrameStatus; compact: boolean }) {
       </span>
     </>
   );
+  if (items.length === 0 && status.href !== undefined) {
+    return (
+      <div class="status" data-part="status" data-state={status.state}>
+        <a class="status-block" href={status.href} aria-label={says} title={props.compact ? says : undefined}>
+          {body}
+        </a>
+      </div>
+    );
+  }
   if (items.length === 0) {
     return (
       <div class="status" data-part="status" data-state={status.state}>

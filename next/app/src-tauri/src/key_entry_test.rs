@@ -268,9 +268,11 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
     }
     clean(app, &[key, wrong])?;
     main.eval("location.hash = '#/connection'")
-        .map_err(|_| "could not open Connection")?;
-    wait_for("the Connection entry button", || {
-        eval(main, "[...document.querySelectorAll('button')].some(b => b.textContent === 'Enter management key')")
+        .map_err(|_| "could not open Where pluxy runs")?;
+    // Signed in, the page offers the key again under "Versions and advanced"; it opens the same
+    // native window as the button the signed-out page shows.
+    wait_for("the key entry button of Where pluxy runs", || {
+        eval(main, "[...document.querySelectorAll('button')].some(b => b.textContent === 'Enter it again')")
             .filter(|v| v == true)
     })?;
     if eval(
@@ -278,7 +280,7 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
         "document.querySelector('input[type=password]') === null",
     ) != Some(json!(true))
     {
-        return Err("Connection still has a webview password field".into());
+        return Err("Where pluxy runs still has a webview password field".into());
     }
     fn button(app: &AppHandle, main: &Webview, key: &str, cancel: bool) -> Result<Value, String> {
         main.eval("window.__keyOutcome = null; [...document.querySelectorAll('button')].find(b => b.textContent === 'Enter management key').click()")
@@ -322,7 +324,7 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
     wait_for("signed-out native entry", || {
         eval(
             main,
-            "document.querySelector('form[aria-label=Connection]') !== null",
+            "[...document.querySelectorAll('button')].some(b => b.textContent === 'Enter management key')",
         )
         .filter(|v| v == true)
     })?;

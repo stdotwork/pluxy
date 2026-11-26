@@ -61,9 +61,11 @@ that scrolls:
   it (`status` on the shell, a `FrameStatus`): a state (`running`, `down` for not answering,
   `stopped`, `unknown`), a word for it, a line saying where pluxy runs, and optionally a menu of
   items: an address with a Copy button, an action that shows while it runs and why it failed, or
-  a link. Escape and a click outside close the menu, and focus returns to the block. The panel
+  a link. Escape and a click outside close the menu, and focus returns to the block. With no menu,
+  the status can give an `href`, and the block is then a link to it. The panel
   says what it knows, the address it was served from and whether its last call was answered
-  (`panel/status.ts`); the desktop app reads its connection and links to its Connection page.
+  (`panel/status.ts`); the desktop app reads its connection: a pluxy it runs says Running, one it only
+  connects to says Connected, and a state it cannot show pages in links to Where pluxy runs.
 - **The header strip** over the page holds the page's one `h1`, the destination's tabs, and at
   its end the page's main actions, then the Privacy mode toggle and, where the host can sign out,
   the sign-out button. A page gives its title and actions with `PageHead`, as before: inside the
@@ -100,8 +102,8 @@ the desktop app adds its own. A build only bundles the pages it imports, so page
 app add nothing to the panel.
 
 A host with no session to show pages for can show the frame by itself (`Frame`), with the
-destinations visible but not choosable and one pane of its own. The desktop app does, around its
-Connection page, until a core is connected.
+destinations visible but not choosable and one pane of its own. The desktop app does, around the
+pane that says what happened (and Where pluxy runs, opened in it), until a core is connected.
 
 With `extensionPages` set, the shell adds the pages of the extensions that run, after the
 build's own: each is a `PageDef` (address `#/ext/<publisher>/<name>/<page>`) whose render shows
