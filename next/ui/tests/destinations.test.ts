@@ -16,7 +16,7 @@ test("each of core's pages sits under the destination a person looks for it in",
   expect(byDest).toEqual({
     home: ["status"],
     accounts: ["accounts", "add-account", "routing", "quota"],
-    activity: ["usage"],
+    activity: ["usage", "activity/usage"],
     tools: ["tools"],
     settings: ["setup", "config", "system", "extensions", "themes", "logs"],
   });
@@ -47,6 +47,14 @@ test("Accounts has three tabs, named for what a person does there", () => {
   expect(placed?.current).toBe("routing");
   expect(placed?.above).toEqual([]);
   expect(placed?.topics).toEqual([]);
+});
+
+test("Activity has two tabs, Requests first, so the destination opens on it", () => {
+  const pages = corePages();
+  expect(destinationHome(pages, "activity")?.id).toBe("usage");
+  const placed = place(pages, "activity/usage");
+  expect(placed?.tabs.map((p) => p.label ?? p.title)).toEqual(["Requests", "Usage"]);
+  expect(placed?.current).toBe("activity/usage");
 });
 
 test("a page under another shows the way back and no tabs", () => {

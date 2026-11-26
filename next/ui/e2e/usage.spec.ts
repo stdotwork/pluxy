@@ -1,15 +1,31 @@
 import { readFile } from "node:fs/promises";
-import { expect, test } from "@playwright/test";
-import { goTo, goToId, openPanel, signIn, useCore } from "./support";
+import { expect, type Page, test } from "@playwright/test";
+import { goTo, headerTabs, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
-test("filters recorded requests and exports the matching rows", async ({ page }) => {
+/** Core's own answer to a request, with the trace ID it sent back. */
+async function ask(model: string, key = core.clientKey) {
+  const response = await fetch(`${core.base}/v1/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages: [{ role: "user", content: "hi" }] }),
+  });
+  await response.text();
+  const trace = response.headers.get("X-CPA-TRACE-ID");
+  if (!trace) throw new Error("core sent no trace ID");
+  return { status: response.status, trace };
+}
+
+async function addAccount(id: string, priority: number, settings?: Record<string, unknown>) {
   const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
-    id: "usage-account",
+    id,
+    models: ["fake-model", "server-error"],
+    priority,
+    settings,
     extension: "test/alpha",
     method: "api_key",
-    input: { api_key: "test-usage" },
+    input: { api_key: `test-${id}`, label: id },
   });
   expect(started.status).toBe(202);
   await expect
@@ -19,123 +35,279 @@ test("filters recorded requests and exports the matching rows", async ({ page })
           .state,
     )
     .toBe("done");
-  const traces: string[] = [];
-  for (const model of ["fake-model", "server-error"]) {
-    const response = await fetch(`${core.base}/v1/chat/completions`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${core.clientKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, messages: [{ role: "user", content: "hi" }] }),
-    });
-    expect(response.status).toBe(model === "fake-model" ? 200 : 500);
-    const trace = response.headers.get("X-CPA-TRACE-ID");
-    expect(trace).toBeTruthy();
-    if (!trace) throw new Error("missing trace ID");
-    traces.push(trace);
-    await response.text();
+}
+
+const trace: Record<string, string> = {};
+const rows = (page: Page) => page.locator('[data-page="usage"] [data-part="request-row"]');
+const row = (page: Page, id: string) => page.locator(`[data-trace="${id}"] [data-part="request-row"]`);
+
+test.beforeAll(async () => {
+  await addAccount("usage-account", 1);
+  trace.ok = (await ask("fake-model")).trace;
+  const failed = await ask("server-error");
+  expect(failed.status).toBe(500);
+  trace.failed = failed.trace;
+  // A second account that comes first, and a named key that asks through it.
+  await addAccount("usage-second", 5);
+  const made = await core.mgmt<{ value: string }>("POST", "/client-keys", { label: "Claude Code" });
+  expect(made.status).toBe(201);
+  trace.named = (await ask("fake-model", made.body.value)).trace;
+});
+
+test("Requests opens newest first; Failed, an account and a key filter it, and the address carries them", async ({
+  page,
+}) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/activity`);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Activity: Requests", exact: true }),
+  ).toBeVisible();
+  await expect(rows(page)).toHaveCount(3);
+  // Newest first, with its account and its key's name.
+  await expect(rows(page).first()).toContainText("usage-second");
+  await expect(rows(page).first()).toContainText("Claude Code");
+  await expect(page.getByRole("heading", { level: 2, name: "Today" })).toBeVisible();
+  await expect(headerTabs(page).getByRole("link", { name: "Requests" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+
+  await page.getByRole("radio", { name: "Failed", exact: true }).check();
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page).first()).toContainText("server-error");
+  expect(new URL(page.url()).hash).toBe("#/activity?failed=1");
+
+  // A failed request through the second account does not exist: nothing matches.
+  await page.getByLabel("Every account", { exact: true }).selectOption({ label: "usage-second" });
+  await expect(page.getByText("No requests match.")).toBeVisible();
+  await page.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await expect(rows(page)).toHaveCount(3);
+  expect(new URL(page.url()).hash).toBe("#/activity");
+
+  await page.getByLabel("Every account", { exact: true }).selectOption({ label: "usage-second" });
+  await expect(rows(page)).toHaveCount(1);
+  await page.getByLabel("Every key", { exact: true }).selectOption({ label: "Claude Code" });
+  await expect(rows(page)).toHaveCount(1);
+  const hash = new URL(page.url()).hash;
+  expect(hash).toMatch(/^#\/activity\?account=usage-second&key=/);
+
+  // Opening that address again restores the filters.
+  await page.reload();
+  await expect(rows(page)).toHaveCount(1);
+  await expect(page.getByLabel("Every account", { exact: true }).locator("option:checked")).toHaveText(
+    "usage-second",
+  );
+  await expect(page.getByLabel("Every key", { exact: true }).locator("option:checked")).toHaveText(
+    "Claude Code",
+  );
+});
+
+test("a row opens to why it went where it did, and its trace links to its log", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/activity`);
+  const failed = row(page, trace.failed ?? "");
+  await failed.getByRole("button", { expanded: false }).click();
+  await expect(failed).toContainText("usage-account failed: Provider error.");
+  await expect(failed.getByRole("link", { name: "Open usage-account" })).toHaveAttribute(
+    "href",
+    "#/accounts/usage-account",
+  );
+  await expect(failed.getByRole("link", { name: trace.failed })).toHaveAttribute(
+    "href",
+    `#/logs/${trace.failed}`,
+  );
+  // One row is open at a time.
+  const ok = row(page, trace.ok ?? "");
+  await ok.getByRole("button", { expanded: false }).click();
+  await expect(failed.getByRole("button", { expanded: true })).toHaveCount(0);
+  // A request that succeeded has a log only while core logs every request.
+  await expect(ok.getByRole("link", { name: trace.ok })).toHaveCount(0);
+  await expect(ok.getByText(trace.ok ?? "", { exact: true })).toBeVisible();
+  try {
+    await core.mgmt("PATCH", "/settings", { observability: { logs: { "request-log": true } } });
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await row(page, trace.ok ?? "")
+      .getByRole("button", { expanded: false })
+      .click();
+    await expect(row(page, trace.ok ?? "").getByRole("link", { name: trace.ok })).toHaveAttribute(
+      "href",
+      `#/logs/${trace.ok}`,
+    );
+  } finally {
+    await core.mgmt("PATCH", "/settings", { observability: { logs: { "request-log": false } } });
   }
+});
+
+test("the end of the list says how far back pluxy keeps requests", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/activity`);
+  await expect(rows(page)).toHaveCount(3);
+  await expect(page.getByText(/^That is every request pluxy keeps, back to \w+ \d\d:\d\d\./)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Show older" })).toHaveCount(0);
+});
+
+test("Requests opens one request from an address, and says when it is no longer kept", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/activity?trace=${trace.ok}`);
+  const line = row(page, trace.ok ?? "").getByRole("button", { expanded: true });
+  await expect(line).toBeVisible();
+  await expect(line).toBeFocused();
+  await expect(page.getByText("That request is no longer kept.")).toHaveCount(0);
+  await page.goto(`${core.base}/panel/#/activity?trace=no-such-request`);
+  await expect(page.getByText("That request is no longer kept.")).toBeVisible();
+  await expect(rows(page)).toHaveCount(3);
+  // The old address still works.
+  await page.goto(`${core.base}/panel/#/usage`);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Activity: Requests", exact: true }),
+  ).toBeVisible();
+  await expect(rows(page)).toHaveCount(3);
+});
+
+test("a request that fell back says how many accounts failed, and its row what each attempt came to", async ({
+  page,
+}) => {
+  // Two new accounts for one model, the first already out of its usage window.
+  await addAccount("tries-first", 90, { exhausted_until: Math.floor(Date.now() / 1000) + 3600 });
+  await addAccount("tries-second", 80);
+  const answered = await ask("fake-model");
+  expect(answered.status).toBe(200);
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/activity`);
+  const request = row(page, answered.trace);
+  await expect(request).toContainText("tries-second");
+  await expect(request).toContainText("after 1 other");
+  await request.getByRole("button", { expanded: false }).click();
+  await expect(request).toContainText("tries-second succeeded after 1 other account failed.");
+  const attempts = request.locator(".request-attempts li");
+  await expect(attempts).toHaveCount(2);
+  await expect(attempts.nth(0)).toContainText("tries-first");
+  await expect(attempts.nth(1)).toContainText("tries-second");
+  await expect(attempts.nth(1)).toContainText("Succeeded");
+});
+
+test("Usage adds the requests up, by range and by name; a name filters, and its requests are one link away", async ({
+  page,
+}) => {
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Usage");
-  await expect(page.getByRole("heading", { level: 1, name: "Usage", exact: true })).toBeVisible();
-  const requests: string[] = [];
-  page.on("request", (request) => {
-    if (request.url().includes("/usage/events?")) requests.push(request.url());
-  });
-  await expect(page.getByLabel("Since", { exact: true })).toHaveAttribute(
-    "placeholder",
-    "e.g. 24h or 2026-01-01T00:00:00Z",
+  await expect(page.locator(".usage-figures")).toContainText(/\d+ requests · \d+(\.\d)?% succeeded/);
+  const bars = page.locator('[data-part="usage-chart"] svg g[role="img"]');
+  await expect(bars).toHaveCount(7);
+  await page.getByRole("radio", { name: "30 days", exact: true }).check();
+  await expect(bars).toHaveCount(30);
+  await page.getByRole("radio", { name: "24 hours", exact: true }).check();
+  await expect.poll(async () => bars.count()).toBeGreaterThanOrEqual(24);
+  await page.getByRole("radio", { name: "7 days", exact: true }).check();
+  await expect(bars).toHaveCount(7);
+  // The bar for today says its figures.
+  await expect(bars.last()).toHaveAttribute(
+    "aria-label",
+    /^\w{3},? (\w{3} \d+|\d+ \w{3}): \d+ requests?, \d+ failed$/,
   );
-  await page.getByLabel("Since", { exact: true }).fill("invalid");
-  await expect(page.getByRole("alert")).toContainText("since");
-  await page.getByLabel("Since", { exact: true }).fill("");
-  await expect(page.getByRole("alert")).toHaveCount(0);
-  await expect(page.locator('[data-page="usage"] [data-part="item"]')).toHaveCount(2);
-  requests.length = 0;
-  await page.getByLabel("Model", { exact: true }).pressSequentially("abc", { delay: 50 });
-  await expect.poll(() => requests.length).toBe(1);
-  expect(new URL(requests[0] ?? "http://invalid").searchParams.get("model")).toBe("abc");
-  await page.getByLabel("Model", { exact: true }).fill("fake-model");
-  const rows = page.locator('[data-page="usage"] [data-part="item"]');
-  await expect(rows).toHaveCount(1);
-  await expect(rows.first()).toContainText("fake-model");
-  await expect(rows.first().getByRole("link", { name: traces[0] })).toHaveAttribute(
-    "href",
-    `#/logs/${traces[0]}`,
+
+  await page.getByRole("button", { name: "Show the numbers" }).click();
+  const numbers = page.locator('[data-part="usage-numbers"]');
+  await expect(numbers.getByRole("columnheader", { name: "Day" })).toBeVisible();
+  await expect(numbers.getByRole("columnheader", { name: "Tokens" })).toBeVisible();
+  await page.getByRole("button", { name: "Hide the numbers" }).click();
+  await expect(numbers).toHaveCount(0);
+
+  await page.getByRole("radio", { name: "Account", exact: true }).check();
+  await page.getByRole("button", { name: "usage-second", exact: true }).click();
+  const chip = page.getByRole("button", { name: /^Account: usage-second/ });
+  await expect(chip).toBeVisible();
+  await expect(page.locator(".usage-figures")).toContainText("1 request");
+  await page.getByRole("link", { name: "See these requests" }).click();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Activity: Requests", exact: true }),
+  ).toBeVisible();
+  await expect(rows(page)).toHaveCount(1);
+  await expect(page.getByLabel("Every account", { exact: true }).locator("option:checked")).toHaveText(
+    "usage-second",
   );
-  if (process.env.USAGE_SHOTS) {
-    for (const theme of ["default", "terminal"]) {
-      await goTo(page, "Themes");
-      await page.getByRole("radio", { name: new RegExp(`^${theme}`, "i") }).check();
-      await goToId(page, "usage");
-      await expect(rows).toHaveCount(2);
-      await page.screenshot({ path: `${process.env.USAGE_SHOTS}/${theme}-rows.png`, fullPage: true });
-      await page.getByLabel("Model", { exact: true }).fill("fake-model");
-      await expect(rows).toHaveCount(1);
-      await page.screenshot({ path: `${process.env.USAGE_SHOTS}/${theme}-filter.png`, fullPage: true });
-    }
-  }
-  await page.getByLabel("Model", { exact: true }).fill("");
-  await page.getByLabel("Failed", { exact: true }).selectOption("true");
-  await expect(rows).toHaveCount(1);
-  await expect(rows.first()).toContainText("server-error");
-  await expect(rows.first()).toContainText(traces[1] ?? "missing trace");
-  const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Export", exact: true }).click();
-  const csv = await readFile(await (await downloadPromise).path(), "utf8");
-  expect(csv).toContain("server-error");
-  expect(csv).toContain(traces[1]);
-  expect(csv).not.toContain("fake-model");
-  expect(csv.trim().split(/\r?\n/)).toHaveLength(2);
+  // The chip comes off.
+  await page.goto(`${core.base}/panel/#/activity/usage?account=nobody`);
+  await expect(page.getByText("No requests in the last 7 days.")).toBeVisible();
+  await page.getByRole("button", { name: /^Account: nobody/ }).click();
+  await expect(page.locator(".usage-figures")).toContainText("requests");
 });
 
-test("a request that fell back says how many tries it took, and its detail what each came to", async ({
-  page,
-}) => {
-  // Two accounts for one model, the first to be tried already out of its usage window.
-  const add = async (id: string, priority: number, settings?: Record<string, unknown>) => {
-    const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
-      id,
-      models: ["fake-model"],
-      priority,
-      settings,
-      extension: "test/local",
-      method: "api_key",
-      input: { api_key: `test-${id}` },
-    });
-    expect(started.status).toBe(202);
-    await expect
-      .poll(
-        async () =>
-          (await core.mgmt<{ login: { state: string } }>("GET", `/logins/${started.body.login.id}`)).body
-            .login.state,
-      )
-      .toBe("done");
-  };
-  await add("tries-first", 9, { exhausted_until: Math.floor(Date.now() / 1000) + 3600 });
-  await add("tries-second", 8);
-  const response = await fetch(`${core.base}/v1/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${core.clientKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "fake-model", messages: [{ role: "user", content: "hi" }] }),
-  });
-  expect(response.status).toBe(200);
-  expect(response.headers.get("X-Pluxy-Attempts")).toBe("2");
-  const trace = response.headers.get("X-CPA-TRACE-ID") ?? "";
-  await response.text();
-
+test("with the record turned off, both tabs say so and link to the switch", async ({ page }) => {
   await openPanel(page, core);
   await signIn(page, core);
-  await page.goto(`${core.base}/panel/#/usage`);
-  const row = page.locator('[data-part="item"]').filter({ hasText: trace });
-  await expect(row).toContainText("tries-second");
-  await expect(row).toContainText("2 tries");
-  await row.getByRole("button").first().click();
-  const detail = page.getByRole("complementary");
-  await expect(detail).toContainText("What pluxy tried");
-  const tried = detail.getByRole("listitem");
-  await expect(tried).toHaveCount(2);
-  await expect(tried.nth(0)).toContainText("tries-first");
-  await expect(tried.nth(0)).toContainText("failed: ");
-  await expect(tried.nth(1)).toContainText("tries-second");
-  await expect(tried.nth(1)).toContainText("answered");
+  try {
+    await core.mgmt("PATCH", "/settings", {
+      observability: { usage: { "usage-statistics-enabled": false } },
+    });
+    await page.goto(`${core.base}/panel/#/activity`);
+    const pane = page.locator('[data-part="state-pane"]');
+    await expect(pane).toContainText("pluxy is not keeping a record of requests.");
+    await expect(pane.getByRole("link", { name: "Turn it on in Config" })).toHaveAttribute(
+      "href",
+      "#/config/logging",
+    );
+    const save = page.getByRole("button", { name: "Save as spreadsheet", exact: true });
+    await expect(save).toBeDisabled();
+    await expect(save.locator("xpath=..")).toHaveAttribute(
+      "title",
+      "pluxy is not keeping a record of requests.",
+    );
+    await page.goto(`${core.base}/panel/#/activity/usage`);
+    await expect(pane).toContainText("pluxy is not keeping a record of requests.");
+  } finally {
+    await core.mgmt("PATCH", "/settings", { observability: { usage: { "usage-statistics-enabled": true } } });
+  }
+});
+
+test("Save as spreadsheet writes the header row and the requests, newest first", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/activity`);
+  await expect(rows(page).first()).toBeVisible();
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save as spreadsheet", exact: true }).click();
+  const file = await download;
+  expect(file.suggestedFilename()).toMatch(/^pluxy-requests-\d{4}-\d\d-\d\d\.csv$/);
+  const lines = (await readFile(await file.path(), "utf8")).trim().split(/\r?\n/);
+  expect(lines[0]).toBe("Time,Model,Provider,Account,Client key,Failed,Status,Latency,Tokens,Trace ID");
+  const ids = lines.slice(1).map((l) => l.split(",").at(-1));
+  expect(ids).toContain(trace.ok);
+  expect(ids.indexOf(trace.named)).toBeLessThan(ids.indexOf(trace.failed));
+  expect(ids.indexOf(trace.failed)).toBeLessThan(ids.indexOf(trace.ok));
+});
+
+test("a load that failed says so, and a save that could not read says that, not the same thing", async ({
+  page,
+}) => {
+  const fail = (route: import("@playwright/test").Route) =>
+    route.fulfill({ status: 500, json: { error: { code: "internal", message: "core could not read it" } } });
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.route("**/v0/management/usage/events?*", fail);
+  await page.goto(`${core.base}/panel/#/activity`);
+  await expect(
+    page.getByRole("heading", { name: "Could not read the requests.", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Not saved")).toHaveCount(0);
+  await expect(page.getByText("Could not read the requests to save.")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
+  // Reading again works once core does.
+  await page.unroute("**/v0/management/usage/events?*");
+  await page.getByRole("button", { name: "Try again", exact: true }).click();
+  await expect(rows(page).first()).toBeVisible();
+  // Now only the save's read fails: the list stays, and the save has its own words.
+  await page.route("**/v0/management/usage/events?*", fail);
+  await page.getByRole("button", { name: "Save as spreadsheet", exact: true }).click();
+  await expect(page.getByText("Could not read the requests to save. Try again.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Could not read the requests.", exact: true })).toHaveCount(
+    0,
+  );
+  await expect(rows(page).first()).toBeVisible();
 });

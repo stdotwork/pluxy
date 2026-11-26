@@ -149,7 +149,8 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   `Store.Add`, `Store.Summarize`); daily JSONL files and closed-day summaries in
   `next/internal/usage/disk.go` (`Open`); request metering in `next/internal/server/usage.go`
   (`meter`, `meterStream`); management endpoints in `next/internal/core/manageusage.go`
-  (`Core.handleUsage`); panel view in `next/ui/kit/pages/usage.tsx`.
+  (`Core.handleUsage`); panel views in `next/ui/kit/pages/requests.tsx` (Requests) and `usage.tsx` (Usage), with their
+  shared logic in `activity.ts`.
 - **Tests**: `go test -count=1 -run TestStore ./internal/usage` and
   `go test -count=1 -run TestManageUsageRangesByKeyAndBefore ./internal/core`.
 - **Handbook**: `next/README.md` ("Usage statistics").

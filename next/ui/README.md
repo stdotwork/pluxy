@@ -278,7 +278,7 @@ feature, it keeps the old label, unless the label named something this core does
 **Logs Viewer**
 
 - The "Method", "Status" and "Path" filters, and "Show Raw Logs": core's log holds no request
-  lines. Requests are on the Usage page and in the request logs.
+  lines. Requests are on the Activity page and in the request logs.
 - "Full Screen": a theme's `width` layout option `full` does it.
 - New lines every second: "Continuous reading" reads new lines every 2 seconds while the page is
   visible.

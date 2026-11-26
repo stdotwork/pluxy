@@ -104,6 +104,7 @@ const PAGES = [
   "Routing",
   "Quota Management",
   "Logs Viewer",
+  "Requests",
   "Usage",
   "Set up pluxy",
   "Config Panel",

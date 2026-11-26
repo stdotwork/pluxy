@@ -371,7 +371,7 @@ storage cannot turn it off. A file that cannot be read or parsed counts as on.
 
 ## Files the window saves
 
-The Themes page's **Export**, the Logs page's downloads and the Usage page's **Export** save
+The Themes page's **Export**, the Logs page's downloads and the Requests page's **Save as spreadsheet** save
 a file. In the panel that is a browser download. The app's window opens no address but the app's
 own, so a download link, whose address starts with `blob:`, does nothing there; these pages hand
 the file to the `file_save` command instead (`src-tauri/src/export.rs`). It saves the file in
