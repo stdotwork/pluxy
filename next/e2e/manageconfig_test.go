@@ -273,7 +273,7 @@ func TestManageConfigNeedsManagementKey(t *testing.T) {
 	c := startManaged(t, false)
 	for _, call := range []struct{ method, path string }{
 		{http.MethodGet, "/config"}, {http.MethodPost, "/config/validate"}, {http.MethodPut, "/config"},
-		{http.MethodGet, "/client-keys"}, {http.MethodPost, "/client-keys"}, {http.MethodDelete, "/client-keys/x"},
+		{http.MethodGet, "/client-keys"}, {http.MethodPost, "/client-keys"}, {http.MethodPatch, "/client-keys/x"}, {http.MethodDelete, "/client-keys/x"},
 		{http.MethodPost, "/management-key/rotate"}, {http.MethodGet, "/settings"}, {http.MethodPatch, "/settings"},
 	} {
 		for _, key := range []string{"", "wrong-key", clientKey} {
@@ -556,6 +556,7 @@ func TestManageConfigPutRefusedDocument(t *testing.T) {
 type keyView struct {
 	ID     string `json:"id"`
 	Masked string `json:"masked"`
+	Label  string `json:"label"`
 }
 
 func (c *mcore) keys(t *testing.T) []keyView {
@@ -907,5 +908,176 @@ func TestManageSettingsRefusals(t *testing.T) {
 				t.Errorf("settings changed: %+v", s)
 			}
 		})
+	}
+}
+
+// labelOf returns the label GET /client-keys shows for the key with this mask.
+func (c *mcore) labelOf(t *testing.T, masked string) string {
+	t.Helper()
+	for _, k := range c.keys(t) {
+		if k.Masked == masked {
+			return k.Label
+		}
+	}
+	t.Fatalf("no key with mask %q in %+v", masked, c.keys(t))
+	return ""
+}
+
+// A client key can have a name: set when the key is made or later, cleared again, kept in the
+// config file beside the keys (never inside them), shown by GET /config, recorded on the usage
+// events of the key's requests, and removed with the key.
+func TestManageClientKeyLabels(t *testing.T) {
+	for _, f := range formats() {
+		t.Run(f.name, func(t *testing.T) {
+			c := startManaged(t, f.yaml, clientKey, secondClientKey)
+			if raw := string(c.expect(t, http.StatusOK, http.MethodGet, "/client-keys", nil)); strings.Contains(raw, "label") {
+				t.Errorf("keys without a name show a label: %s", raw)
+			}
+
+			// A new key takes a name, trimmed.
+			var added struct {
+				Key   keyView `json:"key"`
+				Value string  `json:"value"`
+			}
+			if err := json.Unmarshal(c.expect(t, http.StatusCreated, http.MethodPost, "/client-keys", map[string]string{"label": "  Claude Code  "}), &added); err != nil {
+				t.Fatal(err)
+			}
+			if added.Key.Label != "Claude Code" || added.Key.Masked != mask(added.Value) {
+				t.Errorf("added = %+v", added)
+			}
+			if got := c.labelOf(t, mask(added.Value)); got != "Claude Code" {
+				t.Errorf("listed label = %q", got)
+			}
+			disk := c.file(t)
+			if !strings.Contains(disk, "client_key_labels") || !strings.Contains(disk, "Claude Code") || !strings.Contains(disk, added.Key.ID) {
+				t.Errorf("the label is not in the config file beside the keys:\n%s", disk)
+			}
+			if f.yaml && (!strings.Contains(disk, "# how accounts are picked") || !strings.Contains(disk, "# core config for the e2e test")) {
+				t.Errorf("comments lost:\n%s", disk)
+			}
+
+			// Its requests are recorded under the name; a key without one records none.
+			if code := chatStatus(t, c.base, added.Value); code != http.StatusOK {
+				t.Fatalf("chat with the named key: %d", code)
+			}
+			if code := chatStatus(t, c.base, clientKey); code != http.StatusOK {
+				t.Fatalf("chat with the plain key: %d", code)
+			}
+			p, raw := c.usageEvents(t, "")
+			wantNoSecrets(t, "GET /usage/events", raw, clientKey, added.Value)
+			if len(p.Events) != 2 || p.Events[0].KeyID != added.Key.ID || p.Events[0].Label != "Claude Code" || p.Events[1].Label != "" {
+				t.Errorf("events: %s", raw)
+			}
+
+			// PATCH names an existing key and, with null or "", clears the name.
+			first := c.keys(t)[0]
+			var patched keyView
+			if err := json.Unmarshal(c.expect(t, http.StatusOK, http.MethodPatch, "/client-keys/"+first.ID, map[string]string{"label": "Codex"}), &patched); err != nil {
+				t.Fatal(err)
+			}
+			if patched.ID != first.ID || patched.Masked != first.Masked || patched.Label != "Codex" {
+				t.Errorf("patched = %+v, key was %+v", patched, first)
+			}
+			if got := c.labelOf(t, first.Masked); got != "Codex" {
+				t.Errorf("listed label after PATCH = %q", got)
+			}
+			if code := chatStatus(t, c.base, clientKey); code != http.StatusOK {
+				t.Fatalf("chat with the renamed key: %d", code)
+			}
+			if p, raw = c.usageEvents(t, ""); len(p.Events) != 3 || p.Events[2].Label != "Codex" {
+				t.Errorf("events after renaming: %s", raw)
+			}
+			// It shows in GET /config, which holds no secret.
+			cfg := c.config(t)
+			if !strings.Contains(cfg.Content, "Codex") || !strings.Contains(cfg.Content, first.ID) {
+				t.Errorf("GET /config hides the labels:\n%s", cfg.Content)
+			}
+			wantNoSecrets(t, "GET /config", cfg.Content, managedSecrets...)
+			for _, clear := range []any{map[string]any{"label": nil}, map[string]string{"label": ""}, map[string]string{"label": "   "}} {
+				c.expect(t, http.StatusOK, http.MethodPatch, "/client-keys/"+first.ID, map[string]string{"label": "Again"})
+				patched = keyView{}
+				if err := json.Unmarshal(c.expect(t, http.StatusOK, http.MethodPatch, "/client-keys/"+first.ID, clear), &patched); err != nil {
+					t.Fatal(err)
+				}
+				if patched.Label != "" || c.labelOf(t, first.Masked) != "" || strings.Contains(c.file(t), "Again") {
+					t.Errorf("clearing with %v: reply %+v, file:\n%s", clear, patched, c.file(t))
+				}
+			}
+
+			// Refused: nothing changes.
+			before := c.snap(t)
+			for name, body := range map[string]any{
+				"65 characters": map[string]string{"label": strings.Repeat("x", 65)},
+				"two lines":     map[string]string{"label": "a\nb"},
+				"a number":      map[string]int{"label": 7},
+				"no label":      map[string]string{},
+				"another field": map[string]string{"name": "x"},
+			} {
+				b := c.expect(t, http.StatusBadRequest, http.MethodPatch, "/client-keys/"+first.ID, body)
+				if errorCode(t, b) != "invalid_request" {
+					t.Errorf("PATCH with %s: %s", name, b)
+				}
+				if name != "no label" {
+					c.expect(t, http.StatusBadRequest, http.MethodPost, "/client-keys", body)
+				}
+			}
+			c.wantSame(t, before, "refused labels")
+			if b := c.expect(t, http.StatusNotFound, http.MethodPatch, "/client-keys/no-such-id", map[string]string{"label": "x"}); errorCode(t, b) != "not_found" {
+				t.Errorf("unknown ID: %s", b)
+			}
+			c.wantSame(t, before, "naming an unknown ID")
+			// A label of exactly 64 characters is fine.
+			c.expect(t, http.StatusOK, http.MethodPatch, "/client-keys/"+first.ID, map[string]string{"label": strings.Repeat("é", 64)})
+			c.expect(t, http.StatusOK, http.MethodPatch, "/client-keys/"+first.ID, map[string]any{"label": nil})
+
+			// An old client's POST (no body, or {}) makes a key with no name.
+			for _, body := range []any{nil, "{}"} {
+				var plain struct {
+					Key keyView `json:"key"`
+				}
+				if err := json.Unmarshal(c.expect(t, http.StatusCreated, http.MethodPost, "/client-keys", body), &plain); err != nil {
+					t.Fatal(err)
+				}
+				if plain.Key.Label != "" {
+					t.Errorf("a key made with body %v has label %q", body, plain.Key.Label)
+				}
+				c.expect(t, http.StatusNoContent, http.MethodDelete, "/client-keys/"+plain.Key.ID, nil)
+			}
+
+			// A person edits the file: a name changed by hand is read on the next write.
+			edited := c.config(t)
+			c.expect(t, http.StatusOK, http.MethodPut, "/config", map[string]string{"content": replaceOnce(t, edited.Content, "Claude Code", "Typed by hand"), "base_hash": edited.Hash})
+			if got := c.labelOf(t, mask(added.Value)); got != "Typed by hand" {
+				t.Errorf("label read from the hand-edited file = %q\n%s", got, c.file(t))
+			}
+
+			// Removing a key removes its name, and only its name.
+			c.expect(t, http.StatusOK, http.MethodPatch, "/client-keys/"+first.ID, map[string]string{"label": "Codex"})
+			c.expect(t, http.StatusNoContent, http.MethodDelete, "/client-keys/"+added.Key.ID, nil)
+			disk = c.file(t)
+			if strings.Contains(disk, "Typed by hand") || strings.Contains(disk, added.Key.ID) || !strings.Contains(disk, "Codex") || !strings.Contains(disk, first.ID) {
+				t.Errorf("config file after removing the named key:\n%s", disk)
+			}
+			c.expect(t, http.StatusNoContent, http.MethodDelete, "/client-keys/"+first.ID, nil)
+			disk = c.file(t)
+			if strings.Contains(disk, "Codex") || strings.Contains(disk, "client_key_labels") {
+				t.Errorf("config file after removing the last named key keeps its label map:\n%s", disk)
+			}
+		})
+	}
+}
+
+// A label in the file that is not a valid name is refused like any invalid setting.
+func TestManageClientKeyLabelsRefusesBadFile(t *testing.T) {
+	c := startManaged(t, false)
+	first := c.keys(t)[0]
+	cur := c.config(t)
+	before := c.snap(t)
+	for name, label := range map[string]string{"long": strings.Repeat("x", 65), "two lines": "a\\nb"} {
+		content := replaceOnce(t, cur.Content, `"client_keys"`, `"client_key_labels": {"`+first.ID+`": "`+label+`"}, "client_keys"`)
+		if code, b := c.call(t, http.MethodPut, "/config", map[string]string{"content": content, "base_hash": cur.Hash}); code < 400 || code >= 500 {
+			t.Errorf("%s label in the file: status %d: %s", name, code, b)
+		}
+		c.wantSame(t, before, name+" label in the file")
 	}
 }

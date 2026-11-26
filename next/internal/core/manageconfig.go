@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -223,7 +224,8 @@ func newKey() string { return rand.Text() }
 type clientKeyView = management.ClientKey
 
 func (c *Core) keyView(k string) clientKeyView {
-	return clientKeyView{ID: c.keyID(k), Masked: maskKey(k)}
+	id := c.keyID(k)
+	return clientKeyView{ID: id, Masked: maskKey(k), Label: c.Config().ClientKeyLabels[id]}
 }
 
 func maskKey(k string) string {
@@ -376,13 +378,75 @@ func (c *Core) handleConfig(m *server.Management) {
 	})
 
 	m.Handle("POST /client-keys", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Label string `json:"label"`
+		}
+		if !readOptionalJSON(w, r, &req) {
+			return
+		}
+		label, err := server.CheckLabel(req.Label)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
 		key := "sk-" + newKey()
-		err := c.WriteConfig("management API: new client key", c.edit(func(d *configdoc.Doc) error { return d.AddClientKey(key) }))
+		err = c.WriteConfig("management API: new client key", c.edit(func(d *configdoc.Doc) error {
+			if err := d.AddClientKey(key); err != nil {
+				return err
+			}
+			if label == "" {
+				return nil
+			}
+			return d.SetClientKeyLabel(c.keyID(key), label)
+		}))
 		if err != nil {
 			c.writeChangeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, management.NewClientKeyReply{Key: c.keyView(key), Value: key})
+		v := c.keyView(key)
+		v.Label = label
+		writeJSON(w, http.StatusCreated, management.NewClientKeyReply{Key: v, Value: key})
+	})
+
+	m.Handle("PATCH /client-keys/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var req struct {
+			Label json.RawMessage `json:"label"`
+		}
+		if !readStrictJSON(w, r, &req) {
+			return
+		}
+		var sent *string
+		if req.Label == nil || json.Unmarshal(req.Label, &sent) != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "send label as a string, or null for none")
+			return
+		}
+		label := ""
+		if sent != nil {
+			var err error
+			if label, err = server.CheckLabel(*sent); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+				return
+			}
+		}
+		var view clientKeyView
+		err := c.WriteConfig("management API: client key label", c.edit(func(d *configdoc.Doc) error {
+			keys, err := d.ClientKeys()
+			if err != nil {
+				return err
+			}
+			i := slices.IndexFunc(keys, func(k string) bool { return c.keyID(k) == id })
+			if i < 0 {
+				return &editError{http.StatusNotFound, "not_found", "no client key in the config file has this ID"}
+			}
+			view = clientKeyView{ID: id, Masked: maskKey(keys[i]), Label: label}
+			return d.SetClientKeyLabel(id, label)
+		}))
+		if err != nil {
+			c.writeChangeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
 	})
 
 	m.Handle("DELETE /client-keys/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -402,7 +466,7 @@ func (c *Core) handleConfig(m *server.Management) {
 			case left == 0:
 				return &editError{http.StatusConflict, "conflict", "this is the last client key, and without one anyone who reaches core can use it; add another key first"}
 			}
-			return nil
+			return d.SetClientKeyLabel(id, "")
 		}))
 		if err != nil {
 			c.writeChangeError(w, err)

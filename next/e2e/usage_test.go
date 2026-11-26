@@ -55,6 +55,7 @@ type usageEvent struct {
 	Tried         []usageTried   `json:"tried"`
 	LeftOut       []usageLeftOut `json:"left_out"`
 	KeyID         string         `json:"key_id"`
+	Label         string         `json:"label"`
 	ClientIP      string         `json:"client_ip"`
 	Failed        bool           `json:"failed"`
 	Status        int            `json:"status"`

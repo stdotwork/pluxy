@@ -407,7 +407,7 @@ func (m *Management) list(w http.ResponseWriter, r *http.Request) {
 // credential; without an ID, core makes one), a label and how to log in.
 type addRequest struct {
 	route.Account
-	// Label is the label the person gives the account (checkLabel); it wins over the provider's.
+	// Label is the label the person gives the account (CheckLabel); it wins over the provider's.
 	Label string `json:"label"`
 	// Extension names the extension that signs in; empty while only one runs.
 	Extension string            `json:"extension"`
@@ -451,7 +451,7 @@ func (m *Management) add(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	label, err := checkLabel(req.Label)
+	label, err := CheckLabel(req.Label)
 	if err != nil {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -462,10 +462,10 @@ func (m *Management) add(w http.ResponseWriter, r *http.Request) {
 // maxLabel is the most characters a label a person gives an account may have.
 const maxLabel = 64
 
-// checkLabel returns a label a person gives an account without its surrounding spaces, or an
+// CheckLabel returns a label a person gives an account or a client key without its surrounding spaces, or an
 // error when it is not one line (it holds a control character or a line or paragraph separator)
 // or is longer than maxLabel characters. "" is no label.
-func checkLabel(label string) (string, error) {
+func CheckLabel(label string) (string, error) {
 	label = strings.TrimSpace(label)
 	notOneLine := strings.ContainsFunc(label, func(r rune) bool { return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' })
 	if notOneLine || utf8.RuneCountInString(label) > maxLabel {
@@ -659,7 +659,7 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 			l := ""
 			if sent != nil {
 				var err error
-				if l, err = checkLabel(*sent); err != nil {
+				if l, err = CheckLabel(*sent); err != nil {
 					writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
 					return
 				}

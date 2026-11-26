@@ -109,6 +109,9 @@ type Event struct {
 	// KeyID identifies the client key the request came with, as the management API lists client
 	// keys; empty with no client keys set.
 	KeyID string `json:"key_id,omitempty"`
+	// Label is the client key's name (client_key_labels) when the request arrived; empty when the
+	// key had none or the request had no key.
+	Label string `json:"label,omitempty"`
 	// ClientIP is the address the request came from: the connection's peer, or the client a
 	// trusted proxy names (trusted_proxies).
 	ClientIP string `json:"client_ip,omitempty"`

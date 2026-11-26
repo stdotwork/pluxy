@@ -41,6 +41,10 @@ type Config struct {
 	// ClientKeys are the keys clients must send as a bearer token. At least one is required:
 	// core serves no client without a key.
 	ClientKeys []string `json:"client_keys"`
+	// ClientKeyLabels are the names of client keys, by the ID the management API lists a key
+	// under (never the key itself). A key without an entry has no name. Each label passes
+	// CheckLabel; ParseConfig trims them and drops an empty one.
+	ClientKeyLabels map[string]string `json:"client_key_labels,omitempty"`
 	// Extension is the extension run from a manifest path, with its accounts. Optional once
 	// packages are used.
 	Extension ExtensionConfig `json:"extension"`
@@ -517,6 +521,17 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	if len(c.ClientKeys) == 0 {
 		// Today's core serves anyone without a key then; this core refuses to.
 		return nil, errors.New("config: client_keys is empty (access.api-keys in a config.yaml): set at least one client key; core serves no client without one")
+	}
+	for id, label := range c.ClientKeyLabels {
+		l, err := CheckLabel(label)
+		if err != nil {
+			return nil, fmt.Errorf("config %s: client_key_labels: the label of key %q: %w", path, id, err)
+		}
+		if l == "" {
+			delete(c.ClientKeyLabels, id)
+		} else {
+			c.ClientKeyLabels[id] = l
+		}
 	}
 	if c.ManagementKey == "" && hashed {
 		return nil, fmt.Errorf("config %s: remote-management.secret-key is a bcrypt hash: replace it with a new key (pluxy cannot use a bcrypt hash); core always has a management key, so the panel and the pluxy command can manage it", path)

@@ -106,6 +106,24 @@ func (d *Doc) RemoveClientKeys(drop func(key string) bool) (int, error) {
 	return len(kept), nil
 }
 
+// clientKeyLabels is where the client keys' names are: client_key_labels, a mapping from a key's
+// ID (the one GET /client-keys lists, never the key) to its label. It is this core's own
+// setting, so it keeps its name in a config.yaml too.
+var clientKeyLabels = []string{"client_key_labels"}
+
+// SetClientKeyLabel gives the client key with this ID the label, or removes its label when
+// label is empty; the mapping goes with its last entry.
+func (d *Doc) SetClientKeyLabel(id, label string) error {
+	if label != "" {
+		return d.Set(String(label), append(slices.Clone(clientKeyLabels), id)...)
+	}
+	d.Delete(append(slices.Clone(clientKeyLabels), id)...)
+	if m := d.Get(clientKeyLabels...); m != nil && m.Kind == yaml.MappingNode && len(m.Content) == 0 {
+		d.Delete(clientKeyLabels...)
+	}
+	return nil
+}
+
 // SetManagementKey sets the management key: management_key in a JSON config; in a
 // config.yaml management.secret-key, or the older remote-management.secret-key when only that
 // is there.
