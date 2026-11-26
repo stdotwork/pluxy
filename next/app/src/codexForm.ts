@@ -2,6 +2,8 @@
 // model catalog.
 
 export const PACKAGE = "pluxy/codex-setup";
+/** The client label the tool's recipe gives its launches, which the launcher keys recent folders by. */
+export const CLIENT = "Codex";
 
 export interface Model {
   slug: string;

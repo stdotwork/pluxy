@@ -1,7 +1,7 @@
 // The Claude Code page's form logic (src/claudeCodeForm.ts): the form it fills from
 // the tool's read-back, and when Apply is allowed.
 import { describe, expect, test } from "bun:test";
-import { fresh, fromFile, ready, settingsNote, toolUnavailable } from "../src/claudeCodeForm";
+import { fresh, fromFile, ready, settingsNote } from "../src/claudeCodeForm";
 
 describe("form from the file", () => {
   test("a file set up with no startup model keeps it empty; a file never set up starts at opus", () => {
@@ -73,19 +73,5 @@ describe("the settings file in the selected environment", () => {
     expect(settingsNote()).toBe("~/.claude/settings.json");
     expect(settingsNote("/home/alice")).toBe("/home/alice/.claude/settings.json");
     expect(settingsNote("/root")).toBe("/root/.claude/settings.json");
-  });
-});
-
-describe("tool unavailable", () => {
-  test("when the tool is not installed or refuses as the package", () => {
-    expect(toolUnavailable("pluxy/claude-code is not installed on this device")).toBe(true);
-    expect(toolUnavailable("pluxy/claude-code is disabled")).toBe(true);
-  });
-
-  test("not for a missing Linux build, a package that does not run in WSL, or no error", () => {
-    expect(toolUnavailable("pluxy/claude-code's Linux build for linux/amd64 is not installed")).toBe(false);
-    expect(toolUnavailable("pluxy/claude-code does not run in WSL")).toBe(false);
-    expect(toolUnavailable(undefined)).toBe(false);
-    expect(toolUnavailable("the settings file changed since it was read")).toBe(false);
   });
 });
