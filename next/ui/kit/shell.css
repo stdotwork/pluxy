@@ -481,6 +481,17 @@
     white-space: nowrap;
   }
 
+  /* A page under another (an account's page) has no tabs: its name, often long, gives way and is
+     cut with an ellipsis rather than pushing the strip's controls to a second row. */
+  .strip:has(.crumb) {
+    flex-wrap: nowrap;
+  }
+
+  .strip:has(.crumb) .strip-end {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+  }
+
   /* A page change puts focus on the heading, which is not a control. */
   .strip-title h1:focus {
     outline: none;

@@ -102,6 +102,6 @@ describe("locales", () => {
     const html = render();
     expect(html).toContain('<h1 data-part="page-title">Konten</h1>');
     expect(html).not.toContain('<h1 data-part="page-title">Accounts</h1>');
-    expect(html).toContain(">Refresh</button>");
+    expect(html).toContain("Loading accounts…");
   });
 });

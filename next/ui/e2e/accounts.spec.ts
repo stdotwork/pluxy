@@ -1,147 +1,117 @@
+// All accounts: Find an account, Select and its actions, and the Quota page's old address.
 import { expect, test } from "@playwright/test";
 import type { Account } from "../kit/api/accounts";
-import { goTo, goToId, openPanel, signIn, useCore } from "./support";
+import { accountRow, goTo, openPanel, pageTitle, signIn, useCore } from "./support";
 
 const core = useCore();
-const searchText = "Search name, account, type, provider, or error (403, 429, invalid). Use * as a wildcard";
 
-for (const theme of ["default", "terminal"]) {
-  test(`accounts search, paging and batch actions in ${theme}`, async ({ page }) => {
-    for (let n = 1; n <= 30; n++) {
-      const suffix = String(n).padStart(2, "0");
-      expect(
-        (
-          await core.mgmt("POST", "/accounts", {
-            id: `bulk-${suffix}`,
-            extension: "test/local",
-            method: "api_key",
-            input: { api_key: `k-${suffix}` },
-          })
-        ).status,
-      ).toBe(202);
-    }
-    await expect
-      .poll(async () => (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts.length)
-      .toBe(33);
-    await page.addInitScript((id) => localStorage.setItem("pluxy.theme", `pluxy/${id}`), theme);
-    await openPanel(page, core);
-    await signIn(page, core);
-    await goToId(page, "accounts");
-    await expect(page.getByRole("heading", { name: /Accounts$/, level: 1 })).toBeVisible();
-    await page.getByLabel("Per page", { exact: true }).selectOption("10");
-    await expect(page.getByText("Page 1 / 4 · 33 accounts", { exact: true })).toBeVisible();
-    await expect(page.locator('[data-part="item"]')).toHaveCount(10);
-    await expect(page.getByRole("tab", { name: "test/local (31)", exact: true })).toBeVisible();
-    if (process.env.P7_SHOTS) {
-      await page.getByLabel("Per page", { exact: true }).selectOption("50");
-      await page.screenshot({ path: `${process.env.P7_SHOTS}/${theme}-list.png`, fullPage: true });
-      await page.getByLabel("Per page", { exact: true }).selectOption("10");
-    }
-    await page.getByRole("tab", { name: "test/alpha (2)", exact: true }).click();
-    await expect(page.locator('[data-part="item"]')).toHaveCount(2);
-    await page.getByRole("tab", { name: "All (33)", exact: true }).click();
-    await page.getByLabel("Source", { exact: true }).selectOption("config");
-    await expect(page.locator('[data-part="item"]')).toHaveCount(3);
-    await page.getByLabel("Source", { exact: true }).selectOption("login");
-    await expect(page.getByText("Page 1 / 3 · 30 accounts", { exact: true })).toBeVisible();
-    await page.getByLabel("Source", { exact: true }).selectOption("");
-    await page.getByRole("button", { name: "Next", exact: true }).click();
-    await expect(page.getByText("Page 2 / 4 · 33 accounts", { exact: true })).toBeVisible();
-    await page.getByPlaceholder(searchText).fill("bulk-17");
-    await expect(page.locator('[data-part="item"]')).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "bulk-17", exact: true })).toBeVisible();
-    if (process.env.P7_SHOTS)
-      await page.screenshot({ path: `${process.env.P7_SHOTS}/${theme}-filtered.png`, fullPage: true });
-    await page.getByPlaceholder(searchText).fill("bulk-*");
-    await expect(page.getByText("Page 1 / 3 · 30 accounts", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Select filtered", exact: true }).click();
-    await expect(page.getByText("30 selected", { exact: true })).toBeVisible();
-    if (process.env.P7_SHOTS)
-      await page.screenshot({ path: `${process.env.P7_SHOTS}/${theme}-batch.png`, fullPage: true });
-    await page.getByRole("button", { name: "Disable", exact: true }).click();
-    await expect
-      .poll(
-        async () =>
-          (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts.filter(
-            (a) => a.id.startsWith("bulk-") && a.disabled,
-          ).length,
-      )
-      .toBe(30);
-    await page.getByLabel("Status filter", { exact: true }).selectOption("disabled");
-    await expect(page.getByText("Page 1 / 3 · 30 accounts", { exact: true })).toBeVisible();
-    await expect(page.locator('[data-part="item"]')).toHaveCount(10);
-    await page.getByRole("button", { name: "Enable", exact: true }).click();
-    await expect(
-      page.getByText("No matching accounts. Clear or change your filters.", { exact: true }),
-    ).toBeVisible();
-    expect(
-      (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts
-        .filter((a) => a.id.startsWith("bulk-"))
-        .every((a) => !a.disabled),
-    ).toBe(true);
-    await page.getByLabel("Status filter", { exact: true }).selectOption("all");
-    await page.getByRole("button", { name: "Remove", exact: true }).click();
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText("Are you sure you want to remove 30 accounts?");
-    await dialog.getByRole("button", { name: "Remove", exact: true }).click();
-    await expect
-      .poll(async () =>
-        (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts.map((a) => a.id).sort(),
-      )
-      .toEqual(["alpha-1", "alpha-2", "local-1"]);
-    await expect(
-      page.getByText("No matching accounts. Clear or change your filters.", { exact: true }),
-    ).toBeVisible();
-    await page.getByPlaceholder(searchText).fill("");
-    await page.getByLabel("Status filter", { exact: true }).selectOption("all");
-    await page.getByRole("button", { name: "Select filtered", exact: true }).click();
-    await page.getByRole("button", { name: "Disable", exact: true }).click();
-    await expect(page.getByRole("status")).toContainText("Skipped 3 config accounts");
-    expect(
-      (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts.every((a) => !a.disabled),
-    ).toBe(true);
-    await page.getByRole("button", { name: "Clear cooldown", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("3 accounts updated");
-  });
-}
+const listed = async () => (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts;
 
-test("batch actions limit concurrency and keep every failure visible", async ({ page }) => {
-  for (let n = 1; n <= 7; n++) {
+async function addKeys(prefix: string, count: number) {
+  for (let n = 1; n <= count; n++) {
+    const suffix = String(n).padStart(2, "0");
     expect(
       (
         await core.mgmt("POST", "/accounts", {
-          id: `failure-${n}`,
+          id: `${prefix}-${suffix}`,
           extension: "test/local",
           method: "api_key",
-          input: { api_key: `k-${n}` },
+          // Named after its ID: the test provider calls every signed-in account "Test account".
+          input: { api_key: `k-${suffix}`, label: `${prefix}-${suffix}` },
         })
       ).status,
     ).toBe(202);
   }
   await expect
-    .poll(
-      async () =>
-        (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts.filter((a) =>
-          a.id.startsWith("failure-"),
-        ).length,
-    )
-    .toBe(7);
-  let active = 0;
-  let maximum = 0;
-  let entered = 0;
-  let release!: () => void;
-  const firstThree = new Promise<void>((resolve) => {
-    release = resolve;
+    .poll(async () => (await listed()).filter((a) => a.id.startsWith(`${prefix}-`)).length)
+    .toBe(count);
+}
+
+for (const theme of ["default", "terminal"]) {
+  test(`Find an account, Select and its actions in ${theme}`, async ({ page }) => {
+    await addKeys("bulk", 8);
+    await page.addInitScript((id) => localStorage.setItem("pluxy.theme", `pluxy/${id}`), theme);
+    await openPanel(page, core);
+    await signIn(page, core);
+    await goTo(page, "Accounts");
+    await expect(page.getByText("11 accounts at 2 providers · 11 serving", { exact: true })).toBeVisible();
+    const serving = page.getByRole("region", { name: "Serving" });
+    await expect(serving.locator('[data-part="account-row"]')).toHaveCount(11);
+
+    // Find an account matches a public ID and a provider's name.
+    const find = page.getByPlaceholder("Find an account");
+    const bulk = (await listed()).find((a) => a.id === "bulk-05");
+    await find.fill(bulk?.public_id ?? "");
+    await expect(page.locator('[data-part="account-row"]')).toHaveCount(1);
+    await expect(accountRow(page, "bulk-05")).toBeVisible();
+    await find.fill("alpha");
+    await expect(page.locator('[data-part="account-row"]')).toHaveCount(2);
+    await find.fill("no-such-account");
+    await expect(page.getByText('No account matches "no-such-account".')).toBeVisible();
+    await page.getByRole("button", { name: "Clear search", exact: true }).click();
+    await expect(page.locator('[data-part="account-row"]')).toHaveCount(11);
+
+    // Select: tick some, turn them off, then on; the settings-file account is skipped and said so.
+    await page.getByRole("button", { name: "Select", exact: true }).click();
+    const bar = page.getByRole("toolbar", { name: "Actions for the selected accounts" });
+    for (const id of ["bulk-01", "bulk-02", "alpha-1"])
+      await page.getByRole("checkbox", { name: `Select ${id}`, exact: true }).check();
+    await expect(bar).toContainText("3 selected");
+    await bar.getByRole("button", { name: "Turn off", exact: true }).click();
+    await expect(page.getByText("Skipped 1 account set in pluxy's settings file.")).toBeVisible();
+    await expect
+      .poll(async () =>
+        (await listed())
+          .filter((a) => a.disabled)
+          .map((a) => a.id)
+          .sort(),
+      )
+      .toEqual(["bulk-01", "bulk-02"]);
+    await bar.getByRole("button", { name: "Done", exact: true }).click();
+    const off = page.getByRole("region", { name: "Turned off" });
+    await expect(off.locator('[data-part="account-row"]')).toHaveCount(2);
+    if (process.env.P2A_SHOTS)
+      await page.screenshot({ path: `${process.env.P2A_SHOTS}/${theme}-list.png`, fullPage: true });
+
+    await page.getByRole("button", { name: "Select", exact: true }).click();
+    for (const id of ["bulk-01", "bulk-02"])
+      await page.getByRole("checkbox", { name: `Select ${id}`, exact: true }).check();
+    await bar.getByRole("button", { name: "Turn on", exact: true }).click();
+    await expect.poll(async () => (await listed()).filter((a) => a.disabled).length).toBe(0);
+
+    // Remove… asks first, and leaves the settings-file account alone.
+    for (const id of ["bulk-03", "alpha-2"])
+      await page.getByRole("checkbox", { name: `Select ${id}`, exact: true }).check();
+    await bar.getByRole("button", { name: "Remove…", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Remove 4 accounts?" });
+    await expect(dialog).toContainText("pluxy deletes its saved sign-in. To use it again, add it again.");
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect((await listed()).length).toBe(11);
+    await bar.getByRole("button", { name: "Remove…", exact: true }).click();
+    await dialog.getByRole("button", { name: "Remove", exact: true }).click();
+    await expect
+      .poll(async () => (await listed()).map((a) => a.id).sort())
+      .toEqual(
+        ["alpha-1", "alpha-2", "local-1", ...["04", "05", "06", "07", "08"].map((n) => `bulk-${n}`)].sort(),
+      );
+    await expect(page.getByText("Skipped 1 account set in pluxy's settings file.")).toBeVisible();
+    await bar.getByRole("button", { name: "Done", exact: true }).click();
+    for (const n of ["04", "05", "06", "07", "08"])
+      expect((await core.mgmt("DELETE", `/accounts/bulk-${n}`)).status).toBe(204);
   });
+}
+
+test("Select acts on one account after another and keeps every failure on screen", async ({ page }) => {
+  await addKeys("failure", 4);
+  let active = 0;
+  let most = 0;
   await page.route("**/v0/management/accounts/failure-*", async (route) => {
     if (route.request().method() !== "PATCH") return route.continue();
     active++;
-    entered++;
-    maximum = Math.max(maximum, active);
-    if (entered === 3) release();
-    await firstThree;
+    most = Math.max(most, active);
     const id = route.request().url().split("/").at(-1);
-    if (id === "failure-1" || id === "failure-5") {
+    if (id === "failure-01" || id === "failure-03") {
       await route.fulfill({
         status: 409,
         contentType: "application/json",
@@ -156,21 +126,55 @@ test("batch actions limit concurrency and keep every failure visible", async ({ 
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Accounts");
-  await page.getByPlaceholder(searchText).fill("failure-*");
-  await page.getByRole("button", { name: "Select filtered", exact: true }).click();
-  await page.getByRole("button", { name: "Disable", exact: true }).click();
-  await expect(page.getByRole("status")).toHaveText("5 accounts updated");
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  for (let n = 1; n <= 4; n++)
+    await page.getByRole("checkbox", { name: `Select failure-0${n}`, exact: true }).check();
+  await page.getByRole("toolbar").getByRole("button", { name: "Turn off", exact: true }).click();
   await expect
     .poll(async () => (await page.getByRole("alert").allTextContents()).sort())
-    .toEqual(["failure-1: Update refused for failure-1", "failure-5: Update refused for failure-5"]);
-  expect(entered).toBe(7);
-  expect(maximum).toBe(3);
-  const result = (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts;
+    .toEqual(["failure-01: Update refused for failure-01", "failure-03: Update refused for failure-03"]);
+  expect(most).toBe(1);
   expect(
-    result
+    (await listed())
       .filter((a) => a.id.startsWith("failure-") && a.disabled)
       .map((a) => a.id)
       .sort(),
-  ).toEqual(["failure-2", "failure-3", "failure-4", "failure-6", "failure-7"]);
-  for (let n = 1; n <= 7; n++) expect((await core.mgmt("DELETE", `/accounts/failure-${n}`)).status).toBe(204);
+  ).toEqual(["failure-02", "failure-04"]);
+  for (let n = 1; n <= 4; n++)
+    expect((await core.mgmt("DELETE", `/accounts/failure-0${n}`)).status).toBe(204);
+});
+
+test("the Quota page's old address lands on All accounts", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/quota`);
+  await expect(pageTitle(page)).toHaveText("Accounts");
+  await expect(
+    page.locator('[data-part="header-tabs"]').getByRole("link", { name: "All accounts" }),
+  ).toHaveAttribute("aria-current", "page");
+  await expect(page.locator('[data-part="account-row"]').first()).toBeVisible();
+});
+
+test("an account set in the settings file offers no Remove… on its page; one added here asks first", async ({
+  page,
+}) => {
+  await addKeys("gone", 1);
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/accounts/alpha-1`);
+  await expect(page.getByRole("main")).toContainText("Set in pluxy's settings file.");
+  await expect(page.getByRole("button", { name: "Remove…", exact: true })).toHaveCount(0);
+  await page.goto(`${core.base}/panel/#/accounts/gone-01`);
+  const remove = page.getByRole("button", { name: "Remove…", exact: true });
+  await remove.click();
+  const dialog = page.getByRole("dialog", { name: "Remove gone-01?" });
+  await expect(dialog).toContainText("pluxy deletes its saved sign-in. To use it again, add it again.");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(remove).toBeFocused();
+  expect((await listed()).some((a) => a.id === "gone-01")).toBe(true);
+  await remove.click();
+  await dialog.getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(page).toHaveURL(/#\/accounts$/);
+  await expect.poll(async () => (await listed()).some((a) => a.id === "gone-01")).toBe(false);
 });

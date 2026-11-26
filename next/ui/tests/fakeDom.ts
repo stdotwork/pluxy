@@ -97,6 +97,15 @@ export class FakeNode {
     );
   }
 
+  /** Finds nothing: a page that looks for an element to focus finds none. */
+  querySelector() {
+    return null;
+  }
+
+  /** A dialog's showModal and close: a fake dialog is open by being in the tree. */
+  showModal() {}
+  close() {}
+
   /** Takes focus: the document's activeElement is then this node. */
   focus() {
     this.ownerDocument.activeElement = this;
@@ -196,11 +205,27 @@ export class FakeWindow {
 }
 
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+const originalHTMLElement = Object.getOwnPropertyDescriptor(globalThis, "HTMLElement");
+
+/** The roots mountIn rendered into, unmounted by restoreDom. */
+const mounted: FakeNode[] = [];
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
 
-/** Puts back the document, window and navigator the test run started with. */
+/**
+ * Unmounts every tree mountIn rendered, then puts back the document, window and navigator the test
+ * run started with. Unmounting first stops the pages' timers and listeners while their document is
+ * still there: a page left mounted would tick on after it, against no document.
+ */
 export function restoreDom() {
+  // Inside act: Preact runs an unmounted tree's effect cleanups after the next paint, and act runs
+  // them now.
+  for (const root of mounted.splice(0))
+    act(() => {
+      render(null, root as unknown as Element);
+    });
+  if (originalHTMLElement) Object.defineProperty(globalThis, "HTMLElement", originalHTMLElement);
+  else Reflect.deleteProperty(globalThis, "HTMLElement");
   if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
   else Reflect.deleteProperty(globalThis, "window");
   if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
@@ -213,6 +238,9 @@ export function installDocument() {
   const document = new FakeDocument();
   Object.defineProperty(globalThis, "document", { configurable: true, value: document });
   Object.defineProperty(globalThis, "window", { configurable: true, value: new FakeWindow() });
+  // What a dialog checks the control that opened it against.
+  if (!originalHTMLElement)
+    Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: FakeNode });
   return document;
 }
 
@@ -240,6 +268,7 @@ export async function mountIn(tree: ComponentChildren) {
   const document = installDocument();
   const root = document.createElement("main");
   document.body.appendChild(root);
+  mounted.push(root);
   await act(async () => {
     render(tree, root as unknown as Element);
   });
@@ -250,6 +279,8 @@ export async function mountIn(tree: ComponentChildren) {
     text: () => root.textContent,
     unmount: async () => {
       await act(async () => render(null, root as unknown as Element));
+      const at = mounted.indexOf(root);
+      if (at >= 0) mounted.splice(at, 1);
     },
   };
 }
