@@ -121,7 +121,7 @@ fn update_attr(main: &Webview, name: &str) -> Value {
     attr(main, UPDATE, name)
 }
 
-/// Opens Version Management with the feed's `variant` releases checked, once the app's latest
+/// Opens the Updates page with the feed's `variant` releases checked, once the app's latest
 /// version is `latest`.
 fn check(main: &Webview, dir: &Path, variant: &str, latest: &str) -> Result<(), String> {
     fs::write(dir.join("feed-variant"), variant).map_err(|e| e.to_string())?;
@@ -199,7 +199,7 @@ fn outcome_now(main: &Webview) -> Value {
     .unwrap_or(Value::Null)
 }
 
-/// Clicks Update Now and waits for that update's own outcome, one of want: a phase in want, read
+/// Clicks Update now and waits for that update's own outcome, one of want: a phase in want, read
 /// with its error, that is not the outcome shown before the click (a step after a failed one
 /// would otherwise take the leftover failure for its own); a failure must say why.
 fn update_outcome(main: &Webview, what: &str, want: &[&str]) -> Result<Value, String> {
@@ -221,7 +221,7 @@ fn update_outcome(main: &Webview, what: &str, want: &[&str]) -> Result<Value, St
     })
 }
 
-/// A refused launch: Update Now is not offered, the page says why, and the command refuses too.
+/// A refused launch: Update now is not offered, the page says why, and the command refuses too.
 fn refused(app: &AppHandle, main: &Webview, dir: &Path, case: &str) -> Result<(), String> {
     check(main, dir, "good", "0.2.0")?;
     let reason = wait_for("the reason there is no update", || {

@@ -203,7 +203,7 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Managed-core recovery and the tray's Start, Stop and Restart | Kept | | [README](README.md#the-window-and-the-tray) |
 | One app per profile, startup preferences, close and window preferences | Kept | | [README](README.md#one-app-per-profile) |
 | Privacy mode | Kept | | [README](README.md#privacy-mode) |
-| Release feed, release notes, channels, signed app update and rollback | Kept | | [README](README.md#version-management-and-release-notes) |
+| Release feed, release notes, channels, signed app update and rollback | Kept | | [README](README.md#updates-and-release-notes) |
 | Portable replacement helper, upstream release addresses, the kernel version picker and preset mirrors | Dropped | The app updates only through the signed updater, from a feed address the person sets, which replaces the old app's core-version page (its `versions` page) | — |
 | MCP server and skills management | Dropped | The owner's decision; app packages are not agent skills | — |
 | Windows installers: the old app's NSIS setup and MSI package (`bundle.targets` `all`), which its updater ran to update | Replaced | One per-user NSIS setup program, no administrator rights; the MSI is dropped: it installs machine-wide, for managed deployment, which is not a goal. The app updates the installed program set itself and never runs the setup, and the setup refuses while the app runs instead of closing it by force. Test package only until release signing | [README](README.md#packages) |
