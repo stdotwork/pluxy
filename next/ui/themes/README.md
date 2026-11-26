@@ -347,6 +347,8 @@ These stay stable within a theme contract version:
 | `data-part="state-pane"` | What a whole pane shows while it loads, when it is empty, or when it could not be read; `data-kind` is `loading`, `empty` or `failed` |
 | `data-part="plan-pill"` | An account's plan as a word; `data-plan-tier` is `top` (the largest plans), `mid` or `free`. The default theme sets the tiers apart by ink weight only, never colour |
 | `data-part="limits"` | An account's limits on its row; `data-state` is `read`, `reading`, `none` or `failed` |
+| `data-part="tool-steps"` | The numbered steps under a coding tool's row on the Tools page: make a key, put the text in the settings file, start the tool again |
+| `data-part="tool-key"` | One key on the Tools page: its name, its use this week, Rename and Delete |
 
 Some parts also carry the `data-slot` name that [T3 Code](https://github.com/pingdotgg/t3code)
 gives the same part, and the root's `dark` class is the one T3 Code uses. They exist so that the

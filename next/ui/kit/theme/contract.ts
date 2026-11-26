@@ -184,6 +184,8 @@ export const PARTS = [
   "state-pane",
   "plan-pill",
   "limits",
+  "tool-steps",
+  "tool-key",
 ] as const;
 
 export type Part = (typeof PARTS)[number];

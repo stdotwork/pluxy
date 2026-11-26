@@ -461,7 +461,7 @@
 
   .tool-line {
     display: grid;
-    grid-template-columns: minmax(10em, 1fr) minmax(max-content, auto) minmax(0, 1.2fr) auto;
+    grid-template-columns: minmax(10em, 1fr) 28ch minmax(0, 1.2fr) auto;
     align-items: center;
     gap: calc(var(--s) * 3);
     min-height: var(--px-size-row);

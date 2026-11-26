@@ -1,0 +1,292 @@
+/* The Tools page: the coding tools, the steps under a row, the address and the keys. Rows come from
+   the shared parts (parts/parts.css); this sets what lies around them. Tokens only. */
+@layer kit {
+  .tools {
+    container-type: inline-size;
+    gap: calc(var(--s) * 6);
+  }
+
+  .tools-list,
+  .tools-section {
+    display: grid;
+    gap: calc(var(--s) * 3);
+    align-content: start;
+    min-width: 0;
+  }
+
+  .tools-list > .notice,
+  .tools-section > .notice,
+  .tools-list p,
+  .tools-section p {
+    margin: 0;
+  }
+
+  .tools-heading {
+    font-size: var(--px-font-size-title);
+  }
+
+  .tools-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 3);
+    min-height: var(--px-size-control);
+  }
+
+  .tools-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+  }
+
+  .tool-rows {
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .tools-other > summary {
+    cursor: pointer;
+    min-height: var(--px-size-control);
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 1);
+    color: var(--px-color-text-muted);
+    list-style: none;
+  }
+
+  .tools-other > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .tools-other-mark {
+    display: inline-flex;
+  }
+
+  .tools-other-mark .icon {
+    transition: transform var(--t);
+  }
+
+  .tools-other[open] .tools-other-mark .icon {
+    transform: rotate(90deg);
+  }
+
+  .tools-other[open] > summary {
+    margin-bottom: calc(var(--s) * 2);
+  }
+
+  /* ---- the steps under a row ---- */
+
+  .tool-steps {
+    list-style: decimal;
+    margin: 0;
+    padding: calc(var(--s) * 2) 0 0 calc(var(--s) * 6);
+    min-width: 0;
+  }
+
+  /* A list item, so its number shows; what it holds is spaced by its children. */
+  .tool-steps > li {
+    display: list-item;
+    min-width: 0;
+    padding-inline-start: calc(var(--s) * 1);
+  }
+
+  .tool-steps > li + li {
+    margin-top: calc(var(--s) * 4);
+  }
+
+  .tool-steps > li > * + * {
+    margin-top: calc(var(--s) * 2);
+  }
+
+  .tool-steps > li::marker {
+    color: var(--px-color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tool-steps p {
+    margin: 0;
+  }
+
+  .tool-steps-failed {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    justify-items: start;
+    padding-top: calc(var(--s) * 2);
+  }
+
+  .tool-file {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .tool-file-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2);
+  }
+
+  /* The text scrolls sideways inside its own box, never the page. */
+  .tool-text {
+    margin: 0;
+    padding: calc(var(--s) * 3);
+    max-width: 100%;
+    overflow: auto;
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    color: var(--px-color-code-text);
+    background: var(--px-color-code-bg);
+    font-family: var(--px-font-mono);
+    font-size: var(--px-font-size-small);
+    white-space: pre;
+  }
+
+  /* ---- address and keys ---- */
+
+  .tools-secondary {
+    display: grid;
+    gap: calc(var(--s) * 6);
+    align-items: start;
+  }
+
+  @container (min-width: 56em) {
+    .tools-secondary {
+      grid-template-columns: minmax(16em, 2fr) minmax(0, 3fr);
+      gap: calc(var(--s) * 8);
+    }
+  }
+
+  .tools-address {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .tools-address code {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .tools-fresh {
+    display: grid;
+    gap: calc(var(--s) * 2);
+  }
+
+  .tools-fresh .notice {
+    display: grid;
+    gap: calc(var(--s) * 2);
+  }
+
+  .tools-fresh-key {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .tools-fresh-key code {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
+
+  .tools-new {
+    display: grid;
+    gap: calc(var(--s) * 3);
+    justify-items: start;
+  }
+
+  .tools-new-name {
+    display: grid;
+    gap: calc(var(--s) * 1);
+    width: min(100%, 24em);
+  }
+
+  .tools-new input,
+  .tool-key-rename input {
+    min-height: var(--px-size-control);
+    width: 100%;
+  }
+
+  .tool-keys {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  /* A key's line wraps rather than squeezes: its question while Delete asks takes a line of its own. */
+  .tool-key {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 1) calc(var(--s) * 3);
+    min-height: var(--px-size-row);
+    padding: calc(var(--s) * 1) calc(var(--s) * 2);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .tool-key-name {
+    display: flex;
+    flex: 1 1 12em;
+    align-items: baseline;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .tool-key-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .tool-key-name .mono {
+    flex: none;
+  }
+
+  .tool-key-used {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .tool-key-actions {
+    display: flex;
+    flex: 0 1 auto;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: calc(var(--s) * 2);
+    margin-inline-start: auto;
+  }
+
+  /* While Delete asks, Rename steps aside: the question and its answers have the line. */
+  .tool-key-actions:has(.confirm) > [data-part="button"] {
+    display: none;
+  }
+
+  .tool-key-rename,
+  .tool-key-note,
+  .tool-key > .notice {
+    flex: 1 1 100%;
+    margin: 0;
+  }
+
+  .tool-key-rename {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2);
+  }
+
+  .tool-key-rename label {
+    flex: 1 1 14em;
+  }
+}
