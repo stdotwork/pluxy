@@ -79,6 +79,9 @@ const LOOK_EVERY_MS = 30_000;
 // The replies, kept in page memory across pages and views.
 const kept = new Map<string, Windows>();
 const reading = new Set<string>();
+// Accounts whose page's Refresh asked for their limits from core: not taken from the copy GET
+// /accounts carries until that read is in.
+const asked = new Set<string>();
 const READING: Windows = { state: "reading", limits: [] };
 
 /**
@@ -93,11 +96,16 @@ export function expireWindows() {
 export function forgetWindows() {
   kept.clear();
   reading.clear();
+  asked.clear();
 }
 
-/** Forgets one account's kept reply, so its limits are read again at once (an account page's Refresh). */
+/**
+ * Forgets one account's kept reply, so its limits are read from core again at once, not taken
+ * from the copy GET /accounts carries (an account page's Refresh).
+ */
 export function forgetWindow(id: string) {
   kept.delete(id);
+  asked.add(id);
 }
 
 /** Limits from a reply to GET /accounts/{id}/quota, or from the copy GET /accounts carries. */
@@ -126,7 +134,7 @@ export function windowsFresh(w: Windows, now: number): boolean {
  * person or is turned off takes no requests, so its limits are not read. At most
  * WINDOWS_PER_VIEW accounts, WINDOWS_AT_ONCE at a time; each reply is kept WINDOWS_KEEP_MS, or
  * until a reset it names has passed. The limits GET /accounts carries (quota) show at once and
- * are read again only when out of date. An account being read again keeps showing its last reply.
+ * are read again only when out of date, or when the account's page asks (forgetWindow). An account being read again keeps showing its last reply.
  * refreshed is the page's Refresh: each time it changes, the reads that failed are made again.
  */
 export function useWindows(
@@ -154,7 +162,7 @@ export function useWindows(
     .slice(0, WINDOWS_PER_VIEW);
   // What GET /accounts carries counts as a reply read when core read it.
   for (const a of wanted) {
-    if (!a.quota) continue;
+    if (!a.quota || asked.has(a.id)) continue;
     const at = Date.parse(a.quota.fetched_at);
     const have = kept.get(a.id);
     if (!Number.isNaN(at) && (!have || (have.at ?? 0) < at))
@@ -171,6 +179,7 @@ export function useWindows(
     const due = (key ? key.split("\n") : []).filter((id) => {
       const have = kept.get(id);
       if (reading.has(id)) return false;
+      if (asked.has(id)) return true;
       if (again && have?.state === "failed") return true;
       return !(have && windowsFresh(have, Date.now()));
     });
@@ -191,6 +200,7 @@ export function useWindows(
           return;
         }
         kept.set(id, windowsOf(r, Date.now()));
+        asked.delete(id);
         if (mounted.current) bump((n) => n + 1);
       }
     };
