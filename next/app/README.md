@@ -1176,17 +1176,27 @@ the page.
 - **The add-on first:** the page reads this device's packages before anything else. With the
   tool's add-on missing it says so and links to Add-ons; with it off it offers **Turn on add-on**
   (the native confirmation enables it); in safe mode it says tool add-ons are paused. It reads no
-  file then.
-- **Reading:** the default settings file is read as the page opens (and again for another WSL
-  environment). Another file is chosen under **Settings file, key and backups** and read with
-  **Read this file**; choosing another file drops the reading, and an answer for a file no longer
-  shown, good or failed, is dropped, so every write goes to the file the page shows (the pinned
-  targets of that reading; the add-on refuses a file that changed since).
+  file then. When the packages cannot be read, it says so with **Try again**, and reads and offers
+  nothing until they are.
+- **Reading:** the default settings file is read as the page opens, again for another WSL
+  environment, and again when the person comes back to **Default**. Another file is chosen under
+  **Settings file, key and backups** and read with **Read this file**; choosing another file drops
+  the reading, and an answer for a file no longer shown, good or failed, is dropped. A read that
+  fails after a good one leaves the reading on screen with a line saying it may be out of date, and
+  nothing is written until a read succeeds (**Try again**).
+- **Writes go to the file shown:** each write sends the pinned targets of the reading on screen
+  (the add-on refuses a file that changed since). While a write or its confirmation waits, the
+  file and environment choices are locked. Each write's `program_call` carries a ticket, and
+  leaving the page withdraws a confirmation still open (`program_cancel`); a Connect whose key
+  window closes after the page was left writes nothing.
 - **Connect {tool}** is one press. It uses the vault's key bound to this add-on and to the pluxy the
   app is connected to (or the one the person chose); with none, it makes one with
   `client_key_capture`, named for the tool (`Claude Code`, `Codex`, `Claude Desktop`), in its
   own native confirmation, then writes the settings in the add-on's confirmation. A cancel stops
-  quietly and a key that could not be made writes nothing. **Update {tool}** does the same for
+  quietly and a key that could not be made writes nothing. When the key was made but the write did
+  not happen, the page says the key is kept, and the next Connect uses it, even before the key
+  list is read again. Connect, Update and Save say each reason they are held, such as the app not
+  being connected to pluxy. **Update {tool}** does the same for
   settings that point elsewhere or miss part of what pluxy needs, and **Save**, in the section
   edited, for a connected tool. **Disconnect** (the add-on's `clear`: pluxy's values go, the
   person's edits stay) and **Restore backup** (the copy from before pluxy first changed the file)
@@ -1196,8 +1206,9 @@ the page.
   page opens) and say `Your accounts do not offer {model}.` under a model no account serves;
   Connect still writes it. **Remove model** asks first, inline.
 - **Start** (one section for every tool, through the launcher, `pluxy/execution`): the folder,
-  with the recent ones for the tool, the terminal, and **Start {tool}**, which stays off until a
-  folder is chosen; without the Launcher add-on it says so and links to Add-ons. The terminal list
+  with the recent ones for the tool, the terminal, and **Start {tool}**, which, for a tool that
+  starts in a folder, stays off until one is chosen (Claude Desktop starts with none); without the
+  Launcher add-on it says so and links to Add-ons. The terminal list
   loads again whenever this device's packages change (`pluxy-device`); a chosen terminal the list
   no longer offers falls back to Automatic (`src/startCli.ts`). The launcher's confirmation shows
   each launch in full. No key is part of a launch: each tool reads it from its settings.
@@ -1212,6 +1223,11 @@ the page.
   shows whether each file was present and its size, and the settings restoring it would add,
   change or remove, by name only (never a value); **Restore** and **Delete** each ask in the
   add-on's window.
+- **What the native side says** (`src/toolWords.ts`): every native call of these pages goes
+  through `nativeReply`, which turns the native side's words into the page's (`core` becomes
+  `pluxy`, a client key a key, the vault the app). In privacy mode the pages mask what they show
+  of paths (the home folder's user name, and all but the last two parts), WSL users' names,
+  account IDs, and the errors and reasons the native side gives.
 
 `readExtraTools` (`src/clientPage.tsx`) reads Claude Desktop, Grok Build and Hermes Agent for
 the Tools list in the app: each add-on that is on previews its tool's default settings; a reading
@@ -1245,9 +1261,9 @@ running in that distribution as that user, so the default file is that user's
 path; any other network path is refused there). The first use asks to **Install the Linux build for
 WSL**, in its own native confirmation. **Start Claude Code** starts it in that distribution through
 the launcher, in the Windows console. The page keeps its last choice for the window; the app checks
-it against its records on every call. **Connect** does not work in WSL yet: it needs a key, and the
-vault's secrets, key capture and native key entry are Linux only for now, so on Windows there is no
-key to give. Reading, backups and **Start Claude Code** work there.
+it against its records on every call. **Connect** makes and keeps the key on Windows, as on any
+computer (the vault and its keys work on Linux, Windows and macOS), and the add-on's write in the
+distribution gets it after its confirmation.
 
 ## Codex
 

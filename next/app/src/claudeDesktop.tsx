@@ -39,7 +39,7 @@ import {
   useToolSetup,
 } from "./clientPage";
 import type { AgentPage } from "./easyMode";
-import { reply } from "./host";
+import { nativeReply, useShown } from "./toolWords";
 
 const t = strings("claudeDesktop", {
   title: "Claude Desktop",
@@ -130,32 +130,35 @@ export function ClaudeDesktopPage() {
   };
   const setRow = (i: number, patch: Partial<Row>) =>
     edit(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const shown = useShown();
   const alias = useAction(s.served.reload);
-  const [made, setMade] = useState<string>();
+  const [made, setMade] = useState<{
+    alias: string;
+    accounts: string[];
+    config_accounts: string[];
+    already: boolean;
+  }>();
   const createAlias = (r: Row) =>
     alias.run(async () => {
       setMade(undefined);
-      const res = await reply<{
+      const res = await nativeReply<{
         alias: string;
         accounts: string[];
         config_accounts: string[];
         already: boolean;
       }>("core_alias_create", { model: r.model.trim(), alias: r.alias.trim() });
       if (aliasCancelled(res.error?.message)) return { status: 200 };
-      const b = res.body;
-      if (b) {
-        const said = t(b.already ? "aliasAlready" : "aliasMade", {
-          alias: b.alias,
-          accounts: b.accounts.join(", "),
-        });
-        setMade(
-          b.config_accounts.length > 0
-            ? `${said} ${t("aliasConfig", { accounts: b.config_accounts.join(", ") })}`
-            : said,
-        );
-      }
+      if (res.body) setMade(res.body);
       return res;
     });
+  // What the alias's creation said, the accounts named by their IDs (masked in privacy mode).
+  const ids = (list: string[]) => list.map((a) => shown.id(a)).join(", ");
+  const madeText =
+    made &&
+    [
+      t(made.already ? "aliasAlready" : "aliasMade", { alias: made.alias, accounts: ids(made.accounts) }),
+      ...(made.config_accounts.length > 0 ? [t("aliasConfig", { accounts: ids(made.config_accounts) })] : []),
+    ].join(" ");
   const input = () => ({
     models: rows.map((r) => ({ model: r.model.trim(), alias: r.alias.trim(), one_m: r.one_m })),
   });
@@ -174,8 +177,8 @@ export function ClaudeDesktopPage() {
       <ToolTop
         s={s}
         start={start}
-        facts={[s.found?.version, path]}
-        path={path}
+        facts={[s.found?.version]}
+        paths={[path]}
         held={held}
         form={input}
         failedRead={
@@ -188,7 +191,7 @@ export function ClaudeDesktopPage() {
                     variant="primary"
                     busy={s.working === "folders"}
                     disabled={s.busy}
-                    onClick={() => s.write("folders", () => s.call("folders", {}))}
+                    onClick={() => s.write("folders", (call) => call("folders", {}))}
                   >
                     {t("createFolders")}
                   </Button>
@@ -210,8 +213,8 @@ export function ClaudeDesktopPage() {
             <p class="muted">{t("aliasRule")}</p>
             <p class="muted">{t("aliasPluxy")}</p>
           </div>
-          {alias.error && <Notice tone="danger">{alias.error}</Notice>}
-          {made && <Notice tone="ok">{made}</Notice>}
+          {alias.error && <Notice tone="danger">{shown.text(alias.error)}</Notice>}
+          {madeText && <Notice tone="ok">{madeText}</Notice>}
           {rows.length === 0 && <p class="muted">{t("empty")}</p>}
           {rows.map((r, i) => {
             const state = aliasState(r, served);
@@ -285,7 +288,13 @@ export function ClaudeDesktopPage() {
               ]}
             >
               {where === "root" && (
-                <Text label={t("root")} hint={t("rootHint")} value={root} onInput={setRoot} />
+                <Text
+                  label={t("root")}
+                  hint={t("rootHint")}
+                  value={root}
+                  onInput={setRoot}
+                  disabled={s.locked}
+                />
               )}
               {where === "files" &&
                 [t("deployment"), t("profile"), t("meta")].map((label, i) => (
@@ -295,6 +304,7 @@ export function ClaudeDesktopPage() {
                     hint={t("fileHint")}
                     value={files[i] ?? ""}
                     onInput={(v: string) => setFiles((fs) => fs.map((f, j) => (j === i ? v : f)))}
+                    disabled={s.locked}
                   />
                 ))}
             </FileChoice>
@@ -305,7 +315,8 @@ export function ClaudeDesktopPage() {
                 bare
                 pkg={PACKAGE}
                 pins={async () => s.preview?.targets}
-                disabled={s.busy}
+                disabled={!s.writable}
+                onBusy={s.setOutside}
                 onChange={s.load}
               />
             )

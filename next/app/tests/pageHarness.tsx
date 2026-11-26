@@ -6,6 +6,7 @@
 import { afterEach } from "bun:test";
 import { render, type VNode } from "preact";
 import { act } from "preact/test-utils";
+import { PrivacyContext, privacyMasks } from "../../ui/kit/privacy";
 import { type Kit, KitContext } from "../../ui/kit/ui";
 
 export class FakeNode {
@@ -193,9 +194,10 @@ export interface Write {
   environment: unknown;
 }
 
-/** WSL as the host offers it: these distributions, each with the user me. */
+/** WSL as the host offers it: these distributions, each with the users named (me by default). */
 export interface Wsl {
   distros: string[];
+  users?: string[];
 }
 
 /** The add-ons the page tests install: every tool page's, and the launcher. */
@@ -237,12 +239,20 @@ export interface ChannelOptions {
   wsl?: Wsl;
   /** The vault's secrets; by default one plain secret, "My key". */
   secrets?: unknown[];
-  /** This device's add-ons (device_list); by default every one installed and on. */
+  /** This device's add-ons (device_list); by default every one installed and on. An Error is
+   * thrown; a function is asked on each call. */
   catalog?: unknown;
-  /** What client_key_capture answers: a secret, or an error to throw. Default: a new key. */
+  /** What client_key_capture answers: a secret, or an error to throw, or a promise of either.
+   * Default: a new key. */
   capture?: (args: { label: string; client: string }) => unknown;
   /** The connection's mode; local by default. */
   mode?: string;
+  /** Whether the app is signed in to pluxy; true by default. */
+  signedIn?: boolean;
+  /** After the first, vault_secrets answers only once release() is called. */
+  holdSecrets?: boolean;
+  /** Other window commands' answers (an Error is thrown), before the defaults. */
+  commands?: Record<string, (args: Record<string, unknown>) => unknown>;
   /** What an add-on answers to an operation other than preview (still recorded as a write). */
   ops?: Record<string, (input: Record<string, unknown>) => unknown>;
 }
@@ -257,8 +267,18 @@ export function channel(o: ChannelOptions = {}) {
   const calls: { cmd: string; args: Record<string, unknown> }[] = [];
   const records: unknown[] = [];
   const secrets = [...(o.secrets ?? [{ id: "k1", label: "My key" }])];
+  const held: (() => void)[] = [];
+  let secretReads = 0;
   const invoke = (cmd: string, args: Record<string, unknown> = {}): Promise<unknown> => {
     calls.push({ cmd, args });
+    const own = o.commands?.[cmd];
+    if (own) {
+      const answer = own(args);
+      return Promise.resolve(answer).then((a) => {
+        if (a instanceof Error) throw a.message;
+        return a;
+      });
+    }
     switch (cmd) {
       case "environments_get":
         return Promise.resolve({ available: o.wsl !== undefined, environments: records });
@@ -268,10 +288,15 @@ export function channel(o: ChannelOptions = {}) {
         records.push(record);
         return Promise.resolve(record);
       }
-      case "device_list":
-        return Promise.resolve(o.catalog ?? catalogOf());
-      case "vault_secrets":
-        return Promise.resolve({ secrets });
+      case "device_list": {
+        const c = typeof o.catalog === "function" ? o.catalog() : (o.catalog ?? catalogOf());
+        return c instanceof Error ? Promise.reject(c.message) : Promise.resolve(c);
+      }
+      case "vault_secrets": {
+        const listed = { secrets: [...secrets] };
+        if (!o.holdSecrets || secretReads++ === 0) return Promise.resolve(listed);
+        return new Promise((resolve) => held.push(() => resolve({ secrets: [...secrets] })));
+      }
       case "client_key_capture": {
         const a = args as { label: string; client: string };
         const made = o.capture
@@ -281,12 +306,19 @@ export function channel(o: ChannelOptions = {}) {
               label: a.label,
               client_key: { client: a.client, core: { mode: "local", origin: CORE }, masked: "sk-…made" },
             };
-        if (made instanceof Error) return Promise.reject(made.message);
-        secrets.push(made);
-        return Promise.resolve(made);
+        return Promise.resolve(made).then((m) => {
+          if (m instanceof Error) throw m.message;
+          secrets.push(m);
+          return m;
+        });
       }
       case "connection_get":
-        return Promise.resolve({ signed_in: true, remembered: false, target: CORE, mode: o.mode ?? "local" });
+        return Promise.resolve({
+          signed_in: o.signedIn ?? true,
+          remembered: false,
+          target: CORE,
+          mode: o.mode ?? "local",
+        });
       case "launcher_state":
         return Promise.resolve({ history: {} });
       case "launcher_terminals":
@@ -312,7 +344,13 @@ export function channel(o: ChannelOptions = {}) {
               distros: (o.wsl?.distros ?? []).map((name) => ({ name, default: false, version: null })),
             });
           return Promise.resolve({
-            users: [{ name: "me", uid: 1000, home: "/home/me", default: false, root: false }],
+            users: (o.wsl?.users ?? ["me"]).map((name) => ({
+              name,
+              uid: 1000,
+              home: `/home/${name}`,
+              default: false,
+              root: false,
+            })),
           });
         }
         if (op === "preview")
@@ -333,10 +371,14 @@ export function channel(o: ChannelOptions = {}) {
             };
             reads.push(read);
           });
-        if (op === "backup-list") return Promise.resolve({ backups: [], keep: 10 });
+        if (op === "backup-list" && !o.ops?.["backup-list"])
+          return Promise.resolve({ backups: [], keep: 10 });
         writes.push({ pkg, op, input: input as Write["input"], environment: environment ?? null });
         const answer = o.ops?.[op]?.(input as Record<string, unknown>) ?? {};
-        return answer instanceof Error ? Promise.reject(answer.message) : Promise.resolve(answer);
+        return Promise.resolve(answer).then((a) => {
+          if (a instanceof Error) throw a.message;
+          return a;
+        });
       }
       default:
         return Promise.resolve({});
@@ -344,7 +386,11 @@ export function channel(o: ChannelOptions = {}) {
   };
   /** The newest read not answered yet. */
   const pending = () => [...reads].reverse().find((r) => !r.answered);
-  return { reads, writes, calls, invoke, pending, secrets };
+  /** Lets the held vault_secrets answers in (holdSecrets). */
+  const release = () => {
+    for (const r of held.splice(0)) r();
+  };
+  return { reads, writes, calls, invoke, pending, secrets, release };
 }
 
 export type Channel = ReturnType<typeof channel>;
@@ -382,13 +428,23 @@ export function installWindow(invoke: Channel["invoke"]) {
   return document;
 }
 
+/** An answer the test gives when it chooses: promise is what a command answers meanwhile. */
+export function later<T = unknown>() {
+  let give: (v: T) => void = () => {};
+  const promise = new Promise<T>((resolve) => {
+    give = resolve;
+  });
+  return { promise, give };
+}
+
 /** Mounts page in the kit. served are the models pluxy serves; found the tools pluxy's own look at
- * this computer found (GET /setup). */
+ * this computer found (GET /setup); privacy turns privacy mode on. */
 export async function mount(
   page: () => VNode,
   invoke: Channel["invoke"],
   served: string[] = SERVED,
   found: unknown[] = [],
+  o: { privacy?: boolean } = {},
 ) {
   const document = installWindow(invoke);
   const kit = {
@@ -403,7 +459,12 @@ export async function mount(
   const root = document.createElement("main");
   document.body.appendChild(root);
   await act(async () => {
-    render(<KitContext.Provider value={kit}>{page()}</KitContext.Provider>, root);
+    render(
+      <KitContext.Provider value={kit}>
+        <PrivacyContext.Provider value={privacyMasks(!!o.privacy)}>{page()}</PrivacyContext.Provider>
+      </KitContext.Provider>,
+      root,
+    );
   });
   await settle();
 
@@ -427,9 +488,17 @@ export async function mount(
     text: () => root.textContent,
     /** The path a field shows. */
     shown: (label: string) => field(label).value,
+    /** Leaves the page: it is unmounted, as when the person goes to another page. */
+    leave: async () => {
+      await act(async () => {
+        render(null, root);
+      });
+      await settle();
+    },
     pick: async (label: string) => {
       const radio = labelled(label).flatMap((l) => all(l, "input"))[0];
       if (!radio) throw new Error(`no choice labelled ${label}`);
+      if (radio.disabled) throw new Error(`choice ${label} is disabled`);
       await act(async () => {
         radio.dispatchEvent(new Event("change"));
       });
@@ -437,6 +506,7 @@ export async function mount(
     },
     type: async (label: string, value: string) => {
       const input = field(label);
+      if (input.disabled) throw new Error(`field ${label} is disabled`);
       input.value = value;
       await act(async () => {
         input.dispatchEvent(new Event("input"));

@@ -4,7 +4,9 @@
 // page works on this computer. Distributions and their users come from the optional pluxy/wsl
 // program; the host checks a picked user (environment_add) and keeps the record. The page's last
 // choice is kept per client package in the window's storage; the host validates it on every call.
-// Labels follow the old app's environment picker. Logic in environment.ts.
+// Labels follow the old app's environment picker. Logic in environment.ts. In privacy mode the
+// users' names, paths and errors are masked; while the page writes (disabled), nothing here can
+// be changed.
 
 import { useEffect, useId, useRef, useState } from "preact/hooks";
 import { strings } from "../../ui/kit/strings";
@@ -25,7 +27,7 @@ import {
   WSL_PACKAGE,
   type WslUser,
 } from "./environment";
-import { reply } from "./host";
+import { nativeReply, useShown } from "./toolWords";
 
 const t = strings("environment", {
   title: "Where {tool} runs",
@@ -72,7 +74,9 @@ export interface Environment {
  * another one. */
 export function useEnvironment(pkg: string, onChange: () => void): Environment {
   const { host } = useKit();
-  const known = useLoad(() => reply<{ available: boolean; environments: EnvRecord[] }>("environments_get"));
+  const known = useLoad(() =>
+    nativeReply<{ available: boolean; environments: EnvRecord[] }>("environments_get"),
+  );
   const [chosen, setChosen] = useState<Selection>(() => parseSelection(host.prefs.get(prefKey(pkg))));
   const [mode, setModeState] = useState<"local" | "wsl">(chosen ? "wsl" : "local");
   const available = known.data?.available === true;
@@ -104,8 +108,9 @@ export function useEnvironment(pkg: string, onChange: () => void): Environment {
 
 const join = (...notes: (string | false | undefined)[]) => notes.filter(Boolean).join(" · ") || undefined;
 
-function Wsl(props: { env: Environment; tool: string }) {
+function Wsl(props: { env: Environment; tool: string; disabled?: boolean }) {
   const { env } = props;
+  const shown = useShown();
   const sel = env.selection?.wsl;
   const [distros, setDistros] = useState<{ distros: Distro[]; installed: boolean }>();
   const [distro, setDistro] = useState(sel?.distro);
@@ -123,7 +128,7 @@ function Wsl(props: { env: Environment; tool: string }) {
     setDistro(d);
     setUsers(undefined);
     read.run(async () => {
-      const r = await reply<{ users: WslUser[] }>("program_call", {
+      const r = await nativeReply<{ users: WslUser[] }>("program_call", {
         package: WSL_PACKAGE,
         op: "users",
         input: { distro: d },
@@ -135,7 +140,7 @@ function Wsl(props: { env: Environment; tool: string }) {
   };
   const listDistros = () =>
     detect.run(async () => {
-      const r = await reply<{ distros: Distro[]; installed: boolean }>("program_call", {
+      const r = await nativeReply<{ distros: Distro[]; installed: boolean }>("program_call", {
         package: WSL_PACKAGE,
         op: "distros",
         input: {},
@@ -167,15 +172,15 @@ function Wsl(props: { env: Environment; tool: string }) {
   const offered = got
     ? got.map((u) => ({
         value: u.name,
-        label: u.root ? t("root") : u.name,
+        label: u.root ? t("root") : shown.id(u.name),
         note: join(u.default && t("default")),
       }))
     : [
         ...knownUsers
           .filter((r) => r.uid !== 0)
-          .map((r) => ({ value: r.user, label: r.user, note: undefined as string | undefined })),
+          .map((r) => ({ value: r.user, label: shown.id(r.user), note: undefined as string | undefined })),
         ...(sel && sel.distro === distro && !knownUsers.some((r) => r.user === sel.user)
-          ? [{ value: sel.user, label: sel.user, note: undefined }]
+          ? [{ value: sel.user, label: shown.id(sel.user), note: undefined }]
           : []),
         ...knownUsers
           .filter((r) => r.uid === 0)
@@ -185,7 +190,7 @@ function Wsl(props: { env: Environment; tool: string }) {
     if (!distro) return;
     if (!got) return env.choose({ wsl: { distro, user } });
     add.run(async () => {
-      const r = await reply<EnvRecord>("environment_add", { distro, user });
+      const r = await nativeReply<EnvRecord>("environment_add", { distro, user });
       if (r.body) env.choose({ wsl: { distro, user } });
       return r;
     });
@@ -195,7 +200,7 @@ function Wsl(props: { env: Environment; tool: string }) {
   return (
     <>
       {detect.busy && <p class="muted">{t("detecting")}</p>}
-      {detect.error && <Notice tone="danger">{detect.error}</Notice>}
+      {detect.error && <Notice tone="danger">{shown.text(detect.error)}</Notice>}
       {nothing && <Notice tone="warn">{t("empty")}</Notice>}
       {names.length > 0 && (
         <>
@@ -214,32 +219,36 @@ function Wsl(props: { env: Environment; tool: string }) {
               };
             })}
             onChange={readUsers}
+            disabled={props.disabled}
           />
           <small class="hint">{t("startsDistro")}</small>
         </>
       )}
-      {read.error && <Notice tone="danger">{read.error}</Notice>}
+      {read.error && <Notice tone="danger">{shown.text(read.error)}</Notice>}
       {distro && offered.length > 0 && (
         <Choices
           label={t("user")}
           value={sel && sel.distro === distro ? sel.user : undefined}
           choices={offered}
           onChange={pick}
+          disabled={props.disabled}
         />
       )}
-      {add.error && <Notice tone="danger">{add.error}</Notice>}
+      {add.error && <Notice tone="danger">{shown.text(add.error)}</Notice>}
       {!sel && !detect.busy && names.length > 0 && <p class="muted">{t("pickUser", { tool: props.tool })}</p>}
-      <Button onClick={detectAll} disabled={detect.busy || read.busy || add.busy}>
+      <Button onClick={detectAll} disabled={props.disabled || detect.busy || read.busy || add.busy}>
         {t("detect")}
       </Button>
     </>
   );
 }
 
-/** The section itself, for the tool called tool: nothing unless the host offers WSL here. */
-export function EnvironmentBlock(props: { env: Environment; tool: string }) {
+/** The section itself, for the tool called tool: nothing unless the host offers WSL here. While
+ * disabled (the page writes to the environment chosen), no choice can be changed. */
+export function EnvironmentBlock(props: { env: Environment; tool: string; disabled?: boolean }) {
   const { env, tool } = props;
-  if (env.error) return <Notice tone="danger">{env.error}</Notice>;
+  const shown = useShown();
+  if (env.error) return <Notice tone="danger">{shown.text(env.error)}</Notice>;
   if (!env.available) return null;
   return (
     <section class="tool-section tool-where" aria-label={t("title", { tool })}>
@@ -255,8 +264,9 @@ export function EnvironmentBlock(props: { env: Environment; tool: string }) {
           { value: "wsl", label: t("wsl") },
         ]}
         onChange={env.setMode}
+        disabled={props.disabled}
       />
-      {env.mode === "wsl" && <Wsl env={env} tool={tool} />}
+      {env.mode === "wsl" && <Wsl env={env} tool={tool} disabled={props.disabled} />}
     </section>
   );
 }
@@ -270,16 +280,17 @@ export function LinuxBuildOffer(props: {
   onInstalled?: () => void;
 }) {
   const install = useAction(props.onInstalled ?? (() => {}));
+  const shown = useShown();
   const { record } = props;
   if (!record || !linuxBuildMissing(props.error)) return null;
   return (
     <>
-      {install.error && <Notice tone="danger">{install.error}</Notice>}
+      {install.error && <Notice tone="danger">{shown.text(install.error)}</Notice>}
       <Button
         disabled={install.busy}
         onClick={() =>
           install.run(() =>
-            reply("device_install_wsl", { package: props.pkg, platform: linuxPlatform(record) }),
+            nativeReply("device_install_wsl", { package: props.pkg, platform: linuxPlatform(record) }),
           )
         }
       >
@@ -312,8 +323,10 @@ export function PathText(props: {
   id?: string;
   bare?: boolean;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   const own = useId();
+  const shown = useShown();
   const id = props.id ?? own;
   const [converted, setConverted] = useState<string>();
   const { distro } = props;
@@ -340,6 +353,7 @@ export function PathText(props: {
         class={props.bare ? "mono" : undefined}
         aria-label={props.bare ? props.label : undefined}
         placeholder={props.placeholder}
+        disabled={props.disabled}
         autocomplete="off"
         spellcheck={false}
         list={props.list}
@@ -356,7 +370,7 @@ export function PathText(props: {
       {props.hint && <small class="hint">{props.hint}</small>}
       {refused && <Notice tone="danger">{t("outside")}</Notice>}
       {!refused && converted !== undefined && converted === props.value && (
-        <Notice tone="ok">{t("converted", { path: converted })}</Notice>
+        <Notice tone="ok">{t("converted", { path: shown.path(converted) })}</Notice>
       )}
     </Wrap>
   );

@@ -14,7 +14,7 @@ import { HermesPage } from "../src/hermes";
 import { OmpPage } from "../src/omp";
 import { OpenCodePage } from "../src/opencode";
 import { PiPage } from "../src/pi";
-import { type Channel, channel, type Mounted, mount, settle } from "./pageHarness";
+import { type Channel, channel, later, type Mounted, mount, settle } from "./pageHarness";
 
 const MORE = "Settings file, key and backups";
 
@@ -231,6 +231,14 @@ for (const c of pages) {
     // On the old pages the late answer pinned A: the write was offered, for A, beside a field showing B.
     const sent = await writeIfOffered(c, ch, page);
     expect(sent.filter((target) => target !== `${B}/target.json`)).toEqual([]);
+    if (!c.shared) return;
+    // On the shared pages, nothing was offered until B is read; then the write goes to B.
+    expect(sent).toEqual([]);
+    await page.click(c.read);
+    ch.pending()?.answer(c.body(B));
+    await settle();
+    expect(page.canPress(c.write)).toBe(true);
+    expect(await writeIfOffered(c, ch, page)).toEqual([`${B}/target.json`]);
   });
 
   test(`${c.name}: a failed read that answers after the path changed is dropped`, async () => {
@@ -332,4 +340,34 @@ test("Claude Code: a user picked in the distribution shown is written to, and on
   expect(ch.writes.filter((w) => w.op === "apply").map((w) => w.environment)).toEqual([
     { wsl: { distro: DEBIAN, user: "me" } },
   ]);
+});
+
+test("Claude Code: while a write waits, where Claude Code runs cannot be changed", async () => {
+  const answer = later<unknown>();
+  const ch = channel({ wsl: { distros: [UBUNTU, DEBIAN] }, ops: { apply: () => answer.promise } });
+  const page = await mount(() => <ClaudeCodePage />, ch.invoke);
+  await page.pick("WSL");
+  await page.pick(UBUNTU);
+  await page.pick("me");
+  if (!ch.pending()) await page.click("Read this file");
+  ch.pending()?.answer(claudeCodeRead(SETTINGS));
+  await settle();
+  await page.click("Connect Claude Code");
+  await expect(page.pick("Windows")).rejects.toThrow("is disabled");
+  await expect(page.pick(DEBIAN)).rejects.toThrow("is disabled");
+  answer.give({});
+  await settle();
+  expect(ch.writes.filter((w) => w.op === "apply").map((w) => w.environment)).toEqual([
+    { wsl: { distro: UBUNTU, user: "me" } },
+  ]);
+  await page.pick(DEBIAN);
+});
+
+test("Claude Code: in privacy mode, WSL users' names are masked", async () => {
+  const ch = channel({ wsl: { distros: [UBUNTU], users: ["alice"] } });
+  const page = await mount(() => <ClaudeCodePage />, ch.invoke, undefined, [], { privacy: true });
+  await page.pick("WSL");
+  await page.pick(UBUNTU);
+  expect(page.text()).toContain("User");
+  expect(page.text()).not.toContain("alice");
 });

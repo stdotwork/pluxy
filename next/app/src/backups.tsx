@@ -4,15 +4,18 @@
 // backup-diff, backup-create, backup-restore, backup-delete). The bytes stay in the app's vault:
 // this page gets each version's ID, when it was saved, its files' paths, presence and sizes, and
 // the names of the settings a restore would add, change or remove, never a value. Each write asks
-// in the add-on's own confirmation window, so the page asks nothing before it.
+// in the add-on's own confirmation window, so the page asks nothing before it; leaving the page
+// while that window is open withdraws it (each write's call carries a ticket for program_cancel).
+// Paths and errors are masked in privacy mode.
 
-import { useRef, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import type { Reply } from "../../ui/kit/host";
 import { strings } from "../../ui/kit/strings";
 import { Button, Card, Choices, Facts, Notice, useAction, useLoad, whenText } from "../../ui/kit/ui";
 import { cancelled } from "./clientPage";
 import type { Selection } from "./environment";
 import { reply } from "./host";
+import { nativeReply, useShown } from "./toolWords";
 
 const t = strings("backups", {
   title: "Backup and restore",
@@ -59,6 +62,10 @@ interface Diff {
   }[];
 }
 
+let tickets = 0;
+/** A fresh ticket for a backup write's program_call. */
+const newTicket = () => `backups-${Date.now().toString(36)}-${++tickets}`;
+
 const fill = (s: string, v: Record<string, string | number>) =>
   s.replace(/\{(\w+)\}/g, (_, k) => String(v[k] ?? ""));
 
@@ -67,7 +74,8 @@ const fill = (s: string, v: Record<string, string | number>) =>
  * environment, when given, is the environment every call goes to (environment.ts: null for this
  * computer, or a WSL distribution and user); pages without one leave it out. bare leaves out the
  * card and its title, for a page that puts the browser under a heading of its own (the pages on the
- * shared parts, under Settings file, key and backups). */
+ * shared parts, under Settings file, key and backups). onBusy hears when a write starts and ends,
+ * so the page can hold its file choice meanwhile. */
 export function Backups(props: {
   pkg: string;
   pins: () => Promise<unknown[] | undefined>;
@@ -75,14 +83,32 @@ export function Backups(props: {
   onChange?: () => void;
   environment?: Selection;
   bare?: boolean;
+  onBusy?: (busy: boolean) => void;
 }) {
-  const tool = <T,>(op: string, input: Record<string, unknown>) =>
-    reply<T>("program_call", {
-      package: props.pkg,
-      op,
-      input,
-      ...(props.environment !== undefined ? { environment: props.environment } : {}),
-    });
+  const shown = useShown();
+  const tickets = useRef(new Set<string>());
+  useEffect(() => {
+    const open = tickets.current;
+    return () => {
+      for (const ticket of open) reply("program_cancel", { ticket });
+      open.clear();
+    };
+  }, []);
+  /** A call of the add-on; a write's (ticket set) is withdrawn if the page goes away first. */
+  const tool = async <T,>(op: string, input: Record<string, unknown>, ticket?: string) => {
+    if (ticket) tickets.current.add(ticket);
+    try {
+      return await nativeReply<T>("program_call", {
+        package: props.pkg,
+        op,
+        input,
+        ...(ticket ? { ticket } : {}),
+        ...(props.environment !== undefined ? { environment: props.environment } : {}),
+      });
+    } finally {
+      if (ticket) tickets.current.delete(ticket);
+    }
+  };
   const list = useLoad(() => tool<{ backups: Version[]; keep: number }>("backup-list", {}));
   const [selected, setSelected] = useState<string>();
   const [diff, setDiff] = useState<Diff>();
@@ -121,18 +147,26 @@ export function Backups(props: {
     const targets = await props.pins();
     if (!targets)
       return { status: 400, error: { code: "refused", message: "the settings file could not be read" } };
-    return tool<T>(op, { ...extra, targets });
+    return tool<T>(op, { ...extra, targets }, newTicket());
   };
   const versions = list.data?.backups ?? [];
   const version = versions.find((v) => v.id === selected);
-  const busy = create.busy || write.busy || remove.busy || props.disabled;
+  const writing = create.busy || write.busy || remove.busy;
+  const busy = writing || props.disabled;
+  const onBusy = useRef(props.onBusy);
+  onBusy.current = props.onBusy;
+  useEffect(() => onBusy.current?.(writing), [writing]);
+  // Gone while a write waits: the page holds its choices no longer.
+  useEffect(() => () => onBusy.current?.(false), []);
   // The exact time: versions are told apart by it.
   const when = (v: Version) =>
     (Number.isFinite(v.created) && whenText(new Date(v.created).toISOString(), "exact")) || String(v.created);
 
   // A cancel in the add-on's window is no error.
-  const shown = (e: string | undefined) => (e && !cancelled(e) ? e : undefined);
-  const errors = [list.error, shown(create.error), shown(write.error), shown(remove.error)].filter(Boolean);
+  const said = (e: string | undefined) => (e && !cancelled(e) ? e : undefined);
+  const errors = [list.error, said(create.error), said(write.error), said(remove.error)]
+    .filter((e): e is string => !!e)
+    .map((e) => shown.text(e));
 
   const body = (
     <div class="backups">
@@ -177,19 +211,23 @@ export function Backups(props: {
       {version && (
         <div key={version.id} class="backups-version">
           <Facts rows={[[t("id"), when(version)]]} />
-          {inspect.error && <Notice tone="danger">{inspect.error}</Notice>}
+          {inspect.error && <Notice tone="danger">{shown.text(inspect.error)}</Notice>}
           {version.files.map((f, i) => {
             const d = diff?.files[i];
             return (
               <div key={f.target} class="backups-file">
-                <Facts rows={[[f.target, f.exists ? fill(t("present"), { size: f.size }) : t("absent")]]} />
+                <Facts
+                  rows={[
+                    [shown.path(f.target), f.exists ? fill(t("present"), { size: f.size }) : t("absent")],
+                  ]}
+                />
                 {d && !d.same && !d.now_exists && <p class="muted">{t("created")}</p>}
                 {d && !d.same && !d.readable && <p class="muted">{t("unreadable")}</p>}
                 {d && d.changes.length > 0 && (
                   <ul>
                     {d.changes.map((c) => (
                       <li key={JSON.stringify([c.restore, c.path])}>
-                        {t(c.restore)} <code>{c.path.join(".")}</code>
+                        {t(c.restore)} <code>{shown.text(c.path.join("."))}</code>
                       </li>
                     ))}
                     {d.more > 0 && <li>{fill(t("more"), { count: d.more })}</li>}
@@ -213,7 +251,7 @@ export function Backups(props: {
             <Button
               busy={remove.busy}
               disabled={busy}
-              onClick={() => remove.run(() => tool("backup-delete", { backup: version.id }))}
+              onClick={() => remove.run(() => tool("backup-delete", { backup: version.id }, newTicket()))}
             >
               {t("delete")}
             </Button>

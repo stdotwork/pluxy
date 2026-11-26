@@ -45,6 +45,7 @@ import {
 import type { AgentPage } from "./easyMode";
 import { inHome } from "./environment";
 import { EnvironmentBlock, LinuxBuildOffer, PathText, plainPath, useEnvironment } from "./environmentBlock";
+import { useShown } from "./toolWords";
 
 const t = strings("claudeCode", {
   title: "Claude Code",
@@ -115,6 +116,7 @@ export function ClaudeCodePage() {
     },
   });
   const start = useStart({ s, client: CLIENT, folder: true });
+  const shown = useShown();
   const listId = useId();
   const served = servedNames(s);
   const edit = (patch: Partial<Form>) => {
@@ -159,13 +161,13 @@ export function ClaudeCodePage() {
       <ToolTop
         s={s}
         start={start}
-        facts={[s.found?.version, path]}
-        path={path}
+        facts={[s.found?.version]}
+        paths={[path]}
         held={held}
         form={input}
         lines={<LinuxBuildOffer error={s.failed} pkg={PACKAGE} record={env.record} onInstalled={s.load} />}
       />
-      <EnvironmentBlock env={env} tool={t("title")} />
+      <EnvironmentBlock env={env} tool={t("title")} disabled={s.locked} />
       {s.addon === "on" && s.settings && !refused && (
         <Section title={t("models")} aside={<SaveButton s={s} dirty={dirty} form={input} held={held} />}>
           <ModelList id={listId} s={s} />
@@ -240,7 +242,11 @@ export function ClaudeCodePage() {
           key={JSON.stringify(env.selection)}
           s={s}
           start={start}
-          folderNote={env.selection ? t("folderWsl", { example: inHome(home ?? "~", "project") }) : undefined}
+          folderNote={
+            env.selection
+              ? t("folderWsl", { example: shown.path(inHome(home ?? "~", "project")) })
+              : undefined
+          }
           extra={<LinuxBuildOffer error={start.error} pkg={PACKAGE} record={env.record} />}
         />
       )}
@@ -267,6 +273,7 @@ export function ClaudeCodePage() {
                   value={file}
                   onInput={setFile}
                   distro={distro}
+                  disabled={s.locked}
                 />
               )}
               {where === "root" && (
@@ -277,8 +284,9 @@ export function ClaudeCodePage() {
                     value={root}
                     onInput={setRoot}
                     distro={distro}
+                    disabled={s.locked}
                   />
-                  <PathText label={t("inRoot")} value={inRoot} onInput={setInRoot} />
+                  <PathText label={t("inRoot")} value={inRoot} onInput={setInRoot} disabled={s.locked} />
                 </>
               )}
             </FileChoice>
@@ -289,7 +297,8 @@ export function ClaudeCodePage() {
                 bare
                 pkg={PACKAGE}
                 pins={async () => s.preview?.targets}
-                disabled={s.busy || env.pending}
+                disabled={!s.writable}
+                onBusy={s.setOutside}
                 onChange={s.load}
                 environment={env.selection}
               />

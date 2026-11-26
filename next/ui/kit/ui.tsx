@@ -767,6 +767,8 @@ export function Choices<V extends string>(props: {
   value: V | undefined;
   choices: Choice<V>[];
   onChange: (v: V) => void;
+  /** Every choice shown but none can be picked, such as while what it chooses is in use. */
+  disabled?: boolean;
 }) {
   const id = useId();
   return (
@@ -782,6 +784,7 @@ export function Choices<V extends string>(props: {
               name={id}
               value={c.value}
               checked={props.value === c.value}
+              disabled={props.disabled}
               onChange={() => props.onChange(c.value)}
             />
             <span>

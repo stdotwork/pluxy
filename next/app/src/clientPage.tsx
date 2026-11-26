@@ -13,8 +13,6 @@ import type { SetupClient } from "../../ui/kit/api";
 import type { Reply } from "../../ui/kit/host";
 import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { toolState } from "../../ui/kit/parts/toolRow";
-import { usePrivacy } from "../../ui/kit/privacy";
-import { shownPath } from "../../ui/kit/save";
 import { strings } from "../../ui/kit/strings";
 import { Button, Card, Choices, Notice, StateBadge, useAction, useKit, useLoad } from "../../ui/kit/ui";
 import { folderWait } from "./clientHelp";
@@ -24,6 +22,7 @@ import { historyKey } from "./environment";
 import { type Environment, PathText, plainPath } from "./environmentBlock";
 import { type Connection, connectionGet, reply } from "./host";
 import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
+import { nativeReply, plainReply, useShown } from "./toolWords";
 
 const t = strings("toolPage", {
   reading: "Reading {tool}'s settings…",
@@ -40,6 +39,11 @@ const t = strings("toolPage", {
   addon: "Changing {tool}'s settings needs the {tool} add-on.",
   safeMode: "Safe mode is on, so tool add-ons are paused.",
   readFailed: "Could not read {tool}'s settings. {reason}",
+  stale:
+    "Could not read {tool}'s settings again, so what this page shows may be out of date. Nothing is written until they are read. {reason}",
+  addonsUnread: "Could not check the {tool} add-on, so nothing is read yet. {reason}",
+  noPluxy: "Connect waits until the app is connected to pluxy.",
+  keyKept: "The key made for {tool} is kept: Connect uses it next time.",
   waiting: "Answer the confirmation window to go on.",
   done: "Done. If {tool} is running, start it again so it reads the new settings.",
   keyFailed: "Could not make a key for {tool}. {reason}",
@@ -169,9 +173,9 @@ const NOT_APPLIED = "is not applied to these targets";
 /**
  * How an add-on (a tool package on this device) stands for a page: on, missing, off (installed
  * but turned off, or not yet allowed for this release), or paused by safe mode. loading until the
- * catalog is read.
+ * catalog is read; unread when it could not be read, so nothing about the add-on is known.
  */
-export type AddonState = "loading" | "on" | "missing" | "off" | "safe";
+export type AddonState = "loading" | "unread" | "on" | "missing" | "off" | "safe";
 
 export function addonState(catalog: DeviceCatalog | undefined, pkg: string): AddonState {
   if (!catalog) return "loading";
@@ -182,10 +186,10 @@ export function addonState(catalog: DeviceCatalog | undefined, pkg: string): Add
   return "on";
 }
 
-/** This device's catalog, read again when the native side says it changed. A catalog that cannot
- * be read counts every add-on as on, so the page's own read says what is wrong. */
+/** This device's catalog, read again when the native side says it changed. unread: it could not be
+ * read and was never read before, so nobody knows whether an add-on is on. */
 function useCatalog() {
-  const catalog = useLoad(device.list);
+  const catalog = useLoad(() => device.list().then(plainReply));
   useDeviceChanged(catalog.reload);
   const unread = catalog.phase === "failed" && !catalog.data;
   return { catalog, data: unread ? undefined : catalog.data, unread };
@@ -275,11 +279,14 @@ export async function readExtraTools(
       let settings: ReadBack | undefined;
       let target: string | undefined;
       if (addonState(catalog, x.pkg) === "on") {
-        const r = await reply<ToolPreview & { settings?: ReadBack; config?: ReadBack }>("program_call", {
-          package: x.pkg,
-          op: "preview",
-          input: core ? { base_url: core } : {},
-        });
+        const r = await nativeReply<ToolPreview & { settings?: ReadBack; config?: ReadBack }>(
+          "program_call",
+          {
+            package: x.pkg,
+            op: "preview",
+            input: core ? { base_url: core } : {},
+          },
+        );
         settings = r.body?.settings ?? r.body?.config;
         target = r.body?.targets?.[0]?.target;
       }
@@ -302,6 +309,10 @@ export async function readExtraTools(
 }
 
 // ---- the page's state and its writes ---------------------------------------------------------
+
+let tickets = 0;
+/** A fresh ticket for a write's program_call, so program_cancel can withdraw it. */
+const newTicket = () => `tool-page-${Date.now().toString(36)}-${++tickets}`;
 
 /** A call to the page's add-on, in the page's environment. */
 export type ToolCall = <T>(op: string, input: Record<string, unknown>) => Promise<Reply<T>>;
@@ -329,19 +340,23 @@ export function useToolSetup<P extends ToolPreview>(o: {
   onRead: (p: P) => void;
 }) {
   const { api } = useKit();
-  const { catalog, data } = useCatalog();
-  const unread = catalog.phase === "failed" && !catalog.data;
-  const addon = unread ? "on" : addonState(data, o.pkg);
-  const launcher = unread ? "on" : addonState(data, LAUNCHER);
+  const { catalog, data, unread } = useCatalog();
+  const addon: AddonState = unread ? "unread" : addonState(data, o.pkg);
+  const launcher: AddonState = unread ? "unread" : addonState(data, LAUNCHER);
   const [conn, setConn] = useState<Connection | null>();
   useEffect(() => {
     connectionGet().then(setConn, () => setConn(null));
   }, []);
   const core = conn?.signed_in ? conn.target : undefined;
-  const secrets = useLoad(() => reply<{ secrets?: Secret[] }>("vault_secrets"));
+  const secrets = useLoad(() => nativeReply<{ secrets?: Secret[] }>("vault_secrets"));
   const [chosen, setChosen] = useState("");
-  const keys = usableKeys(o.pkg, core, secrets.data?.secrets);
-  const key = keyFor(o.pkg, core, secrets.data?.secrets, chosen);
+  // The key Connect made last, until the vault's list has it: a second press meanwhile uses it
+  // instead of making another.
+  const [made, setMade] = useState<Secret>();
+  const listed = secrets.data?.secrets;
+  const known = made && !listed?.some((k) => k.id === made.id) ? [...(listed ?? []), made] : listed;
+  const keys = usableKeys(o.pkg, core, known);
+  const key = keyFor(o.pkg, core, known, chosen);
   // The models pluxy's accounts serve, read once as the page opens.
   const served = useLoad(() => api.servedModels());
   // pluxy's own look at this computer: only when pluxy runs here, and for this computer's files.
@@ -362,13 +377,9 @@ export function useToolSetup<P extends ToolPreview>(o: {
   }, [local]);
   const found = local && !o.env?.selection ? scan : undefined;
 
+  const environment = o.env ? { environment: o.env.selection } : {};
   const call: ToolCall = (op, input) =>
-    reply("program_call", {
-      package: o.pkg,
-      op,
-      input,
-      ...(o.env ? { environment: o.env.selection } : {}),
-    });
+    nativeReply("program_call", { package: o.pkg, op, input, ...environment });
 
   // ---- the reading
   const selected = JSON.stringify([o.env?.mode ?? null, o.env?.selection ?? null, o.selection]);
@@ -392,23 +403,56 @@ export function useToolSetup<P extends ToolPreview>(o: {
   };
   const connKnown = conn !== undefined;
   const pending = !!o.env?.pending;
-  // The default file is read once for each selection it is shown for: as the page opens, and again
-  // in another environment. A reload of what the environment section knows reads nothing again.
+  // The default file is read once each time it is shown: as the page opens, in another
+  // environment, and again when the person comes back to it from another file. A reload of what
+  // the environment section knows reads nothing again.
   const autoRead = useRef<string | undefined>(undefined);
   useEffect(() => {
+    if (!o.isDefault) autoRead.current = undefined;
     if (!connKnown || addon !== "on" || pending || !o.isDefault || autoRead.current === selected) return;
     autoRead.current = selected;
     load();
   }, [connKnown, addon, pending, selected]);
   const reading = readingKey === selected;
   const failed = readError?.key === selected ? readError.message : undefined;
+  // A reading kept from before a read of the same file failed: it may be out of date, so writes
+  // wait for a good one.
+  const stale = !!preview && failed !== undefined;
   const settings = preview ? o.settings(preview) : undefined;
   const state = settings ? readingState(found?.installed, settings) : undefined;
 
-  // ---- the writes: one at a time, each answered in the add-on's confirmation
+  // ---- the writes: one at a time, each answered in the add-on's confirmation. A write goes to the
+  // file the page shows as it is sent; while it waits, the file and environment choices are locked
+  // (locked), and leaving the page withdraws a confirmation still open (each write call carries a
+  // ticket that program_cancel cancels).
+  const live = useRef(true);
+  const tickets = useRef(new Set<string>());
+  useEffect(() => {
+    live.current = true;
+    const open = tickets.current;
+    return () => {
+      live.current = false;
+      for (const ticket of open) reply("program_cancel", { ticket });
+      open.clear();
+    };
+  }, []);
+  /** A call that writes: cancelled with its confirmation if the page goes away first. */
+  const writeCall: ToolCall = async (op, input) => {
+    const ticket = newTicket();
+    tickets.current.add(ticket);
+    try {
+      return await nativeReply("program_call", { package: o.pkg, op, input, ticket, ...environment });
+    } finally {
+      tickets.current.delete(ticket);
+    }
+  };
+  /** Whether the page is still open on the file it showed when a write began at. */
+  const still = (at: string) => live.current && isCurrent(at);
   const [working, setWorking] = useState<string>();
+  const [outside, setOutside] = useState(false);
   const [error, setError] = useState<string>();
   const [done, setDone] = useState(false);
+  const [kept, setKept] = useState(false);
   const busyNow = useRef(false);
   /** Runs one write; step gives the error to show, or nothing (done, or cancelled quietly). */
   const run = async (name: string, step: () => Promise<string | undefined>) => {
@@ -417,8 +461,10 @@ export function useToolSetup<P extends ToolPreview>(o: {
     setWorking(name);
     setError(undefined);
     setDone(false);
+    setKept(false);
     const out = await step();
     busyNow.current = false;
+    if (!live.current) return;
     setWorking(undefined);
     if (out) setError(out);
   };
@@ -432,52 +478,74 @@ export function useToolSetup<P extends ToolPreview>(o: {
   /** Connect, Update and Save: a key for the tool when it has none here, then its settings. */
   const connect = (input: Record<string, unknown>) =>
     run("connect", async () => {
-      if (!preview) return undefined;
+      const at = selected;
+      const shown = preview;
+      if (!shown || stale) return undefined;
       let id = key?.id;
+      let fresh = false;
       if (!id) {
-        const made = await reply<Secret>("client_key_capture", { label: o.name, client: o.pkg });
-        if (!made.body) {
+        const capture = await nativeReply<Secret>("client_key_capture", { label: o.name, client: o.pkg });
+        if (!capture.body) {
           secrets.reload();
-          const m = made.error?.message ?? "";
+          const m = capture.error?.message ?? "";
           return cancelled(m) ? undefined : t("keyFailed", { tool: o.name, reason: sentence(m) });
         }
-        id = made.body.id;
+        id = capture.body.id;
+        fresh = true;
+        setMade(capture.body);
         setChosen(id);
+        secrets.reload();
+        // The person may have left the page while the key's window was open: the settings shown
+        // when Connect was pressed are no longer the ones on screen, so nothing is written.
+        if (!still(at)) {
+          setKept(true);
+          return undefined;
+        }
       }
-      const r = await call("apply", { targets: preview.targets, base_url: core, key: id, ...input });
+      const r = await writeCall("apply", { targets: shown.targets, base_url: core, key: id, ...input });
       secrets.reload();
+      if (!still(at)) return undefined;
       const e = failure(r);
-      if (e !== undefined) return e;
+      if (e !== undefined) {
+        setKept(fresh);
+        return e;
+      }
       setDone(true);
       load();
       return undefined;
     });
   const undo = (op: "clear" | "restore") =>
     run(op, async () => {
-      if (!preview) return undefined;
-      const r = await call(op, { targets: preview.targets });
+      const at = selected;
+      if (!preview || stale) return undefined;
+      const r = await writeCall(op, { targets: preview.targets });
+      if (!still(at)) return undefined;
       const e = failure(r, (m) => (m.includes(NOT_APPLIED) ? t("noBackup") : m));
       if (e !== undefined) return e;
       load();
       return undefined;
     });
-  /** A write of the page's own (Codex's import, Claude Desktop's folder); after runs once it worked. */
-  const write = (name: string, step: () => Promise<Reply<unknown>>, after: () => void = load) =>
+  /** A write of the page's own (Claude Desktop's folder), made with the call it is given (which
+   * carries a ticket); after runs once it worked, while the page still shows the same file. */
+  const write = (name: string, step: (call: ToolCall) => Promise<Reply<unknown>>, after: () => void = load) =>
     run(name, async () => {
-      const e = failure(await step());
+      const at = selected;
+      const r = await step(writeCall);
+      if (!still(at)) return undefined;
+      const e = failure(r);
       if (e !== undefined) return e;
       after();
       return undefined;
     });
   const turnOn = () =>
     run("addon", async () => {
-      const e = failure(await device.setEnabled(o.pkg, true));
+      const e = failure(plainReply(await device.setEnabled(o.pkg, true)));
       catalog.reload();
       return e;
     });
   const enterKey = () =>
     run("key", async () => {
-      const r = await reply<Secret>("client_key_enter", {
+      const r = await nativeReply<Secret>("client_key_enter", {
         label: t("enteredLabel", { tool: o.name }),
         client: o.pkg,
       });
@@ -485,6 +553,9 @@ export function useToolSetup<P extends ToolPreview>(o: {
       if (r.body) setChosen(r.body.id);
       return failure(r);
     });
+  const busy = !!working || reading || outside;
+  // Why Connect, Update or Save cannot be pressed now, apart from the page's own form.
+  const blocked = connKnown && !core ? [t("noPluxy")] : [];
 
   return {
     name: o.name,
@@ -492,6 +563,8 @@ export function useToolSetup<P extends ToolPreview>(o: {
     env: o.env,
     addon,
     launcher,
+    retryAddons: catalog.reload,
+    addonsError: unread ? catalog.error : undefined,
     turnOn,
     conn,
     core,
@@ -508,13 +581,23 @@ export function useToolSetup<P extends ToolPreview>(o: {
     state,
     reading,
     failed,
+    stale,
     load,
     canRead: o.canRead && addon === "on" && !pending && connKnown,
     isDefault: o.isDefault,
     working,
-    busy: !!working || reading,
+    busy,
+    /** A write or its confirmation is under way (the page's own, or the backups'): the file and
+     * environment choices are locked until it ends. */
+    locked: !!working || outside,
+    /** The backups tell the page while one of their writes waits. */
+    setOutside,
+    /** Whether a write can start: a reading of the file shown, not out of date, nothing under way. */
+    writable: !busy && !!preview && !stale && !o.env?.pending,
+    blocked,
     error,
     done,
+    kept,
     setDone,
     connect,
     disconnect: () => undo("clear"),
@@ -572,32 +655,41 @@ export function LinkButton(props: { href: string; primary?: boolean; children: C
 
 /**
  * The head of a page on the shared parts, from its setup s: start is the page's Start, facts the
- * version and file, path the file as the lines name it, held the reasons Connect is held (each a
- * line), form the settings Connect writes. failedRead gives the page's own words and button for a
- * read that failed in a way it knows (Claude Desktop's missing folder); lines adds the page's own.
+ * tool's own facts (its version), paths the files the page shows (masked in privacy mode, after
+ * the facts and in the lines that name them), held the reasons the page's form holds Connect
+ * (each a line), form the settings Connect writes. failedRead gives the page's own words and
+ * button for a read that failed in a way it knows (Claude Desktop's missing folder); lines adds
+ * the page's own.
  */
 export function ToolTop(props: {
   s: ToolSetup;
   start?: Start;
   facts: (string | undefined)[];
-  path: string;
+  paths: string[];
   held?: string[];
   form: () => Record<string, unknown>;
   failedRead?: { line: string; action: ComponentChildren };
   lines?: ComponentChildren;
 }) {
   const { s } = props;
-  const p = usePrivacy();
+  const shown = useShown();
   const tool = s.name;
-  const held = props.held ?? [];
+  const path = props.paths.map(shown.path).join(", ");
+  // Every reason Connect, Update or Save is held, each said where the button is.
+  const held = [...s.blocked, ...(props.held ?? [])];
   const busy = s.busy || !!s.env?.pending;
-  const canWrite = !busy && !!s.core && !!s.preview;
+  const canWrite = s.writable && !!s.core;
   const lines: ComponentChildren[] = [];
-  const actions: ComponentChildren[] = [];
+  let actions: ComponentChildren[] = [];
   let state: string | undefined;
   const readButton = (
     <Button key="read" variant="primary" onClick={s.load} disabled={busy || !s.canRead}>
       {t("readFile")}
+    </Button>
+  );
+  const tryAgain = (
+    <Button key="again" variant="primary" onClick={s.load} disabled={busy || !s.canRead}>
+      {t("tryAgain")}
     </Button>
   );
   const connectButton = (label: string) => (
@@ -616,7 +708,18 @@ export function ToolTop(props: {
       {t("disconnect")}
     </Button>
   );
-  if (s.addon !== "on" && s.addon !== "loading") {
+  if (s.addon === "unread") {
+    lines.push(
+      <Notice key="addons" tone="danger">
+        {t("addonsUnread", { tool, reason: sentence(shown.text(s.addonsError) ?? "") })}
+      </Notice>,
+    );
+    actions.push(
+      <Button key="addons" variant="primary" onClick={s.retryAddons}>
+        {t("tryAgain")}
+      </Button>,
+    );
+  } else if (s.addon !== "on" && s.addon !== "loading") {
     lines.push(<p key="addon">{s.addon === "safe" ? t("safeMode") : t("addon", { tool })}</p>);
     actions.push(
       s.addon === "off" ? (
@@ -642,14 +745,10 @@ export function ToolTop(props: {
     } else {
       lines.push(
         <Notice key="failed" tone="danger">
-          {t("readFailed", { tool, reason: sentence(p.text(s.failed) ?? "") })}
+          {t("readFailed", { tool, reason: sentence(shown.text(s.failed)) })}
         </Notice>,
       );
-      actions.push(
-        <Button key="again" variant="primary" onClick={s.load} disabled={busy || !s.canRead}>
-          {t("tryAgain")}
-        </Button>,
-      );
+      actions.push(tryAgain);
     }
   } else if (!s.settings) {
     if (s.reading || s.addon === "loading" || (s.isDefault && !s.env?.pending)) {
@@ -667,18 +766,18 @@ export function ToolTop(props: {
     const st = s.settings;
     state = s.state;
     if (st.state === "refused") {
-      lines.push(<p key="refused">{t("refused", { path: props.path, tool })}</p>);
+      lines.push(<p key="refused">{t("refused", { path, tool })}</p>);
       if (st.reason) {
         lines.push(
           <p key="why" class="muted">
-            {t("why", { reason: p.text(st.reason) ?? "" })}
+            {t("why", { reason: shown.text(st.reason) })}
           </p>,
         );
       }
       lines.push(<p key="fix">{t("refusedFix")}</p>);
       actions.push(readButton);
       actions.push(
-        <Button key="restore" busy={s.working === "restore"} onClick={s.restore} disabled={busy}>
+        <Button key="restore" busy={s.working === "restore"} onClick={s.restore} disabled={!s.writable}>
           {t("restoreBackup")}
         </Button>,
       );
@@ -702,7 +801,7 @@ export function ToolTop(props: {
       const address = st.base_url && originOf(st.base_url) !== originOf(s.core) ? st.base_url : undefined;
       lines.push(
         <p key="update">
-          {address ? t("elsewhere", { tool, address: p.text(address) ?? "" }) : t("partial", { tool })}
+          {address ? t("elsewhere", { tool, address: shown.text(address) }) : t("partial", { tool })}
         </p>,
       );
       actions.push(connectButton(t("update", { tool })));
@@ -712,7 +811,15 @@ export function ToolTop(props: {
       if (state === "not_installed") lines.push(<p key="missing">{t("notInstalled", { tool })}</p>);
       actions.push(connectButton(t("connect", { tool })));
     }
-    if (st.state === "not-configured" || st.state === "needs-update") {
+    if (s.stale) {
+      // The reading shown may be out of date: it says so, and only reading again is offered.
+      lines.push(
+        <Notice key="stale" tone="danger">
+          {t("stale", { tool, reason: sentence(shown.text(s.failed ?? "")) })}
+        </Notice>,
+      );
+      actions = [tryAgain];
+    } else if (st.state === "not-configured" || st.state === "needs-update") {
       for (const h of held) {
         lines.push(
           <p key={h} class="tool-held">
@@ -723,14 +830,15 @@ export function ToolTop(props: {
     }
   }
   if (props.lines) lines.push(props.lines);
-  if (s.working && s.working !== "key") lines.push(<p key="waiting">{t("waiting")}</p>);
+  if (s.locked && s.working !== "key") lines.push(<p key="waiting">{t("waiting")}</p>);
   if (s.error) {
     lines.push(
       <Notice key="error" tone="danger">
-        {p.text(s.error)}
+        {shown.text(s.error)}
       </Notice>,
     );
   }
+  if (s.kept && !s.working) lines.push(<p key="kept">{t("keyKept", { tool })}</p>);
   if (s.done && !s.working) {
     lines.push(
       <Notice key="done" tone="ok">
@@ -742,7 +850,7 @@ export function ToolTop(props: {
     <ToolHead
       name={tool}
       state={state}
-      facts={props.facts}
+      facts={[...props.facts, path]}
       lines={lines.length > 0 ? lines : undefined}
       actions={actions.length > 0 ? actions : undefined}
     />
@@ -773,15 +881,24 @@ export function SaveButton(props: {
 }) {
   const { s } = props;
   if (s.settings?.state !== "configured" || !props.dirty) return null;
+  // Every reason Save is held, said beside it (the head says why for Connect and Update).
+  const held = s.stale ? [] : [...s.blocked, ...(props.held ?? [])];
   return (
-    <Button
-      variant="primary"
-      busy={s.working === "connect"}
-      onClick={() => s.connect(props.form())}
-      disabled={s.busy || !s.core || (props.held?.length ?? 0) > 0}
-    >
-      {t("save")}
-    </Button>
+    <span class="tool-save">
+      {held.map((h) => (
+        <small key={h} class="tool-held">
+          {h}
+        </small>
+      ))}
+      <Button
+        variant="primary"
+        busy={s.working === "connect"}
+        onClick={() => s.connect(props.form())}
+        disabled={!s.writable || !s.core || held.length > 0}
+      >
+        {t("save")}
+      </Button>
+    </span>
   );
 }
 
@@ -888,9 +1005,9 @@ export function useStart(o: {
   const [override, setOverride] = useState("");
   const [terminal, setTerminal] = useState("automatic");
   const on = s.launcher === "on";
-  const state = useLoad(() => reply<{ history: Record<string, string[]> }>("launcher_state"));
+  const state = useLoad(() => nativeReply<{ history: Record<string, string[]> }>("launcher_state"));
   const terminals = useLoad(() =>
-    reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
+    nativeReply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
   );
   useDeviceChanged(terminals.reload);
   const action = useAction(state.reload);
@@ -902,7 +1019,7 @@ export function useStart(o: {
     action.run(async () => {
       const r = await s.call<Record<string, unknown>>("recipe", recipe);
       if (!r.body) return r;
-      return reply("launcher_launch", {
+      return nativeReply("launcher_launch", {
         launch: { ...r.body, ...launch },
         ...(s.env ? { environment: sel } : {}),
       });
@@ -955,6 +1072,7 @@ export function StartSection(props: {
   extra?: ComponentChildren;
 }) {
   const { s, start } = props;
+  const shown = useShown();
   const tool = s.name;
   const ids = { folder: useId(), terminal: useId() };
   if (!start.on) {
@@ -993,7 +1111,7 @@ export function StartSection(props: {
                 <option value="">{t("recentPick")}</option>
                 {start.recent.map((r) => (
                   <option key={r} value={r}>
-                    {r}
+                    {shown.path(r)}
                   </option>
                 ))}
               </select>
@@ -1034,7 +1152,7 @@ export function StartSection(props: {
         <Notice tone="warn">{launcherProblem(start.terminals.error)}</Notice>
       )}
       {start.error && !cancelled(start.error) && (
-        <Notice tone="danger">{launcherProblem(start.error)}</Notice>
+        <Notice tone="danger">{shown.text(launcherProblem(start.error))}</Notice>
       )}
       {props.extra}
     </Section>
@@ -1051,7 +1169,8 @@ export interface FileOption<V extends string> {
 }
 
 /** Which file: the default (with its path), or files the person names (the fields, children),
- * and Read this file. */
+ * and Read this file. The choice is locked while a write waits (s.locked); the page locks its
+ * fields the same way. */
 export function FileChoice<V extends string>(props: {
   s: ToolSetup;
   value: V;
@@ -1060,9 +1179,16 @@ export function FileChoice<V extends string>(props: {
   children?: ComponentChildren;
 }) {
   const { s } = props;
+  const shown = useShown();
   return (
     <div class="tool-files">
-      <Choices label={t("whichFile")} value={props.value} choices={props.options} onChange={props.onChange} />
+      <Choices
+        label={t("whichFile")}
+        value={props.value}
+        choices={props.options.map((o) => ({ ...o, note: o.note && shown.path(o.note) }))}
+        onChange={props.onChange}
+        disabled={s.locked}
+      />
       {props.children}
       <div>
         <Button onClick={s.load} disabled={s.busy || !s.canRead}>
@@ -1089,7 +1215,7 @@ export function FileKeyBackups(props: {
   backups: ComponentChildren;
 }) {
   const { s, start } = props;
-  const p = usePrivacy();
+  const shown = useShown();
   const tool = s.name;
   const refused = s.settings?.state === "refused";
   const [open, setOpen] = useState(false);
@@ -1098,7 +1224,7 @@ export function FileKeyBackups(props: {
   }, [refused]);
   const ids = { program: useId() };
   const key = s.key;
-  const masked = (k: Secret) => (k.client_key?.masked ? ` · ${p.text(k.client_key.masked)}` : "");
+  const masked = (k: Secret) => (k.client_key?.masked ? ` · ${shown.text(k.client_key.masked)}` : "");
   return (
     <details class="tool-more" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>{t("more")}</summary>
@@ -1131,8 +1257,8 @@ export function FileKeyBackups(props: {
               value={key?.id}
               choices={s.keys.map((k) => ({
                 value: k.id,
-                label: p.text(k.label) ?? "",
-                note: k.client_key?.masked ? p.text(k.client_key.masked) : undefined,
+                label: shown.text(k.label),
+                note: k.client_key?.masked ? shown.text(k.client_key.masked) : undefined,
               }))}
               onChange={s.setChosen}
             />
@@ -1141,7 +1267,7 @@ export function FileKeyBackups(props: {
             {t("useExisting")}
           </Button>
         </span>
-        {s.secrets.error && <Notice tone="danger">{p.text(s.secrets.error)}</Notice>}
+        {s.secrets.error && <Notice tone="danger">{shown.text(s.secrets.error)}</Notice>}
       </SettingRow>
       {s.preview && s.settings && !refused && (
         <SettingRow name={t("changes")}>
@@ -1149,20 +1275,20 @@ export function FileKeyBackups(props: {
             <dt>{t("writesTo")}</dt>
             <dd class="mono">
               {s.preview.targets.map((x) => (
-                <span key={x.target}>{shownPath(x.target, p.on)}</span>
+                <span key={x.target}>{shown.path(x.target)}</span>
               ))}
             </dd>
             <dt>{t("addressNow")}</dt>
-            <dd class="mono">{s.settings.base_url ? p.text(s.settings.base_url) : t("nothing")}</dd>
+            <dd class="mono">{s.settings.base_url ? shown.text(s.settings.base_url) : t("nothing")}</dd>
             <dt>{t("addressAfter")}</dt>
-            <dd class="mono">{s.core ? p.text(s.core) : t("nothing")}</dd>
+            <dd class="mono">{s.core ? shown.text(s.core) : t("nothing")}</dd>
             <dt>{t("keyInFile")}</dt>
             <dd>{s.settings.key_set ? t("yes") : t("no")}</dd>
           </dl>
         </SettingRow>
       )}
       <SettingRow name={t("restoreBackup")} description={t("restoreNote")}>
-        <Button busy={s.working === "restore"} onClick={s.restore} disabled={s.busy || !s.preview}>
+        <Button busy={s.working === "restore"} onClick={s.restore} disabled={!s.writable}>
           {t("restoreBackup")}
         </Button>
       </SettingRow>
@@ -1186,6 +1312,7 @@ export function Text(props: {
   onInput: (v: string) => void;
   list?: string;
   area?: boolean;
+  disabled?: boolean;
 }) {
   const id = useId();
   const input = (e: { currentTarget: { value: string } }) => props.onInput(e.currentTarget.value);
@@ -1193,7 +1320,14 @@ export function Text(props: {
     <label class="field" data-part="field" for={id}>
       <span class="label">{props.label}</span>
       {props.area ? (
-        <textarea id={id} rows={4} spellcheck={false} value={props.value} onInput={input} />
+        <textarea
+          id={id}
+          rows={4}
+          spellcheck={false}
+          value={props.value}
+          onInput={input}
+          disabled={props.disabled}
+        />
       ) : (
         <input
           id={id}
@@ -1203,6 +1337,7 @@ export function Text(props: {
           list={props.list}
           value={props.value}
           onInput={input}
+          disabled={props.disabled}
         />
       )}
       {props.hint && <small class="hint">{props.hint}</small>}

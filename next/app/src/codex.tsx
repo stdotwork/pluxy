@@ -36,6 +36,7 @@ import {
 } from "./codexForm";
 import type { AgentPage } from "./easyMode";
 import { PathText } from "./environmentBlock";
+import { plainReply, useShown } from "./toolWords";
 
 const t = strings("codex", {
   title: "Codex",
@@ -295,6 +296,7 @@ export function CodexPage() {
     },
   });
   const start = useStart({ s, client: CLIENT, folder: true, recipe: { target: "cli" } });
+  const shown = useShown();
   const edit = (patch: Partial<Form>) => {
     s.setDone(false);
     setForm((f) => ({ ...f, ...patch }));
@@ -303,7 +305,7 @@ export function CodexPage() {
   const imports = useAction(() => {});
   const doImport = () =>
     imports.run(async () => {
-      const served = await api.servedModels();
+      const served = plainReply(await api.servedModels());
       if (!served.body) return served;
       const r = await s.call<{ models: Model[]; missing: string[] }>("import", {
         models: served.body.models.map((m) => ({
@@ -345,9 +347,11 @@ export function CodexPage() {
       ? undefined
       : (s.settings as Exclude<ReadBack, { state: "refused" }> | undefined);
   // The default files as a person reads them (from ~), else the files read.
-  const path =
+  const pinned = s.preview?.targets.map((x) => x.target) ?? [];
+  const paths = [
     (where === "default" ? s.found?.config : undefined) ??
-    (s.preview?.targets.map((x) => x.target).join(", ") || "~/.codex/config.toml");
+      (pinned.length > 0 ? pinned : ["~/.codex/config.toml"]),
+  ].flat();
   const lines = st && (
     <>
       {st.provider !== "pluxy" && st.state !== "configured" && (
@@ -363,8 +367,8 @@ export function CodexPage() {
       <ToolTop
         s={s}
         start={start}
-        facts={[s.found?.version, path]}
-        path={path}
+        facts={[s.found?.version]}
+        paths={paths}
         held={held}
         form={input}
         lines={lines}
@@ -478,7 +482,7 @@ export function CodexPage() {
               </Button>
             </span>
           </SettingRow>
-          {imports.error && <Notice tone="danger">{imports.error}</Notice>}
+          {imports.error && <Notice tone="danger">{shown.text(imports.error)}</Notice>}
           {missing.length > 0 && (
             <Notice tone="warn">{t("noTemplate", { models: missing.join(", ") })}</Notice>
           )}
@@ -544,17 +548,25 @@ export function CodexPage() {
                     hint={t("pathHint")}
                     value={configPath}
                     onInput={setConfigPath}
+                    disabled={s.locked}
                   />
                   <Text
                     label={t("catalogPath")}
                     hint={t("pathHint")}
                     value={catalogPath}
                     onInput={setCatalogPath}
+                    disabled={s.locked}
                   />
                 </>
               )}
               {where === "root" && (
-                <Text label={t("root")} hint={t("rootHint")} value={root} onInput={setRoot} />
+                <Text
+                  label={t("root")}
+                  hint={t("rootHint")}
+                  value={root}
+                  onInput={setRoot}
+                  disabled={s.locked}
+                />
               )}
             </FileChoice>
           }
@@ -564,7 +576,8 @@ export function CodexPage() {
                 bare
                 pkg={PACKAGE}
                 pins={async () => s.preview?.targets}
-                disabled={s.busy}
+                disabled={!s.writable}
+                onBusy={s.setOutside}
                 onChange={s.load}
               />
             )
