@@ -108,4 +108,8 @@ test("an account's badge is its plain state: turned off first, then what keeps r
   expect(badge({ disabled: true, health: { state: "banned" } })).toBe("Turned off");
   expect(badge({}, new Set(["test/other"]))).toBe("Provider stopped");
   expect(tone({}, new Set(["test/other"]))).toBe("danger");
+  // The title keeps what core sent, for support.
+  expect(html({ state: "reauth_required" })).toContain('title="reauth_required"');
+  expect(html({ health: { state: "banned" } })).toContain('title="banned"');
+  expect(html({ disabled: true, health: { state: "banned" } })).toContain('title="disabled"');
 });

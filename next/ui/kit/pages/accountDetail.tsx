@@ -46,11 +46,17 @@ const t = strings("accountDetail", {
 });
 
 /**
- * An account's state as a badge: its condition, as AccountRow's mark names it (accountCondition),
- * so a badge on any page agrees with the account's row.
+ * An account's state as a badge: its condition in words, as AccountRow's mark names it
+ * (accountCondition), so a badge on any page agrees with the account's row. Its title keeps the
+ * state core sent: turned off, the health state that keeps requests away, else its state.
  */
 export function AccountState(props: { a: Account; running?: ReadonlySet<string> }) {
-  return <StateBadge state={conditionState(accountCondition(props.a, props.running))} of="account" />;
+  const a = props.a;
+  const c = accountCondition(a, props.running);
+  const sent = a.disabled
+    ? "disabled"
+    : (leftOut(a) ?? (c.kind === "cooling" ? a.health?.state : undefined) ?? a.state);
+  return <StateBadge state={conditionState(c)} sent={sent} of="account" />;
 }
 
 export interface AccountDetailProps {

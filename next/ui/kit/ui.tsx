@@ -395,14 +395,19 @@ export function Badge(props: { tone: Tone; children: ComponentChildren }) {
  * A state from core as a badge, in plain words (states.ts). The value core sent stays on the
  * badge, as its title and data-state, for support. `of` says what the state belongs to.
  */
-export function StateBadge(props: { state: string; of?: StateOf }) {
+/**
+ * A state in plain words. sent is the state core sent, kept in data-state and the title for
+ * support, when the words come from another state (an account's condition); else state.
+ */
+export function StateBadge(props: { state: string; of?: StateOf; sent?: string }) {
+  const sent = props.sent ?? props.state;
   return (
     <span
       class="badge"
       data-part="badge"
       data-tone={stateTone(props.state, props.of)}
-      data-state={props.state}
-      title={props.state}
+      data-state={sent}
+      title={sent}
     >
       {stateText(props.state, props.of)}
     </span>
