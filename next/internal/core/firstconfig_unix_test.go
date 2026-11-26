@@ -88,3 +88,49 @@ func TestWriteFirstConfigRefusesAFolderOthersCanChange(t *testing.T) {
 		})
 	}
 }
+
+// A config path that is already a link, to a file or to nothing, or a hard link to a file, is
+// never written through: the write fails as a config already there, and the file the link names
+// is left as it was, or still missing.
+func TestWriteFirstConfigNeverWritesThroughALink(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		target bool // the link names a file that exists
+		make   func(target, path string) error
+	}{
+		{"a link to a file", true, os.Symlink},
+		{"a link to a missing file", false, os.Symlink},
+		{"a hard link to a file", true, os.Link},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			target := filepath.Join(t.TempDir(), "theirs.json")
+			if c.target {
+				if err := os.WriteFile(target, []byte("theirs\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dir := filepath.Join(t.TempDir(), "home")
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "config.json")
+			if err := c.make(target, path); err != nil {
+				t.Fatal(err)
+			}
+			before, _ := os.Lstat(path)
+			if _, err := WriteFirstConfig(path, 0); !errors.Is(err, fs.ErrExist) {
+				t.Errorf("error %v, want a config already there", err)
+			}
+			if after, err := os.Lstat(path); err != nil || after.Mode() != before.Mode() || !os.SameFile(after, before) {
+				t.Errorf("the config path was replaced: %v %v", after, err)
+			}
+			b, err := os.ReadFile(target)
+			switch {
+			case c.target && (err != nil || string(b) != "theirs\n"):
+				t.Errorf("the linked file now holds %q (%v)", b, err)
+			case !c.target && !errors.Is(err, fs.ErrNotExist):
+				t.Errorf("the missing file the link names was written: %q %v", b, err)
+			}
+		})
+	}
+}

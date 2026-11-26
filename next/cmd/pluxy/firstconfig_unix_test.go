@@ -9,12 +9,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 // pluxy init into a home folder others can write in exits 1 with the refusal and what to run,
-// writes nothing, and on a terminal shows the folder's foreign bytes escaped; a first start of
-// pluxy serve gives the same line, not wrapped in another.
+// writes nothing, and on a terminal shows the folder's foreign bytes escaped, without the chmod
+// command, which would not run as shown; a first start of pluxy serve gives the same line, not
+// wrapped in another.
 func TestInitRefusesAFolderOthersCanChange(t *testing.T) {
 	t.Setenv("PLUXY_INIT_PORT", "0")
 	h := newTestHome(t)
@@ -27,6 +29,10 @@ func TestInitRefusesAFolderOthersCanChange(t *testing.T) {
 	}
 	h.env["PLUXY_HOME"] = dir
 	line := func(shown, arg string) string {
+		if arg == "" {
+			return "pluxy: not writing a config in " + shown + ": other users can add or replace files in it (mode 0777), " +
+				"and the config holds your keys. Use another folder (PLUXY_HOME or -config).\n"
+		}
 		return "pluxy: not writing a config in " + shown + ": other users can add or replace files in it (mode 0777), " +
 			"and the config holds your keys. Run chmod go-w " + arg + " and try again, or use another folder.\n"
 	}
@@ -38,8 +44,7 @@ func TestInitRefusesAFolderOthersCanChange(t *testing.T) {
 		stderrIsTerminal = old
 		want := line(dir, "'"+dir+"'")
 		if terminal {
-			shown := escapeTableCell(dir)
-			want = line(shown, "'"+shown+"'")
+			want = line(escapeTableCell(dir), "")
 		}
 		if code != exitFailed || out.Len() != 0 || errOut.String() != want {
 			t.Errorf("init (terminal %v): %d %q\n%q\nwant\n%q", terminal, code, out.String(), errOut.String(), want)
@@ -51,5 +56,35 @@ func TestInitRefusesAFolderOthersCanChange(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "config.json")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("a config was written: %v", err)
+	}
+}
+
+// Another failure to write a first config, here a home that cannot be made in a read-only
+// folder, names the path; on a terminal its foreign bytes are escaped, from pluxy init and from a
+// first pluxy serve.
+func TestFirstConfigErrorShowsThePathEscaped(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can make a folder in a read-only one")
+	}
+	t.Setenv("PLUXY_INIT_PORT", "0")
+	h := newTestHome(t)
+	parent := filepath.Join(t.TempDir(), "read-only \x1b[2J")
+	if err := os.Mkdir(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(parent, "home")
+	h.env["PLUXY_HOME"] = dir
+	old := stderrIsTerminal
+	stderrIsTerminal = func(io.Writer) bool { return true }
+	t.Cleanup(func() { stderrIsTerminal = old })
+	var out, errOut bytes.Buffer
+	code := initConfig([]string{"-port", "0"}, &out, &errOut, h.getenv)
+	if shown := strings.ReplaceAll(dir, "\x1b", `\x1b`); code != exitFailed || strings.Contains(errOut.String(), "\x1b") ||
+		!strings.Contains(errOut.String(), shown+": permission denied") {
+		t.Errorf("init: %d %q, want exit %d and the path shown as %q", code, errOut.String(), exitFailed, shown)
+	}
+	err := firstStart(filepath.Join(dir, "config.json"), true, false)
+	if shown := escapeTableCell(dir); err == nil || strings.Contains(err.Error(), "\x1b") || !strings.Contains(err.Error(), shown+": permission denied") {
+		t.Errorf("first start: %q, want the path shown as %q", err, shown)
 	}
 }

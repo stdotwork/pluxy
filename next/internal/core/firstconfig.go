@@ -29,10 +29,13 @@ type FirstConfig struct {
 
 // WriteFirstConfig writes a new config file at path for a core that has none: it listens on
 // 127.0.0.1, with one new client key and a new management key, and only this user can read
-// it. Its folder is made when it is missing, and refused when other users could change what is
-// in it (home.OpenDir; the error is then a *home.Refusal). port is the port to listen on; with
-// port -1 it is DefaultPort when that is free and a free one when it is taken, and with port 0
-// a free one. It never replaces a file at path (the error is then fs.ErrExist), and writes JSON
+// it. Its folder is made when it is missing, and refused when it is a link, belongs to another
+// user, or on unix its mode lets group or others write in it (home.OpenDir: on Windows such a
+// folder is made private instead; the error is then a *home.Refusal). Only that folder is
+// checked, not those above it, and on macOS by its mode bits, not its access list. Only this
+// first write checks it: a config already there is used without a check. port is the port to
+// listen on; with port -1 it is DefaultPort when that is free and a free one when it is taken,
+// and with port 0 a free one. It never replaces a file at path (the error is then fs.ErrExist), and writes JSON
 // only: a config.yaml is today's core's, written by a person.
 func WriteFirstConfig(path string, port int) (FirstConfig, error) {
 	abs, err := filepath.Abs(path)
