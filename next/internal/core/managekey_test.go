@@ -212,6 +212,46 @@ func TestManagementKeyTwoSteps(t *testing.T) {
 			t.Error("the staged key is not in use")
 		}
 	})
+
+	// A stage sent while a commit is between its check of the staged key and its write waits
+	// for the commit: it cannot replace the key the commit is putting into use.
+	t.Run("a stage waits for a commit between its check and its write", func(t *testing.T) {
+		c, path := safeCore(t, safeConfig)
+		first, _ := stageKey(t, c, oldKey)
+		waits := make(chan struct{})
+		c.staged.waiting = func() { close(waits) }
+		second := make(chan string, 1)
+		c.staged.checked = func() {
+			c.staged.checked = nil // the hook runs under the lock, once
+			go func() {
+				code, b := keyCall(c, oldKey, http.MethodPost, "/management-key/rotate/stage", nil)
+				var r struct {
+					Value string `json:"value"`
+				}
+				if code != http.StatusOK || json.Unmarshal(b, &r) != nil || r.Value == "" {
+					t.Errorf("the second stage: %d %s", code, b)
+				}
+				second <- r.Value
+			}()
+			select {
+			case <-waits:
+			case v := <-second:
+				t.Errorf("a stage answered between the commit's check and its write")
+				second <- v
+			}
+		}
+		if code, b := commitKey(c, oldKey, first); code != http.StatusNoContent {
+			t.Fatalf("commit: %d %s", code, b)
+		}
+		if got := fileKey(t, path); got != first || !keyWorks(c, first) {
+			t.Errorf("the config file holds %q, want the committed key", got)
+		}
+		// The second stage ran after the commit, so its key is the one staged now.
+		next := <-second
+		if code, b := commitKey(c, first, next); code != http.StatusNoContent || fileKey(t, path) != next {
+			t.Errorf("commit of the second stage's key: %d %s", code, b)
+		}
+	})
 }
 
 // readSignal reads r and closes done once r is read to its end.

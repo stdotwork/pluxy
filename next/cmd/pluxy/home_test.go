@@ -534,6 +534,34 @@ func TestManagementKeyCommands(t *testing.T) {
 	}
 	mustContain(t, "rotate --show-key from a copy", errOut, copied+" (--config) does not hold the new key")
 
+	// A hard link to pluxy's config is the same file but another entry: pluxy replaces its config
+	// by a rename, after which the link keeps the old key. Nothing changes.
+	linked := filepath.Join(t.TempDir(), "config.json")
+	if err := os.Link(h.homeCfg, linked); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--config", linked)
+	if code != exitUsage || out != "" {
+		t.Errorf("rotate from a hard link: %d %q %q", code, out, errOut)
+	}
+	unchanged("rotate from a hard link", key)
+	mustContain(t, "rotate from a hard link", errOut, "runs on "+h.homeCfg+", not on "+linked, "Nothing changed", "--show-key")
+	// A symbolic link to it is the same entry: the key is put into use and read through the link.
+	symlinked := filepath.Join(t.TempDir(), "config.json")
+	if err := os.Symlink(h.homeCfg, symlinked); err != nil {
+		t.Logf("no symbolic link, so that case is not run: %v", err)
+	} else {
+		out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--config", symlinked)
+		key = changed("rotate from a symbolic link", key)
+		if code != exitOK || out != "" {
+			t.Errorf("rotate from a symbolic link: %d %q %q", code, out, errOut)
+		}
+		mustContain(t, "rotate from a symbolic link", errOut, "pluxy commands that read "+symlinked)
+		if cfg, err := server.LoadConfig(symlinked); err != nil || cfg.ManagementKey != key {
+			t.Errorf("the symbolic link does not lead to the new key: %v", err)
+		}
+	}
+
 	// The new key cannot be printed: it is not put into use.
 	errOut, code = runTo(full, nil, "key", "rotate-management", "--yes", "--show-key")
 	if code != exitFailed {
@@ -656,6 +684,57 @@ func TestKeyRotateWithoutAnAnswer(t *testing.T) {
 			mustContain(t, c.name, errOut.String(), c.want)
 		})
 	}
+}
+
+// Without --show-key, a pluxy at an address that is not loopback is refused before it is called,
+// even when the config file it names is the one the command read: on another machine that path
+// is another file.
+func TestKeyRotateNotOnLoopback(t *testing.T) {
+	const oldKey = "fake-old-management-key"
+	var host string
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && ipn.IP.To4() != nil {
+			host = ipn.IP.String()
+			break
+		}
+	}
+	if host == "" {
+		t.Skip("this machine has no IPv4 address that is not loopback")
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		t.Skipf("cannot listen on %s: %v", host, err)
+	}
+	h := newTestHome(t)
+	emptyFolder(t)
+	cfg := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(cfg, []byte(fmt.Sprintf(`{"listen": %q, "client_keys": ["fake-other-client-key"], "management_key": %q}`, ln.Addr().String(), oldKey)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/management-key/rotate/stage"):
+			json.NewEncoder(w).Encode(map[string]string{"value": "fake-staged-key", "config": cfg})
+		case strings.HasSuffix(r.URL.Path, "/management-key/rotate/commit"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.Write([]byte(`{"version":"dev"}`))
+		}
+	})}
+	go srv.Serve(ln)
+	defer srv.Close()
+	var out, errOut bytes.Buffer
+	code := runCLIWithInput([]string{"key", "rotate-management", "--yes", "--config", cfg}, strings.NewReader(""), &out, &errOut, h.getenv, false)
+	if code != exitUsage || out.String() != "" {
+		t.Errorf("%d %q %q, want exit %d", code, out.String(), errOut.String(), exitUsage)
+	}
+	if n := calls.Load(); n != 0 {
+		t.Errorf("pluxy was called %d times, want none", n)
+	}
+	mustContain(t, "rotate at "+host, errOut.String(), "not at a loopback address", "add --show-key")
 }
 
 // failingWriter is an output that takes nothing, as /dev/full.

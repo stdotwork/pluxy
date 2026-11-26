@@ -164,13 +164,16 @@ those same ways on.
 
 The management key is the config's `management_key`. `pluxy key management` says where the key
 the commands use came from, and prints it only with `--show-key`. `pluxy key rotate-management`
-replaces it through the management API in two steps, so a lost reply never locks anyone out: core
-makes a new key and keeps it in memory only, naming the config file it runs on, while the old key
-keeps working; the command makes sure the person can get the new key, and only then has core write
-it to that file and put it into use. The person gets the new key from the command's standard output
-with `--show-key`, which must be written before the key is put into use, or from the config file
-the command read when that is the very file core runs on: a copy of it, even one with the same
-contents, is refused and nothing changes. The command says what must be given the new key
+replaces it through the management API in two steps, so that, one rotation at a time, a lost reply
+does not lock anyone out: core makes a new key and keeps it in memory only, naming the config file
+it runs on, while the old key keeps working; the command makes sure the person can get the new key,
+and only then has core write it to that file and put it into use. The person gets the new key from
+the command's standard output with `--show-key`, which must be written before the key is put into
+use. Without `--show-key` the command works only with a pluxy at a loopback address, on this
+machine, and only when the config file it read is the very file pluxy runs on, the same directory
+entry (a symbolic link to it counts): a copy of it, even one with the same contents, or a hard link
+to it elsewhere is refused and nothing changes. A pluxy at any other address needs `--show-key`.
+Two rotations at the same time are not covered: the later one's key replaces the earlier one's. The command says what must be given the new key
 ([details](management/README.md#core)). A reply lost before the key is put into use changes
 nothing, and the command says the old key still works; when the last reply is lost, the command
 asks core once more and exits 0 if the new key is in use, otherwise 1, saying which key to try.

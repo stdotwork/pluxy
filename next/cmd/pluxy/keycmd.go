@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 
+	"github.com/stdotwork/pluxy/next/internal/server"
 	"github.com/stdotwork/pluxy/next/management"
 )
 
@@ -69,14 +71,18 @@ func runKeyManagement(x *invocation) error {
 }
 
 // runKeyRotate is pluxy key rotate-management: pluxy changes its management key in two steps,
-// so a lost reply never leaves the person without a key that works. Stage makes a new key that
-// pluxy keeps in memory only, and names the config file pluxy runs on; the old key still works.
-// The command then makes sure the person can get the new key: on standard output with
-// --show-key, where a failed write ends it, else in the config file it read, when that is the
-// file pluxy names (os.SameFile: a copy with the same contents is another file). Only then does
-// commit put the key into use: pluxy writes it to its config file, and the old key stops working.
-// Pluxy decides a commit under its config-write lock and answers 204 for the key already in use,
-// so after a lost commit reply one more commit with the old key tells whether the key changed.
+// so that, one rotation at a time, a lost reply does not leave the person without a key that
+// works. Stage makes a new key that pluxy keeps in memory only, and names the config file pluxy
+// runs on; the old key still works. The command then makes sure the person can get the new key:
+// on standard output with --show-key, where a failed write ends it. Without --show-key, in the
+// config file it read, and only for a pluxy at a loopback address: that file and the one pluxy
+// names must be the same directory entry (sameEntry), because pluxy replaces its file by a
+// rename, which a copy or a hard link elsewhere does not see. Over another address --show-key is
+// needed. Only then does commit put the key into use: pluxy writes it to its config file, and the
+// old key stops working. Pluxy decides a commit under its config-write lock and answers 204 for
+// the key already in use, so after a lost commit reply one more commit with the old key tells
+// whether the key changed. Two rotations at the same time are not covered: the later one's key
+// replaces the earlier one's.
 func runKeyRotate(x *invocation) error {
 	t := x.target
 	viaConfig := t.urlFrom == fromConfig && t.keyFrom == fromConfig
@@ -85,6 +91,8 @@ func runKeyRotate(x *invocation) error {
 		return usageError{"this command did not find pluxy through a config file, so it cannot tell where pluxy keeps the new key: add --show-key to print the new key"}
 	case !x.opts.showKey && x.json:
 		return usageError{"--json prints the API's reply, which holds the new key: add --show-key"}
+	case !x.opts.showKey && !onThisMachine(t.url):
+		return usageError{fmt.Sprintf("pluxy at %s is not at a loopback address, so this command cannot tell whether the config file it read is the one pluxy writes the new key to: add --show-key to print the new key", t.url)}
 	case !x.opts.yes && !x.prompts():
 		return usageError{"changing the management key stops every program that uses the old one: pass --yes, or run it on a terminal to be asked"}
 	}
@@ -109,7 +117,7 @@ func runKeyRotate(x *invocation) error {
 	if err != nil {
 		return fmt.Errorf("%s did not answer the key change (%v). Nothing changed: your management key still works. Run the command again", t.url, err)
 	}
-	inFile := t.config != "" && sameFile(t.config, staged.Config)
+	inFile := t.config != "" && sameEntry(t.config, staged.Config)
 	if !x.opts.showKey && !inFile {
 		return usageError{fmt.Sprintf("%s runs on %s, not on %s, so the new key would not be written where this command looks. Nothing changed. Pass --config %s, or add --show-key to print the new key",
 			t.url, staged.Config, t.configName(), staged.Config)}
@@ -198,14 +206,39 @@ func (x *invocation) giveNewKey() {
 		"and update PLUXY_MANAGEMENT_KEY or --key wherever scripts set them.\n")
 }
 
-// sameFile reports whether the paths a and b name the same file.
-func sameFile(a, b string) bool {
+// sameEntry reports whether the paths a and b name the same directory entry: with their links
+// followed and made absolute they are the same path, and it is the same file. A hard link is
+// another entry for the same file, which pluxy's write by rename leaves with the old contents.
+func sameEntry(a, b string) bool {
+	ra, err := resolved(a)
+	if err != nil {
+		return false
+	}
+	rb, err := resolved(b)
+	if err != nil || ra != rb {
+		return false
+	}
 	fa, err := os.Stat(a)
 	if err != nil {
 		return false
 	}
 	fb, err := os.Stat(b)
 	return err == nil && os.SameFile(fa, fb)
+}
+
+// resolved is path with its symbolic links followed, made absolute.
+func resolved(path string) (string, error) {
+	p, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(p)
+}
+
+// onThisMachine reports whether the address rawURL names a loopback host.
+func onThisMachine(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	return err == nil && server.IsLoopbackHost(u.Hostname())
 }
 
 // absPath is path made absolute, or path when that fails.

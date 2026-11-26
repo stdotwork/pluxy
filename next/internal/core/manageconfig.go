@@ -223,30 +223,42 @@ const stagedKeyFor = 10 * time.Minute
 
 // stagedKey is the management key POST /management-key/rotate/stage made, kept in memory only:
 // one at a time, until it is put into use, another stage replaces it, it is stagedKeyFor old, or
-// core stops.
+// core stops. mu is held by a stage while it sets the key, and by a commit from its check of the
+// key through the config write to forgetting the key, so a stage cannot replace the key between a
+// commit's check and its write. set, holds and drop need mu held.
 type stagedKey struct {
 	mu      sync.Mutex
 	value   string
 	expires time.Time
+
+	// Tests only: waiting is called when lock finds mu held, before it waits for it; checked is
+	// called with mu held when a commit's check has passed, before its write.
+	waiting, checked func()
+}
+
+// lock takes mu.
+func (s *stagedKey) lock() {
+	if s.waiting == nil {
+		s.mu.Lock()
+		return
+	}
+	if !s.mu.TryLock() {
+		s.waiting()
+		s.mu.Lock()
+	}
 }
 
 func (s *stagedKey) set(value string, expires time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.value, s.expires = value, expires
 }
 
 // holds reports whether value is the staged key and has not expired at now.
 func (s *stagedKey) holds(value string, now time.Time) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.value != "" && now.Before(s.expires) && sameSecret(value, s.value)
 }
 
 // drop forgets the staged key when it is value: it is in use now.
 func (s *stagedKey) drop(value string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if sameSecret(value, s.value) {
 		s.value, s.expires = "", time.Time{}
 	}
@@ -471,7 +483,9 @@ func (c *Core) handleConfig(m *server.Management) {
 	// Its reply names the config file core runs on, where commit writes the key.
 	m.Handle("POST /management-key/rotate/stage", func(w http.ResponseWriter, r *http.Request) {
 		key := newKey()
+		c.staged.lock()
 		c.staged.set(key, c.keyNow().Add(stagedKeyFor))
+		c.staged.mu.Unlock()
 		config, err := filepath.Abs(c.opts.ConfigPath)
 		if err != nil {
 			config = c.opts.ConfigPath
@@ -481,7 +495,8 @@ func (c *Core) handleConfig(m *server.Management) {
 
 	// Commit decides under the config-write lock, as the write itself: a commit sent again after
 	// a lost reply waits for the first, then finds its key in use and answers 204 too, so one
-	// retry tells whether the key changed.
+	// retry tells whether the key changed. It holds the staged key's lock from the check to
+	// forgetting the key, so a stage waits for it and cannot replace the key in between.
 	m.Handle("POST /management-key/rotate/commit", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Value string `json:"value"`
@@ -490,22 +505,29 @@ func (c *Core) handleConfig(m *server.Management) {
 			return
 		}
 		set := c.edit(func(d *configdoc.Doc) error { return d.SetManagementKey(req.Value) })
-		err := c.WriteConfig("management API: management key changed", func(cur []byte) ([]byte, error) {
-			switch {
-			case sameSecret(req.Value, c.Config().ManagementKey):
-				return nil, errKeyInUse
-			case !c.staged.holds(req.Value, c.keyNow()):
-				return nil, &editError{http.StatusConflict, "conflict", "this is not the staged management key: none was staged, a later stage replaced it, it is more than 10 minutes old, or pluxy restarted since. Nothing changed"}
+		err := func() error {
+			c.staged.lock()
+			defer c.staged.mu.Unlock()
+			err := c.WriteConfig("management API: management key changed", func(cur []byte) ([]byte, error) {
+				switch {
+				case sameSecret(req.Value, c.Config().ManagementKey):
+					return nil, errKeyInUse
+				case !c.staged.holds(req.Value, c.keyNow()):
+					return nil, &editError{http.StatusConflict, "conflict", "this is not the staged management key: none was staged, a later stage replaced it, it is more than 10 minutes old, or pluxy restarted since. Nothing changed"}
+				}
+				if c.staged.checked != nil {
+					c.staged.checked()
+				}
+				return set(cur)
+			})
+			if err == nil {
+				c.staged.drop(req.Value)
 			}
-			return set(cur)
-		})
-		switch {
-		case errors.Is(err, errKeyInUse):
-		case err != nil:
+			return err
+		}()
+		if err != nil && !errors.Is(err, errKeyInUse) {
 			c.writeChangeError(w, err)
 			return
-		default:
-			c.staged.drop(req.Value)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
