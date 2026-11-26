@@ -53,6 +53,11 @@ type AccountCheck = management.AccountCheck
 func setFields(v *AccountView, a route.Account, state *route.State, hold route.Hold, red AccountRedactor) {
 	v.Priority, v.Weight, v.MaxConcurrency, v.Prefix = a.Priority, a.Weight, a.MaxConcurrency, a.Prefix
 	v.DisableCooling, v.RequestRetry = a.DisableCooling, a.RequestRetry
+	if state != nil {
+		if q, ok := state.LastQuota(a.ID); ok {
+			v.Quota = &management.QuotaReply{FetchedAt: q.At.UTC(), Quota: q.Quota}
+		}
+	}
 	v.Models, v.ExcludedModels, v.ModelAlias, v.Endpoint = a.Models, a.ExcludedModels, a.ModelAlias, a.Endpoint
 	v.Timeouts = a.Timeouts
 	v.ProxyURL = proxyurl.Redact(a.ProxyURL)

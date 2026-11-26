@@ -223,6 +223,12 @@ type Account struct {
 	// starts, its state and when core starts it next. Absent when ignition does not run for the
 	// account.
 	Ignition *AccountIgnition `json:"ignition,omitempty"`
+
+	// Quota is the last quota reply core read for the account, when it read it and what it
+	// said, as GET /accounts/{id}/quota replies. It is kept in memory, so it is gone after a
+	// restart, and absent while core has none (an account never read, or one with no reading).
+	// Core reads nothing to fill it: it comes from that call and from routing's own readings.
+	Quota *QuotaReply `json:"quota,omitempty"`
 }
 
 // AccountIgnition is an account's window ignition, in Account.

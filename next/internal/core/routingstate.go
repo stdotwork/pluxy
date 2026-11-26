@@ -255,9 +255,9 @@ func (rd readings) Reading(ctx context.Context, a route.Account) (*protocol.Quot
 	}
 	ctx, cancel := context.WithTimeout(ctx, readingTimeout)
 	defer cancel()
-	q, err := c.accountQuota(ctx, s, a.ID)
+	reply, err := c.accountQuota(ctx, s, a.ID)
 	if err == nil {
-		return q, nil
+		return reply.Quota, nil
 	}
 	var le *llm.Error
 	if errors.As(err, &le) {

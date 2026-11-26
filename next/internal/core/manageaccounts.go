@@ -83,12 +83,12 @@ func (c *Core) handleAccounts(m *server.Management) {
 	m.Handle("GET /accounts/{id}/quota", func(w http.ResponseWriter, r *http.Request) {
 		s, release := c.acquire()
 		defer release()
-		q, err := c.accountQuota(r.Context(), s, r.PathValue("id"))
+		reply, err := c.accountQuota(r.Context(), s, r.PathValue("id"))
 		if err != nil {
 			writeAccountError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, management.QuotaReply{FetchedAt: time.Now().UTC(), Quota: q})
+		writeJSON(w, http.StatusOK, reply)
 	})
 	m.Handle("POST /accounts/{id}/test", func(w http.ResponseWriter, r *http.Request) {
 		var req management.TestRequest
@@ -240,9 +240,10 @@ func (c *Core) listModels(ctx context.Context, s *snapshot, a route.Account) (*p
 	return list, nil
 }
 
-// accountQuota reads account id's quota through its extension. A credential the upstream refuses
-// is renewed and tried once more, as for a request.
-func (c *Core) accountQuota(ctx context.Context, s *snapshot, id string) (*protocol.Quota, error) {
+// accountQuota reads account id's quota through its extension and keeps the reply as the
+// account's last (route.State.NoteQuota), whoever asked: a management call, routing or ignition.
+// A credential the upstream refuses is renewed and tried once more, as for a request.
+func (c *Core) accountQuota(ctx context.Context, s *snapshot, id string) (*management.QuotaReply, error) {
 	a, ok := c.account(s, id)
 	if !ok {
 		return nil, fmt.Errorf("%w %q", errNoAccount, id)
@@ -258,7 +259,9 @@ func (c *Core) accountQuota(ctx context.Context, s *snapshot, id string) (*proto
 		}
 		q, e := g.Quota(ctx, protocol.Account{ID: a.ID, Settings: a.Settings, Credential: cr, ProxyURL: a.ProxyURL, Headers: a.Headers})
 		if e == nil {
-			return q, nil
+			at := time.Now().UTC()
+			c.state.NoteQuota(a.ID, q, at)
+			return &management.QuotaReply{FetchedAt: at, Quota: q}, nil
 		}
 		if e.Code == llm.CodeAuth && a.Managed && try == 0 && c.creds.Rejected(ctx, a.ID, version) {
 			continue
