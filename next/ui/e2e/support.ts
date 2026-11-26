@@ -4,7 +4,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 
 /** A running core. Its fields are filled once the spec's `beforeAll` has started it. */
 export interface Core {
@@ -118,9 +118,8 @@ export const pageTitle = (page: Page) => page.locator('[data-part="page-title"]'
 const PLACES: Record<string, { dest: string; tab?: string; link?: string }> = {
   Dashboard: { dest: "Home" },
   Accounts: { dest: "Accounts" },
-  "Add Account": { dest: "Accounts", link: "Add Account" },
+  "Add Account": { dest: "Accounts", link: "Add an account" },
   Routing: { dest: "Accounts", tab: "Order & fallback" },
-  "Quota Management": { dest: "Accounts", tab: "Limits" },
   Requests: { dest: "Activity" },
   Usage: { dest: "Activity", tab: "Usage" },
   Tools: { dest: "Tools" },
@@ -158,7 +157,6 @@ const TITLES: Record<string, string> = {
   accounts: "Accounts",
   "add-account": "Add Account",
   routing: "Routing",
-  quota: "Quota Management",
   usage: "Requests",
   "activity/usage": "Usage",
   setup: "Set up pluxy",
@@ -175,4 +173,23 @@ export async function goToId(page: Page, id: string) {
   const title = TITLES[id];
   if (!title) throw new Error(`goToId: no core page has the ID ${id}`);
   await goTo(page, title);
+}
+
+/**
+ * An account's row on All accounts (the shared AccountRow), by the account's ID: its name's link
+ * leads to #/accounts/<id>. A row shows the account's name, which is its label when it has one.
+ */
+export function accountRow(scope: Page | Locator, id: string) {
+  const page = "frames" in scope ? scope : scope.page();
+  return scope
+    .locator('[data-part="account-row"]')
+    .filter({ has: page.locator(`a.account-name[href="#/accounts/${encodeURIComponent(id)}"]`) });
+}
+
+/** Opens an account's own page from All accounts, the way a person does: by its name's link. */
+export async function openAccount(page: Page, id: string) {
+  await goTo(page, "Accounts");
+  await accountRow(page, id).locator("a.account-name").click();
+  await expect(page).toHaveURL(new RegExp(`#/accounts/${encodeURIComponent(id)}$`));
+  await expect(page.locator('[data-part="account-page"]')).toBeVisible();
 }

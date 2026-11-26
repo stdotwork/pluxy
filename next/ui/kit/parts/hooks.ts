@@ -53,6 +53,10 @@ export interface Windows {
   state: "reading" | "read" | "none" | "failed";
   limits: QuotaLimit[];
   plan?: string;
+  /** The manual resets the provider says are left (its reset_credits limit), when it says. */
+  resets?: number;
+  /** When the subscription ends (seconds since 1970), when the provider says. */
+  endsAt?: number;
   error?: string;
   /** When the reply was read (ms since 1970). */
   at?: number;
@@ -83,6 +87,11 @@ export function forgetWindows() {
   reading.clear();
 }
 
+/** Forgets one account's kept reply, so its limits are read again at once (an account page's Refresh). */
+export function forgetWindow(id: string) {
+  kept.delete(id);
+}
+
 /** Limits from a reply to GET /accounts/{id}/quota, or from the copy GET /accounts carries. */
 export function windowsOf(r: Reply<QuotaReply>, at: number): Windows {
   // 422: the provider reports no limits for this kind of account. That is an answer, not a failure.
@@ -92,7 +101,9 @@ export function windowsOf(r: Reply<QuotaReply>, at: number): Windows {
   const quota = r.body?.quota;
   const limits = (quota?.limits ?? []).filter((l) => l.id !== "reset_credits");
   const plan = quota?.plan?.trim() || undefined;
-  return { state: limits.length > 0 ? "read" : "none", limits, plan, at };
+  const resets = quota?.limits.find((l) => l.id === "reset_credits")?.remaining;
+  const endsAt = quota?.plan_ends_at || undefined;
+  return { state: limits.length > 0 ? "read" : "none", limits, plan, resets, endsAt, at };
 }
 
 /** Whether a kept reply is still good at now. */

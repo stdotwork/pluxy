@@ -121,7 +121,14 @@ export function accountCondition(a: Account, running?: ReadonlySet<string>, now 
   if (providerMissing(a, running)) return { kind: "no_provider", group: "needs", resting: [] };
   const blocks = a.cooldowns ?? [];
   const block = lastBlock(blocks, now);
-  if (out === "exhausted" || block?.c.kind === "quota") {
+  // Core's health reads exhausted for a quota block on one model too. A core that lists its
+  // cooldowns says what is blocked: with no block over the whole account, only those models wait.
+  const oneModel =
+    out === "exhausted" &&
+    a.cooldowns !== undefined &&
+    !block &&
+    blocks.some((c) => c.scope === "model" && (ms(c.until) ?? 0) > now);
+  if ((out === "exhausted" && !oneModel) || block?.c.kind === "quota") {
     return { kind: "exhausted", group: "waiting", until: ms(a.health?.until) ?? block?.until, resting: [] };
   }
   const resting = blocks

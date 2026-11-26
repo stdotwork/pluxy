@@ -59,7 +59,7 @@ test("logs show failures, trace lookup, continuous reading and clearing", async 
   }, trace);
   await expect(page.getByLabel("Trace ID", { exact: true })).toHaveValue(trace);
   await expect(requestLog).toContainText("=== REQUEST INFO ===");
-  await goTo(page, "Quota Management");
+  await goTo(page, "Accounts");
   await page.evaluate((id) => {
     location.hash = `#/logs/${id}`;
   }, trace);

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToString } from "preact-render-to-string";
 import type { Account } from "../kit/api";
-import { AccountState } from "../kit/pages/accountDetail";
+import { accountCondition, conditionWord } from "../kit/parts";
 import { stateText, stateTone } from "../kit/states";
 import { StateBadge } from "../kit/ui";
 
@@ -68,7 +68,7 @@ test("the badge keeps what core sent, for support", () => {
   expect(renderToString(<StateBadge state="quarantined" />)).toContain(">Stopped after crashes</span>");
 });
 
-test("an account's badge is its plain state: turned off first, then what keeps requests away", () => {
+test("an account's condition word: turned off first, then what keeps requests away", () => {
   const account = (fields: Partial<Account>): Account => ({
     id: "a",
     source: "login",
@@ -77,18 +77,12 @@ test("an account's badge is its plain state: turned off first, then what keeps r
     extension: "test/alpha",
     ...fields,
   });
-  const html = (fields: Partial<Account>, running?: ReadonlySet<string>) =>
-    renderToString(<AccountState a={account(fields)} running={running} />);
   const badge = (fields: Partial<Account>, running?: ReadonlySet<string>) =>
-    html(fields, running).replace(/<[^>]+>/g, "");
-  const tone = (fields: Partial<Account>, running?: ReadonlySet<string>) =>
-    /data-tone="(\w+)"/.exec(html(fields, running))?.[1];
+    conditionWord(accountCondition(account(fields), running));
   const later = new Date(Date.now() + 3_600_000).toISOString();
   expect(badge({})).toBe("Serving");
-  // The badge says what AccountRow's mark says (accountCondition): a whole account cooling down
-  // waits; one cooling down on some models still serves.
+  // A whole account cooling down waits; one cooling down on some models still serves.
   expect(badge({ cooldowns: [{ scope: "account", kind: "rate_limit", until: later }] })).toBe("Cooling down");
-  expect(tone({ cooldowns: [{ scope: "account", kind: "rate_limit", until: later }] })).toBe("warn");
   expect(badge({ health: { state: "cooling", until: later } })).toBe("Cooling down");
   expect(badge({ cooldowns: [{ scope: "model", model: "m", kind: "rate_limit", until: later }] })).toBe(
     "Serving",
@@ -107,9 +101,4 @@ test("an account's badge is its plain state: turned off first, then what keeps r
   expect(badge({ health: { state: "broken" } })).toBe("Cannot be read");
   expect(badge({ disabled: true, health: { state: "banned" } })).toBe("Turned off");
   expect(badge({}, new Set(["test/other"]))).toBe("Provider stopped");
-  expect(tone({}, new Set(["test/other"]))).toBe("danger");
-  // The title keeps what core sent, for support.
-  expect(html({ state: "reauth_required" })).toContain('title="reauth_required"');
-  expect(html({ health: { state: "banned" } })).toContain('title="banned"');
-  expect(html({ disabled: true, health: { state: "banned" } })).toContain('title="disabled"');
 });

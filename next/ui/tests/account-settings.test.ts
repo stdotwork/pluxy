@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
+import { h } from "preact";
+import { renderToString } from "preact-render-to-string";
 import type { Account } from "../kit/api";
+import { AccountSettings } from "../kit/pages/accountSettings";
 import { accountChange, draftOf } from "../kit/pages/accountSettings.helpers";
 
 // An account as core's reply reads after the browser parsed it.
@@ -163,4 +166,29 @@ test("headers that are not a JSON object of text values are refused", () => {
   expect(bad(`"X-Title: pluxy"`)).toEqual({ invalid: "headersObject" });
   expect(bad(`{"X-Title": 1}`)).toEqual({ invalid: "headersValue" });
   expect(bad(`{"X-Title": null}`)).toEqual({ invalid: "headersValue" });
+});
+
+test("Proxy URL and Custom headers show as core sends them, and an untouched form sends them back unchanged", () => {
+  // Core sends both with every secret already replaced.
+  const a: Account = {
+    id: "a",
+    source: "login",
+    state: "active",
+    refreshable: false,
+    proxy_url: "socks5://redacted@proxy.example:1080",
+    headers: { Authorization: "pluxy-redacted-0123456789abcdef01234567", "X-Title": "pluxy" },
+  };
+  const html = renderToString(h(AccountSettings, { account: a }));
+  expect(html).toContain("Proxy URL (proxy_url)");
+  expect(html).toContain("socks5://redacted@proxy.example:1080");
+  expect(html).toContain("Custom headers (headers)");
+  expect(html).toContain("Authorization: pluxy-redacted-0123456789abcdef01234567");
+  expect(html).toContain("X-Title: pluxy");
+  // Saving another field sends neither: core keeps the secrets behind the placeholders.
+  expect(accountChange(a, { ...draftOf(a), priority: "4" })).toEqual({ change: { priority: 4 } });
+  // A header changed beside the secret sends the placeholder back as it came.
+  const d = { ...draftOf(a), headers: JSON.stringify({ ...a.headers, "X-Title": "two" }) };
+  expect(accountChange(a, d)).toEqual({
+    change: { headers: { Authorization: "pluxy-redacted-0123456789abcdef01234567", "X-Title": "two" } },
+  });
 });

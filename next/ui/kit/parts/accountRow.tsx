@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "preact/hooks";
 import type { Account } from "../api/accounts";
+import type { QuotaLimit } from "../api/quota";
 import { Icon, type IconName } from "../icons";
 import { Meter } from "../meter";
 import { accountIdentities, usePrivacy } from "../privacy";
@@ -123,44 +124,54 @@ export function Limits(props: {
   }
   return (
     <span class="limits" data-part="limits" data-state="read">
-      {rowWindows(w.limits).map((l) => {
-        const name = windowName(l);
-        const left = leftPercent(l);
-        const reset = resetsIn(l, now);
-        const countdown = reset === undefined ? undefined : shortDuration(reset / 1000);
-        const said = l.unlimited
-          ? t("titleNoLimit", { name })
-          : left === undefined
-            ? name
-            : left === 0
-              ? t("titleUsedUp", { name })
-              : t("titleLeft", { name, percent: left });
-        const title = countdown ? t("titleResets", { title: said, duration: countdown }) : said;
-        const word = l.unlimited
-          ? t("noLimit")
-          : left === undefined
-            ? ""
-            : left === 0
-              ? t("usedUp")
-              : t("left", { percent: left });
-        return (
-          <span class="limit" key={l.id} title={title}>
-            <span class="limit-name">{windowShort(l)}</span>
-            {left !== undefined ? (
-              <Meter
-                mode="left"
-                percent={left}
-                label={t("gauge", { account: props.account, name })}
-                valueText={word}
-              />
-            ) : (
-              <span class="meter" data-mode="left" data-tone="none" aria-hidden="true" />
-            )}
-            <span class="limit-left">{word}</span>
-            {countdown && <span class="limit-reset">{countdown}</span>}
-          </span>
-        );
-      })}
+      {rowWindows(w.limits).map((l) => (
+        <LimitLine key={l.id} limit={l} account={props.account} now={now} />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * One limit: its name (short, "5h", or long, "5-hour limit"), a gauge of what is left, the share
+ * left and the countdown to its reset. account names the gauge for assistive technology.
+ */
+export function LimitLine(props: { limit: QuotaLimit; account: string; now?: number; long?: boolean }) {
+  const l = props.limit;
+  const now = props.now ?? Date.now();
+  const name = windowName(l);
+  const left = leftPercent(l);
+  const reset = resetsIn(l, now);
+  const countdown = reset === undefined ? undefined : shortDuration(reset / 1000);
+  const said = l.unlimited
+    ? t("titleNoLimit", { name })
+    : left === undefined
+      ? name
+      : left === 0
+        ? t("titleUsedUp", { name })
+        : t("titleLeft", { name, percent: left });
+  const title = countdown ? t("titleResets", { title: said, duration: countdown }) : said;
+  const word = l.unlimited
+    ? t("noLimit")
+    : left === undefined
+      ? ""
+      : left === 0
+        ? t("usedUp")
+        : t("left", { percent: left });
+  return (
+    <span class="limit" title={title}>
+      <span class="limit-name">{props.long ? windowName(l) : windowShort(l)}</span>
+      {left !== undefined ? (
+        <Meter
+          mode="left"
+          percent={left}
+          label={t("gauge", { account: props.account, name })}
+          valueText={word}
+        />
+      ) : (
+        <span class="meter" data-mode="left" data-tone="none" aria-hidden="true" />
+      )}
+      <span class="limit-left">{word}</span>
+      {countdown && <span class="limit-reset">{countdown}</span>}
     </span>
   );
 }

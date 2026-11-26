@@ -1,5 +1,5 @@
-// An account's routing fields and settings in its details (accountDetail.tsx): shown read-only,
-// and for an account added by login changed in the Edit form. Core shows a secret in the
+// An account's routing fields and settings on its page (account.tsx): shown read-only, and for an
+// account added by login changed in the Edit settings form. Core shows a secret in the
 // settings only as a placeholder, and keeps the secret when the placeholder is sent back.
 
 import { useEffect, useRef, useState } from "preact/hooks";
@@ -21,7 +21,7 @@ import { ConfigDialog } from "./configDialog";
 
 const t = strings("accountSettings", {
   heading: "Account settings",
-  edit: "Edit",
+  edit: "Edit settings",
   editTitle: "Edit {name}",
   prefix: "Prefix (prefix)",
   proxyUrl: "Proxy URL (proxy_url)",
@@ -110,6 +110,18 @@ export function AccountSettings(props: { account: Account }) {
       <Facts
         rows={[
           [t("prefix"), p.text(a.prefix, ids)],
+          // Core sends both with every secret already replaced: shown as they come.
+          [t("proxyUrl"), a.proxy_url && <span class="mono">{a.proxy_url}</span>],
+          [
+            t("headers"),
+            a.headers && Object.keys(a.headers).length > 0 && (
+              <pre class="mono account-settings-json">
+                {Object.entries(a.headers)
+                  .map(([name, value]) => `${name}: ${value}`)
+                  .join("\n")}
+              </pre>
+            ),
+          ],
           [t("priority"), a.priority ?? 0],
           [t("weight"), a.weight],
           [t("disableCooling"), flag(a.disable_cooling)],
@@ -157,8 +169,13 @@ function useLeaveGuard(dirty: { current: boolean }, ask: (go: () => void) => voi
   }, []);
 }
 
-/** The Edit button and its form, for an account added by login. */
-export function AccountEdit(props: { account: Account; onChanged: () => void; disabled?: boolean }) {
+/** The Edit settings button and its form, for an account added by login. name is the account's name as the page shows it. */
+export function AccountEdit(props: {
+  account: Account;
+  name: string;
+  onChanged: () => void;
+  disabled?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -168,6 +185,7 @@ export function AccountEdit(props: { account: Account; onChanged: () => void; di
       {open && (
         <EditForm
           account={props.account}
+          name={props.name}
           close={() => setOpen(false)}
           saved={() => {
             setOpen(false);
@@ -179,7 +197,7 @@ export function AccountEdit(props: { account: Account; onChanged: () => void; di
   );
 }
 
-function EditForm(props: { account: Account; close: () => void; saved: () => void }) {
+function EditForm(props: { account: Account; name: string; close: () => void; saved: () => void }) {
   const { api } = useKit();
   const p = usePrivacy();
   const a = props.account;
@@ -211,10 +229,7 @@ function EditForm(props: { account: Account; close: () => void; saved: () => voi
   const models = rows(draft.models, (l) => set("models", l));
   const aliases = rows(draft.aliases, (l) => set("aliases", l));
   return (
-    <ConfigDialog
-      title={t("editTitle", { name: p.text(a.id, accountIdentities(a)) })}
-      close={() => !save.busy && ask(props.close)}
-    >
+    <ConfigDialog title={t("editTitle", { name: props.name })} close={() => !save.busy && ask(props.close)}>
       <form
         class="stack account-edit"
         data-part="account-edit"

@@ -147,6 +147,8 @@
   .account-name {
     flex: 0 1 auto;
     min-width: 0;
+    /* A link a pointer can hit: at least 24px high (the kit's smallest target). */
+    line-height: 24px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
