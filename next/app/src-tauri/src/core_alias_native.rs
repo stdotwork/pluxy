@@ -7,10 +7,10 @@
 //! confirmation, worked through the UI driver:
 //!
 //! - account: a login account of test/alpha (`e2e/testext`'s `api_key` sign-in) serves
-//!   `fake-model`, as the config account `local-1` does (`e2e/panelcore`);
+//!   `server-error`, which no other account of the test core serves (`fake-model` is listed under
+//!   the config account of test/local only);
 //! - cancel: `core_alias_create` asks a native confirmation naming the alias, the model, the login
-//!   account, the config account it leaves alone and that Restore backup leaves the alias;
-//!   cancelled, core is unchanged;
+//!   account and that Restore backup leaves the alias; cancelled, core is unchanged;
 //! - confirm: the login account's `model_alias` holds the alias (forked: the model keeps its
 //!   name) and core serves both names on it;
 //! - again: asked again, it is already there, unasked.
@@ -28,9 +28,8 @@ use tauri::{AppHandle, Manager, Webview};
 
 /// The login account the check adds.
 const ACCOUNT: &str = "alias-login-1";
-/// The account of the test core's config that serves the model too.
-const CONFIG_ACCOUNT: &str = "local-1";
-const MODEL: &str = "fake-model";
+/// A model of a login account of e2e/testext that no account in the test core's config serves.
+const MODEL: &str = "server-error";
 const ALIAS: &str = "claude-opus-5-fake";
 /// Longer than the confirmation keeps its Confirm button unarmed once it shows.
 const ARMED: Duration = Duration::from_millis(1300);
@@ -74,10 +73,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
             .filter(|v| !v.is_null())
             .map(|r| Err(format!("core_alias_create answered without asking: {r}")))
         })??;
-        dialog_with(
-            app,
-            &[ALIAS, MODEL, ACCOUNT, CONFIG_ACCOUNT, "Restore backup"],
-        )?;
+        dialog_with(app, &[ALIAS, MODEL, ACCOUNT, "Restore backup"])?;
         if cancel {
             press("alt+c")?;
         } else {
@@ -98,13 +94,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
                 r.status == 202,
                 format!("core did not take the login account: {r:?}"),
             )?;
-            wait_for("core serving fake-model on the login account", || {
-                served(MODEL).filter(|a| a.contains(&json!(ACCOUNT)))
+            wait_for("core serving the model on the login account", || {
+                served(MODEL).filter(|a| a == &[json!(ACCOUNT)])
             })?;
-            require(
-                served(MODEL).is_some_and(|a| a.contains(&json!(CONFIG_ACCOUNT))),
-                "the config account does not serve fake-model",
-            )?;
             require(
                 aliases().is_null() && served(ALIAS).is_none(),
                 format!("the login account starts with an alias: {}", aliases()),
@@ -134,7 +126,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
             require(
                 r["ok"] == true
                     && r["value"]["accounts"] == json!([ACCOUNT])
-                    && r["value"]["config_accounts"] == json!([CONFIG_ACCOUNT]),
+                    && r["value"]["config_accounts"] == json!([]),
                 format!("the confirmed alias: {r}"),
             )?;
             require(
