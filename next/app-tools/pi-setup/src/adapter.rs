@@ -211,7 +211,10 @@ pub fn remove(tx: &Transactions, agent: &Path, pinned: Option<&Folder>) -> Resul
     {
         return Ok(false);
     }
-    tx.remove_folder(crate::SET, &Folder::pinned(&t.pin)?)?;
+    // The handle on the plugin's folder closed first: Windows does not rename a folder held open.
+    let pin = t.pin.clone();
+    drop(t);
+    tx.remove_folder(crate::SET, &Folder::pinned(&pin)?)?;
     Ok(true)
 }
 

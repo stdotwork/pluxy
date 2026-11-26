@@ -741,11 +741,13 @@ fn a_plugin_moved_aside_that_cannot_go_back_is_named_and_put_back_by_the_next_st
     let e = adapter::update(&tx, &folder).unwrap_err();
     hook(None);
     drop(folder);
-    // The error says where the person's copy is; it is all there, and the next start puts it back
-    // once the name is free.
+    // The error says where the person's copy is (by its resolved path, as the library reads the
+    // agent folder); it is all there, and the next start puts it back once the name is free.
     let aside = aside_in(&agent).unwrap();
+    let resolved = std::fs::canonicalize(&aside).unwrap();
     assert!(
-        e.message.contains(&aside.display().to_string()) && e.message.contains("preview it again"),
+        e.message.contains(&resolved.display().to_string())
+            && e.message.contains("preview it again"),
         "{}",
         e.message
     );
