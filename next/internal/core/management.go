@@ -46,8 +46,9 @@ const maxManagementBody = 1 << 20
 //	POST   /v0/management/config/validate  check a config document without applying it
 //	PUT    /v0/management/config    replace the config file and apply it (WriteConfig)
 //	GET    /v0/management/client-keys  the client keys, masked
-//	POST   /v0/management/client-keys  add a new random client key; the reply shows it once
-//	DELETE /v0/management/client-keys/{id}  remove a client key
+//	POST   /v0/management/client-keys  add a new random client key, with a label if sent; the reply shows it once
+//	PATCH  /v0/management/client-keys/{id}  set or clear a client key's label
+//	DELETE /v0/management/client-keys/{id}  remove a client key (and its label)
 //	POST   /v0/management/management-key/rotate  replace the management key with a new one
 //	GET    /v0/management/models    the models served, as GET /v1/models lists them, each with its
 //	                                extension, upstream name and the IDs of the accounts that serve it

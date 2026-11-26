@@ -8,9 +8,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -201,7 +203,8 @@ func (c *Core) edit(change func(d *configdoc.Doc) error) func([]byte) ([]byte, e
 	}
 }
 
-// readStrictJSON reads a request body into v, refusing fields v does not have.
+// readStrictJSON reads a request body into v, refusing fields v does not have and anything after
+// the one JSON object.
 func readStrictJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	b, ok := readManagementBody(w, r)
 	if !ok {
@@ -211,6 +214,10 @@ func readStrictJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "request body: "+err.Error())
+		return false
+	}
+	if dec.Decode(new(any)) != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid_request", "request body must be one JSON object")
 		return false
 	}
 	return true
@@ -223,7 +230,23 @@ func newKey() string { return rand.Text() }
 type clientKeyView = management.ClientKey
 
 func (c *Core) keyView(k string) clientKeyView {
-	return clientKeyView{ID: c.keyID(k), Masked: maskKey(k)}
+	id := c.keyID(k)
+	return clientKeyView{ID: id, Masked: maskKey(k), Label: c.Config().ClientKeyLabels[id]}
+}
+
+// checkKeyLabel returns a label sent for a client key as CheckLabel does, and refuses a label that
+// is one of the client keys or the management key: a label is listed and recorded in usage
+// events, so it must not be a secret. It writes the 400 reply and returns false when it refuses.
+func (c *Core) checkKeyLabel(w http.ResponseWriter, sent string) (string, bool) {
+	label, err := server.CheckLabel(sent)
+	if err == nil && c.Config().LabelIsKey(label) {
+		err = server.ErrLabelIsKey
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return "", false
+	}
+	return label, true
 }
 
 func maskKey(k string) string {
@@ -376,13 +399,72 @@ func (c *Core) handleConfig(m *server.Management) {
 	})
 
 	m.Handle("POST /client-keys", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Label string `json:"label"`
+		}
+		if !readOptionalJSON(w, r, &req) {
+			return
+		}
+		label, ok := c.checkKeyLabel(w, req.Label)
+		if !ok {
+			return
+		}
 		key := "sk-" + newKey()
-		err := c.WriteConfig("management API: new client key", c.edit(func(d *configdoc.Doc) error { return d.AddClientKey(key) }))
+		err := c.WriteConfig("management API: new client key", c.edit(func(d *configdoc.Doc) error {
+			if err := d.AddClientKey(key); err != nil {
+				return err
+			}
+			if label == "" {
+				return nil
+			}
+			return d.SetClientKeyLabel(c.keyID(key), label)
+		}))
 		if err != nil {
 			c.writeChangeError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, management.NewClientKeyReply{Key: c.keyView(key), Value: key})
+	})
+
+	m.Handle("PATCH /client-keys/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var req struct {
+			Label json.RawMessage `json:"label"`
+		}
+		if !readStrictJSON(w, r, &req) {
+			return
+		}
+		var sent *string
+		if req.Label == nil || json.Unmarshal(req.Label, &sent) != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "send label as a string, or null for none")
+			return
+		}
+		label := ""
+		if sent != nil {
+			var ok bool
+			if label, ok = c.checkKeyLabel(w, *sent); !ok {
+				return
+			}
+		}
+		var masked string
+		err := c.WriteConfig("management API: client key label", c.edit(func(d *configdoc.Doc) error {
+			keys, err := d.ClientKeys()
+			if err != nil {
+				return err
+			}
+			i := slices.IndexFunc(keys, func(k string) bool { return c.keyID(k) == id })
+			if i < 0 {
+				return &editError{http.StatusNotFound, "not_found", "no client key in the config file has this ID"}
+			}
+			masked = maskKey(keys[i])
+			return d.SetClientKeyLabel(id, label)
+		}))
+		if err != nil {
+			c.writeChangeError(w, err)
+			return
+		}
+		// What is stored now, which is the label sent: the edit refuses what it cannot set.
+		writeJSON(w, http.StatusOK, clientKeyView{ID: id, Masked: masked, Label: c.Config().ClientKeyLabels[id]})
 	})
 
 	m.Handle("DELETE /client-keys/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -402,6 +484,9 @@ func (c *Core) handleConfig(m *server.Management) {
 			case left == 0:
 				return &editError{http.StatusConflict, "conflict", "this is the last client key, and without one anyone who reaches core can use it; add another key first"}
 			}
+			// A label set through an alias or merge stays: no key has this ID any more, so
+			// nothing reads it.
+			d.RemoveClientKeyLabel(id)
 			return nil
 		}))
 		if err != nil {

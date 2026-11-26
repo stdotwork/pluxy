@@ -3,7 +3,9 @@ package configdoc
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -104,6 +106,91 @@ func (d *Doc) RemoveClientKeys(drop func(key string) bool) (int, error) {
 		d.edited = true
 	}
 	return len(kept), nil
+}
+
+// clientKeyLabels is where the client keys' names are: client_key_labels, a mapping from a key's
+// ID (the one GET /client-keys lists, never the key) to its label. It is this core's own
+// setting, so it keeps its name in a config.yaml too.
+var clientKeyLabels = []string{"client_key_labels"}
+
+// ErrLabelIndirect is the refusal to set or clear a client key's label that a config.yaml sets
+// through a YAML alias or a merge key (<<): there is no entry of its own to change, and changing
+// the shared one would change other labels too. It reads as the reply to the person.
+var ErrLabelIndirect = errors.New("this key's label is set through an alias or merge in config.yaml, so it cannot be changed here: edit config.yaml")
+
+// labelsInEffect returns the client key labels as the file's readers see them, with aliases and
+// merge keys resolved.
+func (d *Doc) labelsInEffect() (map[string]string, error) {
+	var v struct {
+		Labels map[string]string `yaml:"client_key_labels"`
+	}
+	if err := d.root.Decode(&v); err != nil {
+		return nil, fmt.Errorf("%w: client_key_labels: %v", ErrInvalid, err)
+	}
+	return v.Labels, nil
+}
+
+// RemoveClientKeyLabel removes the entry of the client key with this ID from the labels, if it
+// has one of its own; the mapping goes with its last entry.
+func (d *Doc) RemoveClientKeyLabel(id string) {
+	d.Delete(append(slices.Clone(clientKeyLabels), id)...)
+	if m := d.Get(clientKeyLabels...); m != nil && m.Kind == yaml.MappingNode && len(m.Content) == 0 {
+		d.Delete(clientKeyLabels...)
+	}
+}
+
+// SetClientKeyLabel gives the client key with this ID the label, or removes its label when
+// label is empty; the mapping goes with its last entry. It returns ErrLabelIndirect when the labels
+// (or this key's) are set through an alias or a merge key, or when the change would alter
+// another key's label; the document is then not to be written.
+func (d *Doc) SetClientKeyLabel(id, label string) error {
+	labels := d.Get(clientKeyLabels...)
+	if labels != nil && labels.Kind == yaml.AliasNode {
+		return ErrLabelIndirect
+	}
+	before, err := d.labelsInEffect()
+	if err != nil {
+		return err
+	}
+	if own := child(labels, id); (own != nil && own.Kind == yaml.AliasNode) || (own == nil && before[id] != "") {
+		return ErrLabelIndirect
+	}
+	if label != "" {
+		if err := d.Set(String(label), append(slices.Clone(clientKeyLabels), id)...); err != nil {
+			return err
+		}
+	} else {
+		d.RemoveClientKeyLabel(id)
+	}
+	// What the readers see must be the old labels with this one changed: a shared anchor would
+	// change the labels of the keys that alias it.
+	want := maps.Clone(before)
+	if label == "" {
+		delete(want, id)
+	} else {
+		if want == nil {
+			want = map[string]string{}
+		}
+		want[id] = label
+	}
+	// Read it as it would be written: clearing the label that holds an anchor would leave
+	// an alias without one.
+	b, err := d.encode()
+	if err != nil {
+		return err
+	}
+	written, err := Parse(b, d.YAML)
+	if err != nil {
+		return ErrLabelIndirect
+	}
+	after, err := written.labelsInEffect()
+	if err != nil {
+		return err
+	}
+	if !maps.Equal(after, want) {
+		return ErrLabelIndirect
+	}
+	return nil
 }
 
 // SetManagementKey sets the management key: management_key in a JSON config; in a

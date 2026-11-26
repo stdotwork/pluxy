@@ -518,6 +518,7 @@ func TestNewKeysPassThrough(t *testing.T) {
 credentials_dir: creds
 drop_policy: reject
 token_count_estimate: false
+client_key_labels: {abc123: Claude Code}
 packages: {dir: pk}
 cors: {allowed_origins: ["http://localhost:5173"]}
 extensions:
@@ -526,7 +527,7 @@ codex-api-key: [{api-key: from-yaml, base-url: "https://yaml.example.com"}]
 `)
 	equalJSON(t, r.Config, `{
 		"listen": ":8317", "routing": {"request_retry": 0, "session_affinity": {"enabled": false}},
-		"credentials_dir": "creds", "drop_policy": "reject", "token_count_estimate": false, "packages": {"dir": "pk"},
+		"credentials_dir": "creds", "drop_policy": "reject", "token_count_estimate": false, "client_key_labels": {"abc123": "Claude Code"}, "packages": {"dir": "pk"},
 		"cors": {"allowed_origins": ["http://localhost:5173"]},
 		"extensions": {"pluxy/codex": {"idle_stop_ms": 0, "accounts": [
 			{"id": "own", "credential": {"kind": "api_key", "api_key": "k"}},
