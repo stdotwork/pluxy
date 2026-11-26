@@ -36,9 +36,9 @@ const row = (page: import("@playwright/test").Page, id: string) =>
 test("a state shows in plain words and keeps what core sent for support", async ({ page }) => {
   const states = {
     "relogin-1": "Needs sign-in",
-    "used-up-1": "Exhausted",
-    "off-1": "Disabled",
-    "fine-1": "Available",
+    "used-up-1": "Limit used up",
+    "off-1": "Turned off",
+    "fine-1": "Serving",
   };
   for (const [id, words] of Object.entries(states)) {
     await expect(row(page, id).locator('[data-part="badge"]')).toHaveText(words);

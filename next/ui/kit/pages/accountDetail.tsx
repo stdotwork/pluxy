@@ -3,20 +3,10 @@
 
 import { useState } from "preact/hooks";
 import { type Account, leftOut, providerMissing } from "../api";
+import { accountCondition, conditionState } from "../parts/account";
 import { accountIdentities, usePrivacy } from "../privacy";
 import { rich, strings } from "../strings";
-import {
-  Badge,
-  Button,
-  ConfirmButton,
-  Detail,
-  Facts,
-  Notice,
-  StateBadge,
-  useAction,
-  useKit,
-  when,
-} from "../ui";
+import { Button, ConfirmButton, Detail, Facts, Notice, StateBadge, useAction, useKit, when } from "../ui";
 import { AccountEdit, AccountSettings } from "./accountSettings";
 import { AccountTools } from "./accountTools";
 import { credentialTools } from "./accountTools.helpers";
@@ -38,7 +28,6 @@ const t = strings("accountDetail", {
   enable: "Enable",
   disable: "Disable",
   remove: "Remove",
-  noProvider: "No provider",
   noProviderHint:
     "{extension} is not running, so this account gets no requests. Install or enable it on Extensions.",
   leftOutBecause: "Left out because",
@@ -57,15 +46,17 @@ const t = strings("accountDetail", {
 });
 
 /**
- * An account's state as a badge: Disabled when it is turned off, the health state that keeps
- * requests away from it when there is one, else its state.
+ * An account's state as a badge: its condition in words, as AccountRow's mark names it
+ * (accountCondition), so a badge on any page agrees with the account's row. Its title keeps the
+ * state core sent: turned off, the health state that keeps requests away, else its state.
  */
 export function AccountState(props: { a: Account; running?: ReadonlySet<string> }) {
-  if (props.a.disabled) return <StateBadge state="disabled" of="account" />;
-  const out = leftOut(props.a);
-  if (out) return <StateBadge state={out} of="account" />;
-  if (providerMissing(props.a, props.running)) return <Badge tone="warn">{t("noProvider")}</Badge>;
-  return <StateBadge state={props.a.state} of="account" />;
+  const a = props.a;
+  const c = accountCondition(a, props.running);
+  const sent = a.disabled
+    ? "disabled"
+    : (leftOut(a) ?? (c.kind === "cooling" ? a.health?.state : undefined) ?? a.state);
+  return <StateBadge state={conditionState(c)} sent={sent} of="account" />;
 }
 
 export interface AccountDetailProps {

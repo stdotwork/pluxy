@@ -54,7 +54,7 @@ whichever provider reports it and however the provider words it.
 | One such file, in body text | `auth file` | `credential file`, `OAuth file` |
 | The record the proxy routes requests through | `credential` | |
 | The upstream identity | `account` | |
-| Credential can take requests / cannot / turned off | `Available` / `Unavailable` / `Disabled` (owner to confirm) | `Active`, `Ready` |
+| An account's condition, and the groups a list sorts accounts into | `Serving`, `Cooling down`, `Limit used up`, `Needs sign-in`, `Closed by provider`, `Cannot be read`, `Provider stopped`, `Turned off`; groups `Needs you`, `Waiting`, `Serving`, `Turned off` | `Active`, `Ready` |
 | Temporary local block after errors (noun) | `cooldown` | `cooling` |
 | The same, as a state | `cooling down` | `cooling` |
 | Clear that block | `Clear cooldown` | |

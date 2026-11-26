@@ -177,6 +177,13 @@ export const PARTS = [
   "setup-pick",
   "setup-client",
   "setup-paste",
+  "account-row",
+  "request-row",
+  "setting-row",
+  "tool-row",
+  "state-pane",
+  "plan-pill",
+  "limits",
 ] as const;
 
 export type Part = (typeof PARTS)[number];

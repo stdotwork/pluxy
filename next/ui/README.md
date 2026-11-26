@@ -8,7 +8,7 @@ pages in the same places. Core keeps the themes a person adds and which theme is
 
 | Folder | What it holds |
 | --- | --- |
-| `kit/` | What both builds share: the host-services interface (`host.ts`), the management API calls by area (`api/`), the string layer (`strings.ts`), privacy mode's masks (`privacy.ts`), components (`ui.tsx`, `ui.css`), its icons (`icons.tsx`), the shell (`shell.tsx`) and the application frame it shows its pages in (`frame.tsx`, `shell.css`, with the page model in `destinations.ts`), the stylesheet that puts the kit's CSS in order (`kit.css`), the typefaces the default theme names (`fonts/`, declared in `fonts.css`), the theme engine (`theme/`) and the pages core offers (`pages/`, listed in `pages/core.ts`) |
+| `kit/` | What both builds share: the host-services interface (`host.ts`), the management API calls by area (`api/`), the string layer (`strings.ts`), privacy mode's masks (`privacy.ts`), components (`ui.tsx`, `ui.css`), the parts every page shows an account, a request, a setting, a coding tool and a loading, empty or failed pane with (`parts/`), its icons (`icons.tsx`), the shell (`shell.tsx`) and the application frame it shows its pages in (`frame.tsx`, `shell.css`, with the page model in `destinations.ts`), the stylesheet that puts the kit's CSS in order (`kit.css`), the typefaces the default theme names (`fonts/`, declared in `fonts.css`), the theme engine (`theme/`) and the pages core offers (`pages/`, listed in `pages/core.ts`) |
 | `panel/` | The browser build: its entry page, `browserHost.ts`, the kit's host in a browser, and `status.ts`, what its status block says |
 | `themes/` | The theme contract and the built-in themes, as theme files |
 | `extension-pages/` | The extension pages contract, and `pluxy-page.js`, the module an extension's page loads to talk to the panel |
@@ -42,8 +42,8 @@ render(<Shell host={host} themes={themes} privacy={privacy} pages={corePages()} 
 The **Privacy mode** toggle at the header strip's end hides account e-mail addresses and
 identifiers while the person shares their screen (`kit/privacy.ts`). It changes only what pages show: a page passes a
 value through `usePrivacy()`'s masks where it shows it (text, `title`, `aria-label`) and keeps the
-real value for calls, search, filters, copying and downloads. Keys never go through the masks;
-they keep their own handling in both states. Where the desktop app says it saved a file, privacy
+real value for calls, search, filters, copying and downloads. A key's name (its label) goes through
+them; a key's value, even masked, never does: it keeps its own handling in both states. Where the desktop app says it saved a file, privacy
 mode names the file and its folder only (`shownPath` in `kit/save.tsx`): the folders above hold
 the person's user name. The panel keeps the choice in the host's prefs
 (`prefsPrivacy`); the desktop app keeps it natively. Extension pages get it as `privacy` in the

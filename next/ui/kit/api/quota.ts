@@ -13,6 +13,8 @@ export interface QuotaLimit {
   resets_at?: number;
   window_seconds?: number;
   models?: string[];
+  /** The limit counts one feature of the plan (code review, another product), not requests. */
+  feature?: boolean;
 }
 
 export interface Quota {

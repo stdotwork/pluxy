@@ -4,6 +4,8 @@ import { one } from "./path";
 export interface ClientKey {
   id: string;
   masked: string;
+  /** The key's name, such as the tool it was made for; absent for a key with none. */
+  label?: string;
 }
 
 export interface ConfigDocument {

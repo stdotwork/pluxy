@@ -283,9 +283,9 @@ test("Refresh reads the packages again, so a provider started since shows as run
 for (const failure of [
   {
     status: 0,
-    shown: "cannot reach core; check that pluxy is running and the address is right, then try again",
+    shown: "cannot reach pluxy; check that it is running and the address is right, then try again",
   },
-  { status: 500, shown: "core returned HTTP 500; check Logs Viewer and try again" },
+  { status: 500, shown: "pluxy returned HTTP 500; check Logs Viewer and try again" },
 ] as const) {
   test(`a ${failure.status} re-read keeps the page and shows ${failure.shown}`, async () => {
     jest.useFakeTimers();

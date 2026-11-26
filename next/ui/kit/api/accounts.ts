@@ -2,6 +2,7 @@
 
 import type { Host } from "../host";
 import { one } from "./path";
+import type { QuotaReply } from "./quota";
 
 export interface AccountError {
   code: string;
@@ -57,6 +58,11 @@ export interface Account {
   active_requests?: number;
   /** What routing holds against the account now, as core judges it. */
   health?: AccountHealth;
+  /**
+   * The limits core last read for the account, with when it read them; absent from a core that
+   * does not keep them, and for an account it has not read.
+   */
+  quota?: QuotaReply;
 }
 
 /**
