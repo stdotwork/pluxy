@@ -3,6 +3,7 @@
 // A function, so the titles are read in the locale set when the shell renders.
 
 import type { PageDef } from "../shell";
+import { accountPage } from "./account";
 import { accountsPage } from "./accounts";
 import { addAccountPage } from "./addAccount";
 import { configPage } from "./config";
@@ -10,7 +11,6 @@ import { extensionsPage } from "./extensions";
 import { type GeneralOptions, generalPage } from "./general";
 import { homePage } from "./home";
 import { logsPage } from "./logs";
-import { quotaPage } from "./quota";
 import { requestsPage } from "./requests";
 import { routingPage } from "./routing";
 import { type SetupOptions, setupPage } from "./setup";
@@ -30,9 +30,9 @@ export interface CorePageOptions {
 export const corePages = (options?: CorePageOptions): PageDef[] => [
   homePage(),
   accountsPage(),
+  accountPage(),
   addAccountPage(),
   routingPage(),
-  quotaPage(),
   requestsPage(),
   usageTabPage(),
   toolsPage(options?.tools),

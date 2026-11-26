@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { goToId, openPanel, signIn, useCore } from "./support";
+import { openAccount as open, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 const secret = "sk-account-settings-panel";
@@ -38,20 +38,28 @@ async function listed(id: string): Promise<Listed | undefined> {
   return r.body.accounts.find((a) => a.id === id);
 }
 
+/** The account's own page; its settings sit under "Settings, models and a test request". */
 async function openAccount(page: Page, id: string) {
-  await goToId(page, "accounts");
-  await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
-  await page.getByRole("button", { name: id, exact: true }).click();
-  return page.getByRole("complementary", { name: `Details: ${id}`, exact: true });
+  await open(page, id);
+  const main = page.getByRole("main");
+  await main.getByText("Settings, models and a test request", { exact: true }).click();
+  return main;
 }
 
-test("Edit sets priority and an excluded model, and asks before discarding", async ({ page }) => {
+test("Edit settings sets priority and an excluded model, and asks before discarding", async ({ page }) => {
   await addAccount("settings-key", "api_key", { api_key: "account-settings-test-input" });
   await openPanel(page, core);
   await signIn(page, core);
   const detail = await openAccount(page, "settings-key");
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
-  const form = page.getByRole("dialog", { name: "Edit settings-key", exact: true });
+  const edit = detail.getByRole("button", { name: "Edit settings", exact: true });
+  await edit.click();
+  const form = page.getByRole("dialog");
+  // Escape closes the form and gives focus back to the button that opened it.
+  await expect(form).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(form).toHaveCount(0);
+  await expect(edit).toBeFocused();
+  await edit.click();
   await form.getByLabel("Priority (priority)").fill("5");
   await form.getByLabel("Excluded models (excluded_models)").fill("rate-*");
 
@@ -76,17 +84,13 @@ test("Edit sets priority and an excluded model, and asks before discarding", asy
   expect(a?.excluded_models).toEqual(["rate-*"]);
   const settings = detail.locator('[data-part="account-settings"]');
   await expect(settings).toContainText("rate-*");
-  await detail.getByRole("button", { name: "Show models", exact: true }).click();
+  // The models it serves leave the excluded one out.
   const models = detail.locator('[data-part="account-models"]');
-  await expect(models.locator('[data-part="item"]').filter({ hasText: "rate-limited" })).toContainText(
-    "Excluded",
-  );
-  await expect(models.locator('[data-part="item"]').filter({ hasText: "fake-model" })).toContainText(
-    "Included",
-  );
+  await expect(models).toContainText("fake-model");
+  await expect(models).not.toContainText("rate-limited");
 
   // Discarding drops the edit.
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
+  await detail.getByRole("button", { name: "Edit settings", exact: true }).click();
   await form.getByLabel("Priority (priority)").fill("9");
   await form.getByRole("button", { name: "Cancel", exact: true }).click();
   await form.getByRole("button", { name: "Discard changes", exact: true }).click();
@@ -110,8 +114,8 @@ test("the unsaved-changes question stays on while a save runs, and a failed save
   await openPanel(page, core);
   await signIn(page, core);
   const detail = await openAccount(page, "settings-slow");
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
-  const form = page.getByRole("dialog", { name: "Edit settings-slow", exact: true });
+  await detail.getByRole("button", { name: "Edit settings", exact: true }).click();
+  const form = page.getByRole("dialog");
   await form.getByLabel("Priority (priority)").fill("7");
   await form.getByRole("button", { name: "Save", exact: true }).click();
   // Leaving while the save runs asks first, and stays put.
@@ -119,7 +123,7 @@ test("the unsaved-changes question stays on while a save runs, and a failed save
     location.hash = "#/status";
   });
   await expect(form.getByText("Discard unsaved changes?")).toBeVisible();
-  await expect(page).toHaveURL(/#\/accounts$/);
+  await expect(page).toHaveURL(/#\/accounts\/settings-slow$/);
   release();
   await expect(form.getByText("the save failed")).toBeVisible();
   await form.getByRole("button", { name: "Keep editing", exact: true }).click();
@@ -138,8 +142,8 @@ test("settings show a placeholder for a secret, and saving keeps the secret", as
   await signIn(page, core);
   const detail = await openAccount(page, "settings-secret");
   await expect(detail.locator('[data-part="account-settings"]')).toContainText(String(placeholder));
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
-  const form = page.getByRole("dialog", { name: "Edit settings-secret", exact: true });
+  await detail.getByRole("button", { name: "Edit settings", exact: true }).click();
+  const form = page.getByRole("dialog");
   const text = form.getByLabel("Settings (settings)");
   await expect(text).toHaveValue(new RegExp(String(placeholder)));
   await text.fill(JSON.stringify({ base_url: "https://two.example/v1", api_key: placeholder }, null, 2));
@@ -168,8 +172,8 @@ test("a config account's settings are read-only", async ({ page }) => {
   await signIn(page, core);
   const detail = await openAccount(page, "alpha-1");
   await expect(detail.locator('[data-part="account-settings"]')).toContainText("alpha-model");
-  await expect(detail.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
-  await expect(detail.getByRole("link", { name: "Edit in Config Panel" })).toBeVisible();
+  await expect(detail.getByRole("button", { name: "Edit settings", exact: true })).toHaveCount(0);
+  await expect(detail.getByRole("link", { name: "Open the settings file" })).toBeVisible();
 });
 
 test("Proxy URL shows without its password, and saving another field keeps the password", async ({
@@ -188,8 +192,8 @@ test("Proxy URL shows without its password, and saving another field keeps the p
   await openPanel(page, core);
   await signIn(page, core);
   const detail = await openAccount(page, "settings-proxy");
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
-  const form = page.getByRole("dialog", { name: "Edit settings-proxy", exact: true });
+  await detail.getByRole("button", { name: "Edit settings", exact: true }).click();
+  const form = page.getByRole("dialog");
   const proxy = form.getByLabel("Proxy URL (proxy_url)");
   await expect(proxy).toHaveValue("");
 
@@ -211,6 +215,10 @@ test("Proxy URL shows without its password, and saving another field keeps the p
     return r.body.accounts.find((a) => a.id === "settings-proxy")?.proxy_url;
   };
   expect(await shown()).toBe("socks5://redacted@proxy.example:1080");
+  // The page shows it as core sends it.
+  await expect(detail.locator('[data-part="account-settings"]')).toContainText(
+    "socks5://redacted@proxy.example:1080",
+  );
   const asked = async () => {
     const r = await fetch(`${core.base}/v1/chat/completions`, {
       method: "POST",
@@ -226,7 +234,7 @@ test("Proxy URL shows without its password, and saving another field keeps the p
 
   // Reopened, the field shows the redacted URL; saving another field sends no proxy_url, and the
   // password stays.
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
+  await detail.getByRole("button", { name: "Edit settings", exact: true }).click();
   await expect(proxy).toHaveValue("socks5://redacted@proxy.example:1080");
   const shots = process.env.ACCOUNT_SETTINGS_SHOTS;
   if (shots) {
@@ -246,7 +254,7 @@ test("Proxy URL shows without its password, and saving another field keeps the p
   expect(await asked()).toBe(digest(full));
 
   // Clearing the field sets the default: no proxy.
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
+  await detail.getByRole("button", { name: "Edit settings", exact: true }).click();
   await proxy.fill("");
   await form.getByRole("button", { name: "Save", exact: true }).click();
   await expect(form).toHaveCount(0);
@@ -274,8 +282,8 @@ test("Custom Headers show secrets as placeholders, and saving another header kee
   await openPanel(page, core);
   await signIn(page, core);
   const detail = await openAccount(page, "settings-headers");
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
-  const form = page.getByRole("dialog", { name: "Edit settings-headers", exact: true });
+  await detail.getByRole("button", { name: "Edit settings", exact: true }).click();
+  const form = page.getByRole("dialog");
   const save = form.getByRole("button", { name: "Save", exact: true });
   const headers = form.getByLabel("Custom headers (headers)");
   await expect(headers).toHaveValue("");
@@ -326,6 +334,9 @@ test("Custom Headers show secrets as placeholders, and saving another header kee
   const placeholder = first?.Authorization ?? "";
   expect(placeholder).toMatch(/^pluxy-redacted-[0-9a-f]{24}$/);
   expect(first).toEqual({ Authorization: placeholder, "X-Title": "pluxy one" });
+  await expect(detail.locator('[data-part="account-settings"]')).toContainText(
+    `Authorization: ${placeholder}`,
+  );
   expect(JSON.stringify((await core.mgmt("GET", "/accounts")).body)).not.toContain(token);
   // The extension got the real values: a digest is all that shows it, since core removes a secret
   // value from any text an extension sends back.
@@ -333,7 +344,7 @@ test("Custom Headers show secrets as placeholders, and saving another header kee
 
   // Reopened, the form shows the placeholder, never the value. Changing only the plain header
   // sends the whole map, the secret as its placeholder, and core keeps the secret.
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
+  await detail.getByRole("button", { name: "Edit settings", exact: true }).click();
   await expect(headers).toHaveValue(new RegExp(placeholder));
   expect(await page.content()).not.toContain(token);
   expect(JSON.parse(await headers.inputValue())).toEqual({
@@ -360,7 +371,7 @@ test("Custom Headers show secrets as placeholders, and saving another header kee
   expect(await asked()).toBe(`Authorization=${digest(authorization)},X-Title=${digest("pluxy two")}`);
 
   // Saving another field sends no headers, and the secret stays.
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
+  await detail.getByRole("button", { name: "Edit settings", exact: true }).click();
   await form.getByLabel("Priority (priority)").fill("3");
   const other = page.waitForRequest(
     (r) => r.method() === "PATCH" && r.url().endsWith("/accounts/settings-headers"),
@@ -371,7 +382,7 @@ test("Custom Headers show secrets as placeholders, and saving another header kee
   expect(await asked()).toBe(`Authorization=${digest(authorization)},X-Title=${digest("pluxy two")}`);
 
   // A secret typed anew replaces the old one.
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
+  await detail.getByRole("button", { name: "Edit settings", exact: true }).click();
   await headers.fill(JSON.stringify({ Authorization: "Bearer headers-secret-e2e-new" }, null, 2));
   await save.click();
   await expect(form).toHaveCount(0);
@@ -379,7 +390,7 @@ test("Custom Headers show secrets as placeholders, and saving another header kee
   expect(await asked()).toBe(`Authorization=${digest("Bearer headers-secret-e2e-new")}`);
 
   // Removing every header sets the default: none.
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
+  await detail.getByRole("button", { name: "Edit settings", exact: true }).click();
   await headers.fill("");
   await save.click();
   await expect(form).toHaveCount(0);

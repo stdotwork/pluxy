@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { expect, type Page, test } from "@playwright/test";
 import type { Account } from "../kit/api/accounts";
 import type { ClientKey } from "../kit/api/config";
-import { goTo, openPanel, signIn, useCore } from "./support";
+import { accountRow, goTo, openPanel, pageTitle, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -62,6 +62,10 @@ test.beforeAll(async () => {
   await addAccount("privacy-amp", AMP);
   await addAccount("privacy-at", AT);
   await addAccount(EMAIL_ID, EMAIL);
+  // A header that names the owner, shown under the account's settings.
+  expect((await core.mgmt("PATCH", `/accounts/${EMAIL_ID}`, { headers: { "X-User": EMAIL } })).status).toBe(
+    200,
+  );
   await addAccount(IMPORTED_ID, IMPORTED);
   for (const id of TWINS) await addAccount(id, id.replace("_example_com", "@example.com"), 900);
   const accounts = (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts;
@@ -113,9 +117,7 @@ async function expectMasked(page: Page) {
 
 async function accountRows(page: Page) {
   await goTo(page, "Accounts");
-  const list = page.locator('[data-part="list"]');
-  await expect(list.locator('[data-part="item"]').filter({ hasText: "privacy-amp" })).toBeVisible();
-  return list;
+  await expect(page.locator('[data-part="account-row"]').first()).toBeVisible();
 }
 
 test("privacy mode masks identities, survives a reload, reaches extension pages and reveals again", async ({
@@ -128,38 +130,43 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   await expect(hidden(page)).toHaveCount(0);
   await goTo(page, "General");
   await expect(page.getByRole("switch", { name: "Hide names" })).not.toBeChecked();
-  let list = await accountRows(page);
-  await expect(list.locator('[data-part="item"]').filter({ hasText: "privacy-amp" })).toContainText(AMP);
-  await expect(list.locator('[data-part="item"]').filter({ hasText: "privacy-at" })).toContainText(AT);
-  await expect(list.locator('[data-part="item"]').filter({ hasText: EMAIL_ID })).toContainText(EMAIL);
+  await accountRows(page);
+  // A row names an account by its label: the ID of an account that has one shows nowhere.
+  await expect(accountRow(page, "privacy-amp")).toContainText(AMP);
+  await expect(accountRow(page, "privacy-at")).toContainText(AT);
+  await expect(accountRow(page, EMAIL_ID)).toContainText(EMAIL);
   const before = await shown(page);
-  for (const raw of RAW) expect(before).toContain(raw);
-  expect((await names(page)).some((n) => n.includes(EMAIL_ID))).toBe(true);
+  for (const raw of RAW.filter((r) => r !== "alice_smith")) expect(before).toContain(raw);
+  expect((await names(page)).some((n) => n.includes(EMAIL))).toBe(true);
 
   // On.
   await hideNames(page, true);
   await expect(hidden(page)).toHaveAttribute("aria-pressed", "true");
   await expect(hidden(page)).toHaveAttribute("title", "Show names again");
-  list = await accountRows(page);
-  await expect(list.locator('[data-part="item"]').filter({ hasText: "privacy-amp" })).toContainText(
-    AMP_MASKED,
-  );
-  const at = list.locator('[data-part="item"]').filter({ hasText: "privacy-at" });
-  await expect(at).toContainText(AT_MASKED);
-  await expect(list.locator('[data-part="item"]').filter({ hasText: EMAIL_MASKED })).toHaveCount(1);
-  await expect(list.getByRole("button", { name: IMPORTED_ID_MASKED, exact: true })).toBeVisible();
-  await expectMasked(page);
-  // Tooltips and accessible names are masked too: the row's checkbox and its details.
-  await expect(page.getByRole("checkbox", { name: `Select ${EMAIL_MASKED}`, exact: true })).toBeVisible();
-  await list.getByRole("button", { name: EMAIL_MASKED, exact: true }).click();
+  await accountRows(page);
+  await expect(accountRow(page, "privacy-amp")).toContainText(AMP_MASKED);
+  await expect(accountRow(page, "privacy-at")).toContainText(AT_MASKED);
   await expect(
-    page.getByRole("complementary", { name: `Details: ${EMAIL_MASKED}`, exact: true }),
+    accountRow(page, EMAIL_ID).getByRole("link", { name: EMAIL_MASKED, exact: true }),
   ).toBeVisible();
   await expectMasked(page);
+  // Tooltips and accessible names are masked too: the row's checkbox and the account's own page.
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: `Select ${EMAIL_MASKED}`, exact: true })).toBeVisible();
+  await expectMasked(page);
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await accountRow(page, EMAIL_ID).getByRole("link", { name: EMAIL_MASKED, exact: true }).click();
+  await expect(pageTitle(page)).toHaveText(EMAIL_MASKED);
+  await expectMasked(page);
+  // Its settings, models and test request too, with the header that names the owner.
+  await page.getByText("Settings, models and a test request", { exact: true }).click();
+  await expect(page.locator('[data-part="account-settings"]')).toContainText(`X-User: ${EMAIL_MASKED}`);
+  await expectMasked(page);
   // Search still matches the real values.
-  await page.getByPlaceholder(/^Search name, account/).fill("alice.smith");
-  await expect(list.locator('[data-part="item"]')).toHaveCount(1);
-  await page.getByPlaceholder(/^Search name, account/).fill("");
+  await goTo(page, "Accounts");
+  await page.getByPlaceholder("Find an account").fill("alice.smith");
+  await expect(page.locator('[data-part="account-row"]')).toHaveCount(1);
+  await page.getByPlaceholder("Find an account").fill("");
 
   // Log views: the core log's lines and an error request log.
   await page.goto(`${core.base}/panel/#/logs`);
@@ -220,10 +227,8 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   await page.reload();
   await expect(hidden(page)).toHaveAttribute("aria-pressed", "true");
   await expect(frame.locator("html")).toHaveAttribute("data-privacy", "on");
-  list = await accountRows(page);
-  await expect(list.locator('[data-part="item"]').filter({ hasText: "privacy-amp" })).toContainText(
-    AMP_MASKED,
-  );
+  await accountRows(page);
+  await expect(accountRow(page, "privacy-amp")).toContainText(AMP_MASKED);
   await expectMasked(page);
 
   // The person turns it off: everything shows again, and the extension page hears it.
@@ -232,9 +237,9 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   await hidden(page).click();
   await expect(hidden(page)).toHaveCount(0);
   await expect(frame.locator("html")).toHaveAttribute("data-privacy", "off");
-  list = await accountRows(page);
-  await expect(list.locator('[data-part="item"]').filter({ hasText: "privacy-amp" })).toContainText(AMP);
-  await expect(list.locator('[data-part="item"]').filter({ hasText: EMAIL_ID })).toContainText(EMAIL);
+  await accountRows(page);
+  await expect(accountRow(page, "privacy-amp")).toContainText(AMP);
+  await expect(accountRow(page, EMAIL_ID)).toContainText(EMAIL);
   await page.reload();
   await expect(hidden(page)).toHaveCount(0);
   await goTo(page, "System");
@@ -255,10 +260,10 @@ test("the panel's other tabs follow hiding names", async ({ page, context }) => 
   await hideNames(page, true);
   await expect(hidden(other)).toHaveAttribute("aria-pressed", "true");
   await goTo(other, "Accounts");
-  await expect(other.getByRole("button", { name: EMAIL_MASKED, exact: true })).toBeVisible();
+  await expect(other.getByRole("link", { name: EMAIL_MASKED, exact: true })).toBeVisible();
   await hidden(page).click();
   await expect(hidden(other)).toHaveCount(0);
-  await expect(other.getByRole("button", { name: EMAIL_ID, exact: true })).toBeVisible();
+  await expect(other.getByRole("link", { name: EMAIL, exact: true })).toBeVisible();
 });
 
 test("Home hides account names and the failed request's names while names are hidden", async ({ page }) => {

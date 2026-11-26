@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { goTo, headerTabs, nav, openPanel, pageTitle, signIn, topics, useCore } from "./support";
+import { accountRow, goTo, headerTabs, nav, openPanel, pageTitle, signIn, topics, useCore } from "./support";
 
 const core = useCore();
 
@@ -59,10 +59,7 @@ test("panel shows core, switches layout and theme live, and recovers from custom
 
   // Accounts: config accounts of both extensions.
   await goTo(page, "Accounts");
-  const accounts = page.locator('[data-part="list"]');
-  for (const id of ["local-1", "alpha-1", "alpha-2"]) {
-    await expect(accounts.locator('[data-part="item"]', { hasText: id })).toBeVisible();
-  }
+  for (const id of ["local-1", "alpha-1", "alpha-2"]) await expect(accountRow(page, id)).toBeVisible();
 
   // Extensions: the installed packages, one enabled and running, one disabled.
   await goTo(page, "Extensions");
@@ -382,7 +379,7 @@ test("a narrow window shows the rail, then a bar of icons, whatever the theme sa
   const bar = await nav(page).boundingBox();
   expect(bar && bar.width === 500 && bar.height < 70 && bar.y === 0).toBe(true);
   await nav(page).getByRole("link", { name: "Accounts", exact: true }).click();
-  await expect(headerTabs(page).getByRole("link")).toHaveText(["Accounts", "Order & fallback", "Limits"]);
+  await expect(headerTabs(page).getByRole("link")).toHaveText(["All accounts", "Order & fallback"]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBe(0);
 });
 
@@ -392,10 +389,10 @@ test("the header strip names the page, shows a destination's tabs, and the way b
   await open(page);
   await signIn(page, core);
   await goTo(page, "Accounts");
-  // The three pages of Accounts are tabs; the heading names the destination and the page.
+  // The two pages of Accounts are tabs; the heading names the destination and the page.
   const tabs = headerTabs(page);
-  await expect(tabs.getByRole("link")).toHaveText(["Accounts", "Order & fallback", "Limits"]);
-  await expect(tabs.getByRole("link", { name: "Accounts", exact: true })).toHaveAttribute(
+  await expect(tabs.getByRole("link")).toHaveText(["All accounts", "Order & fallback"]);
+  await expect(tabs.getByRole("link", { name: "All accounts", exact: true })).toHaveAttribute(
     "aria-current",
     "page",
   );
@@ -423,15 +420,27 @@ test("the header strip names the page, shows a destination's tabs, and the way b
   await strip.getByRole("link", { name: "Accounts", exact: true }).click();
   await expect(page).toHaveURL(/#\/accounts$/);
 
+  // An account's page sits under All accounts too: its name in the strip, the way back before it.
+  await page.getByRole("link", { name: "alpha-1", exact: true }).click();
+  await expect(page).toHaveURL(/#\/accounts\/alpha-1$/);
+  await expect(tabs).toHaveCount(0);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("alpha-1");
+  await expect(nav(page).getByRole("link", { name: "Accounts", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await strip.getByRole("link", { name: "Accounts", exact: true }).click();
+  await expect(page).toHaveURL(/#\/accounts$/);
+
   // With tabs at the side, a destination's tabs are a list beside the page.
   await goTo(page, "Themes");
   await page.getByRole("radiogroup", { name: "Tabs" }).getByRole("radio", { name: "Side" }).check();
   await goTo(page, "Accounts");
   await expect(tabs).toHaveCount(0);
   const beside = page.getByRole("navigation", { name: "Accounts pages" });
-  await expect(beside.getByRole("link")).toHaveText(["Accounts", "Order & fallback", "Limits"]);
-  await beside.getByRole("link", { name: "Limits", exact: true }).click();
-  await expect(page).toHaveURL(/#\/quota$/);
+  await expect(beside.getByRole("link")).toHaveText(["All accounts", "Order & fallback"]);
+  await beside.getByRole("link", { name: "Order & fallback", exact: true }).click();
+  await expect(page).toHaveURL(/#\/routing$/);
 });
 
 test("the status block says where pluxy runs; its menu copies the address and closes on Escape and on a click outside", async ({
@@ -602,8 +611,8 @@ test("screenshots in two themes", async ({ page }) => {
     await goTo(page, "Themes");
     await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: theme }).check();
     await goTo(page, "Accounts");
-    await page.locator('[data-part="item"]', { hasText: "alpha-1" }).click();
-    await expect(page.locator('[data-part="detail"]')).toBeVisible();
+    await page.getByRole("link", { name: "alpha-1", exact: true }).click();
+    await expect(page.locator('[data-part="account-page"]')).toBeVisible();
     await page.screenshot({ path: join(dir, file), fullPage: true, animations: "disabled" });
   }
   await goTo(page, "Themes");

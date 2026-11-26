@@ -17,7 +17,8 @@
 //   in each folder in it ends every agent left running, and each agent's heartbeat must stop; on
 //   macOS Terminal, when the session's launches started it, is quit;
 // - vault: the vault, secret delivery and references and journal recovery, then client-key capture
-//   and entry (vault_native.rs, client_key_native.rs; vault.ts). Client keys are made on the test
+//   and entry, then a model alias made in core (vault_native.rs, client_key_native.rs,
+//   core_alias_native.rs; vault.ts). Client keys are made on the test
 //   core, whose config file core.json in the fixtures names: the app's own core, which run.ts's
 //   session uses on Linux, does not run on these systems yet. Neither the vault's key and canary,
 //   the test core's management key nor a client key the check learned may appear in the app's
@@ -726,8 +727,12 @@ export async function toolSession(name: ToolSession, ctx: Context) {
         !output.some((line) => clientKeys.some((k) => line.includes(k))),
         "a client key from the client-key check appeared on the app's stdout/stderr",
       );
+      // A model alias made in core after its native confirmation (core_alias_native.rs).
+      const a = steps.get("core_alias");
+      check(a?.passed === true, `the core alias check did not complete: ${failure}`);
       say(`vault ${JSON.stringify(v ?? {})}`);
       say(`client keys ${JSON.stringify(c ?? {})}`);
+      say(`core alias ${JSON.stringify(a ?? {})}`);
     }
 
     if (name === "open") {

@@ -3,12 +3,13 @@
 //! against the bundled test packages:
 //!
 //! - `first`: adds accounts whose labels are hostile identities (`$&…`, `@x`, an e-mail address
-//!   that the account ID holds in a file-name form); with privacy mode off the Accounts page
-//!   shows them as they are; the Hide names switch in General (`#/settings`) masks them in text,
-//!   tooltips and accessible names, and the header strip then shows a Names hidden button; an
-//!   extension page's webview gets `privacy: true` in its welcome, then a theme event with `false`
-//!   (the Names hidden button) and one with `true` again (the switch) as the choice changes; the
-//!   app quits with it on.
+//!   that the account ID holds in a file-name form); with privacy mode off each account's row on
+//!   the Accounts page shows its label as it is (a row names an account by its label, so a
+//!   labelled account's ID shows nowhere); the Hide names switch in General (`#/settings`) masks
+//!   them in text, tooltips and accessible names, and the header strip then shows a Names hidden
+//!   button; an extension page's webview gets `privacy: true` in its welcome, then a theme event
+//!   with `false` (the Names hidden button) and one with `true` again (the switch) as the choice
+//!   changes; the app quits with it on.
 //! - `second`: the next launch starts masked, before anything is clicked; the Names hidden button
 //!   shows everything again (the person's explicit reveal); the app quits with it off.
 //! - `damaged`: native/privacy.ts damaged the saved preference: the app starts masked.
@@ -157,24 +158,53 @@ fn turn_off(c: &mut Checks, app: &AppHandle) {
     );
 }
 
+/// The hostile accounts: each one's ID and label.
+const HOSTILE: [(&str, &str); 3] = [("privacy-amp", AMP), ("privacy-at", AT), (EMAIL_ID, EMAIL)];
+
+/// The text of an account's row on the Accounts page, found by its name's link to the account's
+/// own page (`#/accounts/<id>`), as next/ui/e2e/support.ts's accountRow finds it.
+fn row(app: &AppHandle, id: &str) -> Option<String> {
+    main_eval(
+        app,
+        &format!(
+            "document.querySelector('a.account-name[href=\"#/accounts/' + encodeURIComponent({}) + '\"]')?.closest('[data-part=account-row]')?.textContent ?? null",
+            json!(id)
+        ),
+    )
+    .and_then(|v| v.as_str().map(String::from))
+}
+
 /// Opens the Accounts page and waits for the hostile accounts' rows.
 fn accounts(c: &mut Checks, app: &AppHandle) {
     let _ = main_eval(app, "(location.hash = '#/accounts', true)");
     c.check(
-        until(
-            app,
-            30,
-            "[...document.querySelectorAll('[data-part=item]')].some((e) => e.textContent.includes('privacy-amp'))",
-        ),
+        within(30, || {
+            HOSTILE
+                .iter()
+                .all(|(id, _)| row(app, id).is_some())
+                .then_some(())
+        })
+        .is_some(),
         "the Accounts page lists the hostile accounts",
     );
 }
 
+/// Each hostile account's row shows its label as it is.
+fn labels_shown(c: &mut Checks, app: &AppHandle, when: &str) {
+    for (id, label) in HOSTILE {
+        c.check(
+            row(app, id).is_some_and(|t| t.contains(label)),
+            format!("{when}: the row of {id} shows its label {label}"),
+        );
+    }
+}
+
 fn raw_shown(c: &mut Checks, app: &AppHandle, key: &str) {
     let all = shown(app);
-    for raw in [AMP, AT, EMAIL, EMAIL_ID] {
+    for raw in [AMP, AT, EMAIL] {
         c.check(all.contains(raw), format!("privacy mode off shows {raw}"));
     }
+    labels_shown(c, app, "privacy mode off");
     c.check(!all.contains(key), "the account's key is not in the window");
 }
 
@@ -325,9 +355,10 @@ fn second(c: &mut Checks, app: &AppHandle) {
         "turned off, the $& label shows as it is",
     );
     let all = shown(app);
-    for raw in [AT, EMAIL, EMAIL_ID] {
+    for raw in [AT, EMAIL] {
         c.check(all.contains(raw), format!("turned off, {raw} shows again"));
     }
+    labels_shown(c, app, "turned off");
 }
 
 fn damaged(c: &mut Checks, app: &AppHandle) {

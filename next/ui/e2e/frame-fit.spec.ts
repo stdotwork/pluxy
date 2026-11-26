@@ -126,7 +126,7 @@ for (const [theme, appearance] of [
       await expectStripHolds(page, "Home");
       await goTo(page, "Accounts");
       await expect(
-        page.locator('[data-part="header-actions"]').getByRole("link", { name: "Add Account" }),
+        page.locator('[data-part="header-actions"]').getByRole("link", { name: "Add an account" }),
       ).toBeVisible();
       await expectStripHolds(page, "Accounts");
       if (dir)

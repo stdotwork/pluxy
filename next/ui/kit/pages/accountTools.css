@@ -1,24 +1,40 @@
 @layer kit {
   .account-tools {
-    margin-block-start: calc(var(--px-space-unit) * 4);
     overflow-wrap: normal;
   }
-  .account-tools .facts dt,
-  .account-tools .facts dd {
-    overflow-wrap: normal;
-    word-break: normal;
-  }
-  .account-tools .account-tool-list {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .account-tools .account-tool-list .facts > div {
-    grid-template-columns: minmax(0, 0.4fr) minmax(0, 1fr);
-  }
-  .account-tools h3,
-  .account-tools h4 {
+  .account-tools h3 {
     margin: 0;
+    font-size: var(--px-font-size);
+    font-weight: var(--px-font-weight-strong);
+  }
+  .account-model-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s) calc(var(--s) * 4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--px-font-size-mono);
+  }
+  .account-test-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: calc(var(--s) * 2);
+  }
+  .account-test-row .field {
+    flex: 0 1 20rem;
+    min-width: 0;
+  }
+  .account-test-result {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--s) calc(var(--s) * 3);
   }
   .account-tools pre {
+    flex-basis: 100%;
+    margin: 0;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }

@@ -16,7 +16,7 @@ test("each of core's pages sits under the destination a person looks for it in",
   );
   expect(byDest).toEqual({
     home: ["status"],
-    accounts: ["accounts", "add-account", "routing", "quota"],
+    accounts: ["accounts", "account", "add-account", "routing"],
     activity: ["usage", "activity/usage"],
     tools: ["tools"],
     settings: ["settings", "themes", "config", "extensions", "logs", "system", "setup"],
@@ -41,10 +41,10 @@ test("a destination opens its first page that sits under no other; one with no p
   expect(destinationHome([child, parent], "tools")?.id).toBe("parent");
 });
 
-test("Accounts has three tabs, named for what a person does there", () => {
+test("Accounts has two tabs, named for what a person does there", () => {
   const placed = place(corePages(), "routing");
   expect(placed?.dest).toBe("accounts");
-  expect(placed?.tabs.map((p) => p.label ?? p.title)).toEqual(["Accounts", "Order & fallback", "Limits"]);
+  expect(placed?.tabs.map((p) => p.label ?? p.title)).toEqual(["All accounts", "Order & fallback"]);
   expect(placed?.current).toBe("routing");
   expect(placed?.above).toEqual([]);
   expect(placed?.topics).toEqual([]);
@@ -187,4 +187,31 @@ describe("the address that opens a page", () => {
     expect(currentId(pages, "#/tools")).toBe("tools");
     expect(currentId([], "#/activity")).toBe("");
   });
+});
+
+test("an account's page sits under All accounts: the strip shows the way back and no tabs", () => {
+  const placed = place(corePages(), "account");
+  expect(placed?.dest).toBe("accounts");
+  expect(ids(placed?.above ?? [])).toEqual(["accounts"]);
+  expect(placed?.tabs).toEqual([]);
+  expect(placed?.current).toBe("accounts");
+});
+
+test("an address opens the page whose ID or address matches it longest", () => {
+  const pages = corePages();
+  expect(currentId(pages, "#/accounts")).toBe("accounts");
+  expect(currentId(pages, "#/accounts/")).toBe("accounts");
+  expect(currentId(pages, "#/accounts?x=1")).toBe("accounts");
+  expect(currentId(pages, "#/accounts/acc_1a2b3c4d")).toBe("account");
+  expect(currentId(pages, "#/accounts/acc_1a2b3c4d/sign-in")).toBe("account");
+  expect(currentId(pages, "#/accounts/a%2Fb?x=1")).toBe("account");
+  // The Quota page is gone: its address lands on All accounts.
+  expect(currentId(pages, "#/quota")).toBe("accounts");
+  expect(currentId(pages, "#/add-account")).toBe("add-account");
+  // An exact address answers itself and what is under it; a prefix only what follows it.
+  const a: PageDef = { id: "a", title: "A", dest: "tools", addresses: ["old"], render };
+  const b: PageDef = { id: "b", title: "B", dest: "tools", addresses: ["a/"], render };
+  expect(currentId([a, b], "#/old/x")).toBe("a");
+  expect(currentId([a, b], "#/a")).toBe("a");
+  expect(currentId([a, b], "#/a/1")).toBe("b");
 });

@@ -5,6 +5,7 @@ import { usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
 import { Button, Empty, List, Notice, PageHead, useKit, useLoad } from "../ui";
+import { AuthImport } from "./authImport";
 
 const t = strings("addAccount", {
   title: "Add Account",
@@ -195,6 +196,7 @@ export function AddAccountPage(props: { onSuccess?: (accountId: string) => void;
             })}
           </>
         )}
+        {!props.embedded && <AuthImport />}
       </div>
     </>
   );
