@@ -207,29 +207,7 @@
       },
       {
         "id": "update",
-        "description": "Update Pi Plugin: replace pluxy's copy of the CLIProxyAPI provider plugin in the agent folder's pluxy-cliproxyapi-provider folder with the copy this tool carries. No file outside that folder changes.",
-        "effect": "write",
-        "input_schema": {
-          "type": "object",
-          "properties": {
-            "folder": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 4096
-            }
-          },
-          "required": [
-            "folder"
-          ],
-          "additionalProperties": false
-        },
-        "output_schema": {
-          "type": "object"
-        }
-      },
-      {
-        "id": "uninstall",
-        "description": "Uninstall Pi Plugin: take pluxy's CLIProxyAPI provider plugin out of the previewed settings.json and remove its pluxy-cliproxyapi-provider folder, keeping the connection settings and everything else. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "description": "Update Pi Plugin: replace pluxy's copy of the CLIProxyAPI provider plugin that the preview pinned, the pluxy-cliproxyapi-provider folder in the previewed agent folder, with the copy this tool carries; refused when that folder, or the agent folder, is not the one previewed. No file outside that folder changes.",
         "effect": "write",
         "input_schema": {
           "type": "object",
@@ -325,10 +303,298 @@
                 ],
                 "additionalProperties": false
               }
+            },
+            "plugin": {
+              "type": "object",
+              "properties": {
+                "selected": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "root": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "link": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 4096
+                },
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "identity": {
+                  "type": "object",
+                  "properties": {
+                    "link": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 41
+                    },
+                    "root": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 41
+                    },
+                    "parent": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 41
+                    },
+                    "file": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 41
+                    }
+                  },
+                  "required": [
+                    "link",
+                    "parent",
+                    "file"
+                  ],
+                  "additionalProperties": false
+                },
+                "sha256": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 64,
+                  "maxLength": 64
+                }
+              },
+              "required": [
+                "selected",
+                "link",
+                "target",
+                "identity",
+                "sha256"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [
-            "targets"
+            "targets",
+            "plugin"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object"
+        }
+      },
+      {
+        "id": "uninstall",
+        "description": "Uninstall Pi Plugin: take pluxy's CLIProxyAPI provider plugin out of the previewed settings.json and remove the pluxy-cliproxyapi-provider folder the preview pinned (none when it found no copy of pluxy's; refused when another is there now), keeping the connection settings and everything else. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "effect": "write",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "selected": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "link": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "target": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "identity": {
+                    "type": "object",
+                    "properties": {
+                      "link": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "root": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "parent": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      },
+                      "file": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 41
+                      }
+                    },
+                    "required": [
+                      "link",
+                      "parent",
+                      "file"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "selected",
+                  "link",
+                  "target",
+                  "identity",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "plugin": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "selected": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "root": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "link": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 4096
+                },
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "identity": {
+                  "type": "object",
+                  "properties": {
+                    "link": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 41
+                    },
+                    "root": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 41
+                    },
+                    "parent": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 41
+                    },
+                    "file": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 41
+                    }
+                  },
+                  "required": [
+                    "link",
+                    "parent",
+                    "file"
+                  ],
+                  "additionalProperties": false
+                },
+                "sha256": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 64,
+                  "maxLength": 64
+                }
+              },
+              "required": [
+                "selected",
+                "link",
+                "target",
+                "identity",
+                "sha256"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "targets",
+            "plugin"
           ],
           "additionalProperties": false
         },

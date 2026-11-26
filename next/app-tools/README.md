@@ -975,10 +975,10 @@ host's vault, and its manual backups (the backup browser). It exports nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
-| `preview` | `read` | `targets`: the three files' selections (`file`, which may be a link, as stow makes; or `root` and `path`), in one folder; or `folder`: an agent folder (it may be a link, as chezmoi can make; a link inside it is refused, so linked files are selected as `targets`); by default the three files in `~/.pi/agent` in the app's `HOME` (below), which must exist (Pi makes it when it first runs); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `pi`: `state` (`not-configured`: the plugin is not listed; `configured`; `needs-update`), `base_url` (cliproxyapi.json's), `key_set`, `provider` (the plugin's provider ID), `default_provider`, `model` (Pi's default model), `registered` (settings.json lists pluxy's plugin), `legacy` (it lists an older app's npm copy), `adapter`: `installed`, `version`, `bundled`, `update`, `foreign` (a folder of that name pluxy did not install); never the key. Files Pi would not take are pinned all the same, so Restore Backup and the backups reach them: `state` is `refused`, `reason` says why, and `adapter` is still there. A file another program writes between the preview's two reads is read again once, else the preview is refused |
+| `preview` | `read` | `targets`: the three files' selections (`file`, which may be a link, as stow makes; or `root` and `path`), in one folder; or `folder`: an agent folder (it may be a link, as chezmoi can make; a link inside it is refused, so linked files are selected as `targets`); by default the three files in `~/.pi/agent` in the app's `HOME` (below), which must exist (Pi makes it when it first runs); `base_url` (optional): the core the state is checked against | The library's preview (pins, `applied`, `edited`) and `pi`: `state` (`not-configured`: the plugin is not listed; `configured`; `needs-update`), `base_url` (cliproxyapi.json's), `key_set`, `provider` (the plugin's provider ID), `default_provider`, `model` (Pi's default model), `registered` (settings.json lists pluxy's plugin), `legacy` (it lists an older app's npm copy), `adapter`: `installed`, `version`, `bundled`, `update`, `foreign` (a folder of that name pluxy did not install), `pin` (the pin of pluxy's copy, which `update` and `uninstall` take back: its marker `.pluxy-adapter.json`, selected inside the agent folder, so it holds the agent folder's link and identity, the copy's folder's identity and the marker's identity and bytes; null when pluxy's copy is not there); never the key. Files Pi would not take are pinned all the same, so Restore Backup and the backups reach them: `state` is `refused`, `reason` says why, and `adapter` is still there. A file another program writes between the preview's two reads is read again once, else the preview is refused |
 | `apply` | `write`; secret `key` (value) | Three pins, `base_url`, `key`, `model` (one model ID) | The library's outcome and `adapter`: `installed` or `kept` |
-| `update` | `write` | `folder`: the agent folder | `{"outcome": "updated", "version"}` |
-| `uninstall` | `write` | Three pins | The library's outcome and `adapter_removed` |
+| `update` | `write` | Three pins, `plugin`: the preview's `adapter.pin` | `{"outcome": "updated", "version"}` |
+| `uninstall` | `write` | Three pins, `plugin`: the preview's `adapter.pin`, null when it found no copy of pluxy's | The library's outcome and `adapter_removed` |
 | `clear` | `write` | Three pins | The library's outcome (the values Apply wrote go, edits made since stay) and `adapter_removed` |
 | `restore` | `write` | Three pins | The library's outcome (the original bytes back: Restore Backup) and `adapter_removed` |
 | `status` | `read` | — | The library's status |
@@ -1008,8 +1008,13 @@ in its signed program, and writes it into the agent folder as a local Pi package
 copy's version, `1.4.25-pluxy.1`). Pi loads a local package from its folder and never installs or
 updates it. **Update** replaces pluxy's copy with the one the installed tool carries (a newer
 plugin comes with a new pluxy/pi-setup); the page offers it when the installed copy's version
-differs. A folder of that name without pluxy's marker is someone else's: Apply and Update refuse,
-and nothing removes it. The review read the plugin's network, process, file and code-loading calls
+differs. Update replaces only the copy the preview pinned: before any change it refuses, as changed
+since the preview, a pinned file or the agent folder that resolves elsewhere now (its link pointed
+elsewhere, the folder moved or replaced) or a copy that is not the one pinned (its folder replaced,
+another version put there); the old copy is moved aside before it is removed, and what moved must be
+the folder pinned, else it is put back and the update refused. A folder of that name without
+pluxy's marker is someone else's: Apply and Update refuse, and nothing removes it. The review read
+the plugin's network, process, file and code-loading calls
 (it starts no processes; it fetches the core's model list and `https://models.dev/api.json` for
 prices) and found one hole, patched in the copy: the plugin wrote a patched copy of a Pi module to
 a fixed name in the shared temporary folder and imported it, so another user of the machine who
@@ -1039,9 +1044,12 @@ cache Apply removed is removed again when there was none before Apply (else the 
 stays). **Uninstall** takes only the plugin's entry out of `settings.json` (through `apply`, so
 Clear and Restore Backup still work afterward) and removes its folder; the connection settings stay,
 as in the old app. Clear, Restore Backup and Uninstall remove pluxy's plugin folder once
-`settings.json` no longer lists it. `preview` and `apply` refuse, before writing, a file Pi or the
-plugin would not take: `settings.json` or `cliproxyapi.json` not strict JSON (a byte order mark
-too) or not an object, `packages` not a list of package sources (a string, or an object with a
+`settings.json` no longer lists it. Uninstall checks the plugin's pin as Update does, before any
+change, and removes only the copy pinned; when the preview found no copy of pluxy's it removes none,
+and refuses if one is there now. Clear and Restore Backup take no plugin pin: they remove pluxy's
+copy in the agent folder as they find it. `preview` and `apply` refuse, before writing, a file Pi
+or the plugin would not take: `settings.json` or `cliproxyapi.json` not strict JSON (a byte order
+mark too) or not an object, `packages` not a list of package sources (a string, or an object with a
 string `source`), `defaultProvider`, `defaultModel`, `baseUrl`, `apiKey` or `providerId` not text.
 Clear and Uninstall refuse such files too; Restore Backup still puts the originals back. A missing file is an empty one; the cache is not checked (Apply removes it). Apply writes the files owner-only (the library takes away the group's and others' bits), since `cliproxyapi.json` holds the key. Neither file has a
 version field, so none is checked. The key may not hold spaces; the model is one ID without spaces.

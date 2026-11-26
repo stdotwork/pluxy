@@ -117,12 +117,23 @@ const hermes = (state: string, applied = false) => ({
   applied,
   config: { state, key_set: state === "configured", model: "gpt-6.1-sol" },
 });
+/** The add-on's pin of pluxy's copy of the plugin in agent: its marker file, rooted at the folder. */
+const pluginPin = (agent = "/home/me/.pi/agent") => ({
+  selected: agent,
+  path: "pluxy-cliproxyapi-provider/.pluxy-adapter.json",
+  root: agent,
+  link: null,
+  target: `${agent}/pluxy-cliproxyapi-provider/.pluxy-adapter.json`,
+  identity: { link: null, root: "2049:11", parent: "2049:12", file: "2049:13" },
+  sha256: "5".repeat(64),
+});
 const plugin = (installed = true) => ({
   installed,
   version: installed ? "1.0.0" : null,
   bundled: "1.0.0",
   update: false,
   foreign: false,
+  pin: installed ? pluginPin() : null,
 });
 const pi = (state: string, applied = false, adapter = plugin(), agent = "/home/me/.pi/agent") => ({
   targets: ["cliproxyapi.json", "settings.json", "cliproxyapi-models.json"].flatMap((f) =>
@@ -1409,11 +1420,23 @@ describe("OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi", () => {
     const page = await mount(() => <PiPage />, ch.invoke);
     // The reading found Pi's files in another agent folder than the default one.
     const agent = "/home/me/profiles/work/agent";
-    ch.reads[0]?.answer(pi("configured", true, { ...plugin(), version: "0.9.0", update: true }, agent));
+    const read = pi(
+      "configured",
+      true,
+      { ...plugin(), version: "0.9.0", update: true, pin: pluginPin(agent) },
+      agent,
+    );
+    ch.reads[0]?.answer(read);
     await settle();
     expect(page.text()).toContain("Version 0.9.0 is installed. Update plugin installs version 1.0.0.");
     await page.click("Update plugin");
-    expect(op(ch, "update")?.args.input).toEqual({ folder: agent });
+    // The reading's pins: its three files and the plugin's copy, all in the folder it read.
+    expect(op(ch, "update")?.args.input).toEqual({ targets: read.targets, plugin: pluginPin(agent) });
+    expect(read.targets.map((t) => t.target)).toEqual([
+      `${agent}/cliproxyapi.json`,
+      `${agent}/settings.json`,
+      `${agent}/cliproxyapi-models.json`,
+    ]);
     expect(typeof op(ch, "update")?.args.ticket).toBe("string");
     ch.pending()?.answer(pi("configured", true));
     await settle();
@@ -1423,6 +1446,51 @@ describe("OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi", () => {
     expect(ch.writes.map((w) => w.op)).toEqual(["update"]);
     await page.click("Yes, uninstall plugin");
     expect(ch.writes.map((w) => w.op)).toEqual(["update", "uninstall"]);
-    expect(op(ch, "uninstall")?.args.input).toEqual({ targets: pi("configured").targets });
+    expect(op(ch, "uninstall")?.args.input).toEqual({
+      targets: pi("configured").targets,
+      plugin: pluginPin(),
+    });
+  });
+
+  test("Pi: Update plugin and Uninstall plugin refused as changed since the reading say so, and nothing is done", async () => {
+    const changed =
+      "the Pi plugin's folder changed since the preview (the target changed since the preview (the link, or what it resolves to): /home/me/.pi/agent/pluxy-cliproxyapi-provider/.pluxy-adapter.json; preview it again)";
+    const refuse = () => new Error(changed);
+    const ch = channel({ ops: { update: refuse, uninstall: refuse } });
+    const page = await mount(() => <PiPage />, ch.invoke);
+    ch.reads[0]?.answer(pi("configured", true, { ...plugin(), version: "0.9.0", update: true }));
+    await settle();
+    const reads = ch.reads.length;
+    await page.click("Update plugin");
+    await settle();
+    expect(op(ch, "update")?.args.input).toEqual({ targets: pi("configured").targets, plugin: pluginPin() });
+    // As every write refused for a file that changed since the reading: the add-on's reason in the
+    // page's error notice, the reading left as it was, and nothing read or done after.
+    expect(page.text().toLowerCase()).toContain(changed.toLowerCase());
+    expect(page.text()).not.toContain("The Pi plugin is updated.");
+    expect(page.text()).toContain("Version 0.9.0 is installed. Update plugin installs version 1.0.0.");
+    expect(ch.reads.length).toBe(reads);
+    await page.click("Uninstall plugin");
+    await page.click("Yes, uninstall plugin");
+    await settle();
+    expect(ch.writes.map((w) => w.op)).toEqual(["update", "uninstall"]);
+    expect(page.text().toLowerCase()).toContain(changed.toLowerCase());
+    expect(page.text()).not.toContain("The Pi plugin is uninstalled.");
+    expect(ch.reads.length).toBe(reads);
+  });
+
+  test("Pi: Uninstall plugin from a reading that found no copy of pluxy's carries no plugin pin", async () => {
+    const ch = channel();
+    const page = await mount(() => <PiPage />, ch.invoke);
+    // Listed in settings.json, but the plugin's folder is not there: no pin, so the add-on removes
+    // no folder, and refuses if pluxy's copy is there by the time the person confirms.
+    ch.reads[0]?.answer({
+      ...pi("needs-update", true, plugin(false)),
+      pi: { ...pi("needs-update", true, plugin(false)).pi, registered: true },
+    });
+    await settle();
+    await page.click("Uninstall plugin");
+    await page.click("Yes, uninstall plugin");
+    expect(op(ch, "uninstall")?.args.input).toEqual({ targets: pi("needs-update").targets, plugin: null });
   });
 });

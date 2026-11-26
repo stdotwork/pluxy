@@ -68,6 +68,9 @@ interface Adapter {
    * only for a newer copy, pluginNewer). */
   update: boolean;
   foreign: boolean;
+  /** The pin of pluxy's copy of the plugin, which Update plugin and Uninstall plugin carry back so
+   * the add-on refuses a plugin or agent folder that changed since; null when there is none. */
+  pin: ToolPreview["targets"][number] | null;
 }
 
 /** What the add-on reads back of Pi's files; refused (with reason) for files Pi would not take. */
@@ -129,12 +132,14 @@ export function PiPage() {
     (where === "default" ? s.found?.config : undefined) ??
     agent ??
     (where === "default" ? "~/.pi/agent" : folder.trim());
-  /** One of the plugin's own writes (Update plugin, Uninstall plugin), which says what it did. */
+  /** One of the plugin's own writes (Update plugin, Uninstall plugin), which says what it did. Each
+   * sends the reading's pins of the three files and of the plugin's copy: the add-on refuses one
+   * that changed since, as every write on these pages does. */
   const plugin = (op: "update" | "uninstall", said: string) => {
     setNotice(undefined);
     s.write(
       op,
-      (call) => call(op, op === "update" ? { folder: agent } : { targets: s.preview?.targets }),
+      (call) => call(op, { targets: s.preview?.targets, plugin: s.preview?.pi.adapter.pin ?? null }),
       () => {
         setNotice(said);
         s.load();
@@ -187,7 +192,7 @@ export function PiPage() {
                   <Button
                     busy={s.working === "update"}
                     onClick={() => plugin("update", t("updated"))}
-                    disabled={!s.writable || !agent}
+                    disabled={!s.writable || !adapter.pin}
                   >
                     {t("updatePlugin")}
                   </Button>

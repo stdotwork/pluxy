@@ -9,6 +9,7 @@
 
 use crate::pi::FOLDER;
 use pluxy_program::Error;
+use pluxy_transactions::{Pin, Selection, Target};
 use serde_json::Value;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::Write;
@@ -137,6 +138,56 @@ fn foreign(agent: &Path) -> Error {
     ))
 }
 
+/// The refusal of a plugin folder that is not the one the preview pinned, saying why.
+pub fn changed(agent: &Path, why: &str) -> Error {
+    Error::invalid_request(format!(
+        "the Pi plugin's folder changed since the preview ({why}): {}; preview it again",
+        folder(agent).display()
+    ))
+}
+
+/// Whether moved, a folder in agent, is the plugin folder pinned: reached through the agent folder
+/// the pin saw (its link, the folder it resolves to), with the plugin folder's and the marker's
+/// identities, whatever the folder's name is now.
+fn is_pinned(agent: &Path, moved: &Path, pinned: &Pin) -> bool {
+    let name = moved.file_name().unwrap_or_default().to_string_lossy();
+    let now = Target::resolve(&Selection::Root {
+        root: agent.to_path_buf(),
+        path: format!("{name}/{MARKER}"),
+    });
+    now.is_ok_and(|t| {
+        let p = &t.pin;
+        p.link == pinned.link
+            && p.link_id == pinned.link_id
+            && p.root == pinned.root
+            && p.root_id == pinned.root_id
+            && p.parent_id == pinned.parent_id
+            && p.file_id == pinned.file_id
+    })
+}
+
+/// Moves pluxy's copy aside, to a hidden sibling, which it gives. With pinned, what moved must be
+/// the folder pinned: otherwise (the agent folder's link pointed elsewhere or a folder replaced
+/// between the caller's check and the move) it goes back under its name, and the move is refused.
+fn aside(agent: &Path, pinned: Option<&Pin>) -> Result<PathBuf, Error> {
+    let dest = folder(agent);
+    let old = sibling(agent, "old");
+    fs::rename(&dest, &old).map_err(|e| io("move aside", &dest, e))?;
+    match pinned {
+        Some(p) if !is_pinned(agent, &old, p) => Err(match fs::rename(&old, &dest) {
+            Ok(()) => changed(agent, "another folder is there now; it is left as it was"),
+            Err(e) => changed(
+                agent,
+                &format!(
+                    "another folder is there now; it could not be put back from {}: {e}",
+                    old.display()
+                ),
+            ),
+        }),
+        _ => Ok(old),
+    }
+}
+
 /// A sibling of the adapter's folder that no one else uses: `.pluxy-cliproxyapi-provider.<what>-…`.
 fn sibling(agent: &Path, what: &str) -> PathBuf {
     let nanos = SystemTime::now()
@@ -178,26 +229,31 @@ fn write_all(dir: &Path) -> Result<(), Error> {
 }
 
 /// Puts the carried copy in place: a new folder written beside it, then renamed over pluxy's
-/// older copy (moved aside and removed) or into the empty place. Refuses a folder that is not
-/// pluxy's.
-fn put(agent: &Path) -> Result<(), Error> {
+/// older copy (moved aside, checked against pinned when given, and removed) or into the empty
+/// place. Refuses a folder that is not pluxy's.
+fn put(agent: &Path, pinned: Option<&Pin>) -> Result<(), Error> {
     let dest = folder(agent);
-    let old = match state(agent) {
+    let installed = match state(agent) {
         State::Foreign => return Err(foreign(agent)),
-        State::Absent => None,
-        State::Installed(_) => Some(sibling(agent, "old")),
+        State::Absent => false,
+        State::Installed(_) => true,
     };
     let new = sibling(agent, "new");
     if let Err(e) = write_all(&new) {
         let _ = fs::remove_dir_all(&new);
         return Err(e);
     }
-    if let Some(old) = &old {
-        if let Err(e) = fs::rename(&dest, old) {
-            let _ = fs::remove_dir_all(&new);
-            return Err(io("move aside", &dest, e));
+    let old = if installed {
+        match aside(agent, pinned) {
+            Ok(old) => Some(old),
+            Err(e) => {
+                let _ = fs::remove_dir_all(&new);
+                return Err(e);
+            }
         }
-    }
+    } else {
+        None
+    };
     if let Err(e) = fs::rename(&new, &dest) {
         let _ = fs::remove_dir_all(&new);
         if let Some(old) = &old {
@@ -217,14 +273,14 @@ pub fn ensure(agent: &Path) -> Result<bool, Error> {
     match state(agent) {
         State::Installed(_) => Ok(false),
         State::Foreign => Err(foreign(agent)),
-        State::Absent => put(agent).map(|_| true),
+        State::Absent => put(agent, None).map(|_| true),
     }
 }
 
-/// Update Pi Plugin: replaces pluxy's copy with the carried one.
-pub fn update(agent: &Path) -> Result<(), Error> {
+/// Update Pi Plugin: replaces pluxy's copy, the one pinned, with the carried one.
+pub fn update(agent: &Path, pinned: &Pin) -> Result<(), Error> {
     match state(agent) {
-        State::Installed(_) => put(agent),
+        State::Installed(_) => put(agent, Some(pinned)),
         State::Foreign => Err(foreign(agent)),
         State::Absent => Err(Error::invalid_request(format!(
             "the Pi plugin is not installed in {}",
@@ -233,17 +289,15 @@ pub fn update(agent: &Path) -> Result<(), Error> {
     }
 }
 
-/// Removes pluxy's copy (with the cache the adapter keeps in it); anything else stays. True when
-/// it removed one.
-pub fn remove(agent: &Path) -> Result<bool, Error> {
+/// Removes pluxy's copy (with the cache the adapter keeps in it), with pinned only the one pinned;
+/// anything else stays. True when it removed one.
+pub fn remove(agent: &Path, pinned: Option<&Pin>) -> Result<bool, Error> {
     if !matches!(state(agent), State::Installed(_)) {
         return Ok(false);
     }
     // Moved aside first: a stop part way through leaves a hidden sibling, never a half-removed
     // folder under the plugin's name that would then read as someone else's.
-    let dest = folder(agent);
-    let old = sibling(agent, "old");
-    fs::rename(&dest, &old).map_err(|e| io("move aside", &dest, e))?;
+    let old = aside(agent, pinned)?;
     pluxy_files::sync_dir(agent).map_err(|e| io("sync", agent, e))?;
     fs::remove_dir_all(&old).map_err(|e| io("remove", &old, e))?;
     Ok(true)

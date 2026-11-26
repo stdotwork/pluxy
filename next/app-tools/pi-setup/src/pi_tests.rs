@@ -402,6 +402,13 @@ fn tree(dir: &Path) -> Vec<(String, Vec<u8>)> {
     out
 }
 
+/// The pin of pluxy's copy in agent, as a preview takes it.
+fn pinned(agent: &Path) -> pluxy_transactions::Pin {
+    pluxy_transactions::Target::resolve(&crate::plugin_selection(agent))
+        .unwrap()
+        .pin
+}
+
 #[test]
 fn the_plugin_is_installed_updated_and_removed_only_as_pluxys() {
     let agent = temp("adapter");
@@ -416,7 +423,6 @@ fn the_plugin_is_installed_updated_and_removed_only_as_pluxys() {
     want.sort();
 
     assert_eq!(adapter::state(&agent), State::Absent);
-    assert!(adapter::update(&agent).is_err());
     assert!(adapter::ensure(&agent).unwrap());
     let dir = agent.join("pluxy-cliproxyapi-provider");
     assert_eq!(tree(&dir), want);
@@ -437,7 +443,8 @@ fn the_plugin_is_installed_updated_and_removed_only_as_pluxys() {
     let v = adapter::state(&agent).to_json();
     assert_eq!(v["update"], true);
     assert_eq!(v["version"], "1.4.24-pluxy.1");
-    adapter::update(&agent).unwrap();
+    let pin = pinned(&agent);
+    adapter::update(&agent, &pin).unwrap();
     assert_eq!(tree(&dir), want);
     let names: Vec<String> = std::fs::read_dir(&agent)
         .unwrap()
@@ -445,9 +452,11 @@ fn the_plugin_is_installed_updated_and_removed_only_as_pluxys() {
         .collect();
     assert_eq!(names, ["pluxy-cliproxyapi-provider"]);
 
-    assert!(adapter::remove(&agent).unwrap());
+    assert!(adapter::remove(&agent, None).unwrap());
     assert!(!dir.exists());
-    assert!(!adapter::remove(&agent).unwrap());
+    assert!(!adapter::remove(&agent, None).unwrap());
+    // Nothing there: nothing to update.
+    assert!(adapter::update(&agent, &pin).is_err());
 
     // Someone else's folder of that name: refused, never removed.
     std::fs::create_dir(&dir).unwrap();
@@ -457,8 +466,8 @@ fn the_plugin_is_installed_updated_and_removed_only_as_pluxys() {
         .unwrap_err()
         .message
         .contains("not pluxy's"));
-    assert!(adapter::update(&agent).is_err());
-    assert!(!adapter::remove(&agent).unwrap());
+    assert!(adapter::update(&agent, &pin).is_err());
+    assert!(!adapter::remove(&agent, None).unwrap());
     assert!(dir.join("package.json").exists());
     std::fs::remove_dir_all(&agent).unwrap();
 }
@@ -581,7 +590,7 @@ fn the_file_systems_root_is_no_agent_folder() {
 fn removing_the_plugin_leaves_nothing_under_its_name_or_beside_it() {
     let agent = temp("remove");
     adapter::ensure(&agent).unwrap();
-    assert!(adapter::remove(&agent).unwrap());
+    assert!(adapter::remove(&agent, None).unwrap());
     assert_eq!(std::fs::read_dir(&agent).unwrap().count(), 0);
     // A hidden sibling left by a stop part way through is not the plugin, nor someone else's.
     std::fs::create_dir(agent.join(".pluxy-cliproxyapi-provider.old-1-2")).unwrap();
@@ -629,4 +638,332 @@ fn the_recipe_starts_the_installers_pi_where_this_system_runs_it_else_the_one_on
     // which runs none of the Unix copies anyway).
     assert!(crate::installed("windows", &home).is_empty());
     std::fs::remove_dir_all(home).unwrap();
+}
+
+/// The vault's frames as the host answers them, in memory (as lib/transactions' own tests do).
+#[derive(Default)]
+struct Mem {
+    backups: std::cell::RefCell<std::collections::BTreeMap<String, (String, String)>>,
+    journals: std::cell::RefCell<std::collections::BTreeMap<String, Option<String>>>,
+    next: std::cell::Cell<u64>,
+}
+
+impl pluxy_transactions::Vault for Mem {
+    fn vault(
+        &self,
+        op: &str,
+        f: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Value, pluxy_program::Error> {
+        use pluxy_program::Error;
+        use serde_json::json;
+        let s = |k: &str| {
+            f.get(k)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
+        let id = |p: &str| {
+            self.next.set(self.next.get() + 1);
+            format!("{p}-{}", self.next.get())
+        };
+        match op {
+            "backup.put" => {
+                let id = id("b");
+                self.backups
+                    .borrow_mut()
+                    .insert(id.clone(), (s("label"), s("data")));
+                Ok(json!({"backup": id}))
+            }
+            "backup.get" => {
+                let b = self.backups.borrow();
+                let (label, data) = b
+                    .get(&s("backup"))
+                    .ok_or_else(|| Error::not_found("no backup"))?;
+                Ok(json!({"backup": s("backup"), "label": label, "data": data}))
+            }
+            "backup.list" => Ok(json!({"backups": self.backups.borrow().iter()
+                .map(|(id, (label, _))| json!({"backup": id, "label": label})).collect::<Vec<_>>()})),
+            "backup.delete" => {
+                self.backups.borrow_mut().remove(&s("backup"));
+                Ok(json!({}))
+            }
+            "journal.begin" => {
+                let id = id("j");
+                self.journals.borrow_mut().insert(id.clone(), None);
+                Ok(json!({"journal": id}))
+            }
+            "journal.commit" | "journal.end" => {
+                let outcome = if op == "journal.commit" {
+                    "committed".to_string()
+                } else {
+                    s("outcome")
+                };
+                self.journals
+                    .borrow_mut()
+                    .insert(s("journal"), Some(outcome.clone()));
+                Ok(json!({"journal": s("journal"), "outcome": outcome}))
+            }
+            _ => Err(Error::unsupported(op.to_string())),
+        }
+    }
+}
+
+/// A symbolic link at at to the folder target.
+fn link_dir(target: &Path, at: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, at).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(target, at).unwrap();
+}
+
+/// Whether this account may make symbolic links (on Windows that takes a privilege or Developer
+/// Mode); when it may not, says so on stderr and the test that needs them is skipped.
+fn links_allowed() -> bool {
+    #[cfg(unix)]
+    return true;
+    #[cfg(windows)]
+    {
+        let probe = std::env::temp_dir().join(format!("pi-setup-links-{}", std::process::id()));
+        let made = std::os::windows::fs::symlink_dir("target", &probe).is_ok();
+        let _ = std::fs::remove_dir(&probe);
+        if !made {
+            eprintln!("skipped: this account cannot make a symbolic link");
+        }
+        made
+    }
+}
+
+/// An agent folder at dir set up by pluxy, with an older copy of the plugin (so the page offers
+/// Update plugin) holding a file that says whose it is.
+fn set_up(dir: &Path, whose: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("cliproxyapi.json"), CONFIG_APPLIED).unwrap();
+    std::fs::write(dir.join("settings.json"), APPLIED).unwrap();
+    adapter::ensure(dir).unwrap();
+    let plugin = dir.join("pluxy-cliproxyapi-provider");
+    std::fs::write(
+        plugin.join(".pluxy-adapter.json"),
+        adapter::marker("1.4.24-pluxy.1"),
+    )
+    .unwrap();
+    std::fs::write(plugin.join("whose.txt"), whose).unwrap();
+}
+
+/// What the Pi page sends for Update plugin and Uninstall plugin from its reading (pi.tsx): the
+/// reading's pins of the three files and of pluxy's copy of the plugin.
+fn sent(preview: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"targets": preview["targets"], "plugin": preview["pi"]["adapter"]["pin"]})
+}
+
+/// How the agent folder is swapped between the preview and the confirmation.
+#[derive(Clone, Copy, Debug)]
+enum Swap {
+    /// The agent folder is a link, pointed at another agent folder.
+    Link,
+    /// The agent folder is moved away and another put in its place.
+    Folder,
+    /// The plugin's folder in it is moved away and another copy put in its place.
+    Plugin,
+    /// Nothing: the confirmation acts on the folder shown.
+    None,
+}
+
+/// Every file under a folder, by relative path, with its bytes (`tree`).
+type Tree = Vec<(String, Vec<u8>)>;
+
+/// A confirmation's reply, the whole tree before it and after it, and the folder holding both.
+type Confirmed = (
+    Result<serde_json::Value, pluxy_program::Error>,
+    Tree,
+    Tree,
+    PathBuf,
+);
+
+/// Previews an agent folder (selected as a folder, or as its linked files when files), swaps it,
+/// and confirms op with what the page sends: the reply, the whole tree before the confirmation and
+/// after it, and the folder shown.
+fn confirm_after(op: &str, swap: Swap, files: bool) -> Confirmed {
+    let base = temp(&format!("swap-{op}-{swap:?}-{files}"));
+    let data = temp(&format!("swap-{op}-{swap:?}-{files}-data"));
+    let (a, b, shown) = (base.join("a"), base.join("b"), base.join("agent"));
+    set_up(&a, "a");
+    set_up(&b, "b");
+    match swap {
+        Swap::Link => link_dir(&a, &shown),
+        _ => std::fs::rename(&a, &shown).unwrap(),
+    }
+    let input = if files {
+        serde_json::json!({"targets": crate::FILES.map(|n| serde_json::json!({"file": shown.join(n)}))})
+    } else {
+        serde_json::json!({"folder": shown})
+    };
+    let vault = Mem::default();
+    let preview = crate::preview(&vault, data.clone(), &input).unwrap();
+    assert_eq!(preview["pi"]["adapter"]["version"], "1.4.24-pluxy.1");
+    let plugin = "pluxy-cliproxyapi-provider";
+    match swap {
+        Swap::Link => {
+            #[cfg(unix)]
+            std::fs::remove_file(&shown).unwrap();
+            #[cfg(windows)]
+            std::fs::remove_dir(&shown).unwrap();
+            link_dir(&b, &shown);
+        }
+        Swap::Folder => {
+            std::fs::rename(&shown, base.join("moved")).unwrap();
+            std::fs::rename(&b, &shown).unwrap();
+        }
+        Swap::Plugin => {
+            std::fs::rename(shown.join(plugin), base.join("moved")).unwrap();
+            std::fs::rename(b.join(plugin), shown.join(plugin)).unwrap();
+        }
+        Swap::None => {}
+    }
+    let before = tree(&base);
+    let r = match op {
+        "update" => crate::update(&sent(&preview)),
+        _ => crate::uninstall(&vault, data.clone(), &sent(&preview)),
+    };
+    let after = tree(&base);
+    std::fs::remove_dir_all(&data).unwrap();
+    (r, before, after, base)
+}
+
+#[test]
+fn update_and_uninstall_refuse_a_folder_swapped_since_the_preview() {
+    if !links_allowed() {
+        return;
+    }
+    let mut failed = Vec::new();
+    for op in ["update", "uninstall"] {
+        for (swap, files) in [
+            (Swap::Link, false),
+            (Swap::Link, true),
+            (Swap::Folder, false),
+            (Swap::Folder, true),
+            (Swap::Plugin, false),
+            (Swap::Plugin, true),
+        ] {
+            let (r, before, after, base) = confirm_after(op, swap, files);
+            let case = format!("{op} after {swap:?} (files: {files})");
+            // Nothing in either folder changed: no file written, moved or removed.
+            if before != after {
+                failed.push(format!("{case} changed the folders: {r:?}"));
+            }
+            match r {
+                Err(e) if e.message.contains("preview it again") => {}
+                r => failed.push(format!("{case} was not refused as changed: {r:?}")),
+            }
+            std::fs::remove_dir_all(&base).unwrap();
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+#[test]
+fn update_and_uninstall_act_on_the_folder_the_preview_showed() {
+    if !links_allowed() {
+        return;
+    }
+    for files in [false, true] {
+        let (r, _, _, base) = confirm_after("update", Swap::None, files);
+        assert_eq!(r.unwrap()["outcome"], "updated");
+        let plugin = base.join("agent").join("pluxy-cliproxyapi-provider");
+        assert_eq!(
+            adapter::state(&base.join("agent")),
+            State::Installed(Some(adapter::VERSION.into()))
+        );
+        assert!(!plugin.join("whose.txt").exists());
+        // The other agent folder is as it was.
+        assert_eq!(
+            std::fs::read(base.join("b/pluxy-cliproxyapi-provider/whose.txt")).unwrap(),
+            b"b"
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+
+        let (r, _, _, base) = confirm_after("uninstall", Swap::None, files);
+        let v = r.unwrap();
+        assert_eq!(v["adapter_removed"], true);
+        assert!(!base.join("agent/pluxy-cliproxyapi-provider").exists());
+        assert_eq!(
+            text(std::fs::read(base.join("agent/settings.json")).unwrap()),
+            UNINSTALLED
+        );
+        assert_eq!(
+            std::fs::read(base.join("b/pluxy-cliproxyapi-provider/whose.txt")).unwrap(),
+            b"b"
+        );
+        assert_eq!(
+            text(std::fs::read(base.join("b/settings.json")).unwrap()),
+            APPLIED
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+}
+
+#[test]
+fn uninstall_leaves_a_copy_installed_since_a_preview_that_found_none() {
+    let agent = temp("installed-since");
+    let data = temp("installed-since-data");
+    std::fs::write(agent.join("cliproxyapi.json"), CONFIG_APPLIED).unwrap();
+    std::fs::write(agent.join("settings.json"), APPLIED).unwrap();
+    let vault = Mem::default();
+    let preview =
+        crate::preview(&vault, data.clone(), &serde_json::json!({"folder": agent})).unwrap();
+    assert_eq!(preview["pi"]["adapter"]["pin"], serde_json::Value::Null);
+    adapter::ensure(&agent).unwrap();
+    let before = tree(&agent);
+    let e = crate::uninstall(&vault, data.clone(), &sent(&preview)).unwrap_err();
+    assert!(e.message.contains("preview it again"), "{}", e.message);
+    assert!(tree(&agent) == before);
+    std::fs::remove_dir_all(&agent).unwrap();
+    std::fs::remove_dir_all(&data).unwrap();
+}
+
+#[test]
+fn a_folder_swapped_after_the_check_is_put_back_not_acted_on() {
+    if !links_allowed() {
+        return;
+    }
+    let plugin = "pluxy-cliproxyapi-provider";
+    // The plugin's folder replaced, or the agent folder's link pointed elsewhere, after the
+    // operation checked the pin and before it moved the folder: the move is refused, the folder
+    // there goes back under its name, and nothing is written or removed.
+    for swap in [Swap::Plugin, Swap::Link] {
+        let base = temp(&format!("late-{swap:?}"));
+        let (a, b, shown) = (base.join("a"), base.join("b"), base.join("agent"));
+        set_up(&a, "a");
+        set_up(&b, "b");
+        link_dir(&a, &shown);
+        let pin = pinned(&shown);
+        match swap {
+            Swap::Plugin => {
+                std::fs::rename(a.join(plugin), base.join("moved")).unwrap();
+                std::fs::rename(b.join(plugin), a.join(plugin)).unwrap();
+            }
+            _ => {
+                #[cfg(unix)]
+                std::fs::remove_file(&shown).unwrap();
+                #[cfg(windows)]
+                std::fs::remove_dir(&shown).unwrap();
+                link_dir(&b, &shown);
+            }
+        }
+        let before = tree(&base);
+        let e = adapter::update(&shown, &pin).unwrap_err();
+        assert!(
+            e.message.contains("preview it again"),
+            "{swap:?}: {}",
+            e.message
+        );
+        assert!(tree(&base) == before, "update after {swap:?}");
+        let e = adapter::remove(&shown, Some(&pin)).unwrap_err();
+        assert!(
+            e.message.contains("preview it again"),
+            "{swap:?}: {}",
+            e.message
+        );
+        assert!(tree(&base) == before, "remove after {swap:?}");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 }

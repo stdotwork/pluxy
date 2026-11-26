@@ -35,9 +35,10 @@ which has full access to your user account. Every client page works the same way
   chezmoi make, is followed and kept as a link.
 - **Connect** (or **Update**, **Save**), **Disconnect** and **Restore backup** write only the files
   that reading pinned, after a native confirmation that names them and the key's label. Disconnect
-  keeps the edits you made since Connect; Restore backup puts the original bytes back. Pi's plugin
-  folder is not pinned yet: installing, updating and removing Pi's plugin act on the plugin folder
-  as the tool finds it when it runs ([README](README.md#pi)).
+  keeps the edits you made since Connect; Restore backup puts the original bytes back. Updating and
+  uninstalling Pi's plugin act only on the plugin folder that reading found; installing it, and the
+  removal after Disconnect or Restore backup, act on the plugin folder as the tool finds it when it
+  runs ([README](README.md#pi)).
 - **Backups** keeps up to 10 manual backups of the client's files in the app's vault.
 - The key comes from the vault and goes to the tool on its private pipe. It is written into the
   client's own config file, and never into a launch's arguments or environment.
@@ -70,7 +71,7 @@ original back. The exact keys each tool writes are in the [app tools README](../
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | `claude` in a terminal | Done | `claude-code` | Later | Later | Later |
 | Codex | `codex` in a terminal; Codex App: a program you name (Codex has no Linux app); `codex app-server daemon restart` | Done | `codex` | Later | Later | Later |
-| Claude Desktop | `claude-desktop`, run directly; **Create alias in core** adds a model alias in the core | Done | `claude-desktop` | Later | Later | Later |
+| Claude Desktop | `claude-desktop`, run directly; **Create alias in pluxy** adds a model alias in the core | Done | `claude-desktop` | Later | Later | Later |
 | OpenCode | `opencode` in a terminal; OpenCode Desktop (`/opt/OpenCode/ai.opencode`) run directly | Done | `opencode` | Later | Later | Later |
 | Oh My Pi | `omp` in a terminal | Done | `omp` | Later | Later | Later |
 | Grok Build | `grok` in a terminal | Done | `grok` | Later | Later | Later |
@@ -167,9 +168,9 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Executable and folder overrides, terminal choice and recent working folders | Kept | They let a launch use the person's own install and folders | Each tool page's Start section and the Launcher page |
 | Showing, hiding, searching and resetting the list of clients | Kept | The person chooses which clients the navigation shows | The Manage Clients page ([README](README.md#manage-clients)): by default the navigation lists the clients whose tool is installed |
 | Codex's OAuth sign-in method and its OpenAI provider-identity switch | Deferred | Not built now: the core takes no ChatGPT login from a client, so the sign-in could not reach it. A later change could add a separate Codex profile for it | Codex uses a client key |
-| Codex model catalog fetched silently | Dropped | The catalog changes only when the person asks | **Import models from core** on the Codex page |
+| Codex model catalog fetched silently | Dropped | The catalog changes only when the person asks | **Import models from pluxy** on the Codex page |
 | Pi's provider plugin installed with `pi install` from npm | Replaced | npm serves whatever is published at that moment | A reviewed copy carried by `pluxy/pi-setup` |
-| Claude Desktop model aliases written into the core's config file | Replaced | A setup tool does not edit the core's files | **Create alias in core**, through the management API |
+| Claude Desktop model aliases written into the core's config file | Replaced | A setup tool does not edit the core's files | **Create alias in pluxy**, through the management API |
 | Old command entry points with no visible feature | Dropped | Nothing used them | — |
 
 ### Usage and sessions

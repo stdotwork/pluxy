@@ -1,12 +1,13 @@
 //! pluxy/pi-setup: sets up Pi to use pluxy's core through the CLIProxyAPI provider adapter it
 //! carries, manages that adapter, and starts Pi, for pluxy's desktop app (README.md). Its
-//! operations: `preview` (read: pins Pi's three files in an agent folder and reads them back,
-//! never the key), `apply` (write: installs the adapter when it is not there, then writes the
-//! core's address, the client key, the adapter's registration and Pi's default provider and model,
-//! and removes the adapter's model cache), `update` (write: replaces the installed adapter with
-//! the one this program carries), `uninstall` (write: takes the adapter's registration out and
-//! removes its folder), `clear` and `restore` (write), `status` (read), `recipe` (read: how the
-//! launcher starts Pi) and the backup browser's standard operations. File writes go through
+//! operations: `preview` (read: pins Pi's three files in an agent folder and pluxy's copy of the
+//! adapter, and reads them back, never the key), `apply` (write: installs the adapter when it is
+//! not there, then writes the core's address, the client key, the adapter's registration and Pi's
+//! default provider and model, and removes the adapter's model cache), `update` (write: replaces
+//! the installed adapter the preview pinned with the one this program carries), `uninstall`
+//! (write: takes the adapter's registration out and removes the folder the preview pinned),
+//! `clear` and `restore` (write), `status` (read), `recipe` (read: how the launcher starts Pi)
+//! and the backup browser's standard operations. File writes go through
 //! pluxy-transactions: link-preserving, journalled, with the originals and manual backups in the
 //! host's vault.
 
@@ -16,7 +17,7 @@ mod pi;
 use pi::{PiMerge, Settings};
 use pluxy_program::{run, Call, Error, Handler};
 use pluxy_transactions::{
-    backup_call, data_dir, json_leaves, sha256_of, Pin, Selection, Target, Transactions,
+    backup_call, data_dir, json_leaves, sha256_of, Pin, Selection, Target, Transactions, Vault,
 };
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -154,13 +155,47 @@ fn pins(input: &Value) -> Result<([Pin; 3], PathBuf), Error> {
     Ok((p, agent))
 }
 
-/// The agent folder an update names.
-fn folder(input: &Value) -> Result<PathBuf, Error> {
-    let f = PathBuf::from(input["folder"].as_str().unwrap_or_default());
-    if !f.is_absolute() {
-        return Err(Error::invalid_request("folder is a full path"));
+/// What the plugin's pin selects in agent: pluxy's marker in the plugin's folder, so the pin holds
+/// the agent folder's link and identity, the plugin folder's identity and the marker's identity
+/// and bytes (the copy's version).
+fn plugin_selection(agent: &Path) -> Selection {
+    Selection::Root {
+        root: agent.to_path_buf(),
+        path: format!("{}/{}", pi::FOLDER, adapter::MARKER),
     }
-    Ok(f)
+}
+
+/// The plugin pin an update or uninstall carries back from the preview: pluxy's copy in the agent
+/// folder the targets are in, or None when the preview found no copy of pluxy's there.
+fn plugin_pin(input: &Value, agent: &Path) -> Result<Option<Pin>, Error> {
+    let v = &input["plugin"];
+    if v.is_null() {
+        return Ok(None);
+    }
+    let pin = Pin::from_json(v)?;
+    if pin.selection != plugin_selection(agent) {
+        return Err(Error::invalid_request(
+            "plugin is the preview's pin of pluxy's Pi plugin in the targets' agent folder",
+        ));
+    }
+    Ok(Some(pin))
+}
+
+/// Refuses, before any change, a plugin folder that is not the one the preview pinned (the agent
+/// folder's link pointed elsewhere, the agent or plugin folder moved or replaced, another copy
+/// put there) or, when the preview found no copy of pluxy's, one that is there now.
+fn check_plugin(agent: &Path, plugin: Option<&Pin>) -> Result<(), Error> {
+    match plugin {
+        Some(p) => match Target::open(p) {
+            Ok(_) => Ok(()),
+            Err(e) if e.message.contains("preview it again") => Err(e),
+            Err(e) => Err(adapter::changed(agent, &e.message)),
+        },
+        None if matches!(adapter::state(agent), adapter::State::Installed(_)) => Err(
+            adapter::changed(agent, "pluxy's copy is there now; the preview found none"),
+        ),
+        None => Ok(()),
+    }
 }
 
 /// What an apply's input asks for, checked, with the key.
@@ -199,14 +234,15 @@ fn settings(input: &Value, key: &str) -> Result<Settings, Error> {
 }
 
 /// Removes pluxy's adapter once settings.json no longer lists it (after a clear, a restore or an
-/// uninstall): a folder nothing loads. Whether it removed it.
-fn tidy(agent: &Path, settings: &Pin) -> Result<bool, Error> {
+/// uninstall): a folder nothing loads; with plugin (uninstall), only the folder that pin names.
+/// Whether it removed it.
+fn tidy(agent: &Path, settings: &Pin, plugin: Option<&Pin>) -> Result<bool, Error> {
     let (_, bytes) = Target::resolve(&settings.selection)?.read_now()?;
     // A settings file Pi would not take is left to the person, with the adapter.
     if pi::registered(bytes.as_deref()).unwrap_or(true) {
         return Ok(false);
     }
-    adapter::remove(agent)
+    adapter::remove(agent, plugin)
 }
 
 /// Where Pi's installer puts `pi` on os, in the order the launcher looks: on Linux and macOS
@@ -232,6 +268,81 @@ fn recipe(os: &str, home: &Path) -> Value {
     json!({"client": "Pi", "kind": "terminal", "program": program, "args": []})
 }
 
+/// Reads the three files and the plugin's state, pinning the files and pluxy's copy of the plugin
+/// (`preview`).
+fn preview(vault: &dyn Vault, data: PathBuf, input: &Value) -> Result<Value, Error> {
+    let sels = selections(input)?;
+    let agent = agent_of(&[&sels[0], &sels[1], &sels[2]])?;
+    let tx = Transactions::new(vault, data);
+    let (mut v, [config, settings]) = pinned_read(|| {
+        let v = tx.preview(SET, &sels)?;
+        let (_, a) = Target::resolve(&sels[0])?.read_now()?;
+        let (_, b) = Target::resolve(&sels[1])?.read_now()?;
+        Ok((v, [a, b]))
+    })?;
+    // Files Pi would not take are pinned all the same, so Restore Backup and the
+    // backups still reach them: `state` is `refused` and `reason` says why apply and
+    // clear refuse them.
+    let state = adapter::state(&agent);
+    let mut read = pi::read_back(
+        config.as_deref(),
+        settings.as_deref(),
+        input["base_url"].as_str(),
+        matches!(state, adapter::State::Installed(_)),
+    )
+    .unwrap_or_else(|e| json!({"state": "refused", "reason": e.message}));
+    read["adapter"] = state.to_json();
+    // pluxy's copy is pinned too, for Update plugin and Uninstall plugin to carry back.
+    read["adapter"]["pin"] = match state {
+        adapter::State::Installed(_) => Target::resolve(&plugin_selection(&agent))?.pin.to_json(),
+        _ => Value::Null,
+    };
+    v["pi"] = read;
+    Ok(v)
+}
+
+/// Update Pi Plugin (`update`): only the copy the preview pinned, in the agent folder its files
+/// are in; the files themselves are not written, so only where they are is checked.
+fn update(input: &Value) -> Result<Value, Error> {
+    let (pins, agent) = pins(input)?;
+    let plugin = plugin_pin(input, &agent)?.ok_or_else(|| {
+        Error::invalid_request(
+            "plugin is the preview's pin of pluxy's Pi plugin, which update replaces",
+        )
+    })?;
+    for p in &pins {
+        Target::place(p)?;
+    }
+    check_plugin(&agent, Some(&plugin))?;
+    adapter::update(&agent, &plugin)?;
+    Ok(json!({"outcome": "updated", "version": adapter::VERSION}))
+}
+
+/// Uninstall Pi Plugin (`uninstall`): the registration goes through apply, so the set's record
+/// (and Clear and Restore after it) stays whole; the connection settings stay (old app). Only the
+/// plugin folder the preview pinned is removed; none when it found no copy of pluxy's.
+fn uninstall(vault: &dyn Vault, data: PathBuf, input: &Value) -> Result<Value, Error> {
+    let (pins, agent) = pins(input)?;
+    let plugin = plugin_pin(input, &agent)?;
+    checked(&pins)?;
+    check_plugin(&agent, plugin.as_ref())?;
+    let mut v = Transactions::new(vault, data).apply(
+        SET,
+        &pins,
+        &|i, _, before| match i {
+            1 => pi::uninstall_settings(before),
+            _ => Ok(before.map(<[u8]>::to_vec)),
+        },
+        &PiMerge,
+        &mut |_| {},
+    )?;
+    v["adapter_removed"] = json!(match &plugin {
+        Some(p) => tidy(&agent, &pins[1], Some(p))?,
+        None => false,
+    });
+    Ok(v)
+}
+
 impl Handler for Pi {
     fn call(&self, call: &Call) -> Result<Value, Error> {
         let input = &call.input;
@@ -243,31 +354,7 @@ impl Handler for Pi {
             }
         }
         match call.op.as_str() {
-            "preview" => {
-                let sels = selections(input)?;
-                let agent = agent_of(&[&sels[0], &sels[1], &sels[2]])?;
-                let tx = Transactions::new(call, data_dir()?);
-                let (mut v, [config, settings]) = pinned_read(|| {
-                    let v = tx.preview(SET, &sels)?;
-                    let (_, a) = Target::resolve(&sels[0])?.read_now()?;
-                    let (_, b) = Target::resolve(&sels[1])?.read_now()?;
-                    Ok((v, [a, b]))
-                })?;
-                // Files Pi would not take are pinned all the same, so Restore Backup and the
-                // backups still reach them: `state` is `refused` and `reason` says why apply and
-                // clear refuse them.
-                let state = adapter::state(&agent);
-                let mut read = pi::read_back(
-                    config.as_deref(),
-                    settings.as_deref(),
-                    input["base_url"].as_str(),
-                    matches!(state, adapter::State::Installed(_)),
-                )
-                .unwrap_or_else(|e| json!({"state": "refused", "reason": e.message}));
-                read["adapter"] = state.to_json();
-                v["pi"] = read;
-                Ok(v)
-            }
+            "preview" => preview(call, data_dir()?, input),
             "apply" => {
                 let (pins, agent) = pins(input)?;
                 let key = input["key"]
@@ -301,35 +388,14 @@ impl Handler for Pi {
                     }
                     Err(e) => {
                         if installed {
-                            let _ = adapter::remove(&agent);
+                            let _ = adapter::remove(&agent, None);
                         }
                         Err(e)
                     }
                 }
             }
-            "update" => {
-                let agent = folder(input)?;
-                adapter::update(&agent)?;
-                Ok(json!({"outcome": "updated", "version": adapter::VERSION}))
-            }
-            // Uninstall Pi Plugin: the registration goes through apply, so the set's record (and
-            // Clear and Restore after it) stays whole; the connection settings stay (old app).
-            "uninstall" => {
-                let (pins, agent) = pins(input)?;
-                checked(&pins)?;
-                let mut v = Transactions::new(call, data_dir()?).apply(
-                    SET,
-                    &pins,
-                    &|i, _, before| match i {
-                        1 => pi::uninstall_settings(before),
-                        _ => Ok(before.map(<[u8]>::to_vec)),
-                    },
-                    &PiMerge,
-                    &mut |_| {},
-                )?;
-                v["adapter_removed"] = json!(tidy(&agent, &pins[1])?);
-                Ok(v)
-            }
+            "update" => update(input),
+            "uninstall" => uninstall(call, data_dir()?, input),
             "clear" => {
                 let (pins, agent) = pins(input)?;
                 checked(&pins)?;
@@ -339,7 +405,7 @@ impl Handler for Pi {
                     &PiMerge,
                     &mut |_| {},
                 )?;
-                v["adapter_removed"] = json!(tidy(&agent, &pins[1])?);
+                v["adapter_removed"] = json!(tidy(&agent, &pins[1], None)?);
                 Ok(v)
             }
             // Restore Backup puts the originals back whatever the files hold now: the person's
@@ -348,7 +414,7 @@ impl Handler for Pi {
                 let (pins, agent) = pins(input)?;
                 let mut v =
                     Transactions::new(call, data_dir()?).restore(SET, &pins, &mut |_| {})?;
-                v["adapter_removed"] = json!(tidy(&agent, &pins[1])?);
+                v["adapter_removed"] = json!(tidy(&agent, &pins[1], None)?);
                 Ok(v)
             }
             "status" => Transactions::new(call, data_dir()?).status(),
