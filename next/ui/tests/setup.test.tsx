@@ -298,6 +298,42 @@ test("a client's state is said in words, and a refused file says why that is fin
   expect(withState("refused")).toContain("you paste the text yourself");
 });
 
+test("a tool whose settings core does not read says Not checked, with no badge and nothing to paste", () => {
+  const desktop = {
+    id: "claude-desktop",
+    name: "Claude Desktop",
+    installed: true,
+    config: "~/.config/Claude-3p/claude_desktop_config.json",
+    state: "unchecked" as const,
+  };
+  const page = view({
+    ...found,
+    found: {
+      ...found.found,
+      clients: [...found.found.clients.slice(0, 1), desktop, ...found.found.clients.slice(1)],
+    },
+  });
+  const row = page.match(/<li data-part="setup-client" data-state="unchecked">.*?<\/li>/s)?.[0] ?? "";
+  expect(row).toContain("Claude Desktop");
+  expect(row).toContain('<span class="muted">Not checked</span>');
+  expect(row).not.toContain("badge");
+  expect(row).not.toContain("Does not point at pluxy yet");
+  expect(row).not.toContain("<button");
+  // Claude Code, whose settings core reads, keeps its paste button.
+  expect(page).toContain("Show what to paste");
+  // Found too: the line for the tool says no more than that.
+  expect(page).toContain('Claude Desktop</strong><span class="muted">Not checked</span>');
+
+  // Not installed, it is still one of the other clients: Not found, and nothing to paste either.
+  const absent = view({
+    ...nothingFound,
+    found: { ...nothingFound.found, clients: [{ ...desktop, installed: false }] },
+  });
+  const other = absent.match(/<li data-part="setup-client" data-state="not-found">.*?<\/li>/s)?.[0] ?? "";
+  expect(other).toContain("Not found on this machine");
+  expect(other).not.toContain("<button");
+});
+
 test("the first scan says pluxy is looking, and the person's ticks survive the replies that follow", () => {
   expect(scanState(scanningFirst)).toBe("first");
   const page = view(scanningFirst);

@@ -808,10 +808,10 @@ func hermesConfigDisplay(goos string) string {
 }
 
 // unreadConfig is the inspect of a tool whose settings core does not read: it names the file and
-// says not configured, which is not a reading of the file. The desktop app's page for the tool
+// says unchecked, which claims nothing about the file. The desktop app's page for the tool
 // reads the file with the tool's own writer.
 func unreadConfig(display string) func(home, coreURL string) (string, string) {
-	return func(string, string) (string, string) { return display, stateNotConfigured }
+	return func(string, string) (string, string) { return display, stateUnchecked }
 }
 
 func exeName(name string) string {

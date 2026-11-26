@@ -586,6 +586,9 @@ const (
 	ClientStateNeedsUpdate   = "needs-update"
 	// ClientStateRefused is a config file the tool's writer would refuse to change.
 	ClientStateRefused = "refused"
+	// ClientStateUnchecked is a tool whose settings core does not read, so whether they point at
+	// this core is not known. Core's scan reports it for Claude Desktop, Grok Build and Hermes Agent.
+	ClientStateUnchecked = "unchecked"
 )
 
 // Setup apply outcomes (SetupApplyResult.Status).

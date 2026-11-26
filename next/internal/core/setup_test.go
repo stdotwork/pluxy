@@ -825,3 +825,28 @@ func TestScanFindsClaudeDesktopBundle(t *testing.T) {
 		t.Errorf("with %s there, found = %v on %s", app, found, runtime.GOOS)
 	}
 }
+
+// Core reads no settings of Claude Desktop, Grok Build or Hermes Agent, so each reports unchecked,
+// with or without a settings file, and a scan kept with another state is corrected on refresh.
+func TestUnreadToolsAreUnchecked(t *testing.T) {
+	home := setTestHome(t)
+	writeTestFile(t, filepath.Join(home, ".grok", "config.toml"), "[models]\ndefault = \"x\"\n")
+	writeTestFile(t, filepath.Join(home, ".hermes", "config.yaml"), "model:\n  provider: pluxy\n")
+	kept := management.SetupFound{}
+	for _, id := range []string{"claude-desktop", "grok-build", "hermes"} {
+		spec, ok := clientSpecByID(id)
+		if !ok {
+			t.Fatalf("no spec for %s", id)
+		}
+		cfg, state := spec.inspect(home, "http://127.0.0.1:8317")
+		if cfg == "" || state != management.ClientStateUnchecked {
+			t.Errorf("%s: inspect = %q, %q, want a file and %q", id, cfg, state, management.ClientStateUnchecked)
+		}
+		kept.Clients = append(kept.Clients, management.SetupClient{ID: id, Installed: true, State: management.ClientStateNotConfigured})
+	}
+	for _, c := range refreshCoreState(kept, "127.0.0.1:8317", false).Clients {
+		if c.State != management.ClientStateUnchecked {
+			t.Errorf("%s: refreshed state %q, want %q", c.ID, c.State, management.ClientStateUnchecked)
+		}
+	}
+}

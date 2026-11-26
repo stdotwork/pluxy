@@ -417,8 +417,8 @@ func TestSetupScansDesktopTools(t *testing.T) {
 		for _, tool := range tools {
 			c := clientByID(sv, tool.id)
 			w := want[tool.id]
-			if c.ID != tool.id || c.Name != tool.name || !c.Installed || c.Version != w.version || c.Config != w.config || c.State != "not-configured" {
-				t.Errorf("%s = %+v, want installed, version %q, config %q, not-configured", tool.id, c, w.version, w.config)
+			if c.ID != tool.id || c.Name != tool.name || !c.Installed || c.Version != w.version || c.Config != w.config || c.State != "unchecked" {
+				t.Errorf("%s = %+v, want installed, version %q, config %q, unchecked", tool.id, c, w.version, w.config)
 			}
 		}
 		if _, err := os.Stat(ran); err == nil {
@@ -432,8 +432,8 @@ func TestSetupScansDesktopTools(t *testing.T) {
 		sv := waitForSetupScan(t, client)
 		for _, tool := range tools {
 			c := clientByID(sv, tool.id)
-			if c.ID != tool.id || c.Name != tool.name || c.Installed || c.Version != "" {
-				t.Errorf("%s = %+v, want listed and not installed", tool.id, c)
+			if c.ID != tool.id || c.Name != tool.name || c.Installed || c.Version != "" || c.State != "unchecked" {
+				t.Errorf("%s = %+v, want listed, not installed and unchecked", tool.id, c)
 			}
 		}
 	})
