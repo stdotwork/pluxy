@@ -50,6 +50,8 @@ const maxManagementBody = 1 << 20
 //	PATCH  /v0/management/client-keys/{id}  set or clear a client key's label
 //	DELETE /v0/management/client-keys/{id}  remove a client key (and its label)
 //	POST   /v0/management/management-key/rotate  replace the management key with a new one
+//	POST   /v0/management/management-key/rotate/stage  make a new management key, kept in memory only
+//	POST   /v0/management/management-key/rotate/commit  put the staged management key into use
 //	GET    /v0/management/models    the models served, as GET /v1/models lists them, each with its
 //	                                extension, upstream name and the IDs of the accounts that serve it
 //	POST   /v0/management/models/refresh  ask providers for their model lists again now

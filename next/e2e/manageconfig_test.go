@@ -274,7 +274,8 @@ func TestManageConfigNeedsManagementKey(t *testing.T) {
 	for _, call := range []struct{ method, path string }{
 		{http.MethodGet, "/config"}, {http.MethodPost, "/config/validate"}, {http.MethodPut, "/config"},
 		{http.MethodGet, "/client-keys"}, {http.MethodPost, "/client-keys"}, {http.MethodPatch, "/client-keys/x"}, {http.MethodDelete, "/client-keys/x"},
-		{http.MethodPost, "/management-key/rotate"}, {http.MethodGet, "/settings"}, {http.MethodPatch, "/settings"},
+		{http.MethodPost, "/management-key/rotate"}, {http.MethodPost, "/management-key/rotate/stage"}, {http.MethodPost, "/management-key/rotate/commit"},
+		{http.MethodGet, "/settings"}, {http.MethodPatch, "/settings"},
 	} {
 		for _, key := range []string{"", "wrong-key", clientKey} {
 			if code, b := mcall(t, c.base, key, call.method, call.path, `{}`); code != http.StatusUnauthorized {

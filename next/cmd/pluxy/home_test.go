@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -301,8 +302,9 @@ func TestNoSecondPluxyBesideTheApp(t *testing.T) {
 }
 
 // pluxy key management says where the key is and prints it only when asked; pluxy key
-// rotate-management rotates it through a real core, which writes the new key to its config,
-// prints the new key only when asked, and refuses when it could not say where the key went.
+// rotate-management changes it in two steps through a real pluxy, which writes the new key to its
+// config, prints the new key only when asked, and refuses when it could not say where the key
+// went. A reply lost at any step leaves a key that works, and the command says which.
 func TestManagementKeyCommands(t *testing.T) {
 	const oldKey = "fake-old-management-key"
 	h := newTestHome(t)
@@ -317,22 +319,44 @@ func TestManagementKeyCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Stop()
-	// drop loses the reply of a rotation on its way back: dropAfter once core has rotated the
-	// key and written it, dropBefore before core sees the call. The connection just closes.
+	// lose plans the fate of the next calls to a path: dropAfter loses the reply once pluxy has
+	// answered the call, dropBefore loses the call before pluxy sees it. The connection just
+	// closes. Calls past the plan go through.
 	const (
-		dropAfter = iota + 1
+		pass = iota
+		dropAfter
 		dropBefore
 	)
-	var drop atomic.Int32
+	const (
+		stagePath  = core.ManagementPrefix + "management-key/rotate/stage"
+		commitPath = core.ManagementPrefix + "management-key/rotate/commit"
+	)
+	var mu sync.Mutex
+	plan := map[string][]int{}
+	lose := func(path string, fates ...int) {
+		mu.Lock()
+		defer mu.Unlock()
+		plan[path] = fates
+	}
+	fate := func(path string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(plan[path]) == 0 {
+			return pass
+		}
+		f := plan[path][0]
+		plan[path] = plan[path][1:]
+		return f
+	}
 	mgmt := c.Management()
 	mux := http.NewServeMux()
 	mux.Handle(core.ManagementPrefix, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mode := drop.Load()
-		if mode == 0 || !strings.HasSuffix(r.URL.Path, "/management-key/rotate") {
+		f := fate(r.URL.Path)
+		if f == pass {
 			mgmt.ServeHTTP(w, r)
 			return
 		}
-		if mode == dropAfter {
+		if f == dropAfter {
 			mgmt.ServeHTTP(httptest.NewRecorder(), r)
 		}
 		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
@@ -363,6 +387,27 @@ func TestManagementKeyCommands(t *testing.T) {
 		}
 		return cfg.ManagementKey
 	}
+	// works reports whether pluxy answers with key.
+	works := func(key string) bool {
+		_, _, code := run(map[string]string{"PLUXY_URL": base, "PLUXY_MANAGEMENT_KEY": key}, "", false, "status")
+		return code == exitOK
+	}
+	// unchanged checks that the key in pluxy's config is key and works.
+	unchanged := func(name, key string) {
+		t.Helper()
+		if got := fileKey(); got != key || !works(key) {
+			t.Errorf("%s: the key changed or stopped working (in the file: %v, works: %v)", name, got != key, works(key))
+		}
+	}
+	// changed checks that the key in pluxy's config is a new one, which works, and the old does not.
+	changed := func(name, old string) string {
+		t.Helper()
+		key := fileKey()
+		if key == old || works(old) || !works(key) {
+			t.Errorf("%s: the key did not change (in the file: %v, old works: %v, new works: %v)", name, key != old, works(old), works(key))
+		}
+		return key
+	}
 
 	out, errOut, code := run(nil, "", false, "key", "management")
 	if code != exitOK || strings.Contains(out+errOut, oldKey) {
@@ -381,7 +426,7 @@ func TestManagementKeyCommands(t *testing.T) {
 		t.Errorf("key management with the key in the environment: %d %q", code, out)
 	}
 
-	// Refused before core is called: not asked and not --yes; --json without --show-key; a core
+	// Refused before pluxy is called: not asked and not --yes; --json without --show-key; a pluxy
 	// not found through a config file without --show-key.
 	for _, c := range []struct {
 		env  map[string]string
@@ -397,12 +442,12 @@ func TestManagementKeyCommands(t *testing.T) {
 			t.Errorf("%v: %d %q %q, want exit %d saying %q", c.args, code, out, errOut, exitUsage, c.want)
 		}
 		if k := fileKey(); k != oldKey {
-			t.Fatalf("%v rotated the key", c.args)
+			t.Fatalf("%v changed the key", c.args)
 		}
 	}
 	// Asked on a terminal and declined: nothing changes.
-	if _, errOut, code := run(nil, "n\n", true, "key", "rotate-management"); code != exitOK || !strings.Contains(errOut, "not rotated") || fileKey() != oldKey {
-		t.Errorf("declined rotation: %d %q", code, errOut)
+	if _, errOut, code := run(nil, "n\n", true, "key", "rotate-management"); code != exitOK || !strings.Contains(errOut, "not changed") || fileKey() != oldKey {
+		t.Errorf("declined key change: %d %q", code, errOut)
 	}
 
 	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes")
@@ -410,7 +455,7 @@ func TestManagementKeyCommands(t *testing.T) {
 	if code != exitOK || out != "" || newKey == oldKey || newKey == "" || strings.Contains(errOut, newKey) {
 		t.Fatalf("rotate: %d %q %q (key in the file changed: %v)", code, out, errOut, newKey != oldKey)
 	}
-	mustContain(t, "rotate", errOut, "Core wrote the new key to "+h.homeCfg, "web panel", "desktop app", "PLUXY_MANAGEMENT_KEY")
+	mustContain(t, "rotate", errOut, "wrote the new key to "+h.homeCfg, "web panel", "desktop app", "PLUXY_MANAGEMENT_KEY")
 	if _, errOut, code := run(nil, "", false, "status"); code != exitOK {
 		t.Errorf("status after the rotation: %d %q", code, errOut)
 	}
@@ -449,21 +494,21 @@ func TestManagementKeyCommands(t *testing.T) {
 		t.Errorf("key management to a full output: %d %q", code, errOut)
 	}
 
-	// A config file with core's address and key that is not core's own file: core would write the
-	// new key elsewhere, so nothing is rotated.
+	// A config file with pluxy's address and key that is not pluxy's own file: pluxy would write
+	// the new key elsewhere, so nothing changes.
 	key := fileKey()
 	stale := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(stale, []byte(fmt.Sprintf(`{"listen": %q, "client_keys": ["fake-other-client-key"], "management_key": %q}`, ln.Addr().String(), key)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--config", stale)
-	if code != exitUsage || out != "" || fileKey() != key {
-		t.Fatalf("rotate from a stale config: %d %q %q (rotated: %v)", code, out, errOut, fileKey() != key)
+	if code != exitUsage || out != "" {
+		t.Errorf("rotate from a stale config: %d %q %q", code, out, errOut)
 	}
-	mustContain(t, "rotate from a stale config", errOut, "does not run on "+stale, "--show-key")
+	unchanged("rotate from a stale config", key)
+	mustContain(t, "rotate from a stale config", errOut, "runs on "+h.homeCfg+", not on "+stale, "Nothing changed", "--config "+h.homeCfg, "--show-key")
 
-	// A copy with the same contents cannot be told apart beforehand: core rotates its own file,
-	// the copy does not get the new key, so the command prints the new key, says why, and exits 0.
+	// A copy with the same contents is another file too: nothing changes, and the copy is kept.
 	b, err := os.ReadFile(h.homeCfg)
 	if err != nil {
 		t.Fatal(err)
@@ -473,80 +518,150 @@ func TestManagementKeyCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--config", copied)
-	if code != exitOK || fileKey() == key || out != fileKey()+"\n" {
-		t.Errorf("rotate from a copy: %d %q %q (rotated: %v)", code, out, errOut, fileKey() != key)
+	if code != exitUsage || out != "" {
+		t.Errorf("rotate from a copy: %d %q %q", code, out, errOut)
+	}
+	unchanged("rotate from a copy", key)
+	mustContain(t, "rotate from a copy", errOut, "runs on "+h.homeCfg+", not on "+copied, "Nothing changed")
+	// With --show-key the key is printed, put into use, and the copy is named as not holding it.
+	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--show-key", "--config", copied)
+	key = changed("rotate --show-key from a copy", key)
+	if code != exitOK || out != key+"\n" {
+		t.Errorf("rotate --show-key from a copy: %d %q %q", code, out, errOut)
 	}
 	if c, err := os.ReadFile(copied); err != nil || !bytes.Equal(c, b) {
 		t.Errorf("rotate from a copy changed the copy: %v", err)
 	}
-	mustContain(t, "rotate from a copy", errOut, copied+" (--config) does not hold it", "core wrote it to the config file it runs on")
+	mustContain(t, "rotate --show-key from a copy", errOut, copied+" (--config) does not hold the new key")
 
-	// The new key cannot be written out: the command fails and names the file that holds it.
-	key = fileKey()
+	// A hard link to pluxy's config is the same file but another entry: pluxy replaces its config
+	// by a rename, after which the link keeps the old key. Nothing changes.
+	linked := filepath.Join(t.TempDir(), "config.json")
+	if err := os.Link(h.homeCfg, linked); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--config", linked)
+	if code != exitUsage || out != "" {
+		t.Errorf("rotate from a hard link: %d %q %q", code, out, errOut)
+	}
+	unchanged("rotate from a hard link", key)
+	mustContain(t, "rotate from a hard link", errOut, "runs on "+h.homeCfg+", not on "+linked, "Nothing changed", "--show-key")
+	// A symbolic link to it is the same entry: the key is put into use and read through the link.
+	symlinked := filepath.Join(t.TempDir(), "config.json")
+	if err := os.Symlink(h.homeCfg, symlinked); err != nil {
+		t.Logf("no symbolic link, so that case is not run: %v", err)
+	} else {
+		out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--config", symlinked)
+		key = changed("rotate from a symbolic link", key)
+		if code != exitOK || out != "" {
+			t.Errorf("rotate from a symbolic link: %d %q %q", code, out, errOut)
+		}
+		mustContain(t, "rotate from a symbolic link", errOut, "pluxy commands that read "+symlinked)
+		if cfg, err := server.LoadConfig(symlinked); err != nil || cfg.ManagementKey != key {
+			t.Errorf("the symbolic link does not lead to the new key: %v", err)
+		}
+	}
+
+	// The new key cannot be printed: it is not put into use.
 	errOut, code = runTo(full, nil, "key", "rotate-management", "--yes", "--show-key")
-	if code != exitFailed || fileKey() == key {
-		t.Errorf("rotate --show-key to a full output: %d %q (rotated: %v)", code, errOut, fileKey() != key)
+	if code != exitFailed {
+		t.Errorf("rotate --show-key to a full output: %d %q", code, errOut)
 	}
-	mustContain(t, "rotate --show-key to a full output", errOut, "could not be written to standard output", "it is in "+h.homeCfg)
+	unchanged("rotate --show-key to a full output", key)
+	mustContain(t, "rotate --show-key to a full output", errOut, "could not be printed", "Nothing changed: your management key still works")
 
-	// Core rotates and its reply is lost: the new key is in core's config file, which the command
-	// checks with core before naming it, and prints with --show-key.
-	drop.Store(dropAfter)
-	key = fileKey()
-	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes")
-	if code != exitOK || out != "" || fileKey() == key {
-		t.Errorf("rotate, reply lost: %d %q %q (rotated: %v)", code, out, errOut, fileKey() != key)
-	}
-	mustContain(t, "rotate, reply lost", errOut, "reply was lost", "Core wrote the new key to "+h.homeCfg)
-	key = fileKey()
+	// Stage's reply is lost: nothing changed.
+	lose(stagePath, dropAfter)
 	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--show-key")
-	if code != exitOK || fileKey() == key || out != fileKey()+"\n" {
-		t.Errorf("rotate --show-key, reply lost: %d %q %q", code, out, errOut)
+	if code != exitFailed || out != "" {
+		t.Errorf("rotate, stage reply lost: %d %q %q", code, out, errOut)
 	}
-	// With no config file to find it in, the command says the key was rotated and lost to it.
-	key = fileKey()
-	out, errOut, code = run(map[string]string{"PLUXY_URL": base, "PLUXY_MANAGEMENT_KEY": key}, "", false, "key", "rotate-management", "--yes", "--show-key")
-	if code != exitFailed || out != "" || fileKey() == key {
-		t.Errorf("rotate --show-key, reply lost, no config: %d %q %q", code, out, errOut)
+	unchanged("rotate, stage reply lost", key)
+	mustContain(t, "rotate, stage reply lost", errOut, "did not answer the key change", "Nothing changed: your management key still works")
+
+	// Commit is lost before pluxy sees it, and so is the second one: nothing changed, and the
+	// command says which key to try.
+	lose(commitPath, dropBefore, dropBefore)
+	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--show-key")
+	if code != exitFailed || out == "" {
+		t.Errorf("rotate --show-key, both commits lost: %d %q %q", code, out, errOut)
 	}
-	mustContain(t, "rotate --show-key, reply lost, no config", errOut, "rotated the management key, but its reply, which held the new key, was lost", "the old key no longer works")
-	// The reply is lost before core sees the call: the old key still works, and the command fails.
-	drop.Store(dropBefore)
-	key = fileKey()
+	unchanged("rotate --show-key, both commits lost", key)
+	mustContain(t, "rotate --show-key, both commits lost", errOut, "stopped answering while changing the key", "Try the new key printed above")
+	lose(commitPath, dropBefore, dropBefore)
+	_, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes")
+	if code != exitFailed {
+		t.Errorf("rotate, both commits lost: %d %q", code, errOut)
+	}
+	unchanged("rotate, both commits lost", key)
+	mustContain(t, "rotate, both commits lost", errOut, "stopped answering while changing the key", "Use the key in "+h.homeCfg)
+
+	// The first commit is lost before pluxy sees it; the second puts the key into use.
+	lose(commitPath, dropBefore)
+	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--show-key")
+	key = changed("rotate, first commit lost", key)
+	if code != exitOK || out != key+"\n" {
+		t.Errorf("rotate, first commit lost: %d %q %q", code, out, errOut)
+	}
+
+	// The first commit's reply is lost after pluxy put the key into use: the second is refused
+	// the old key, and the new key's answer shows it is in use.
+	lose(commitPath, dropAfter)
 	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes")
-	if code != exitFailed || out != "" || fileKey() != key {
-		t.Errorf("rotate, call lost: %d %q %q", code, out, errOut)
+	key = changed("rotate, commit reply lost", key)
+	if code != exitOK || out != "" {
+		t.Errorf("rotate, commit reply lost: %d %q %q", code, out, errOut)
 	}
-	mustContain(t, "rotate, call lost", errOut, "the old key still works")
+	mustContain(t, "rotate, commit reply lost", errOut, "wrote the new key to "+h.homeCfg)
+	// The same with no config file read, the key and address from the environment.
+	lose(commitPath, dropAfter)
+	out, errOut, code = run(map[string]string{"PLUXY_URL": base, "PLUXY_MANAGEMENT_KEY": key}, "", false, "key", "rotate-management", "--yes", "--show-key")
+	key = changed("rotate --show-key, commit reply lost, no config", key)
+	if code != exitOK || out != key+"\n" {
+		t.Errorf("rotate --show-key, commit reply lost, no config: %d %q %q", code, out, errOut)
+	}
 }
 
-// A rotation that core answers with no new key, an empty object or an empty body, is taken as
-// one whose reply was lost: the command asks core with the old key whether it rotated, and never
-// exits 0 without the key.
-func TestRotateWithNoKeyInTheReply(t *testing.T) {
+// A pluxy whose stage reply holds no new key, or that does not know the two steps, gets no
+// commit; a commit pluxy answers 409, at once or after a lost reply, changed nothing.
+func TestKeyRotateWithoutAnAnswer(t *testing.T) {
 	const oldKey = "fake-old-management-key"
+	const staged = `{"value": "fake-staged-key", "config": "/nowhere/config.json"}`
 	for _, c := range []struct {
-		name, reply string
-		rotated     bool
-		args        []string
+		name, stage string
+		stageStatus int
+		commits     []int // each commit's status; 0 loses it
+		wantCommits int
 		want        string
 	}{
-		{"an empty object, not rotated", "{}", false, nil, "the old key still works"},
-		{"an empty body, not rotated", "", false, nil, "the old key still works"},
-		{"an empty object with --json, not rotated", "{}", false, []string{"--json"}, "the old key still works"},
-		{"an empty object, rotated", "{}", true, nil, "the old key no longer works"},
+		{"an empty object", "{}", 200, nil, 0, "did not answer the key change (its reply held no new key). Nothing changed"},
+		{"an empty body", "", 200, nil, 0, "did not answer the key change (its reply held no new key). Nothing changed"},
+		{"no config named", `{"value": "fake-staged-key"}`, 200, nil, 0, "did not answer the key change"},
+		{"an older pluxy", `{"error": {"code": "not_found", "message": "404 page not found"}}`, 404, nil, 0, "is an older pluxy that cannot change its key in two steps. Nothing changed"},
+		{"commit refused", staged, 200, []int{409}, 1, "did not put the new key into use"},
+		{"commit lost, then refused", staged, 200, []int{0, 409}, 2, "did not put the new key into use"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			var rotated atomic.Bool
+			var commits atomic.Int32
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get("Authorization") != "Bearer "+oldKey || rotated.Load() {
+				if r.Header.Get("Authorization") != "Bearer "+oldKey {
 					w.WriteHeader(http.StatusUnauthorized)
 					return
 				}
 				switch {
-				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/management-key/rotate"):
-					rotated.Store(c.rotated)
-					w.Write([]byte(c.reply))
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/management-key/rotate/stage"):
+					w.WriteHeader(c.stageStatus)
+					w.Write([]byte(c.stage))
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/management-key/rotate/commit"):
+					n := int(commits.Add(1))
+					if n > len(c.commits) || c.commits[n-1] == 0 {
+						if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
+							conn.Close()
+						}
+						return
+					}
+					w.WriteHeader(c.commits[n-1])
+					w.Write([]byte(`{"error": {"code": "conflict", "message": "this is not the staged management key"}}`))
 				case strings.HasSuffix(r.URL.Path, "/status"):
 					w.Write([]byte(`{"version":"dev"}`))
 				default:
@@ -559,14 +674,67 @@ func TestRotateWithNoKeyInTheReply(t *testing.T) {
 			h.env["PLUXY_URL"] = srv.URL
 			h.env["PLUXY_MANAGEMENT_KEY"] = oldKey
 			var out, errOut bytes.Buffer
-			args := append([]string{"key", "rotate-management", "--yes", "--show-key"}, c.args...)
-			code := runCLIWithInput(args, strings.NewReader(""), &out, &errOut, h.getenv, false)
-			if code != exitFailed || out.String() != "" {
-				t.Errorf("%d %q %q, want exit %d and nothing on standard output", code, out.String(), errOut.String(), exitFailed)
+			code := runCLIWithInput([]string{"key", "rotate-management", "--yes", "--show-key"}, strings.NewReader(""), &out, &errOut, h.getenv, false)
+			if code != exitFailed {
+				t.Errorf("%d %q %q, want exit %d", code, out.String(), errOut.String(), exitFailed)
+			}
+			if n := int(commits.Load()); n != c.wantCommits {
+				t.Errorf("%d commits sent, want %d", n, c.wantCommits)
 			}
 			mustContain(t, c.name, errOut.String(), c.want)
 		})
 	}
+}
+
+// Without --show-key, a pluxy at an address that is not loopback is refused before it is called,
+// even when the config file it names is the one the command read: on another machine that path
+// is another file.
+func TestKeyRotateNotOnLoopback(t *testing.T) {
+	const oldKey = "fake-old-management-key"
+	var host string
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && ipn.IP.To4() != nil {
+			host = ipn.IP.String()
+			break
+		}
+	}
+	if host == "" {
+		t.Skip("this machine has no IPv4 address that is not loopback")
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		t.Skipf("cannot listen on %s: %v", host, err)
+	}
+	h := newTestHome(t)
+	emptyFolder(t)
+	cfg := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(cfg, []byte(fmt.Sprintf(`{"listen": %q, "client_keys": ["fake-other-client-key"], "management_key": %q}`, ln.Addr().String(), oldKey)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/management-key/rotate/stage"):
+			json.NewEncoder(w).Encode(map[string]string{"value": "fake-staged-key", "config": cfg})
+		case strings.HasSuffix(r.URL.Path, "/management-key/rotate/commit"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.Write([]byte(`{"version":"dev"}`))
+		}
+	})}
+	go srv.Serve(ln)
+	defer srv.Close()
+	var out, errOut bytes.Buffer
+	code := runCLIWithInput([]string{"key", "rotate-management", "--yes", "--config", cfg}, strings.NewReader(""), &out, &errOut, h.getenv, false)
+	if code != exitUsage || out.String() != "" {
+		t.Errorf("%d %q %q, want exit %d", code, out.String(), errOut.String(), exitUsage)
+	}
+	if n := calls.Load(); n != 0 {
+		t.Errorf("pluxy was called %d times, want none", n)
+	}
+	mustContain(t, "rotate at "+host, errOut.String(), "not at a loopback address", "add --show-key")
 }
 
 // failingWriter is an output that takes nothing, as /dev/full.

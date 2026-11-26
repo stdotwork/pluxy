@@ -121,6 +121,9 @@ type Core struct {
 	catalogue    *catalogue.Catalogue // the models.dev snapshot and refresh
 	catalogueNow func() time.Time     // tests can move the refresh clock
 
+	staged stagedKey        // the management key a two-step change made, until it is put into use
+	keyNow func() time.Time // tests can move the staged key's clock
+
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
 	bgWG     sync.WaitGroup
@@ -155,7 +158,7 @@ func Start(opts Options) (*Core, error) {
 	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), requests: server.NewRequests(), checks: newChecks(), ignition: ignite.NewPlanner(),
-		bgCtx: bgCtx, bgCancel: bgCancel, catalogueNow: time.Now}
+		bgCtx: bgCtx, bgCancel: bgCancel, catalogueNow: time.Now, keyNow: time.Now}
 	c.loadPublicKey()
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {

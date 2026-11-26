@@ -595,6 +595,8 @@ mod tests {
     fn the_management_key_routes_are_native_only_however_spelled() {
         for path in [
             ROTATE,
+            "/management-key/rotate/stage",
+            "/management-key/rotate/commit",
             "/management-key/%72otate",
             "/%6Danagement-key/rotate",
             "/%6danagement%2Dkey%2frotate",
