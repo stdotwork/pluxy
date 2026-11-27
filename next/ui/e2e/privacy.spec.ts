@@ -194,8 +194,9 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const groups = [...document.querySelectorAll('[data-part="tier"]')];
         const active = document.activeElement;
+        // The group's place among its provider's groups.
+        const groups = [...(active?.closest("section")?.querySelectorAll('[data-part="tier"]') ?? [])];
         return {
           tier: groups.indexOf(active?.closest('[data-part="tier"]') as Element),
           name: active?.getAttribute("aria-label"),

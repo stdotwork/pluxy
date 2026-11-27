@@ -65,21 +65,22 @@ for (const [theme, control, main] of [
 }
 
 test("a table wider than its pane fades out on the side with more columns", async ({ page }) => {
-  // The System page's list of models is wider than a phone-sized window.
+  // A failed request's log, listed on Logs under Failed requests, is wider than a phone-sized window.
   await page.setViewportSize({ width: 380, height: 480 });
-  // A model served by an account whose long name makes its row wider than the window.
-  const wide = "anaccountwhosenamehasnoplacetobreakandmakesitstierwiderthanthewindow";
-  await page.route("**/v0/management/models", async (route) => {
-    if (route.request().method() !== "GET") return route.fallback();
-    const reply = await route.fetch();
-    const body = (await reply.json()) as { models: unknown[] };
-    const model = { id: "wide-model", upstream: "wide-model", extension: "test/alpha", accounts: [wide] };
-    await route.fulfill({ response: reply, json: { models: [...body.models, model] } });
+  expect(
+    (await core.mgmt("PATCH", "/settings", { observability: { logs: { "logging-to-file": true } } })).status,
+  ).toBe(200);
+  const failed = await fetch(`${core.base}/v1/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${core.clientKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "server-error", messages: [{ role: "user", content: "hi" }] }),
   });
+  await failed.arrayBuffer();
   await openPanel(page, core);
   await signIn(page, core);
-  await page.goto(`${core.base}/panel/#/system`);
-  const frame = page.locator('[data-part="list-frame"]').filter({ hasText: wide });
+  await page.goto(`${core.base}/panel/#/logs`);
+  await page.getByRole("tab", { name: "Failed requests", exact: true }).click();
+  const frame = page.locator('[data-part="list-frame"]').first();
   const cue = (side: "::before" | "::after") =>
     frame.evaluate((el, s) => getComputedStyle(el, s).opacity, side);
   await expect(frame).toHaveAttribute("data-more", "end");
