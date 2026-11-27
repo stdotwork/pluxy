@@ -2,11 +2,14 @@
 // (WCAG AA) and dots and bars at 3:1 against what they sit on (WCAG 1.4.11). The pairs: the
 // navigation on the window's ground, plan pills in their four finishes, tinted notices, table
 // headings, and a limit's gauge against its track.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { measureContrast } from "./contrast";
 import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
+const appCss = readFileSync(join(import.meta.dirname, "..", "..", "app", "src", "app.css"), "utf8");
 
 const THEMES = ["", "pluxy/terminal", "pluxy/paper"] as const; // "" is the default theme
 const APPEARANCES = ["light", "dark"] as const;
@@ -173,6 +176,35 @@ for (const theme of THEMES) {
       expect(list).toHaveLength(8);
       const low = list.filter((r) => r.ratio < GRAPHIC).map((r) => `${r.what}: ${r.ratio.toFixed(2)}:1`);
       expect(low).toEqual([]);
+    });
+
+    test(`the first-launch starting bar clears 3:1 with reduced motion: ${name}`, async ({ page }) => {
+      await open(page, theme, appearance);
+      await page.emulateMedia({ colorScheme: appearance, reducedMotion: "reduce" });
+      await page.addStyleTag({ content: appCss });
+      await page.evaluate(() => {
+        const card = document.createElement("div");
+        card.id = "first-progress-sample";
+        card.className = "focus-card";
+        card.innerHTML = '<div class="first-progress-bar"><span></span></div>';
+        document.querySelector("main")?.prepend(card);
+      });
+      const result = await page.evaluate(`(() => {
+        ${rgbScript()}
+        const card = document.querySelector("#first-progress-sample");
+        const bar = card.querySelector(".first-progress-bar");
+        const fill = bar.firstElementChild;
+        const ground = bgOf(card);
+        const track = over(rgb(getComputedStyle(bar).backgroundColor), ground);
+        const style = getComputedStyle(fill);
+        const raw = rgb(style.backgroundColor);
+        raw[3] = Math.round(raw[3] * Number(style.opacity));
+        const painted = over(raw, track);
+        return { ratio: ratio(painted, track), animation: style.animationName };
+      })()`);
+      const { ratio, animation } = result as { ratio: number; animation: string };
+      expect(animation).toBe("none");
+      expect(ratio).toBeGreaterThanOrEqual(GRAPHIC);
     });
   }
 }
