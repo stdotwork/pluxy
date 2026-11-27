@@ -495,15 +495,18 @@
 
   .request-next .btn {
     max-width: 100%;
+    height: auto;
+    padding-block: var(--s);
+    white-space: normal;
+    text-align: start;
     text-decoration: none;
   }
 
-  /* A long account name is cut with an ellipsis inside the button, which keeps its height. */
+  /* A long account name wraps inside the button instead of being cut off. */
   .request-next .btn-label {
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   /* ---- Usage ------------------------------------------------------------------------------- */

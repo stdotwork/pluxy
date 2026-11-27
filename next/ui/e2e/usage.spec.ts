@@ -380,3 +380,62 @@ test("a load that failed says so, and a save that could not read says that, not 
   );
   await expect(rows(page).first()).toBeVisible();
 });
+
+test("the Open-account button wraps a long account name instead of cutting it off", async ({ page }) => {
+  const long = "alpha-shared-research-workspace-account-with-a-deliberately-very-long-name-0123456789";
+  await page.route("**/v0/management/usage/events?*", (route) =>
+    route.fulfill({
+      json: {
+        events: [
+          {
+            seq: 1,
+            id: "trace-long",
+            timestamp: new Date().toISOString(),
+            endpoint: "/v1/chat/completions",
+            stream: false,
+            model: "fake-model",
+            provider: "test/alpha",
+            account: long,
+            failed: true,
+            status: 500,
+            error_code: "upstream",
+            latency_ms: 120,
+            tried: [{ account: long, provider: "test/alpha", result: "upstream" }],
+          },
+        ],
+        next: 1,
+        more: false,
+        lost: false,
+      },
+    }),
+  );
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/activity`);
+  await rows(page).first().getByRole("button", { expanded: false }).click();
+  const detail = pane(page);
+  const open = detail.getByRole("link", { name: `Open ${long}`, exact: true });
+  await expect(open).toBeVisible();
+  const check = await open.evaluate((btn) => {
+    const span = btn.querySelector<HTMLElement>(".btn-label");
+    const box = btn.getBoundingClientRect();
+    const paneBox = btn.closest('[data-part="detail"]')?.getBoundingClientRect();
+    const control = Number.parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue("--px-size-control"),
+    );
+    const range = document.createRange();
+    if (span) range.selectNodeContents(span);
+    return {
+      overflows: span ? span.scrollWidth > span.clientWidth + 1 : true,
+      lines: span ? range.getClientRects().length : 0,
+      fitsPane: paneBox ? box.right <= paneBox.right + 1 : false,
+      height: box.height,
+      control,
+    };
+  });
+  expect(check.overflows).toBe(false);
+  expect(check.lines).toBeGreaterThan(1);
+  expect(check.fitsPane).toBe(true);
+  expect(check.height).toBeGreaterThanOrEqual(check.control - 0.5);
+});
