@@ -45,6 +45,9 @@ export interface ConnectionChange {
   ca_file?: string;
   core_path?: string;
   core_source?: string;
+  /** A remote pluxy at a plain http address that is not a Tailscale one: the person ticked that
+   * they trust the network. The native side refuses such an address without it. */
+  trust_network?: boolean;
 }
 
 /** The app's own core versions, in managed mode. */
@@ -90,6 +93,15 @@ export interface KeyEntryResult {
 }
 export const keyEntry = (change?: ConnectionChange) =>
   invoke<KeyEntryResult>("key_entry", { change: change ?? null });
+/** Asks for a certificate authority file in the native file chooser: its path, or null when the
+ * person cancelled. Only where canChooseFiles says the app has one. */
+export const certificateChoose = () => invoke<string | null>("certificate_choose");
+/** Whether the app has a native chooser for opening a file here: Linux only, as the native side's
+ * other choosers. The window learns its system from its webview. */
+export const canChooseFiles = () =>
+  typeof navigator !== "undefined" &&
+  /\bLinux\b/.test(navigator.userAgent) &&
+  !/Android/.test(navigator.userAgent);
 export const coreRestart = () => invoke<Connection>("core_restart");
 export const coreVersions = () => invoke<Versions>("core_versions");
 /** Each opens the native confirmation and returns; the app sends pluxy-connection when done. */

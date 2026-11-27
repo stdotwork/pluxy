@@ -184,7 +184,8 @@ the GitHub CLI's [environment](https://cli.github.com/manual/gh_help_environment
 ## The desktop app
 
 The app reaches core in one of three ways: it runs its own core, connects to a core already
-running on the same computer, or connects to a remote core over HTTPS. Closing the window to the
+running on the same computer, or connects to a remote core over HTTPS, or over plain HTTP to a
+Tailscale address or on a network the person says they trust. Closing the window to the
 tray destroys the webviews, so the app holds little memory while it sits there. Every app command
 is declared and granted only to the app's own webview, and each extension page runs in a webview
 of its own with no grants.

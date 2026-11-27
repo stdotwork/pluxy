@@ -412,9 +412,11 @@ impl Client {
             Some(c) => RootCerts::Specific(Arc::new(c)),
             None => RootCerts::WebPki,
         };
-        // A core on this computer is reached directly: a proxy from the environment would see
-        // the key. Others honour the proxy settings; over https a proxy sees no key.
-        let direct = url::Url::parse(base).is_ok_and(|u| crate::conn::is_loopback(&u));
+        // A core on this computer, and one reached over plain http, is reached directly: a
+        // proxy from the environment would see the key. Others honour the proxy settings; over
+        // https a proxy sees no key.
+        let direct = url::Url::parse(base)
+            .is_ok_and(|u| crate::conn::is_loopback(&u) || u.scheme() == "http");
         let proxy = if direct {
             None
         } else {
@@ -436,7 +438,8 @@ impl Client {
         &self.base
     }
 
-    /// Calls `method` on path (under `/v0/management`) with key.
+    /// Calls `method` on path (under `/v0/management`) with key; with an empty key, with no
+    /// Authorization header at all.
     pub fn call(&self, key: &str, method: &str, path: &str, body: Option<&Value>) -> Reply {
         self.send(key, method, path, body, None)
     }
@@ -476,20 +479,27 @@ impl Client {
         body: Option<&Value>,
         limit: Option<Duration>,
     ) -> Reply {
+        /// The request with the client's limit replaced by limit, and the key as its bearer
+        /// token; an empty key sends no Authorization header.
         fn within<B>(
             r: ureq::RequestBuilder<B>,
             limit: Option<Duration>,
+            key: &str,
         ) -> ureq::RequestBuilder<B> {
-            match limit {
+            let r = match limit {
                 Some(l) => r.config().timeout_global(Some(l)).build(),
                 None => r,
+            };
+            if key.is_empty() {
+                r
+            } else {
+                r.header("Authorization", &format!("Bearer {key}"))
             }
         }
         if let Some(p) = path_problem(path) {
             return Reply::failed(400, "invalid_request", p);
         }
         let url = format!("{}{MANAGEMENT}{path}", self.base);
-        let auth = format!("Bearer {key}");
         let encoded = match body {
             Some(b) => match serde_json::to_vec(b) {
                 Ok(v) if v.len() <= MAX_BODY => Some(v),
@@ -499,12 +509,8 @@ impl Client {
             None => None,
         };
         let result = match method {
-            "GET" => within(self.agent.get(&url), limit)
-                .header("Authorization", &auth)
-                .call(),
-            "DELETE" => within(self.agent.delete(&url), limit)
-                .header("Authorization", &auth)
-                .call(),
+            "GET" => within(self.agent.get(&url), limit, key).call(),
+            "DELETE" => within(self.agent.delete(&url), limit, key).call(),
             "POST" | "PATCH" | "PUT" => {
                 if method == "PUT" && !put_allowed(path) {
                     return Reply::failed(
@@ -522,8 +528,8 @@ impl Client {
                         self.agent.patch(&url)
                     },
                     limit,
-                )
-                .header("Authorization", &auth);
+                    key,
+                );
                 match encoded {
                     Some(b) => req.header("Content-Type", "application/json").send(&b[..]),
                     None => req.send_empty(),

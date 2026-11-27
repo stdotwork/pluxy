@@ -176,6 +176,8 @@ struct App {
     quitting: AtomicBool,
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
+    /// A key typed for an address whose pluxy has not refused it, for the next try there.
+    held_key: Mutex<Option<conn::HeldKey>>,
     rotation_open: AtomicBool,
     /// The app's own update (`updater/`).
     updater: updater::State,
@@ -1038,60 +1040,70 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
         }
         let _pending = Pending(app.clone());
         let st = app.state::<App>();
-        let prepared = st.conn.lock().unwrap().prepare_key(change);
-        let target = match prepared {
-            Ok(target) => target,
-            Err(reason) => {
-                let mut connection = st.conn.lock().unwrap().view();
-                connection.error = Some(reason);
-                return KeyEntryResult {
-                    status: "error",
-                    connection,
-                };
+        // The address, its certificate and whether its pluxy takes a key from here are checked
+        // before the key window opens; a key typed for an address and not refused there is
+        // used again on the next try (`conn::enter_key`).
+        let (entry, mut connection) = conn::enter_key(&st.conn, &st.held_key, change, |summary| {
+            if let Some(after) = *st.key_entry_after.lock().unwrap() {
+                std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
             }
-        };
-        if let Some(after) = *st.key_entry_after.lock().unwrap() {
-            std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
-        }
-        // Run off the main thread so the app keeps handling IPC and window close while the dialog is open.
-        let input = key_entry::request(&app, target.summary.clone());
-        let mut error = None;
-        // The key's check is a network call: `finish_key_unlocked` makes it without the lock.
-        let (status, mut connection) = match input {
-            Ok(None) => {
+            // Run off the main thread so the app keeps handling IPC and window close while the dialog is open.
+            let input = key_entry::request(&app, summary).map_err(String::from)?;
+            if input.is_none() {
                 *st.key_entry_after.lock().unwrap() =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
-                ("cancelled", st.conn.lock().unwrap().view())
             }
-            Ok(Some(input)) => {
-                let (result, connection) =
-                    conn::finish_key_unlocked(&st.conn, target, &input.key, input.remember);
-                let status = match result {
-                    Ok(()) => "signed_in",
-                    Err(e) if e == "This management key was not accepted." => {
-                        error = Some(e);
-                        "wrong_key"
-                    }
-                    Err(reason) => {
-                        error = Some(reason);
-                        "error"
-                    }
-                };
-                (status, connection)
+            Ok(input.map(|i| (i.key.as_str().to_owned(), i.remember)))
+        });
+        let status = match entry {
+            conn::Entry::SignedIn => "signed_in",
+            conn::Entry::Cancelled => "cancelled",
+            conn::Entry::WrongKey(why) => {
+                connection.error = Some(why);
+                "wrong_key"
             }
-            Err(e) => {
-                error = Some(e.into());
-                ("error", st.conn.lock().unwrap().view())
+            conn::Entry::Failed(why) => {
+                connection.error = Some(why);
+                "error"
             }
         };
-        if error.is_some() {
-            connection.error = error;
-        }
         show_status(&app, &connection);
         KeyEntryResult { status, connection }
     })
     .await
     .map_err(|_| "native key entry failed".into())
+}
+
+/// The native file chooser's title when the person picks a certificate authority file.
+const CERTIFICATE_CHOOSER: &str =
+    "Choose the certificate authority file of the pluxy to connect to";
+
+/// Asks the person for the certificate authority file of a pluxy to connect to in the native
+/// file chooser, and answers its path (None: they cancelled). The window puts it in its
+/// certificate box; the file is read only when the person connects (`conn::Connection::prepare_key`).
+#[tauri::command]
+async fn certificate_choose(webview: Webview) -> Result<Option<String>, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        {
+            access_choose(&app, CERTIFICATE_CHOOSER.into(), false)?
+                .map(|p| {
+                    p.into_os_string()
+                        .into_string()
+                        .map_err(|_| "the app cannot use a file whose path is not text".to_string())
+                })
+                .transpose()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (app, CERTIFICATE_CHOOSER);
+            Err("choosing a file is supported on Linux only".to_string())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -3291,6 +3303,7 @@ pub fn run() {
             core_rollback,
             core_adopt,
             key_entry,
+            certificate_choose,
             management_key_rotate,
             sign_out,
             page_open,
@@ -3572,6 +3585,7 @@ pub fn run() {
                 quitting: AtomicBool::new(false),
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
+                held_key: Mutex::new(None),
                 rotation_open: AtomicBool::new(false),
                 updater: updater::State::new(updater_plugin.clone()),
             });
