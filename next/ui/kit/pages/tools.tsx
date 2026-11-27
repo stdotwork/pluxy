@@ -186,7 +186,12 @@ export interface ToolsState {
   rescan(): Promise<Setup | undefined>;
 }
 
-export function useToolsState(): ToolsState {
+/**
+ * What the tools state asks of pluxy as its page opens. A pluxy that never scanned always scans;
+ * with lookAgain a pluxy that did is asked to look at its tools again too, for a page that must show
+ * what they are now (a tool connected on another page since the kept scan).
+ */
+export function useToolsState(opts: { lookAgain?: boolean } = {}): ToolsState {
   const { api, unauthorized } = useKit();
   const status = useRef(0);
   const setup = useLoad(async () => {
@@ -225,13 +230,18 @@ export function useToolsState(): ToolsState {
     if (!(await start())) return undefined;
     return new Promise((resolve) => waiting.current.push(resolve));
   };
-  // A pluxy that never scanned scans once as the page opens; while it scans, the page asks again
-  // every second (not while hidden), and stops when the scan is over or the page is left.
+  // A pluxy that never scanned scans once as the page opens (so does one that did, for lookAgain);
+  // while it scans, the page asks again every second (not while hidden), and stops when the scan is
+  // over or the page is left. A scan already running as the page opens is the one for it.
   const asked = useRef(false);
   const data = setup.data;
   const running = data?.scanning === true;
   useEffect(() => {
-    if (!data || data.scanned_at || data.scanning || asked.current) return;
+    if (!data || asked.current) return;
+    if (data.scanning || (data.scanned_at && !opts.lookAgain)) {
+      asked.current = data.scanning === true;
+      return;
+    }
     asked.current = true;
     void scan();
   }, [data]);

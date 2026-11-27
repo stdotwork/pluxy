@@ -549,6 +549,24 @@ func TestManageAccountModelsAndTest(t *testing.T) {
 	if code := manage(t, base, "POST", "/accounts/nobody/test", nil, nil); code != http.StatusNotFound {
 		t.Fatalf("test of an unknown account: %d, want 404", code)
 	}
+
+	// A test is not in the usage record (the panels' Setup says so); a real request is, so the
+	// record is on and the check below reads it.
+	if code := pinnedChat(t, base, "fine"); code != http.StatusOK {
+		t.Fatalf("a real request: %d", code)
+	}
+	var events struct {
+		Events []struct {
+			Endpoint string `json:"endpoint"`
+			Account  string `json:"account"`
+		} `json:"events"`
+	}
+	if code := manage(t, base, "GET", "/usage/events", nil, &events); code != http.StatusOK {
+		t.Fatalf("GET /usage/events: %d", code)
+	}
+	if len(events.Events) != 1 || events.Events[0].Account != "fine" {
+		t.Fatalf("usage events after three tests and one request: %+v, want the request only", events.Events)
+	}
 }
 
 // GET /accounts/{id}/quota reads the account's plan and usage through its extension (the
