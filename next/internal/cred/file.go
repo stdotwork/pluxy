@@ -252,6 +252,12 @@ func CreatePrivate(path string, b []byte) error {
 		return err
 	}
 	defer root.Close()
+	return CreatePrivateIn(root, dir, name, b)
+}
+
+// CreatePrivateIn is CreatePrivate for the new file name in root, a folder already opened (and
+// checked) by the caller. dir is root's path, for messages.
+func CreatePrivateIn(root *os.Root, dir, name string, b []byte) error {
 	tmp, tmpName, err := private.CreateTemp(root, dir, tmpPrefix)
 	if err != nil {
 		return err

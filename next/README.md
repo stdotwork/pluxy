@@ -135,10 +135,20 @@ Without `-config` (or `--config`), every `pluxy` command reads `config.json` in 
 runs in when there is one, and otherwise the one in pluxy's home:
 
 - `pluxy serve` serves it. With no config in either place, its first start writes pluxy's home's
-  config (and, when the folder is not there yet, makes it so only your user can read it; a folder
-  that is already there, such as one `PLUXY_HOME` names, keeps its permissions), so the next `pluxy serve`, from
-  any folder, finds the same one. A start that found its config this way logs which:
-  `config: <path> (pluxy's home)` or `config: <path> (config.json in the current folder)`.
+  config, so the next `pluxy serve`, from any folder, finds the same one. A start that found its
+  config this way logs which: `config: <path> (pluxy's home)` or
+  `config: <path> (config.json in the current folder)`.
+- A first config, written by a first start or `pluxy init`, in pluxy's home or at a `-config`
+  path, holds the management key, so pluxy checks the folder it goes into before writing it. A
+  missing folder is made so only your user can read it. A folder that is already there, such as
+  one `PLUXY_HOME` names, is refused when it is a link, belongs to another user, or (on Linux and
+  macOS) its permissions let group or others write in it: nothing is written, and the command
+  exits 1, saying why and what to do (`chmod go-w <folder>` for the last, unless the folder's name
+  holds characters a terminal shows escaped). On Windows a folder
+  that other accounts can open is given the private access list of the
+  [credentials folder](#accounts-added-by-login). Only that folder is checked, not the folders
+  above it; on macOS only by its permission bits, not an access list added with `chmod +a`; and
+  only when a first config is written: a config that is already there is used without the check.
 - `pluxy init` writes pluxy's home's config and never replaces it. In a folder with a
   `config.json`, it says that file exists, as before.
 - The client commands take core's address and management key, each, from the first of: `--url`
