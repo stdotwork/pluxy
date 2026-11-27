@@ -11,7 +11,8 @@ pluxy must match the recording except where a case lists an **exception**. Each 
 reason, so every difference is on the record.
 
 The recordings come from live runs of the copy of CLIProxyAPI that this repository held until
-pluxy replaced it. That copy is no longer in the repository and nothing here builds or runs it.
+pluxy replaced it, in `core/` (the last commit that changed it is `d62c5bbf1`). That copy is no
+longer in the repository and nothing here builds or runs it.
 Code comments, this file's field names and the cases' `source` fields call it "the old core" or
 "today's core", and its files `core/...`: those paths are files of CLIProxyAPI's source, which you
 cannot open here. The recordings are the reference and are never re-recorded.
