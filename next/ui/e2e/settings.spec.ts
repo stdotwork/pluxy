@@ -61,7 +61,7 @@ test("Settings opens on General, and its topics are in three groups with a tip e
   ]);
   // The pages' titles are their own slices' to change; the tips are Settings'.
   expect(labels[1]?.links).toEqual([
-    ["Config Panel", "Network, logging, keys and pluxy's settings file"],
+    ["Config", "Network, logging, keys and pluxy's settings file"],
     ["Extensions", "The programs that connect pluxy to each provider"],
     ["Logs", "pluxy's log and failed requests"],
     ["System", "Version, models and addresses"],

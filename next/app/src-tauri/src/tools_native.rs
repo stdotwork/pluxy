@@ -1,30 +1,27 @@
-//! The `easy` step of the Claude Code native check (`claude_code_native.rs`): Beginner Mode, the
-//! guided setup (`src/easyMode.tsx`), driven through the window's own page as a person clicks it,
-//! with the real native confirmations, the run's core and its bundled test/alpha extension. It runs
-//! after the `uninstall` step, so pluxy/claude-code is not installed (the curated registry still
-//! offers it) and pluxy/execution is installed and enabled; the key added in the `key` step is in
-//! the vault. Each refusal has a positive control on the same route:
+//! The `tools` step of the Claude Code native check (`claude_code_native.rs`): the Tools page's Claude
+//! Code row (`src/agentPages.ts`, `src/toolRows.tsx`), driven through the window's own page as a
+//! person clicks it, with the real native confirmations, the run's core and its bundled test/alpha
+//! extension. It runs after the `uninstall` step, so pluxy/claude-code is not installed (the curated
+//! registry still offers it) and pluxy/execution is installed and enabled; the key added in the
+//! `key` step is in the vault. Each refusal has a positive control on the same route:
 //!
-//! - open: the window lists Beginner Mode and shows its two steps, Connect a model first;
-//! - login: before any sign-in the guide counts core's accounts and, with none, keeps Next
-//!   disabled; a sign-in with test/alpha's "Test API key" method in the guide's own Add an account
-//!   (no account ID asked: core makes it) adds an account to core that was not there before (read
-//!   back with `GET /accounts`), and the guide then counts it and enables Next;
-//! - clients: Connect an agent lists Claude Code as offered by a registry (not installed) and
-//!   pluxy/execution as enabled; Install installs pluxy/claude-code from the curated registry,
-//!   asking nothing; Enable opens the native confirmation, which says "full access to your user
-//!   account";
-//! - native: while that confirmation shows, the guide offers no control of the package (every one
-//!   of its buttons is disabled) and the package stays not enabled however long the window waits;
-//!   the dialog's own Cancel, pressed natively, leaves it disabled; its Confirm, pressed natively,
-//!   enables it;
-//! - apply: the guide shows Claude Code's own page; on a selected file holding the person's
-//!   settings, a cancelled apply leaves the file byte for byte as it was; a confirmed one, naming
-//!   the file and the key's label and never the key, writes core's address, the key and the
-//!   default model mapping and keeps the person's own setting;
-//! - launch: Start Claude Code from the page in the guide, confirmed natively, runs the stand-in
-//!   terminal with `-e <claude>` in the chosen folder;
-//! - leave: going to another page and back writes nothing.
+//! - open: Tools lists no Beginner Mode and no Manage Clients, and their old addresses go to Setup
+//!   and to Tools; Claude Code's row offers Install add-on, nothing else;
+//! - clients: Install add-on installs pluxy/claude-code from the curated registry, asking nothing,
+//!   and the row then offers Turn on add-on;
+//! - native: Turn on add-on opens the native confirmation, which says "full access to your user
+//!   account"; while it shows, the row says to answer it and offers no live control, and the
+//!   package stays not enabled however long the window waits; the dialog's own Cancel, pressed
+//!   natively, leaves it off and the row says nothing of a failure; its Confirm, pressed natively,
+//!   enables it and the row offers Set up;
+//! - apply: Set up opens Claude Code's own page, with no way back to setup (it was opened from
+//!   Tools); on a selected file holding the person's settings, a cancelled apply leaves the file
+//!   byte for byte as it was; a confirmed one, naming the file and the key's label and never the
+//!   key, writes core's address, the key and the default model mapping and keeps the person's own
+//!   setting;
+//! - launch: Start Claude Code from the page, confirmed natively, runs the stand-in terminal with
+//!   `-e <claude>` in the chosen folder;
+//! - leave: going to Tools and back writes nothing.
 
 use super::admission::{press, require};
 use super::claude_code::Seen;
@@ -42,8 +39,11 @@ const LABEL: &str = "fixture Claude Code key";
 /// The page's one-press Connect.
 const CONNECT: &str = "Connect Claude Code";
 const FULL_ACCESS: &str = "full access to your user account";
-/// The guide's own element.
-const ROOT: &str = "[data-part=easy-mode]";
+/// The row's add-on step: its button, and the line under the row.
+const ADDON: &str = "[data-part=addon-action][data-row=claude-code]";
+const NOTE: &str = "[data-part=addon-note]";
+/// Claude Code's page.
+const PAGE: &str = ".tool-page[data-tool=claude-code]";
 /// A native confirmation keeps Confirm disabled for a second after it shows.
 const SETTLE: Duration = Duration::from_millis(1300);
 
@@ -71,16 +71,12 @@ fn until(main: &Webview, what: &str, f: &str) -> Result<(), String> {
     wait_for(what, || (js(main, f) == Some(json!(true))).then_some(()))
 }
 
-/// The element in the guide that selector names, as JavaScript.
+/// The element in the window that selector names, as JavaScript.
 fn within(selector: &str) -> String {
-    format!(
-        "document.querySelector({})?.querySelector({})",
-        json!(ROOT),
-        json!(selector)
-    )
+    format!("document.querySelector({})", json!(selector))
 }
 
-/// Clicks the enabled button reading text inside the guide's element selector; waits for one.
+/// Clicks the enabled button reading text inside the window's element selector; waits for one.
 fn click(main: &Webview, selector: &str, text: &str) -> Result<(), String> {
     until(
         main,
@@ -93,7 +89,7 @@ fn click(main: &Webview, selector: &str, text: &str) -> Result<(), String> {
     )
 }
 
-/// Types value into the field labelled label inside the guide's element selector, as typing does
+/// Types value into the field labelled label inside the window's element selector, as typing does
 /// (the input event a page listens to); waits for the field. A field whose row names it (no label of
 /// its own) is found by its accessible name.
 fn fill(main: &Webview, selector: &str, label: &str, value: &str) -> Result<(), String> {
@@ -113,7 +109,7 @@ fn fill(main: &Webview, selector: &str, label: &str, value: &str) -> Result<(), 
     )
 }
 
-/// Chooses the radio button of value inside the guide's element selector; waits for it.
+/// Chooses the radio button of value inside the window's element selector; waits for it.
 fn choose(main: &Webview, selector: &str, value: &str) -> Result<(), String> {
     until(
         main,
@@ -126,7 +122,7 @@ fn choose(main: &Webview, selector: &str, value: &str) -> Result<(), String> {
     )
 }
 
-/// The text of the guide's element selector, if it shows.
+/// The text of the window's element selector, if it shows.
 fn text(main: &Webview, selector: &str) -> Option<String> {
     js(
         main,
@@ -135,46 +131,50 @@ fn text(main: &Webview, selector: &str) -> Option<String> {
     .and_then(|v| v.as_str().map(String::from))
 }
 
-/// The row of package in the guide's lists.
-fn row(package: &str) -> String {
-    format!("[data-part=easy-package][data-package={}]", json!(package))
-}
-
-/// The state the guide shows for package: offered, installed, enabled.
-fn state(main: &Webview, package: &str) -> Option<String> {
+/// The step the row's add-on button is for (install or enable), if the row has one.
+fn step_of(main: &Webview) -> Option<String> {
     js(
         main,
         &format!(
-            "return {}?.getAttribute('data-state') ?? null;",
-            within(&row(package))
+            "return {}?.getAttribute('data-step') ?? null;",
+            within(ADDON)
         ),
     )
     .and_then(|v| v.as_str().map(String::from))
 }
 
-fn wait_state(main: &Webview, package: &str, want: &str) -> Result<(), String> {
-    wait_for(&format!("the guide to show {package} {want}"), || {
-        (state(main, package).as_deref() == Some(want)).then_some(())
+fn wait_step(main: &Webview, want: &str) -> Result<(), String> {
+    wait_for(&format!("the row to offer the {want} step"), || {
+        (step_of(main).as_deref() == Some(want)).then_some(())
     })
-    .map_err(|e| format!("{e} (it shows {:?})", state(main, package)))
+    .map_err(|e| format!("{e} (it offers {:?})", step_of(main)))
+}
+
+/// Claude Code's row on the Tools page, as JavaScript.
+const ROW: &str = "[...document.querySelectorAll('[data-part=tool-row]')].find((r) => r.querySelector('.tool-name')?.textContent.trim() === 'Claude Code')";
+
+/// The labels of the row's buttons and the targets of its links, as JSON.
+fn row_controls(main: &Webview) -> Option<Value> {
+    js(
+        main,
+        &format!(
+            "const r = {ROW}; if (!r) return null; return {{ buttons: [...r.querySelectorAll('button')].map((b) => b.textContent.trim()), links: [...r.querySelectorAll('a')].map((a) => [a.textContent.trim(), a.getAttribute('href')]) }};"
+        ),
+    )
+    .filter(|v| !v.is_null())
+}
+
+fn wait_row(main: &Webview, buttons: &[&str], links: &[(&str, &str)]) -> Result<(), String> {
+    let want = json!({ "buttons": buttons, "links": links.iter().map(|(t, h)| json!([t, h])).collect::<Vec<_>>() });
+    wait_for(&format!("Claude Code's row to read {want}"), || {
+        (row_controls(main).as_ref() == Some(&want)).then_some(())
+    })
+    .map_err(|e| format!("{e} (it reads {:?})", row_controls(main)))
 }
 
 /// The window's answer to cmd, which must succeed.
 fn ok(main: &Webview, cmd: &str, args: Value) -> Result<Value, String> {
     super::admission::ok(main, cmd, args)
-}
-
-/// Core's accounts, through the window's core call.
-fn accounts(main: &Webview) -> Result<Vec<Value>, String> {
-    let r = ok(
-        main,
-        "core_call",
-        json!({"method": "GET", "path": "/accounts"}),
-    )?;
-    Ok(r["body"]["accounts"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default())
 }
 
 /// The device catalog's entry for package.
@@ -217,9 +217,8 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
     let main = c.main;
     let s = |v: &Value| v.as_str().unwrap_or_default().to_string();
     let p = |v: &Value| PathBuf::from(s(v));
-    let e = &c.x["easy"];
-    let settings = p(&e["settings"]);
-    let original = s(&c.x["bytes"]["easy"]);
+    let settings = p(&c.x["tools"]["settings"]);
+    let original = s(&c.x["bytes"]["tools"]);
     let records = p(&c.x["records"]);
     let work = std::fs::canonicalize(p(&c.x["work"])).map_err(|e| e.to_string())?;
     let terminal = std::fs::canonicalize(p(&c.x["terminal"])).map_err(|e| e.to_string())?;
@@ -228,14 +227,14 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
     let step = |name: &str, r: Result<(), String>| r.map_err(|e| format!("{name}: {e}"));
     require(
         read(&settings).as_deref() == Some(original.as_str()),
-        "the guide's settings file is not as the fixture wrote it",
+        "the tools check's settings file is not as the fixture wrote it",
     )?;
     require(
         package(main, PACKAGE)?.is_null(),
-        "pluxy/claude-code is still installed before the guide",
+        "pluxy/claude-code is still installed before the Tools check",
     )?;
 
-    // ---- open: listed among the topics of Tools, two steps, the first shown
+    // ---- open: no Beginner Mode, no Manage Clients; Claude Code's row offers its add-on
     step(
         "open",
         (|| {
@@ -243,137 +242,82 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             until(
                 main,
-                "Beginner Mode among the topics of Tools",
-                "return [...document.querySelectorAll('[data-part=topics] a, [data-part=topics-select] option')].some((a) => (a.getAttribute('href') ?? a.value) === '#/easy-mode');",
-            )
-            .map_err(|_| "the window lists no Beginner Mode page (#/easy-mode)".to_string())?;
-            main.eval("location.hash = '#/easy-mode'")
-                .map_err(|e| e.to_string())?;
-            until(
+                "Claude Code's row on Tools",
+                &format!("return {ROW} !== undefined;"),
+            )?;
+            let old = js(
                 main,
-                "Beginner Mode's first step",
-                &format!(
-                    "return {} !== null && {} === null;",
-                    within("[data-part=easy-step][data-step='1']"),
-                    within("[data-part=easy-step][data-step='2']")
-                ),
-            )
-        })(),
-    )?;
-
-    // ---- login: the guide's Add an account signs in with test/alpha's API-key method
-    step(
-        "login",
-        (|| {
-            let known = accounts(main)?;
-            let before = known.len();
-            let step1 = "[data-part=easy-step][data-step='1']";
-            let sources = "[data-part=easy-sources]";
-            wait_for("the guide's source count", || {
-                text(main, sources).filter(|t| {
-                    if before == 0 {
-                        t.contains("No source connected yet")
-                    } else {
-                        t.contains(&format!("{before} connected source"))
-                    }
-                })
-            })?;
-            let next_enabled = || {
-                js(
+                "return [...document.querySelectorAll('a, option')].some((a) => ['#/easy-mode', '#/clients'].includes(a.getAttribute('href') ?? a.value)) || /Beginner Mode|Manage Clients/.test(document.body.textContent);",
+            );
+            require(
+                old == Some(json!(false)),
+                "Tools still names Beginner Mode or Manage Clients",
+            )?;
+            // The old addresses go to the pages that replaced them.
+            for (from, to) in [("#/easy-mode", "#/setup"), ("#/clients", "#/tools")] {
+                main.eval(format!("location.hash = '{from}'"))
+                    .map_err(|e| e.to_string())?;
+                until(
                     main,
-                    &format!(
-                        "const b = [...({}?.querySelectorAll('button') ?? [])].find((b) => b.textContent.trim() === 'Next: connect an agent'); return b ? !b.disabled : null;",
-                        within(sources)
-                    ),
-                )
-            };
-            require(
-                next_enabled() == Some(json!(before > 0)),
-                format!("with {before} accounts, Next is {:?}", next_enabled()),
-            )?;
-            // test/alpha's API-key method.
-            until(
-                main,
-                "test/alpha's Test API key method",
-                &format!(
-                    "const t = [...({}?.querySelectorAll('[data-part=method]') ?? [])].find((t) => t.closest('[data-extension]')?.dataset.extension === 'test/alpha' && t.textContent.includes('Test API key')); \
-                     const b = t && [...t.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Start'); if (!b || b.disabled) return false; b.click(); return true;",
-                    within(step1)
-                ),
-            )?;
-            fill(main, step1, "API key", &s(&e["api_key"]))?;
-            click(main, step1, "Continue")?;
-            wait_for("the sign-in to succeed", || {
-                text(main, step1).filter(|t| t.contains("Added "))
-            })?;
-            let listed = accounts(main)?;
-            require(
-                listed.len() == before + 1
-                    && listed
-                        .iter()
-                        .any(|a| !known.iter().any(|k| k["id"] == a["id"])),
-                format!("core's accounts hold no new account: {known:?} then {listed:?}"),
-            )?;
-            wait_for("the guide to count the new account", || {
-                text(main, sources)
-                    .filter(|t| t.contains(&format!("{} connected source", listed.len())))
-            })?;
-            require(
-                next_enabled() == Some(json!(true)),
-                "Next stays disabled after the sign-in",
-            )?;
-            click(main, sources, "Next: connect an agent")?;
-            until(
-                main,
-                "Connect an agent",
-                &format!(
-                    "return {} !== null;",
-                    within("[data-part=easy-step][data-step='2']")
-                ),
-            )
+                    &format!("{from} to go to {to}"),
+                    &format!("return location.hash === '{to}';"),
+                )?;
+            }
+            main.eval("location.hash = '#/tools'")
+                .map_err(|e| e.to_string())?;
+            // The add-on is offered by the curated registry and not installed: one quiet button.
+            wait_row(main, &["Install add-on"], &[])
         })(),
     )?;
 
-    // ---- clients: offered and enabled packages; install asks nothing; enable asks natively
+    // ---- clients: install asks nothing, and the row then offers to turn the add-on on
     step(
         "clients",
         (|| {
-            wait_state(main, PACKAGE, "offered")?;
-            wait_state(main, EXECUTION, "enabled")?;
+            wait_step(main, "install")?;
             let (r, asked) = super::transactions::unasked(|| -> Result<(), String> {
-                click(main, &row(PACKAGE), "Install")?;
-                wait_state(main, PACKAGE, "installed")
+                click(main, ADDON, "Install add-on")?;
+                wait_step(main, "enable")
             });
             r?;
             require(
                 !asked,
-                "installing from the guide asked a native confirmation",
+                "installing from the row asked a native confirmation",
             )?;
+            wait_row(main, &["Turn on add-on"], &[])?;
             let p = package(main, PACKAGE)?;
             require(
                 p["enabled"] == false && p["source"]["name"] == "curated",
-                format!("installed from the guide: {p}"),
+                format!("installed from the row: {p}"),
             )
         })(),
     )?;
 
-    // ---- native: the guide cannot answer the enable confirmation
+    // ---- native: the row cannot answer the confirmation
     step(
         "native",
         (|| {
-            click(main, &row(PACKAGE), "Enable")?;
+            click(main, ADDON, "Turn on add-on")?;
             let t = confirmation(c, &[PACKAGE, FULL_ACCESS])?;
             require(
                 t.contains(FULL_ACCESS),
-                format!("the enable confirmation: {t}"),
+                format!("the turn-on confirmation: {t}"),
             )?;
-            // While it shows: every control of the row is disabled, the guide clicks nothing
-            // through, and the package stays not enabled.
+            // While it shows: the row says to answer it, every control of the row is disabled and
+            // clicks nothing through, and the package stays off.
+            until(
+                main,
+                "the row to say to answer the confirmation window",
+                &format!(
+                    "return {}?.textContent.trim() === 'Answer the confirmation window to go on.';",
+                    within(NOTE)
+                ),
+            )?;
             let controls = js(
                 main,
                 &format!(
                     "const b = [...({}?.querySelectorAll('button, input, select') ?? [])]; b.forEach((x) => x.click()); return b.length > 0 && b.every((x) => x.disabled);",
-                    within(&row(PACKAGE))
+                    within(ADDON)
                 ),
             );
             require(
@@ -384,57 +328,77 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             )?;
             std::thread::sleep(Duration::from_millis(1500));
             require(
-                state(main, PACKAGE).as_deref() == Some("installed"),
+                step_of(main).as_deref() == Some("enable")
+                    && package(main, PACKAGE)?["enabled"] == false,
                 format!(
-                    "the guide shows {:?} while the confirmation is open",
-                    state(main, PACKAGE)
+                    "the row shows {:?} and the package is on while the confirmation is open",
+                    step_of(main)
                 ),
             )?;
             let still = dialog_with(c.app, &[PACKAGE, FULL_ACCESS])?;
             require(!still.is_empty(), "the confirmation closed by itself")?;
             press("alt+c")?;
-            wait_for("the guide to settle the cancelled enable", || {
+            wait_for("the row to settle the cancelled turn-on", || {
                 js(
                     main,
                     &format!(
-                        "return [...({}?.querySelectorAll('button') ?? [])].some((b) => b.textContent.trim() === 'Enable' && !b.disabled);",
-                        within(&row(PACKAGE))
+                        "return [...({}?.querySelectorAll('button') ?? [])].some((b) => b.textContent.trim() === 'Turn on add-on' && !b.disabled);",
+                        within(ADDON)
                     ),
                 )
                 .filter(|v| v == true)
             })?;
+            // A cancel is not a failure: the row says nothing of one.
+            let said = js(
+                main,
+                &format!("return {ROW}?.textContent.includes('Could not') ?? null;"),
+            );
             require(
-                state(main, PACKAGE).as_deref() == Some("installed")
-                    && package(main, PACKAGE)?["enabled"] == false,
-                "a cancelled enable enabled the package",
+                said == Some(json!(false)) && package(main, PACKAGE)?["enabled"] == false,
+                format!("a cancelled turn-on turned the add-on on or said it failed ({said:?})"),
             )?;
-            // Positive control: the dialog's own Confirm enables it.
-            click(main, &row(PACKAGE), "Enable")?;
+            // Positive control: the dialog's own Confirm turns it on, and the row offers Set up.
+            click(main, ADDON, "Turn on add-on")?;
             confirmation(c, &[PACKAGE, FULL_ACCESS])?;
             std::thread::sleep(SETTLE);
             press("alt+o")?;
-            wait_state(main, PACKAGE, "enabled")?;
+            wait_row(main, &[], &[("Set up", "#/claude-code")])?;
             let p = package(main, PACKAGE)?;
             require(
                 p["enabled"] == true && p["authorized"] == true,
-                format!("confirmed enable: {p}"),
+                format!("confirmed turn-on: {p}"),
             )
         })(),
     )?;
 
-    // ---- apply: Claude Code's own page in the guide; cancel keeps the file
-    let page = "[data-part=easy-client-page]";
+    // ---- apply: Claude Code's own page; cancel keeps the file
+    let page = PAGE;
     step(
         "apply",
         (|| {
-            click(main, &row(PACKAGE), "Set up")?;
+            // The row's Set up opens the page; it was opened from Tools, so no way back to setup.
             until(
                 main,
-                "Claude Code's page in the guide",
+                "Set up on Claude Code's row",
                 &format!(
-                    "return {}?.querySelector('[data-part=page-title]')?.textContent === 'Claude Code';",
+                    "const a = {ROW}?.querySelector('a[data-row=claude-code]'); if (!a) return false; a.click(); return true;"
+                ),
+            )?;
+            until(
+                main,
+                "Claude Code's page",
+                &format!(
+                    "return location.hash === '#/claude-code' && {} !== null && document.querySelector('[data-part=page-title]')?.textContent === 'Claude Code';",
                     within(page)
                 ),
+            )?;
+            let back = js(
+                main,
+                "return document.querySelector('[data-part=setup-return]') !== null;",
+            );
+            require(
+                back == Some(json!(false)),
+                "a page opened from Tools shows the way back to setup",
             )?;
             // The page reads Claude Code's own file as it opens; the check names another one under
             // "Settings file, key and backups" and reads that.
@@ -467,7 +431,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             std::thread::sleep(Duration::from_millis(500));
             require(
                 read(&settings).as_deref() == Some(original.as_str()),
-                "a cancelled apply from the guide changed the file",
+                "a cancelled apply from the page changed the file",
             )?;
             // Confirmed: core's address, the key and the default mapping; the person's own value
             // stays.
@@ -503,7 +467,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                     && env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == env["ANTHROPIC_DEFAULT_OPUS_MODEL"]
                     && v["model"] == "opus",
                 format!(
-                    "the file after the guide's apply (core {target}) holds env {} and model {}",
+                    "the file after the page's apply (core {target}) holds env {} and model {}",
                     redact(env, c.key),
                     v["model"]
                 ),
@@ -511,7 +475,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
         })(),
     )?;
 
-    // ---- launch: Start Claude Code from the page in the guide
+    // ---- launch: Start Claude Code from the page
     step(
         "launch",
         (|| {
@@ -552,24 +516,24 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
         "leave",
         (|| {
             let before = read(&settings);
-            main.eval("location.hash = '#/status'")
+            main.eval("location.hash = '#/tools'")
                 .map_err(|e| e.to_string())?;
             until(
                 main,
-                "the guide to close",
-                &format!("return document.querySelector({}) === null;", json!(ROOT)),
+                "Claude Code's page to close",
+                &format!("return {} === null;", within(page)),
             )?;
-            main.eval("location.hash = '#/easy-mode'")
+            main.eval("location.hash = '#/claude-code'")
                 .map_err(|e| e.to_string())?;
             until(
                 main,
-                "the guide to open again",
-                &format!("return document.querySelector({}) !== null;", json!(ROOT)),
+                "Claude Code's page to open again",
+                &format!("return {} !== null;", within(page)),
             )?;
             std::thread::sleep(Duration::from_millis(500));
             require(
                 read(&settings) == before,
-                "leaving and opening the guide changed the file",
+                "leaving and opening the page changed the file",
             )
         })(),
     )
