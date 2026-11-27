@@ -367,10 +367,18 @@ counts as this machine's when it comes from a loopback address (`127.0.0.1`, `::
 address it arrived at: a program on this machine calling core at a network address core listens on.
 A browser on another machine, or one reaching core through a proxy or tunnel that names the client in
 `X-Forwarded-For`, `X-Real-IP` or `Forwarded`, gets a 403 with the code `remote_disabled`. A client a
-[trusted proxy](config.md#top-level) names counts as this machine only when it is a loopback address. Open the
-panel on core's own machine, or set `"management_allow_remote": true` there (`pluxy help` shows where
-`config.json` is) and save it: core reloads the file by itself, so sign in again. Docker needs it,
+[trusted proxy](config.md#top-level) names counts as this machine only when it is a loopback address. On core's
+own machine, open the panel and turn on **Let other computers manage pluxy** in Config (Settings
+tab, Other computers), or set `"management_allow_remote": true` in `config.json` (`pluxy help` shows
+where it is) and save it: core picks the change up by itself, so sign in again. Docker needs it,
 because requests through a published port arrive from Docker's network address: see [Setup](setup.md).
+
+To open the panel from another computer at all, core must listen on an address that computer can
+reach. The default, `127.0.0.1`, works only on core's own machine. In Config, set **Address pluxy
+listens on** to `0.0.0.0:8317` (every address of the machine, keeping your port), or set `"listen":
+"0.0.0.0:8317"` in `config.json`, then stop core and start it again: a new address is used only when
+core starts. Then open `http://<that machine's address>:8317/panel/`. Config asks before it saves a
+change that would shut out the computer you are using it from.
 
 ### The sign-in form says "The reply from pluxy was 403"
 

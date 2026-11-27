@@ -402,10 +402,13 @@ the rest of the config loads.
 Everything applies on reload except these, which need a restart (a reload that changes one is
 refused, and the running config stays):
 
-- `listen` and `extension_pages.listen`,
+- `extension_pages.listen`,
 - `tls` (turning it on or off, or changing `cert` or `key`),
 - `credentials_dir`,
 - `packages.dir`.
+
+A new `listen` is not refused: the rest of the file applies, core keeps serving on the address it
+has (and logs that the new one waits), and takes the new address when it next starts.
 
 A renewed certificate in the same `tls.cert` and `tls.key` files needs no restart: core looks at the
 files at most once a second while connections arrive and serves the new pair from the next

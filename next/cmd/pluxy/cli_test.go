@@ -1411,3 +1411,31 @@ func TestCLIExitCodesAndStreams(t *testing.T) {
 		}
 	}
 }
+
+// The panel's address in the first-run start line is this computer's own: the line after it says
+// how to open the panel from another computer, and says nothing when it can be opened already.
+func TestOtherComputerLine(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		listen string
+		allow  bool
+		secure bool
+		want   string
+	}{
+		{"loopback", "127.0.0.1:8317", false, false,
+			`that address works only on this computer. To open the panel from another computer, set "listen" to "0.0.0.0:8317" and "management_allow_remote" to true in /etc/pluxy/config.json (Config in the panel sets both), restart pluxy, then open http://<this computer's address>:8317/panel/ there`},
+		{"loopback name over https", "localhost:9000", true, true,
+			`that address works only on this computer. To open the panel from another computer, set "listen" to "0.0.0.0:9000" and "management_allow_remote" to true in /etc/pluxy/config.json (Config in the panel sets both), restart pluxy, then open https://<this computer's address>:9000/panel/ there`},
+		{"every interface, remote management off", "[::]:8317", false, false,
+			`another computer opens the panel at http://<this computer's address>:8317/panel/, using this computer's address in place of the one above, after "management_allow_remote" is set to true in /etc/pluxy/config.json (Config in the panel sets it), or its sign-in is refused`},
+		{"every interface, remote management on", "0.0.0.0:8317", true, false,
+			`another computer opens the panel at http://<this computer's address>:8317/panel/, using this computer's address in place of the one above`},
+		{"a network address, remote management off", "10.0.0.2:8317", false, false,
+			`another computer opens the panel at the address above after "management_allow_remote" is set to true in /etc/pluxy/config.json (Config in the panel sets it), or its sign-in is refused`},
+		{"a network address, remote management on", "10.0.0.2:8317", true, false, ""},
+	} {
+		if got := otherComputerLine(c.listen, c.allow, "/etc/pluxy/config.json", c.secure); got != c.want {
+			t.Errorf("%s: otherComputerLine(%q, %v) =\n%q, want\n%q", c.name, c.listen, c.allow, got, c.want)
+		}
+	}
+}

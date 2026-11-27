@@ -380,8 +380,9 @@ func TestManageConfigValidate(t *testing.T) {
 				} else {
 					bad = replaceOnce(t, r.Content, c.hostLine(), `"listen": "127.0.0.1:1"`)
 				}
+				// A new address is no mistake: pluxy serves on it from its next start, and says so.
 				code, v, raw := validate(bad)
-				if code != 200 || v.Valid || !strings.Contains(v.Error, "listen cannot change") {
+				if code != 200 || !v.Valid || !strings.Contains(raw, "next time pluxy starts") {
 					t.Errorf("status %d: %s", code, raw)
 				}
 			})
@@ -732,7 +733,11 @@ type settingsReply struct {
 			QuotaResponseMode             string  `json:"quota-response-mode"`
 		} `json:"cooldown"`
 	} `json:"routing"`
-	TokenCountEstimate *bool `json:"token_count_estimate"`
+	TokenCountEstimate    *bool  `json:"token_count_estimate"`
+	ManagementAllowRemote bool   `json:"management_allow_remote"`
+	Listen                string `json:"listen"`
+	ListenAfterRestart    string `json:"listen_after_restart"`
+	FromThisComputer      bool   `json:"from_this_computer"`
 }
 
 func (c *mcore) settings(t *testing.T) settingsReply {
@@ -1195,5 +1200,40 @@ func TestManageClientKeyLabelsRefusesBadFile(t *testing.T) {
 			t.Errorf("%s label in the file: status %d: %s", name, code, b)
 		}
 		c.wantSame(t, before, name+" label in the file")
+	}
+}
+
+// The settings the Config page saves for reaching pluxy from another computer: remote management,
+// written where each file format keeps it, and a new listen address, kept in the file until pluxy
+// restarts while the running pluxy keeps its own.
+func TestManageSettingsRemoteAccess(t *testing.T) {
+	t.Parallel()
+	for _, f := range formats() {
+		t.Run(f.name, func(t *testing.T) {
+			c := startManaged(t, f.yaml)
+			s := c.settings(t)
+			if s.ManagementAllowRemote || s.Listen == "" || s.ListenAfterRestart != "" || !s.FromThisComputer {
+				t.Fatalf("settings at the start = %+v", s)
+			}
+			c.expect(t, http.StatusOK, http.MethodPatch, "/settings", `{"management_allow_remote": true}`)
+			want := `"management_allow_remote": true`
+			if f.yaml {
+				want = "allow-remote: true"
+			}
+			if !strings.Contains(c.file(t), want) {
+				t.Errorf("file lacks %q:\n%s", want, c.file(t))
+			}
+			if !c.settings(t).ManagementAllowRemote {
+				t.Error("management_allow_remote is not on after turning it on")
+			}
+
+			c.expect(t, http.StatusOK, http.MethodPatch, "/settings", `{"listen": "0.0.0.0:`+strconv.Itoa(freePort(t))+`"}`)
+			after := c.settings(t)
+			if after.Listen != s.Listen || !strings.HasPrefix(after.ListenAfterRestart, "0.0.0.0:") {
+				t.Errorf("after saving a new address: listen %q (was %q), after restart %q", after.Listen, s.Listen, after.ListenAfterRestart)
+			}
+			// The running pluxy still answers, on the address it has.
+			c.expect(t, http.StatusOK, http.MethodGet, "/status", nil)
+		})
 	}
 }

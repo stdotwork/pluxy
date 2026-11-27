@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -221,6 +223,12 @@ type SettingsPatch struct {
 	// ProxyURL is the proxy of every account without one of its own: an http, https, socks5 or
 	// socks5h URL, direct or none; empty removes it (no proxy).
 	ProxyURL *string `json:"proxy-url"`
+	// ManagementAllowRemote lets computers other than the one core runs on use the management
+	// API (this core's own name for management.allow-remote).
+	ManagementAllowRemote *bool `json:"management_allow_remote"`
+	// Listen is the address core serves on, as host:port: a config.yaml gets it as server.host
+	// and server.port. Core uses a new address only after a restart.
+	Listen *string `json:"listen"`
 	// Payload replaces the payload rules: an object with today's core's lists (default,
 	// default-raw, override, override-raw, filter); null or {} removes them.
 	Payload json.RawMessage `json:"payload"`
@@ -313,12 +321,55 @@ func (d *Doc) ApplySettings(p SettingsPatch) error {
 			return err
 		}
 	}
+	if p.ManagementAllowRemote != nil {
+		if err := d.Set(Bool(*p.ManagementAllowRemote), d.place("management_allow_remote", "management.allow-remote", "remote-management.allow-remote")...); err != nil {
+			return err
+		}
+	}
+	if p.Listen != nil {
+		if err := d.applyListen(*p.Listen); err != nil {
+			return err
+		}
+	}
 	if p.Payload != nil {
 		if err := d.applyPayload(p.Payload); err != nil {
 			return err
 		}
 	}
 	return d.applyObservability(p.Observability)
+}
+
+// CheckListen refuses an address that is not host:port with a port from 0 to 65535; the host may
+// be empty (every interface). It returns the host and port.
+func CheckListen(s string) (host string, port uint16, err error) {
+	s = strings.TrimSpace(s)
+	host, portText, err := net.SplitHostPort(s)
+	if err != nil {
+		return "", 0, fmt.Errorf("%w: listen %q must be an address and a port, such as 127.0.0.1:8317 or 0.0.0.0:8317", ErrInvalid, s)
+	}
+	n, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil {
+		return "", 0, fmt.Errorf("%w: listen %q: the port must be a number from 0 to 65535", ErrInvalid, s)
+	}
+	return host, uint16(n), nil
+}
+
+// applyListen writes the address core serves on: listen in a JSON config; in a config.yaml the
+// host and port it is made of, where the file keeps them (server.host and server.port, or the
+// older root host and port). s is host:port; the host may be empty (every interface).
+func (d *Doc) applyListen(s string) error {
+	host, port, err := CheckListen(s)
+	if err != nil {
+		return err
+	}
+	s = strings.TrimSpace(s)
+	if !d.YAML {
+		return d.Set(String(s), "listen")
+	}
+	if err := d.Set(String(host), d.place("", "server.host", "host")...); err != nil {
+		return err
+	}
+	return d.Set(Int(int64(port)), d.place("", "server.port", "port")...)
 }
 
 // applyPayload writes the payload rules, refusing a field they do not have and what

@@ -226,6 +226,9 @@ A placeholder is accepted only while the file still holds that secret and core h
 | `token_count_estimate` | `token_count_estimate` | `true` or `false` |
 | `proxy-url` | `proxy_url` | The outbound proxy of every account without its own, shown with `redacted` in place of a user name and password; `""` removes it. Sending the value back as shown keeps the password |
 | `payload` | `payload` | The payload rules, all five lists at once; absent when there are none. `null` or `{}` removes them |
+| `management_allow_remote` | `management_allow_remote` (`management.allow-remote` in a `config.yaml`) | `true` or `false`: whether the management API also answers computers other than the one core runs on. A change applies at once |
+| `listen` | `listen` (`server.host` and `server.port` in a `config.yaml`) | The address core serves on, as `host:port`; the host may be empty or `0.0.0.0` for every address. A new address must be an address and a port on a host this computer has (else 400); it is written to the file and used the next time core starts. Until then `GET` shows the running address as `listen` (the port core picked, for a config that listens on port 0) and the new one as `listen_after_restart` |
+| `from_this_computer` | | Read only: `true` when the call came from the computer core runs on. The panel uses it to warn before a change that would shut the caller out |
 
 The settings calls have no name for `max_attempts`, `quota_refresh_ms` or `explain`: change those in
 the document with `PUT /config`.
