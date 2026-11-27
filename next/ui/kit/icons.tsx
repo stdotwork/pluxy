@@ -29,6 +29,10 @@ const ICONS = {
   chevron: "M6 3.5 10.5 8 6 12.5",
   grip: "M6 3.5v.01M6 8v.01M6 12.5v.01M10 3.5v.01M10 8v.01M10 12.5v.01",
   key: "M7 9.5a3.25 3.25 0 1 1-1.6-4.25M6.9 8.1l6.6-.1v2.5M11 8v2",
+  // Where pluxy runs: this computer (a screen on its stand), another one (a globe).
+  computer: "M2.5 3h11a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM6 14h4M8 11v3",
+  globe:
+    "M14.5 8a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0zM1.5 8h13M8 1.5C6.1 3.5 5.25 5.5 5.25 8S6.1 12.5 8 14.5M8 1.5c1.9 2 2.75 4 2.75 6.5S9.9 12.5 8 14.5",
 } as const;
 
 export type IconName = keyof typeof ICONS;

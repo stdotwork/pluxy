@@ -1,5 +1,6 @@
-/* The Setup page: three numbered steps down a hairline, one open at a time, with the import line
-   above them and the way to finish under them. Rows inside come from the shared parts and the
+/* The Setup page: on a first run one step at a time in the focused window (focus.css), under a row
+   of the three steps; afterwards a checklist, one row per step in a rounded card, opened in place,
+   with the import line above it. Home's card after Finish later is here too. Rows inside come from the shared parts and the
    Tools page; this sets what lies around them. Tokens only. */
 @layer kit {
   .setup {
@@ -98,54 +99,59 @@
     white-space: pre;
   }
 
-  /* ---- the steps ---- */
+  /* ---- the checklist (after the first run): one row per step in a rounded card ---- */
 
   .setup-steps {
     list-style: none;
     margin: 0;
     padding: 0;
+    background: var(--px-color-card);
+    border: var(--px-shape-border) solid var(--px-color-card-border);
+    border-radius: var(--r-card);
+    box-shadow: var(--px-shadow-raised);
   }
 
   .setup-step {
-    position: relative;
     display: grid;
-    grid-template-columns: calc(var(--px-size-control) + var(--s) * 1) minmax(0, 1fr);
-    gap: 0 calc(var(--s) * 4);
-    padding-bottom: calc(var(--s) * 6);
+    grid-template-columns: 24px minmax(0, 1fr);
+    gap: 0 calc(var(--s) * 3);
+    padding: calc(var(--s) * 3.5) calc(var(--s) * 4);
   }
 
-  /* The hairline that joins one number to the next. */
-  .setup-step:not(:last-child)::before {
-    content: "";
-    position: absolute;
-    left: calc((var(--px-size-control) + var(--s) * 1) / 2);
-    top: calc(var(--px-size-control) + var(--s) * 2);
-    bottom: calc(var(--s) * 1);
-    width: var(--px-shape-border);
-    background: var(--px-color-border);
+  .setup-step + .setup-step {
+    border-top: var(--px-shape-border) solid var(--px-color-border);
   }
 
-  .setup-step-mark {
+  .setup-step-mark,
+  .setup-stepper-mark {
+    box-sizing: border-box;
     display: grid;
     place-items: center;
-    width: calc(var(--px-size-control) + var(--s) * 1);
-    height: calc(var(--px-size-control) + var(--s) * 1);
+    flex: none;
+    width: 24px;
+    height: 24px;
+    margin-top: 2px;
     border: var(--px-shape-border) solid var(--px-color-border);
     border-radius: 50%;
     color: var(--px-color-text-muted);
-    background: var(--px-color-bg);
+    background: var(--px-color-card);
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-medium);
     font-variant-numeric: tabular-nums;
   }
 
-  .setup-step[data-state="open"] .setup-step-mark {
-    color: var(--px-color-bg);
-    background: var(--px-color-text);
-    border-color: var(--px-color-text);
+  .setup-step[data-state="open"] .setup-step-mark,
+  .setup-stepper [data-state="open"] .setup-stepper-mark {
+    color: var(--px-color-message-action-foreground);
+    background: var(--px-color-message-action);
+    border-color: var(--px-color-message-action);
   }
 
-  .setup-step[data-state="done"] .setup-step-mark {
-    color: var(--px-color-ok);
-    border-color: var(--px-color-ok);
+  .setup-step[data-state="done"] .setup-step-mark,
+  .setup-stepper [data-state="done"] .setup-stepper-mark {
+    color: var(--px-color-success);
+    background: var(--px-color-success-surface);
+    border-color: transparent;
   }
 
   .setup-step-body {
@@ -159,41 +165,47 @@
     align-items: center;
     justify-content: space-between;
     gap: calc(var(--s) * 3);
-    min-height: calc(var(--px-size-control) + var(--s) * 1);
+    min-height: 28px;
+  }
+
+  .setup-step-text {
+    display: grid;
+    gap: calc(var(--s) * 0.5);
+    min-width: 0;
   }
 
   .setup-step-head h2 {
     margin: 0;
     font-size: var(--px-font-size-title);
+    font-weight: var(--px-font-weight-strong);
   }
 
-  .setup-step-head h2:focus {
+  .setup-step-head h2:focus,
+  .setup-top h1:focus {
     outline: none;
   }
 
-  .setup-step-head h2:focus-visible {
-    outline: 2px solid var(--px-color-focus, var(--px-color-accent));
+  .setup-step-head h2:focus-visible,
+  .setup-top h1:focus-visible {
+    outline: 2px solid var(--px-color-focus);
     outline-offset: 2px;
-  }
-
-  .setup-step[data-state="todo"] .setup-step-head h2 {
-    color: var(--px-color-text-muted);
-    font-weight: 400;
   }
 
   .setup-step-summary {
     color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
   }
 
   .setup-step-open {
     display: grid;
     gap: calc(var(--s) * 4);
-    padding-top: calc(var(--s) * 2);
+    padding-top: calc(var(--s) * 3);
     min-width: 0;
   }
 
   /* Step 2 is titled already: the Tools list's own heading would say it twice. */
-  .setup-step-open .tools-heading {
+  .setup-step-open .tools-heading,
+  .setup-screen .tools-heading {
     display: none;
   }
 
@@ -204,8 +216,193 @@
     gap: calc(var(--s) * 2) calc(var(--s) * 4);
   }
 
-  .setup-next {
+  .setup-next:not(.focus-foot) {
     padding-top: calc(var(--s) * 1);
+  }
+
+  /* ---- the first run: the focused window's head, its steps and one step's card ---- */
+
+  .setup-top {
+    display: grid;
+    gap: calc(var(--s) * 4);
+    min-width: 0;
+  }
+
+  .setup-top-text {
+    display: grid;
+    gap: calc(var(--s) * 1);
+  }
+
+  .setup-top h1 {
+    margin: 0;
+    font-size: var(--px-font-size-title);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .setup-top p {
+    margin: 0;
+  }
+
+  .setup-stepper {
+    display: flex;
+    align-items: center;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    min-width: 0;
+  }
+
+  .setup-stepper > li {
+    display: flex;
+    align-items: center;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .setup-stepper > li:last-child {
+    flex: none;
+  }
+
+  /* The line from one step to the next, green once the step before it is done. */
+  .setup-stepper > li:not(:last-child)::after {
+    content: "";
+    flex: 1 1 auto;
+    min-width: calc(var(--s) * 3);
+    height: var(--px-shape-border);
+    margin: 0 calc(var(--s) * 3);
+    background: var(--px-color-border);
+  }
+
+  .setup-stepper > li[data-state="done"]:not(:last-child)::after {
+    background: color-mix(in srgb, var(--px-color-success) 55%, var(--px-color-border));
+  }
+
+  .setup-stepper button {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+    padding: calc(var(--s) * 1) calc(var(--s) * 1.5) calc(var(--s) * 1) calc(var(--s) * 1);
+    margin-inline-start: calc(var(--s) * -1);
+    border: 0;
+    border-radius: var(--r-small);
+    background: transparent;
+    color: var(--px-color-text-muted);
+    font: inherit;
+    cursor: pointer;
+    transition: background var(--t), color var(--t);
+  }
+
+  .setup-stepper button:hover {
+    background: color-mix(in srgb, var(--px-color-text) 6%, transparent);
+    color: var(--px-color-text);
+  }
+
+  .setup-stepper button:focus-visible {
+    outline: 2px solid var(--px-color-focus);
+    outline-offset: 1px;
+  }
+
+  .setup-stepper .setup-stepper-mark {
+    margin-top: 0;
+    width: 22px;
+    height: 22px;
+    background: var(--px-color-chrome);
+  }
+
+  .setup-stepper-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .setup-stepper [data-state="open"] button {
+    color: var(--px-color-text);
+    font-weight: var(--px-font-weight-medium);
+  }
+
+  .setup-stepper [data-state="done"] button {
+    color: var(--px-color-text);
+  }
+
+  .setup-screen {
+    display: grid;
+    gap: calc(var(--s) * 5);
+    min-width: 0;
+  }
+
+  .setup-screen > p,
+  .setup-screen p {
+    margin: 0;
+  }
+
+  /* The import offer sits under the kinds in step 1, as the other way to bring accounts. */
+  .setup-screen .setup-import {
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  /* ---- Home's card after Finish later ---- */
+
+  .setup-later-card {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 3) calc(var(--s) * 6);
+    margin-bottom: calc(var(--s) * 5);
+  }
+
+  .setup-later-text {
+    display: grid;
+    gap: calc(var(--s) * 0.5);
+  }
+
+  .setup-later-text h2,
+  .setup-later-text p {
+    margin: 0;
+  }
+
+  .setup-later-text h2 {
+    font-size: var(--px-font-size-title);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .setup-later-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2) calc(var(--s) * 4);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    flex: 1 1 auto;
+  }
+
+  .setup-later-steps > li {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
+    color: var(--px-color-text-muted);
+  }
+
+  .setup-later-steps > li[data-state="done"] {
+    color: var(--px-color-text);
+  }
+
+  .setup-later-mark {
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: 50%;
+    font-size: var(--px-font-size-label);
+    font-variant-numeric: tabular-nums;
+  }
+
+  [data-state="done"] > .setup-later-mark {
+    color: var(--px-color-success);
+    background: var(--px-color-success-surface);
+    border-color: transparent;
   }
 
   /* ---- step 1 ---- */
@@ -313,14 +510,27 @@
     gap: calc(var(--s) * 2) calc(var(--s) * 3);
   }
 
-  /* A narrow page: the path moves into its title, and the marks take less room. */
+  /* A narrow page: the path moves into its title, and the rows take less room. */
   @container (max-width: 560px) {
     .setup-import-path {
       display: none;
     }
 
     .setup-step {
-      gap: 0 calc(var(--s) * 3);
+      gap: 0 calc(var(--s) * 2.5);
+      padding-inline: calc(var(--s) * 3);
+    }
+  }
+
+  /* A narrow window: the first run's steps keep their marks, and only the open one its title. */
+  @media (max-width: 560px) {
+    .setup-stepper [data-state="done"] .setup-stepper-title,
+    .setup-stepper [data-state="todo"] .setup-stepper-title {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
     }
   }
 }

@@ -8,6 +8,7 @@
 @import "./fonts.css";
 @import "./ui.css";
 @import "./shell.css";
+@import "./focus.css";
 @import "./parts/parts.css";
 @import "./pages/themes.css";
 @import "./extensions/page.css";

@@ -1,6 +1,7 @@
 // Setup's step 3, Check it works: one test request through an account, and its result, before
 // setup ends. Core tests the account directly, so routing is never changed.
 
+import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import type { Account, AccountModel } from "../api";
 import { Icon } from "../icons";
@@ -36,6 +37,7 @@ const t = strings("setupCheck", {
   summaryPassed: "Passed: {model} in {time}.",
   summaryFailed: "Failed: {word}.",
   summaryNone: "Not tested yet.",
+  back: "Back",
 });
 
 /** What the last test on this page came to; kept by the page, so it outlives the step folding. */
@@ -90,6 +92,8 @@ export function CheckStep(props: {
   onAccountsChanged: () => void;
   finishing: boolean;
   onFinish: () => void;
+  /** On the first run: the way to step 2, at the start of the card's foot. */
+  back?: () => void;
 }) {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
@@ -101,8 +105,22 @@ export function CheckStep(props: {
   const account =
     usable.find((a) => a.id === chosen) ?? defaultTestAccount(props.accounts, props.running, props.added);
   const models = useModels(account?.id, choosing);
+  // On the first run the actions are the card's foot, with Back at its start and the main action
+  // at its end; elsewhere the main action comes first.
+  const foot = (...items: ComponentChildren[]) => (
+    <div class={props.back ? "focus-foot setup-next" : "actions"}>
+      {props.back && (
+        <span class="focus-foot-start">
+          <Button variant="ghost" onClick={props.back}>
+            {t("back")}
+          </Button>
+        </span>
+      )}
+      {props.back ? [...items].reverse() : items}
+    </div>
+  );
   const finishButton = (label: string) => (
-    <Button variant="quiet" disabled={props.finishing} onClick={props.onFinish}>
+    <Button key="finish" variant="quiet" disabled={props.finishing} onClick={props.onFinish}>
       {label}
     </Button>
   );
@@ -110,12 +128,12 @@ export function CheckStep(props: {
     return (
       <>
         <p>{t("noAccount")}</p>
-        <div class="actions">
-          <Button variant="primary" onClick={props.onAddAccount}>
+        {foot(
+          <Button key="add" variant="primary" onClick={props.onAddAccount}>
             {t("addAccount")}
-          </Button>
-          {finishButton(t("finishWithout"))}
-        </div>
+          </Button>,
+          finishButton(t("finishWithout")),
+        )}
       </>
     );
   }
@@ -224,33 +242,32 @@ export function CheckStep(props: {
         </Notice>
       )}
       {outcome?.kind === "no-models" && <Notice tone="warn">{t("noModels")}</Notice>}
-      <div class="actions">
-        {outcome?.kind === "passed" ? (
-          <Button variant="primary" disabled={props.finishing} onClick={props.onFinish}>
-            {t("finish")}
-          </Button>
-        ) : outcome?.kind === "no-models" ? (
-          finishButton(t("finishAnyway"))
-        ) : (
-          <>
-            {/* A refused sign-in is fixed by signing in again, so that is the filled button then. */}
-            {signInFix && (
-              <a class="btn" data-part="button" data-variant="primary" href={signInFix.href}>
-                {signInFix.label}
-              </a>
+      {outcome?.kind === "passed"
+        ? foot(
+            <Button key="finish" variant="primary" disabled={props.finishing} onClick={props.onFinish}>
+              {t("finish")}
+            </Button>,
+          )
+        : outcome?.kind === "no-models"
+          ? foot(finishButton(t("finishAnyway")))
+          : foot(
+              // A refused sign-in is fixed by signing in again, so that is the filled button then.
+              signInFix && (
+                <a key="fix" class="btn" data-part="button" data-variant="primary" href={signInFix.href}>
+                  {signInFix.label}
+                </a>
+              ),
+              <Button
+                key="send"
+                variant={signInFix ? "quiet" : "primary"}
+                busy={sending}
+                disabled={sending}
+                onClick={send}
+              >
+                {sending ? t("sending") : outcome ? t("testAgain") : t("send")}
+              </Button>,
+              finishButton(outcome ? t("finishAnyway") : t("finishWithout")),
             )}
-            <Button
-              variant={signInFix ? "quiet" : "primary"}
-              busy={sending}
-              disabled={sending}
-              onClick={send}
-            >
-              {sending ? t("sending") : outcome ? t("testAgain") : t("send")}
-            </Button>
-            {finishButton(outcome ? t("finishAnyway") : t("finishWithout"))}
-          </>
-        )}
-      </div>
     </>
   );
 }

@@ -1,22 +1,23 @@
 // What the window shows until it is connected to a pluxy.
-// - First launch (no place chosen yet): the whole window, no frame: one question and its two
-//   answers. "On this computer" starts the pluxy the app runs, with nothing to type; "Connect to a
-//   pluxy that is already running" asks for its address, then the native key window asks for its
-//   management key.
+// - First launch (no place chosen yet): the focused window, no frame: one card with the question
+//   and its two answers stacked, the picked one grown, and one Continue. "On this computer" starts
+//   the pluxy the app runs, with nothing to type, and the card shows it starting; "On another
+//   computer" asks for its address, then the native key window asks for its management key.
 // - Every later case (stopped, failed, not installed, not signed in, not answering): the app's
 //   frame with its destinations shown but not choosable, and the case in the pane (NotRunning).
 // The words and the choice of case are in connectionCopy.ts.
 
 import type { ComponentChildren } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useId, useState } from "preact/hooks";
 import { DESTINATIONS } from "../../ui/kit/destinations";
+import { Focus } from "../../ui/kit/focus";
 import { Frame } from "../../ui/kit/frame";
 import { Icon } from "../../ui/kit/icons";
 import { StatePane } from "../../ui/kit/parts";
 import { rich } from "../../ui/kit/strings";
 import type { ThemeState } from "../../ui/kit/theme/state";
-import { Notice } from "../../ui/kit/ui";
-import { ConnectForm } from "./connectForm";
+import { Button, Notice } from "../../ui/kit/ui";
+import { useConnect } from "./connectForm";
 import { ConnectionPage } from "./connection";
 import {
   ACTIONS,
@@ -32,20 +33,56 @@ import {
 import { connectionStatus } from "./frameStatus";
 import { type Connection, connectionSet, coreAdopt, coreRestart, coreStart, keyEntry } from "./host";
 
-/** A turning mark: something is going on, and the app waits for it. */
-export function Spinner() {
+/** One of the first launch's two answers: a row to pick, which grows what it needs once picked. */
+function Choice(props: {
+  name: string;
+  picked: boolean;
+  disabled: boolean;
+  icon: "computer" | "globe";
+  title: string;
+  tag?: string;
+  about: string;
+  onPick: () => void;
+  children: ComponentChildren;
+}) {
   return (
-    <span class="spinner" aria-hidden="true">
-      <Icon name="refresh" />
-    </span>
+    <div class="first-choice" data-part="first-choice" data-picked={props.picked ? "" : undefined}>
+      <label class="first-choice-head">
+        <input
+          type="radio"
+          name={props.name}
+          checked={props.picked}
+          disabled={props.disabled}
+          onChange={props.onPick}
+        />
+        <span class="first-choice-icon" aria-hidden="true">
+          <Icon name={props.icon} size={18} />
+        </span>
+        <span class="first-choice-text">
+          <span class="first-choice-title">
+            <b>{props.title}</b>
+            {props.tag && <span class="first-choice-tag">{props.tag}</span>}
+          </span>
+          <small>{props.about}</small>
+        </span>
+      </label>
+      {props.picked && <div class="first-choice-more">{props.children}</div>}
+    </div>
   );
 }
 
-/** The first launch screen: two answers, and nothing else until one is chosen. */
+/**
+ * The first launch screen: one question, two answers stacked, and one Continue. The picked answer
+ * grows what it needs: nothing to type on this computer, the address of another. On this computer,
+ * Continue starts the app's own pluxy and the card says so until it answers; on another, the native
+ * key window asks for the management key.
+ */
 export function FirstLaunch(props: { connection: Connection; onChange: (c: Connection) => void }) {
-  const [step, setStep] = useState<"choose" | "connect">("choose");
+  const [pick, setPick] = useState<"here" | "there">("here");
   const [starting, setStarting] = useState(false);
   const [problem, setProblem] = useState<string>();
+  const there = useConnect(props.connection, props.onChange);
+  const name = useId();
   async function here() {
     setStarting(true);
     setProblem(undefined);
@@ -56,62 +93,73 @@ export function FirstLaunch(props: { connection: Connection; onChange: (c: Conne
       setStarting(false);
     }
   }
-  return (
-    <main class="first" data-part="first-launch">
-      <p class="first-brand">pluxy</p>
-      {starting ? (
-        <section role="status" aria-live="polite">
-          <h1>{FIRST.startingHeading}</h1>
-          <p class="first-lead first-waiting">
-            <Spinner /> {FIRST.startingAbout}
-          </p>
-        </section>
-      ) : step === "connect" ? (
-        <section>
-          <h1>{FIRST.there.title}</h1>
-          <ConnectForm
-            connection={props.connection}
-            onChange={props.onChange}
-            submit={FORM.continue}
-            back={() => setStep("choose")}
-          />
-        </section>
-      ) : (
-        <section>
-          <h1>{FIRST.heading}</h1>
-          <p class="first-lead">{FIRST.lead}</p>
-          {props.connection.error && <p class="first-quiet">{FIRST.damaged}</p>}
-          {problem && <p class="first-quiet">{problem}</p>}
-          <div class="first-choices">
-            <div class="first-option">
-              <button
-                type="button"
-                class="btn first-choice"
-                data-part="button"
-                data-variant="primary"
-                onClick={() => void here()}
-              >
-                <b>{FIRST.here.title}</b>
-                <span>{FIRST.here.about}</span>
-              </button>
-              <p class="first-note">{FIRST.here.note}</p>
-            </div>
-            <div class="first-option">
-              <button
-                type="button"
-                class="btn first-choice"
-                data-part="button"
-                data-variant="quiet"
-                onClick={() => setStep("connect")}
-              >
-                <b>{FIRST.there.title}</b>
-                <span>{FIRST.there.about}</span>
-              </button>
-            </div>
+  if (starting) {
+    return (
+      <Focus part="first-launch">
+        <section class="first-progress" role="status" aria-live="polite">
+          <div class="focus-head">
+            <h1>{FIRST.startingHeading}</h1>
+            <p class="focus-lead">{FIRST.startingAbout}</p>
+          </div>
+          <div class="first-progress-bar" aria-hidden="true">
+            <span />
           </div>
         </section>
-      )}
-    </main>
+      </Focus>
+    );
+  }
+  const busy = there.busy;
+  const said = pick === "here" ? problem : there.problem;
+  return (
+    <Focus part="first-launch" below={<p>{FIRST.later}</p>}>
+      <form
+        class="first-form"
+        aria-label={FIRST.heading}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (pick === "here") void here();
+          else void there.submit();
+        }}
+      >
+        <div class="focus-head">
+          <h1>{FIRST.heading}</h1>
+          <p class="focus-lead">{FIRST.lead}</p>
+        </div>
+        {props.connection.error && <p class="first-quiet">{FIRST.damaged}</p>}
+        <div class="first-choices" role="radiogroup" aria-label={FIRST.heading}>
+          <Choice
+            name={name}
+            picked={pick === "here"}
+            disabled={busy}
+            icon="computer"
+            title={FIRST.here.title}
+            tag={FIRST.recommended}
+            about={FIRST.here.about}
+            onPick={() => setPick("here")}
+          >
+            <p class="first-note">{FIRST.here.note}</p>
+          </Choice>
+          <Choice
+            name={name}
+            picked={pick === "there"}
+            disabled={busy}
+            icon="globe"
+            title={FIRST.there.title}
+            about={FIRST.there.about}
+            onPick={() => setPick("there")}
+          >
+            {there.fields}
+            <p class="first-note">{FORM.note}</p>
+          </Choice>
+        </div>
+        {said && <Notice tone="danger">{said}</Notice>}
+        <div class="focus-foot">
+          <Button type="submit" variant="primary" disabled={busy || (pick === "there" && !there.ready)}>
+            {busy ? FORM.waiting : FORM.continue}
+          </Button>
+        </div>
+      </form>
+    </Focus>
   );
 }
 

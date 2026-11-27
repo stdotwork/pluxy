@@ -1,4 +1,4 @@
-/* The desktop app's own screens: the first launch choice, the not-running pane and Where pluxy runs.
+/* The desktop app's own screens: the first launch card, the not-running pane and Where pluxy runs.
    Like the kit's styles it sits in the layer "kit", reads only theme tokens (--px-*) and leaves a
    theme's custom CSS, which is unlayered, free to win. */
 
@@ -9,105 +9,169 @@
     }
   }
 
-  .spinner {
-    display: inline-flex;
-    color: var(--px-color-text-muted);
-    animation: app-spin 1.2s linear infinite;
-  }
-
   @media (prefers-reduced-motion: reduce) {
-    .spinner,
     .not-running[data-working] .state-pane-mark svg {
       animation: none;
     }
   }
 
-  /* ---- first launch ------------------------------------------------------------------------- */
+  /* ---- first launch: one card in the focused window (the kit's focus.css) ------------------- */
 
-  .first {
-    box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: calc(var(--s) * 8);
-    max-width: 48rem;
-    min-height: 100vh;
-    margin: 0 auto;
-    padding: calc(var(--s) * 8) calc(var(--s) * 6);
+  .first-form,
+  .first-progress {
+    display: grid;
+    gap: calc(var(--s) * 5);
+    min-width: 0;
   }
 
-  .first section {
-    display: flex;
-    flex-direction: column;
-    gap: calc(var(--s) * 4);
-  }
-
-  .first-brand {
-    margin: 0;
-    font-size: calc(var(--px-font-size) * 2);
-    font-weight: var(--px-font-weight-strong);
-  }
-
-  .first h1 {
-    font-size: calc(var(--px-font-size) * 1.75);
-  }
-
-  .first-lead,
   .first-quiet,
   .first-note {
     margin: 0;
     color: var(--px-color-text-muted);
-  }
-
-  .first-lead {
-    max-width: 34rem;
-    font-size: calc(var(--px-font-size) * 1.15);
-  }
-
-  .first-quiet,
-  .first-note {
     font-size: var(--px-font-size-small);
   }
 
-  .first-waiting {
-    display: flex;
-    align-items: center;
-    gap: calc(var(--s) * 2);
-  }
-
+  /* The two answers, stacked in one rounded box; the picked one is marked and grows. */
   .first-choices {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: calc(var(--s) * 4);
-    align-items: start;
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-card);
+    overflow: hidden;
   }
 
-  .first-option {
-    display: flex;
-    flex-direction: column;
-    gap: calc(var(--s) * 2);
-    min-width: 0;
+  .first-choice + .first-choice {
+    border-top: var(--px-shape-border) solid var(--px-color-border);
   }
 
   .first-choice {
-    flex-direction: column;
+    display: grid;
+    min-width: 0;
+    transition: background var(--t);
+  }
+
+  .first-choice[data-picked] {
+    background: color-mix(in srgb, var(--px-color-message-action) 5%, var(--px-color-card));
+    box-shadow: inset 2px 0 0 var(--px-color-message-action);
+  }
+
+  .first-choice-head {
+    display: flex;
     align-items: flex-start;
-    justify-content: flex-start;
+    gap: calc(var(--s) * 3);
+    padding: calc(var(--s) * 3.5) calc(var(--s) * 4);
+    cursor: pointer;
+  }
+
+  .first-choice-head input {
+    flex: none;
+    margin: calc(var(--s) * 2.5) 0 0;
+    accent-color: var(--px-color-message-action);
+  }
+
+  .first-choice-icon {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 36px;
+    height: 36px;
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-small);
+    background: var(--px-color-card);
+    color: var(--px-color-text-muted);
+  }
+
+  .first-choice[data-picked] .first-choice-icon {
+    color: var(--px-color-accent-text);
+    border-color: color-mix(in srgb, var(--px-color-message-action) 35%, var(--px-color-border));
+  }
+
+  .first-choice-text {
+    display: grid;
+    gap: calc(var(--s) * 0.5);
+    min-width: 0;
+  }
+
+  .first-choice-title {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
     gap: calc(var(--s) * 2);
+  }
+
+  .first-choice-title b {
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .first-choice-text small {
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .first-choice-tag {
+    padding: 0 calc(var(--s) * 1.5);
+    border-radius: 999px;
+    background: var(--px-color-info-surface);
+    color: var(--px-color-info-foreground);
+    font-size: var(--px-font-size-label);
+    font-weight: var(--px-font-weight-medium);
+    line-height: 18px;
+  }
+
+  /* What the picked answer grows, under its words. */
+  .first-choice-more {
+    display: grid;
+    gap: calc(var(--s) * 3);
+    padding: 0 calc(var(--s) * 4) calc(var(--s) * 4)
+      calc(var(--s) * 4 + 36px + var(--s) * 3 + 13px + var(--s) * 3);
+    min-width: 0;
+  }
+
+  .first-choice-more .field input {
     width: 100%;
-    height: auto;
-    min-height: calc(var(--s) * 28);
-    padding: calc(var(--s) * 4);
-    text-align: start;
-    white-space: normal;
   }
 
-  .first-choice b {
-    font-size: var(--px-font-size-title);
+  .first-form > .focus-foot {
+    justify-content: flex-end;
   }
 
-  .first-choice span {
-    font-weight: normal;
+  .first-form > .focus-foot .btn {
+    min-width: 7rem;
+  }
+
+  /* Starting: a bar that runs while the app waits for its pluxy. */
+  .first-progress-bar {
+    position: relative;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--px-color-border);
+    overflow: hidden;
+  }
+
+  .first-progress-bar span {
+    position: absolute;
+    inset-block: 0;
+    width: 35%;
+    border-radius: inherit;
+    background: var(--px-color-message-action);
+    animation: first-run calc(var(--px-motion-duration-slow) * 6) var(--px-motion-easing) infinite;
+  }
+
+  @keyframes first-run {
+    from {
+      left: -35%;
+    }
+    to {
+      left: 100%;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .first-progress-bar span {
+      animation: none;
+      left: 0;
+      width: 100%;
+      opacity: 0.5;
+    }
   }
 
   /* ---- the address form ------------------------------------------------------------------- */
@@ -664,20 +728,10 @@
     box-shadow: none;
   }
 
-  /* 640 wide: the two choices stack, and the rows' controls sit under their names (SettingRow). */
-  @media (max-width: 719.98px) {
-    .first {
-      justify-content: flex-start;
-      gap: calc(var(--s) * 5);
-      padding: calc(var(--s) * 5) calc(var(--s) * 4);
-    }
-
-    .first-choices {
-      grid-template-columns: minmax(0, 1fr);
-    }
-
-    .first-choice {
-      min-height: 0;
+  /* A narrow window: the grown fields start under the answer's icon. */
+  @media (max-width: 560px) {
+    .first-choice-more {
+      padding-inline-start: calc(var(--s) * 4);
     }
   }
 

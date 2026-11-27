@@ -36,6 +36,11 @@ export interface Kit {
   unauthorized(): void;
   /** Called after an extension changed (installed, enabled, removed): its pages may differ. */
   extensionsChanged(): void;
+  /**
+   * The Setup page says whether core is on its first run: the shell shows Setup in the focused
+   * window then, and in the frame afterwards. A host without the shell leaves it out.
+   */
+  setupFirstRun?(first: boolean): void;
 }
 
 export const KitContext = createContext<Kit | null>(null);

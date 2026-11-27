@@ -1,0 +1,191 @@
+/* The focused window (focus.tsx): pluxy's name in a bar on the window's ground, and one card
+   centred under it. Signing in, the app's first launch and Setup's first run. Tokens only. */
+@layer kit {
+  .focus {
+    box-sizing: border-box;
+    min-height: 100vh;
+    display: grid;
+    grid-template-rows: var(--px-size-header) minmax(0, 1fr);
+    background: var(--px-color-chrome);
+    color: var(--px-color-text);
+  }
+
+  .focus-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 3);
+    padding: 0 calc(var(--s) * 5);
+    min-width: 0;
+  }
+
+  .focus-bar-end {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .focus-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  /* pluxy's mark: a small tile in the action colour with a prompt drawn in its text colour. */
+  .focus-mark {
+    position: relative;
+    flex: none;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--r-small);
+    background: var(--px-color-message-action);
+  }
+
+  .focus-mark::before,
+  .focus-mark::after {
+    content: "";
+    position: absolute;
+    background: var(--px-color-message-action-foreground);
+    border-radius: 1px;
+  }
+
+  /* The chevron's two strokes are one rotated square's corner; the line after it is a bar. */
+  .focus-mark::before {
+    top: 6.5px;
+    width: 5px;
+    height: 5px;
+    background: transparent;
+    border-top: 1.75px solid var(--px-color-message-action-foreground);
+    border-right: 1.75px solid var(--px-color-message-action-foreground);
+    transform: rotate(45deg);
+    transform-origin: center;
+    left: 3.5px;
+  }
+
+  .focus-mark::after {
+    left: 10.5px;
+    bottom: 5px;
+    width: 5px;
+    height: 1.75px;
+  }
+
+  .focus-stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: calc(var(--s) * 4);
+    padding: calc(var(--s) * 6) calc(var(--s) * 4) calc(var(--s) * 12);
+    min-width: 0;
+  }
+
+  /* One question sits in the middle of the window; a step with a list starts near the top. */
+  .focus-stage[data-width="narrow"] {
+    justify-content: center;
+    padding-bottom: calc(var(--px-size-header) + var(--s) * 12);
+  }
+
+  .focus-card {
+    box-sizing: border-box;
+    display: grid;
+    gap: calc(var(--s) * 5);
+    width: min(100%, 448px);
+    min-width: 0;
+    padding: calc(var(--s) * 7);
+    background: var(--px-color-card);
+    border: var(--px-shape-border) solid var(--px-color-card-border);
+    border-radius: var(--r-dialog);
+    box-shadow: var(--px-shadow-raised);
+  }
+
+  .focus-stage[data-width="wide"] > .focus-card,
+  .focus-stage[data-width="wide"] > .focus-above {
+    width: min(100%, 760px);
+  }
+
+  .focus-card p {
+    margin: 0;
+  }
+
+  .focus-card h1,
+  .focus-card h2 {
+    margin: 0;
+    font-size: calc(var(--px-font-size) * 10 / 7);
+    font-weight: var(--px-font-weight-strong);
+    line-height: 1.25;
+  }
+
+  .focus-card h1:focus,
+  .focus-card h2:focus {
+    outline: none;
+  }
+
+  .focus-card h1:focus-visible,
+  .focus-card h2:focus-visible {
+    outline: 2px solid var(--px-color-focus);
+    outline-offset: 2px;
+  }
+
+  /* A card's head: the question, and the sentence that says what it is for. */
+  .focus-head {
+    display: grid;
+    gap: calc(var(--s) * 1.5);
+  }
+
+  .focus-eyebrow {
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-label);
+    font-weight: var(--px-font-weight-medium);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .focus-lead {
+    color: var(--px-color-text-muted);
+  }
+
+  /* The card's foot: the way back at the start, the way on at the end. */
+  .focus-foot {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2);
+    padding-top: calc(var(--s) * 4);
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .focus-foot > .focus-foot-start {
+    margin-inline-end: auto;
+  }
+
+  .focus-foot .btn {
+    min-height: var(--px-size-control-main);
+  }
+
+  .focus-below {
+    max-width: min(100%, 448px);
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    text-align: center;
+  }
+
+  .focus-below p {
+    margin: 0;
+  }
+
+  /* A narrow window: the card fills it, and its padding shrinks. */
+  @media (max-width: 560px) {
+    .focus-bar {
+      padding: 0 calc(var(--s) * 4);
+    }
+
+    .focus-stage {
+      padding: calc(var(--s) * 2) calc(var(--s) * 3) calc(var(--s) * 8);
+    }
+
+    .focus-card {
+      padding: calc(var(--s) * 5);
+    }
+  }
+}

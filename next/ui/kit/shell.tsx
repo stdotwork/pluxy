@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import { api } from "./api";
 import { DESTINATIONS, destinationHome, type PageDef, place } from "./destinations";
 import { ExtensionPage, type ExtensionPageProps } from "./extensions/page";
+import { Focus, FocusedContext, FocusGround } from "./focus";
 import { destinationLabel, Frame, type FrameLink, type FrameStatus } from "./frame";
 import type { Host, Reply } from "./host";
 import { Icon } from "./icons";
@@ -18,6 +19,7 @@ import { Button, type Kit, KitContext, Notice } from "./ui";
 export type { Destination, PageDef, TopicSection } from "./destinations";
 
 const t = strings("shell", {
+  signInTitle: "Sign in to pluxy",
   signInHint: "Sign in with pluxy's management key.",
   signInWhere:
     "It is kept in pluxy's config file, on the computer pluxy runs on. There, run {command} to print it; {help} shows where the file is.",
@@ -47,6 +49,13 @@ export function guardLeave(guard: LeaveGuard): () => void {
 
 /** The Setup page's ID: the one page the shell opens by itself, and hides when core lacks its calls. */
 export const SETUP_PAGE = "setup";
+
+/**
+ * How long the shell waits for core's answer about Setup before it shows the first page anyway,
+ * when the address names no page: until then the window shows the focused window's bare ground,
+ * so a first run goes straight to Setup without showing Home for an instant.
+ */
+export const SETUP_GATE_WAIT_MS = 3000;
 
 /**
  * What the shell does with core's answer to GET /setup once signed in. offered: the Setup page
@@ -144,10 +153,22 @@ export function SignIn(props: { host: Host; onDone: () => void; reason?: string;
   const [error, setError] = useState(props.reason);
   const [busy, setBusy] = useState(false);
   return (
-    <main class="signin" data-part="main">
+    <Focus
+      part="main"
+      below={
+        <>
+          <p data-part="signin-where">
+            {rich(t("signInWhere"), {
+              command: <code class="mono">pluxy key management --show-key</code>,
+              help: <code class="mono">pluxy help</code>,
+            })}
+          </p>
+          {props.safeAddress && <p class="hint">{t("safeAddress")}</p>}
+        </>
+      }
+    >
       <form
-        class="card"
-        data-part="card"
+        class="signin"
         onSubmit={async (e) => {
           e.preventDefault();
           setBusy(true);
@@ -157,14 +178,10 @@ export function SignIn(props: { host: Host; onDone: () => void; reason?: string;
           else props.onDone();
         }}
       >
-        <h1 data-part="page-title">pluxy</h1>
-        <p class="muted">{t("signInHint")}</p>
-        <p class="muted" data-part="signin-where">
-          {rich(t("signInWhere"), {
-            command: <code class="mono">pluxy key management --show-key</code>,
-            help: <code class="mono">pluxy help</code>,
-          })}
-        </p>
+        <div class="focus-head">
+          <h1 data-part="page-title">{t("signInTitle")}</h1>
+          <p class="focus-lead">{t("signInHint")}</p>
+        </div>
         <label class="field" data-part="field">
           <span class="label">{t("key")}</span>
           <input
@@ -184,9 +201,8 @@ export function SignIn(props: { host: Host; onDone: () => void; reason?: string;
         <Button type="submit" variant="primary" disabled={busy || key === ""}>
           {t("signIn")}
         </Button>
-        {props.safeAddress && <small class="hint">{t("safeAddress")}</small>}
       </form>
-    </main>
+    </Focus>
   );
 }
 
@@ -262,11 +278,24 @@ export function Shell(props: {
     setSignedIn(false);
   }, [host]);
   const extensionsChanged = useCallback(() => setUiVersion((n) => n + 1), []);
+  // What core said about Setup: answered (or the wait ran out), and whether this is its first run.
+  // The Setup page tells the shell again when it reads it, and when the first run ends.
+  const [gate, setGate] = useState<{ answered: boolean; first?: boolean }>({ answered: false });
+  const [gateLate, setGateLate] = useState(false);
+  const pagesRef = useRef<PageDef[]>([]);
+  // The page the address names; at first the build's own pages are all there are.
+  const [page, setPage] = useState(() => currentId(props.pages));
+  const setupFirstRun = useCallback((first: boolean) => {
+    setGate((g) => (g.answered && g.first === first ? g : { answered: true, first }));
+    // The page that ended the first run has moved the address on already: follow it now, so the
+    // window does not show Setup in the frame for an instant before the address change arrives.
+    setPage(currentId(pagesRef.current));
+  }, []);
   // Core keeps the themes: the theme state follows it while signed in.
   useEffect(() => (signedIn ? themes.connect(unauthorized) : undefined), [signedIn, themes, unauthorized]);
   const kit = useMemo(
-    () => ({ host, api: api(host), themes, privacy, unauthorized, extensionsChanged }),
-    [host, themes, privacy, unauthorized, extensionsChanged],
+    () => ({ host, api: api(host), themes, privacy, unauthorized, extensionsChanged, setupFirstRun }),
+    [host, themes, privacy, unauthorized, extensionsChanged, setupFirstRun],
   );
   const extPages = useExtensionPages(
     signedIn && props.extensionPages === true,
@@ -280,24 +309,33 @@ export function Shell(props: {
   useEffect(() => {
     if (!signedIn || !hasSetup) return;
     let live = true;
+    setGate({ answered: false });
+    setGateLate(false);
+    const late = setTimeout(() => setGateLate(true), SETUP_GATE_WAIT_MS);
     kit.api.setup().then((r) => {
       if (!live) return;
+      clearTimeout(late);
       // A refused key is left to the page that loads next: this read is the shell's own, and
       // signing out here could undo a sign-in that is under way in the desktop app.
-      if (r.status === 401) return;
+      if (r.status === 401) return setGate({ answered: true });
       const gate = setupGate(r, location.hash);
       setSetupOffered(gate.offered);
-      if (gate.open) location.replace(`#/${SETUP_PAGE}`);
+      setGate({ answered: true, first: r.body?.first_run === true });
+      if (gate.open) {
+        location.replace(`#/${SETUP_PAGE}`);
+        setPage(currentId(pagesRef.current));
+      }
     });
     return () => {
       live = false;
+      clearTimeout(late);
     };
   }, [signedIn, hasSetup, kit]);
   const pages = useMemo(
     () => [...props.pages.filter((p) => setupOffered || p.id !== SETUP_PAGE), ...extPages],
     [props.pages, extPages, setupOffered],
   );
-  const [page, setPage] = useState(() => currentId(pages));
+  pagesRef.current = pages;
 
   useEffect(() => {
     const onHash = (e?: HashChangeEvent) => {
@@ -363,6 +401,35 @@ export function Shell(props: {
           }}
         />
       </div>
+    );
+  }
+
+  // Waiting for core's answer about Setup on an address that names no page: a first run opens
+  // Setup, so nothing else shows until the answer (or the wait) is over.
+  const unnamed = location.hash.replace(/^#\/?/, "") === "";
+  if (hasSetup && setupOffered && !gate.answered && !gateLate && unnamed) {
+    return (
+      <div class="shell" data-part="shell">
+        <FocusGround />
+      </div>
+    );
+  }
+
+  // Setup on a first run: the focused window, no frame.
+  if (page === SETUP_PAGE && gate.first === true && active) {
+    return (
+      <KitContext.Provider value={kit}>
+        <PrivacyContext.Provider value={masks}>
+          <FocusedContext.Provider value={true}>
+            <div class="shell" data-part="shell" ref={rootRef}>
+              {active.render()}
+              <p class="sr-only" aria-live="polite">
+                {announced}
+              </p>
+            </div>
+          </FocusedContext.Provider>
+        </PrivacyContext.Provider>
+      </KitContext.Provider>
     );
   }
 

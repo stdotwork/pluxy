@@ -9,15 +9,17 @@ import type { Connection, Mode } from "./host";
 export const FIRST = {
   heading: "Where should pluxy run?",
   lead: "pluxy connects your coding tools to your AI accounts. It needs to run somewhere first.",
+  recommended: "Recommended",
   here: {
     title: "On this computer",
     about: "pluxy runs here while this app is open. Nothing to type.",
-    note: "Most people pick this.",
+    note: "Most people pick this. The app starts pluxy and stops it when you quit.",
   },
   there: {
-    title: "Connect to a pluxy that is already running",
-    about: "One on another computer or server, or one you set up yourself on this one.",
+    title: "On another computer",
+    about: "Connect to a pluxy that already runs: on a server, or on its own on this computer.",
   },
+  later: "You can change this later in Settings, under Where pluxy runs.",
   startingHeading: "Starting pluxy on this computer…",
   startingAbout: "This takes a few seconds the first time.",
   damaged: "The app could not read its saved settings, so it is starting fresh.",
@@ -30,7 +32,6 @@ export const FORM = {
   certificateHint: "The full path of its .pem file.",
   continue: "Continue",
   connect: "Connect",
-  back: "Back",
   waiting: "Waiting for the key…",
   note: "Next, a small window asks for its management key. On the computer it runs on, pluxy key management --show-key prints it.",
 };

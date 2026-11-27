@@ -1,13 +1,18 @@
-// Setup: one short guided setup in three steps, one open at a time: the person's AI accounts (which
-// kinds, then signing in), their coding tool, and one test request that proves an account answers.
-// What pluxy found on this computer shows in the step that uses it; a CLIProxyAPI setup to import
-// is one line above the steps (setupImport.tsx). Every step can be skipped, and every way to end
-// setup is the one finish. The panel and the desktop app show this page; the app adds its own
-// tool buttons through SetupOptions.
+// Setup: one short guided setup in three steps: the person's AI accounts (which kinds, then signing
+// in), their coding tool, and one test request that proves an account answers. What pluxy found on
+// this computer shows in the step that uses it; a CLIProxyAPI setup to import is offered with the
+// accounts (setupImport.tsx). Every step can be skipped, and every way to end setup is the one
+// finish. The panel and the desktop app show this page; the app adds its own tool buttons through
+// SetupOptions.
+//
+// On a first run it is a focused window (focus.tsx), one step per screen with Back and Continue and
+// "Finish later" at the top, which leaves a card on Home (SetupLaterCard). Afterwards it is a
+// checklist among the Settings topics: each step one row, opened in place.
 
 import type { ComponentChildren } from "preact";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useContext, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { type ImportReport, problem, runningExtensions, type SetupClient } from "../api";
+import { Focus, FocusedContext } from "../focus";
 import { Icon } from "../icons";
 import { refreshWord, StatePane, tryAgainWord } from "../parts";
 import type { PageDef } from "../shell";
@@ -26,6 +31,7 @@ import {
 import { AccountsStep, accountsSummary } from "./setupAccounts";
 import { CheckStep, checkSummary, type TestOutcome } from "./setupCheck";
 import { ImportLine } from "./setupImport";
+import { forgetLater, rememberLater } from "./setupLater";
 import { ToolListView, type ToolsOptions, useMadeKeys, useToolsState } from "./tools";
 import { toolName } from "./tools.helpers";
 
@@ -43,17 +49,23 @@ const t = strings("setup", {
   step1: "Your AI accounts",
   step2: "Your coding tool",
   step3: "Check it works",
+  lead1:
+    "Tick the kinds of account you have, then sign in to one. pluxy sends your tools' requests through it.",
+  lead2: "Point a coding tool at pluxy, so its requests go through your accounts.",
+  lead3: "Send one short request through an account to see that it answers.",
+  stepOf: "Step {n} of 3",
   open: "Open",
   continue: "Continue",
   skip: "Skip",
+  back: "Back",
   done: "Done",
   toolsUse: { one: "{tools} uses pluxy.", other: "{tools} use pluxy." },
   noTool: "No tool connected yet.",
   here: "Detected on this computer.",
   network: "Other computers on your network can reach pluxy.",
   scanFailed: "Could not look at this computer: {error}.",
-  finishLater: "Leave setup for now",
-  staysUnder: "It won't open by itself again; it stays under Settings.",
+  finishLater: "Finish later",
+  staysUnder: "Finish later leaves a reminder on Home. Setup stays under Settings.",
   backHome: "Back to Home",
   finishFailed: "Could not finish setup: {error}.",
 });
@@ -77,7 +89,11 @@ export interface SetupOptions {
 }
 
 type StepNo = 1 | 2 | 3;
+const STEPS: StepNo[] = [1, 2, 3];
+const TITLES: Record<StepNo, "step1" | "step2" | "step3"> = { 1: "step1", 2: "step2", 3: "step3" };
+const LEADS: Record<StepNo, "lead1" | "lead2" | "lead3"> = { 1: "lead1", 2: "lead2", 3: "lead3" };
 
+/** One of the checklist's rows: the step's mark, title and what it came to, opened in place. */
 function Step(props: {
   n: StepNo;
   title: string;
@@ -100,23 +116,79 @@ function Step(props: {
       </span>
       <section class="setup-step-body" aria-labelledby={id}>
         <div class="setup-step-head">
-          <h2 id={id} ref={props.heading} tabIndex={-1}>
-            {props.title}
-            {props.done && <span class="sr-only"> ({t("done")})</span>}
-          </h2>
+          <div class="setup-step-text">
+            <h2 id={id} ref={props.heading} tabIndex={-1}>
+              {props.title}
+              {props.done && <span class="sr-only"> ({t("done")})</span>}
+            </h2>
+            {!props.open && <p class="setup-step-summary">{props.summary}</p>}
+          </div>
           {!props.open && (
             <Button onClick={props.onOpen} describedBy={id}>
               {t("open")}
             </Button>
           )}
         </div>
-        {props.open ? (
-          <div class="setup-step-open">{props.children}</div>
-        ) : (
-          <p class="setup-step-summary">{props.summary}</p>
-        )}
+        {props.open && <div class="setup-step-open">{props.children}</div>}
       </section>
     </li>
+  );
+}
+
+/** The first run's steps above the card: where the person is, and a way to any step. */
+function Stepper(props: { open: StepNo; done: Record<StepNo, boolean>; onGo: (n: StepNo) => void }) {
+  return (
+    <ol class="setup-stepper" data-part="setup-stepper" aria-label={t("steps")}>
+      {STEPS.map((n) => {
+        const state = props.open === n ? "open" : props.done[n] ? "done" : "todo";
+        return (
+          <li key={n} data-state={state}>
+            <button
+              type="button"
+              aria-current={props.open === n ? "step" : undefined}
+              onClick={() => props.onGo(n)}
+            >
+              <span class="setup-stepper-mark" aria-hidden="true">
+                {props.done[n] && props.open !== n ? <Icon name="check" size={12} /> : n}
+              </span>
+              <span class="setup-stepper-title">
+                {t(TITLES[n])}
+                {props.done[n] && <span class="sr-only"> ({t("done")})</span>}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** The first run's one step on screen: what it is, its content, and the way back and on. */
+function Screen(props: {
+  n: StepNo;
+  heading: (node: HTMLHeadingElement | null) => void;
+  above?: ComponentChildren;
+  children: ComponentChildren;
+}) {
+  const id = `setup-step-${props.n}`;
+  return (
+    <section
+      class="setup-screen"
+      data-part="setup-step"
+      data-step={props.n}
+      data-state="open"
+      aria-labelledby={id}
+    >
+      <div class="focus-head">
+        <p class="focus-eyebrow">{t("stepOf", { n: props.n })}</p>
+        <h2 id={id} ref={props.heading} tabIndex={-1}>
+          {t(TITLES[props.n])}
+        </h2>
+        <p class="focus-lead">{t(LEADS[props.n])}</p>
+      </div>
+      {props.above}
+      {props.children}
+    </section>
   );
 }
 
@@ -129,20 +201,38 @@ function ToolsStep(props: Omit<Parameters<typeof ToolListView>[0], "made">) {
   return <ToolListView {...props} made={made} />;
 }
 
-/** Continue once the step is done, else Skip; both open the next step. */
-function Next(props: { done: boolean; onNext: () => void; children?: ComponentChildren }) {
+/**
+ * Continue once the step is done, else Skip; both open the next step. On the first run it is the
+ * card's foot, with Back at its start.
+ */
+function Next(props: {
+  done: boolean;
+  onNext: () => void;
+  back?: () => void;
+  focused: boolean;
+  children?: ComponentChildren;
+}) {
   return (
-    <div class="actions setup-next">
+    <div class={props.focused ? "focus-foot setup-next" : "actions setup-next"}>
+      {props.back && (
+        <span class="focus-foot-start">
+          <Button variant="ghost" onClick={props.back}>
+            {t("back")}
+          </Button>
+        </span>
+      )}
+      {props.children}
       <Button variant={props.done ? "primary" : "quiet"} onClick={props.onNext}>
         {props.done ? t("continue") : t("skip")}
       </Button>
-      {props.children}
     </div>
   );
 }
 
 export function SetupPage(props: { options?: SetupOptions }) {
-  const { api, host, unauthorized, extensionsChanged } = useKit();
+  const kit = useKit();
+  const { api, host, unauthorized, extensionsChanged } = kit;
+  const focused = useContext(FocusedContext);
   const options = props.options;
   const tools = useToolsState();
   const { setup: loaded, accounts } = tools;
@@ -185,6 +275,12 @@ export function SetupPage(props: { options?: SetupOptions }) {
       document.removeEventListener("visibilitychange", again);
     };
   }, [accounts.reload, status.reload, tools.scan]);
+
+  // The shell shows Setup in the focused window only on a first run: it is told what core says.
+  const firstRun = setup?.first_run;
+  useEffect(() => {
+    if (firstRun !== undefined) kit.setupFirstRun?.(firstRun);
+  }, [firstRun]);
 
   const tools2 = connectedTools(setup, options?.extraTools);
   const done: Record<StepNo, boolean> = {
@@ -240,7 +336,8 @@ export function SetupPage(props: { options?: SetupOptions }) {
     packages.reload();
   };
 
-  const finish = async () => {
+  /** Ends setup; later: the person chose Finish later, so Home keeps a card for it. */
+  const finish = async (later = false) => {
     if (finishing) return;
     setFinishing(true);
     setFinishError(undefined);
@@ -249,8 +346,11 @@ export function SetupPage(props: { options?: SetupOptions }) {
     if (r.status === 401) return unauthorized();
     const why = problem(r);
     if (why !== undefined) return setFinishError(why.replace(/\.$/, ""));
+    if (later) rememberLater(host);
+    else forgetLater(host);
     options?.onFinish?.();
     location.hash = "#/";
+    kit.setupFirstRun?.(false);
   };
 
   const refresh = async () => {
@@ -261,80 +361,186 @@ export function SetupPage(props: { options?: SetupOptions }) {
 
   if (!setup || !accountList) {
     const failed = (loaded.phase === "failed" && !setup) || (accounts.phase === "failed" && !accountList);
+    const pane = failed ? (
+      <StatePane
+        kind="failed"
+        title={t("failed")}
+        details={loaded.error ?? accounts.error}
+        primary={{
+          label: tryAgainWord(),
+          onClick: () => {
+            loaded.reload();
+            accounts.reload();
+          },
+        }}
+      />
+    ) : (
+      <StatePane kind="loading" title={t("loading")} />
+    );
+    if (focused)
+      return (
+        <Focus part="setup-focus" width="wide">
+          <h1 class="sr-only" data-part="page-title" tabIndex={-1}>
+            {t("title")}
+          </h1>
+          {pane}
+        </Focus>
+      );
     return (
       <>
         <PageHead title={t("title")} />
-        {failed ? (
-          <StatePane
-            kind="failed"
-            title={t("failed")}
-            details={loaded.error ?? accounts.error}
-            primary={{
-              label: tryAgainWord(),
-              onClick: () => {
-                loaded.reload();
-                accounts.reload();
-              },
-            }}
-          />
-        ) : (
-          <StatePane kind="loading" title={t("loading")} />
-        )}
+        {pane}
       </>
     );
   }
 
   const first = setup.first_run;
   const names = tools2.map(toolName);
+  const scanNotes = (
+    <>
+      {!setup.scanned_at && (setup.scanning || tools.scanBusy) && (
+        <p class="muted setup-scanning">{t("scanning")}</p>
+      )}
+      {!setup.scanned_at && !setup.scanning && !tools.scanBusy && tools.scanError && (
+        <div class="setup-scan-failed">
+          <Notice tone="danger">{t("scanFailed", { error: tools.scanError.replace(/\.$/, "") })}</Notice>
+          <div class="actions">
+            <Button onClick={() => void tools.scan()}>{tryAgainWord()}</Button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+  const importLine = <ImportLine setup={setup} onImported={imported} onRescan={tools.rescan} />;
+  const heading = (n: StepNo) => (node: HTMLHeadingElement | null) => {
+    headings.current[n] = node;
+  };
+  const finishNotice = finishError && (
+    <Notice tone="danger">{t("finishFailed", { error: finishError })}</Notice>
+  );
+
+  // Each step's content; on the first run back is the way to the step before.
+  const content = (n: StepNo, back?: () => void): ComponentChildren => {
+    if (n === 1)
+      return (
+        <>
+          <AccountsStep
+            setup={setup}
+            packages={packages.data?.packages}
+            accounts={accountList}
+            running={running}
+            hadAccounts={started.current?.hadAccounts ?? false}
+            choices={choices}
+            results={results}
+            needed={needed}
+            adding={adding}
+            addError={addError}
+            remote={remote}
+            signedIn={signedIn}
+            onTick={(id, on) => setChoices((c) => ({ ...c, [id]: on }))}
+            onAdd={add}
+            onSignedIn={(id) => {
+              setSignedIn(id);
+              accounts.reload();
+            }}
+          />
+          {first && importLine}
+          <Next done={done[1]} onNext={() => go(2)} back={back} focused={first} />
+        </>
+      );
+    if (n === 2)
+      return (
+        <>
+          {!remote && <p class="muted">{t("here")}</p>}
+          {setup.found.core.reachable_from_network && <p class="muted">{t("network")}</p>}
+          <ToolsStep
+            toolAction={options?.toolAction}
+            extraTools={options?.extraTools}
+            localPages={options?.localPages}
+            notes={options?.notes}
+            remote={remote}
+            state={tools}
+            onAddAccount={() => go(1)}
+          />
+          <Next done={done[2]} onNext={() => go(3)} back={back} focused={first}>
+            <Button onClick={refresh}>{refreshWord()}</Button>
+          </Next>
+        </>
+      );
+    return (
+      <CheckStep
+        accounts={accountList}
+        running={running}
+        added={signedIn}
+        outcome={outcome}
+        onOutcome={setOutcome}
+        onAddAccount={() => go(1)}
+        onAccountsChanged={accounts.reload}
+        finishing={finishing}
+        onFinish={() => finish()}
+        back={back}
+      />
+    );
+  };
+
+  if (first) {
+    const at = open ?? 1;
+    return (
+      <Focus
+        part="setup-focus"
+        width="wide"
+        bar={
+          <Button variant="ghost" disabled={finishing} onClick={() => finish(true)}>
+            {t("finishLater")}
+          </Button>
+        }
+        above={
+          <div class="focus-above setup-top">
+            <div class="setup-top-text">
+              <h1 data-part="page-title" tabIndex={-1}>
+                {t("title")}
+              </h1>
+              <p class="muted">{t("introFirst")}</p>
+            </div>
+            <Stepper open={at} done={done} onGo={go} />
+          </div>
+        }
+        below={<p>{t("staysUnder")}</p>}
+      >
+        <Screen
+          key={at}
+          n={at}
+          heading={heading(at)}
+          above={
+            <>
+              {scanNotes}
+              {finishNotice}
+            </>
+          }
+        >
+          {content(at, at > 1 ? () => go((at - 1) as StepNo) : undefined)}
+        </Screen>
+      </Focus>
+    );
+  }
+
   const stepProps = (n: StepNo) => ({
     n,
     done: done[n],
     open: open === n,
     onOpen: () => go(n),
-    heading: (node: HTMLHeadingElement | null) => {
-      headings.current[n] = node;
-    },
+    heading: heading(n),
   });
   return (
     <>
-      <PageHead title={first ? t("title") : t("titleLater")} />
+      <PageHead title={t("titleLater")} />
       <div class="setup stack">
-        <p class="setup-intro">{first ? t("introFirst") : t("introLater")}</p>
-        {!setup.scanned_at && (setup.scanning || tools.scanBusy) && (
-          <p class="muted setup-scanning">{t("scanning")}</p>
-        )}
-        {!setup.scanned_at && !setup.scanning && !tools.scanBusy && tools.scanError && (
-          <div class="setup-scan-failed">
-            <Notice tone="danger">{t("scanFailed", { error: tools.scanError.replace(/\.$/, "") })}</Notice>
-            <div class="actions">
-              <Button onClick={() => void tools.scan()}>{tryAgainWord()}</Button>
-            </div>
-          </div>
-        )}
-        <ImportLine setup={setup} onImported={imported} onRescan={tools.rescan} />
+        <p class="setup-intro">{t("introLater")}</p>
+        {scanNotes}
+        {importLine}
         <ol class="setup-steps" aria-label={t("steps")}>
           <Step {...stepProps(1)} title={t("step1")} summary={accountsSummary(accountList, running)}>
-            <AccountsStep
-              setup={setup}
-              packages={packages.data?.packages}
-              accounts={accountList}
-              running={running}
-              hadAccounts={started.current?.hadAccounts ?? false}
-              choices={choices}
-              results={results}
-              needed={needed}
-              adding={adding}
-              addError={addError}
-              remote={remote}
-              signedIn={signedIn}
-              onTick={(id, on) => setChoices((c) => ({ ...c, [id]: on }))}
-              onAdd={add}
-              onSignedIn={(id) => {
-                setSignedIn(id);
-                accounts.reload();
-              }}
-            />
-            <Next done={done[1]} onNext={() => go(2)} />
+            {content(1)}
           </Step>
           <Step
             {...stepProps(2)}
@@ -343,49 +549,17 @@ export function SetupPage(props: { options?: SetupOptions }) {
               names.length > 0 ? t("toolsUse", { count: names.length, tools: joinNames(names) }) : t("noTool")
             }
           >
-            {!remote && <p class="muted">{t("here")}</p>}
-            {setup.found.core.reachable_from_network && <p class="muted">{t("network")}</p>}
-            <ToolsStep
-              toolAction={options?.toolAction}
-              extraTools={options?.extraTools}
-              localPages={options?.localPages}
-              notes={options?.notes}
-              remote={remote}
-              state={tools}
-              onAddAccount={() => go(1)}
-            />
-            <Next done={done[2]} onNext={() => go(3)}>
-              <Button onClick={refresh}>{refreshWord()}</Button>
-            </Next>
+            {content(2)}
           </Step>
           <Step {...stepProps(3)} title={t("step3")} summary={checkSummary(outcome)}>
-            <CheckStep
-              accounts={accountList}
-              running={running}
-              added={signedIn}
-              outcome={outcome}
-              onOutcome={setOutcome}
-              onAddAccount={() => go(1)}
-              onAccountsChanged={accounts.reload}
-              finishing={finishing}
-              onFinish={finish}
-            />
+            {content(3)}
           </Step>
         </ol>
-        {finishError && <Notice tone="danger">{t("finishFailed", { error: finishError })}</Notice>}
+        {finishNotice}
         <p class="setup-later">
-          {first ? (
-            <>
-              <Button disabled={finishing} onClick={finish}>
-                {t("finishLater")}
-              </Button>
-              <span class="muted">{t("staysUnder")}</span>
-            </>
-          ) : (
-            <a class="btn" data-part="button" data-variant="quiet" href="#/">
-              {t("backHome")}
-            </a>
-          )}
+          <a class="btn" data-part="button" data-variant="quiet" href="#/">
+            {t("backHome")}
+          </a>
         </p>
       </div>
     </>

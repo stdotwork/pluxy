@@ -43,6 +43,7 @@ import {
   weekTotals,
 } from "./home.helpers";
 import { Days } from "./homeDays";
+import { SetupLaterCard } from "./setupLater";
 
 const t = strings("home", {
   title: "Home",
@@ -408,6 +409,7 @@ export function HomePage() {
   return (
     <>
       {head}
+      <SetupLaterCard />
       <header class="home-strip" data-verdict={verdict.kind}>
         <div class="home-verdict">
           <h2 class="home-headline">{verdict.headline}</h2>
