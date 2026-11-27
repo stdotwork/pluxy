@@ -125,15 +125,21 @@ test("sign-in says why core refused it, and keeps the words for the cases it alr
     return host.signIn("k", false);
   };
   const off = await asked(403, error("remote_disabled", "remote management is off: ..."));
-  expect(off).toContain('set "management_allow_remote" to true in core\'s config.json');
+  expect(off).toBe(
+    'This pluxy answers only the computer it runs on. On that computer, set "management_allow_remote": true in pluxy\'s config.json (run pluxy help there to see where the file is) and save it. It picks the change up by itself, so then just sign in again.',
+  );
   expect(
     await asked(
       403,
       error("blocked", "too many failed management keys from this address; try again in 29m58s"),
     ),
-  ).toBe("core answered 403: too many failed management keys from this address; try again in 29m58s");
-  expect(await asked(502)).toBe("core answered 502");
-  expect(await asked(401, error("unauthorized", "invalid management key"))).toBe("core refused this key");
-  expect(await asked(404)).toBe("no pluxy management API answered at this address");
+  ).toBe(
+    "The reply from pluxy was 403: too many failed management keys from this address; try again in 29m58s",
+  );
+  expect(await asked(502)).toBe("The reply from pluxy was 502.");
+  expect(await asked(401, error("unauthorized", "invalid management key"))).toBe(
+    "This management key was not accepted.",
+  );
+  expect(await asked(404)).toBe("No pluxy answered at this address.");
   expect(await asked(200, {})).toBeUndefined();
 });

@@ -32,9 +32,9 @@ test("sign-in from another address says that remote management is off and what t
   await page.getByRole("button", { name: "Sign in" }).click();
 
   const message = page.getByRole("alert");
-  await expect(message).toContainText("core answers only the computer it runs on");
-  await expect(message).toContainText('set "management_allow_remote" to true in core\'s config.json');
-  await expect(message).not.toContainText("core answered 403");
+  await expect(message).toContainText("This pluxy answers only the computer it runs on");
+  await expect(message).toContainText('set "management_allow_remote": true in pluxy\'s config.json');
+  await expect(message).not.toContainText("The reply from pluxy was 403");
   // Still on the sign-in page: nothing was signed in.
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
 });

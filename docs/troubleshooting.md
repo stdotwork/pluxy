@@ -218,9 +218,9 @@ Then restart core.
 
 Open `http://127.0.0.1:8317/panel/` (or the `listen` address core printed). The sign-in screen asks for the **Management key**: paste `management_key` from `config.json` and click **Sign in**.
 
-If sign-in from another computer says `core answers only the computer it runs on`, core's remote management is off: it answers management calls only from the computer it runs on (core's reply is 403 `remote_disabled`). On that computer, set `"management_allow_remote": true` in core's `config.json` and save it; core picks the change up by itself, so try again. Any other refusal at sign-in is shown as `core answered <status>:` followed by core's own reason.
+If sign-in from another computer says "This pluxy answers only the computer it runs on", remote management is off: pluxy answers management calls only from the computer it runs on (its reply is 403 `remote_disabled`). On that computer, set `"management_allow_remote": true` in pluxy's `config.json` (`pluxy help` there shows where the file is) and save it. pluxy picks the change up by itself, so sign in again. Any other refusal at sign-in is shown as "The reply from pluxy was", the status and pluxy's own reason.
 
-If the panel prints `Core refused the management key. Sign in again.`, verify you used `management_key` rather than a client key from `client_keys`. Five wrong keys in a row from another machine block that address for 30 minutes (403 `blocked`); requests from core's own machine are never blocked.
+If the panel says "This management key was not accepted." at sign-in, or prints `Core refused the management key. Sign in again.` once you were signed in, verify you used `management_key` rather than a client key from `client_keys`. Five wrong keys in a row from another machine block that address for 30 minutes (403 `blocked`); requests from core's own machine are never blocked.
 
 ## Seeing what happened
 
