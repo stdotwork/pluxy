@@ -345,7 +345,7 @@ func docsEnvVars(t *testing.T) {
 		_, allowed := undocumentedEnv[n]
 		switch {
 		case !documented[n] && !allowed:
-			t.Errorf("shipped code reads %s and no doc names it: add it to the doc that lists the variables it belongs with (next/README.md for core's), or to undocumentedEnv in next/cmd/pluxy/docs_test.go, a list that may only shrink", n)
+			t.Errorf("shipped code reads %s and no doc names it: add it to the doc that lists the variables it belongs with (docs/config.md for core's), or to undocumentedEnv in next/cmd/pluxy/docs_test.go, a list that may only shrink", n)
 		case documented[n] && allowed:
 			t.Errorf("%s is named in a doc now: take it out of undocumentedEnv in next/cmd/pluxy/docs_test.go", n)
 		}
