@@ -297,7 +297,7 @@
 
   .account-grid {
     display: grid;
-    grid-template-columns: auto minmax(10em, 1fr) 6.5em minmax(0, var(--limits)) auto;
+    grid-template-columns: auto minmax(9em, 1fr) 6em var(--limits) auto;
     align-items: center;
     column-gap: calc(var(--s) * 3);
     min-height: var(--px-size-row-tall);
@@ -305,7 +305,7 @@
   }
 
   .account-row[data-wide] .account-grid {
-    grid-template-columns: auto minmax(10em, 1fr) 6.5em minmax(0, var(--limits)) 7em 9.5em;
+    grid-template-columns: auto minmax(9em, 1fr) 6em var(--limits) 7em 9.5em;
   }
 
   .account-mark {
@@ -500,9 +500,38 @@
     text-align: end;
   }
 
+  /* A wide row (Accounts) that has not the room for its week and fix beside its limits: the limits
+     go on a line of their own under the name. The width is what its columns take, in the row's own
+     em, so a theme with larger type moves them down sooner. */
+  @container (max-width: 70em) {
+    .account-row[data-wide] .account-grid {
+      grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+      row-gap: var(--s);
+    }
+
+    .account-row[data-wide]:not(:has(.limits)) .account-who {
+      grid-column: 2;
+    }
+
+    .account-row[data-wide] .account-plan:empty {
+      display: none;
+    }
+
+    .account-row[data-wide] .account-side:has(> .limits) {
+      grid-row: 2;
+      grid-column: 2 / -1;
+      justify-self: start;
+    }
+
+    .account-row[data-wide] .account-reason {
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+  }
+
   /* A narrower pane: the limits go on a line of their own under the name, and the plan beside the
-     name. The width is in the row's own em, so a theme with larger type moves them down sooner. */
-  @container (max-width: 50em) {
+     name; a wide row leaves out its week. */
+  @container (max-width: 52em) {
     .account-grid,
     .account-row[data-wide] .account-grid {
       grid-template-columns: auto minmax(0, 1fr) auto auto;
