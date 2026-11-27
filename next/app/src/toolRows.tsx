@@ -98,8 +98,9 @@ export function AddonAction(props: {
   const working = status.working;
   const label =
     props.step === "install" ? (working === "install" ? t("installing") : t("install")) : t("turnOn");
-  const press = () =>
-    runAddon(
+  // Nothing is returned: the button's own busy mark would sit on the words "Installing…".
+  const press = () => {
+    void runAddon(
       props.pkg,
       props.step,
       props.step === "install"
@@ -107,6 +108,7 @@ export function AddonAction(props: {
         : () => device.setEnabled(props.pkg, true),
       props.changed,
     );
+  };
   const failed = status.failed?.step === props.step ? status.failed.reason : undefined;
   return (
     <>
