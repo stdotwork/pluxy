@@ -90,7 +90,9 @@ test("Add an account asks for no ID: the providers are tiles, then a provider's 
   await expect(way(page, "Test device")).toContainText("Get a code to enter on another device");
   await expect(way(page, "Test API key")).toContainText("Paste an API key from the service.");
   await expect(start(page, "Test browser")).toHaveAttribute("data-variant", "primary");
+  await expect(start(page, "Test browser")).toHaveAccessibleName("Start: Test browser (Recommended)");
   await expect(start(page, "Test device")).not.toHaveAttribute("data-variant", "primary");
+  await expect(start(page, "Test device")).toHaveAccessibleName("Start: Test device");
   await expect(page.getByText("Have auth files from CLIProxyAPI?")).toBeVisible();
 
   // Back to the providers, with the tile just left in focus.

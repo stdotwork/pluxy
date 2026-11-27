@@ -163,9 +163,11 @@ const must = <T,>(found: T | undefined, what: string): T => {
   if (found === undefined) throw new Error(`no ${what}`);
   return found;
 };
-const start = (root: FakeNode, method: string) =>
+const start = (root: FakeNode, method: string, recommended = false) =>
   must(
-    buttons(root).find((b) => attr(b, "aria-label") === `Start: ${method}`),
+    buttons(root).find(
+      (b) => attr(b, "aria-label") === `Start: ${method}${recommended ? " (Recommended)" : ""}`,
+    ),
     `Start button for ${method}`,
   );
 /** Every node below root that has the attribute with the value. */
@@ -190,7 +192,7 @@ const PROVIDER_OF: Record<string, string> = {
 async function begin(root: FakeNode, method: string, provider = PROVIDER_OF[method] ?? "Claude") {
   const picked = tile(root, provider);
   if (picked) await click(picked);
-  await click(start(root, method));
+  await click(start(root, method, method === "Claude subscription"));
 }
 /** The input a label names. */
 const field = (root: FakeNode, label: string) =>
@@ -287,6 +289,10 @@ test("Add an account asks for no ID: the providers are tiles, and a provider's w
   expect(ways).not.toContain("ChatGPT");
   expect(withAttr(page.root, "data-part", "method")).toHaveLength(2);
   expect(withAttr(page.root, "class", "method-badge")).toHaveLength(1);
+  expect(attr(start(page.root, "Claude subscription", true), "aria-label")).toBe(
+    "Start: Claude subscription (Recommended)",
+  );
+  expect(attr(start(page.root, "API key"), "aria-label")).toBe("Start: API key");
   expect(text).not.toContain("pluxy/");
   expect(ways).not.toContain("pluxy/");
   expect(ways).not.toMatch(/Account ID|acc_/);

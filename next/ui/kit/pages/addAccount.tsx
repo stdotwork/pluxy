@@ -36,6 +36,7 @@ const t = strings("addAccount", {
   api_key: "Paste an API key from the service.",
   start: "Start",
   startMethod: "Start: {method}",
+  startRecommended: "Start: {method} (Recommended)",
   added: "Added {name}.",
   addedWithPlan: "Added {name} ({provider}, {plan})",
   addedUnnamed: "Added your {account}.",
@@ -550,7 +551,10 @@ export function AddAccountPage(
                                     <Button
                                       variant={filled === row.method.method ? "primary" : undefined}
                                       disabled={selected !== undefined}
-                                      label={t("startMethod", { method: label })}
+                                      label={t(
+                                        suggested === row.method.method ? "startRecommended" : "startMethod",
+                                        { method: label },
+                                      )}
                                       onClick={() => {
                                         last.current = row.id;
                                         setSelected(row.id);
