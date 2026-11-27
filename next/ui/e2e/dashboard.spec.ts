@@ -347,6 +347,30 @@ test.describe("a core with accounts and requests", () => {
     expect(lastRow && side && side.y > lastRow.y).toBe(true);
   });
 
+  test("the loading skeleton collapses to one column in a narrow window", async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 700 });
+    await openPanel(page, core);
+    await signIn(page, core);
+    await expect(verdict(page, "Everything is serving.")).toBeVisible();
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    await page.route("**/v0/management/accounts", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await held;
+      await route.continue();
+    });
+    await page.reload();
+    const skel = page.locator(".home-skeleton");
+    await expect(skel).toBeVisible();
+    const main = await skel.locator(".home-skeleton-main").boundingBox();
+    const side = await skel.locator(".home-skeleton-side").boundingBox();
+    expect(main && side && side.y >= main.y + main.height - 1).toBe(true);
+    release();
+    await expect(verdict(page, "Everything is serving.")).toBeVisible();
+  });
+
   test("it reads again every minute, and only while the document is visible", async ({ page }) => {
     const reads: string[] = [];
     page.on("request", (r) => {

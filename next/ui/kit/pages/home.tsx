@@ -391,8 +391,10 @@ export function HomePage() {
     return (
       <>
         {head}
-        <StatePane kind="loading" title={t("checking")} rows={0} />
-        <Skeleton />
+        <div class="home-body">
+          <StatePane kind="loading" title={t("checking")} rows={0} />
+          <Skeleton />
+        </div>
       </>
     );
   }
