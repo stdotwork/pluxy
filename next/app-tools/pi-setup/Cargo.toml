@@ -12,3 +12,7 @@ pluxy-program = { path = "../lib/program" }
 pluxy-transactions = { path = "../lib/transactions" }
 # Keys keep their order and numbers their digits in the settings files it rewrites.
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+
+[dev-dependencies]
+# The tests act between the steps of a plugin folder's update or removal (the library's hook).
+pluxy-transactions = { path = "../lib/transactions", features = ["test-hooks"] }

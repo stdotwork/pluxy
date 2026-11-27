@@ -1203,13 +1203,13 @@ the page.
   the reading, and an answer for a file no longer shown, good or failed, is dropped. A read that
   fails after a good one leaves the reading on screen with a line saying it may be out of date, and
   nothing is written until a read succeeds (**Try again**).
-- **Writes go to the file shown:** each write sends the pinned targets of the reading on screen
-  (the add-on refuses a file that changed since). Pi's plugin folder is not pinned yet: installing,
-  updating and removing the plugin act on the plugin folder in Pi's agent folder as the add-on finds
-  it when it runs (see [Pi](#pi)). While a write or its confirmation waits, the
-  file and environment choices are locked. Each write's `program_call` carries a ticket, and
-  leaving the page withdraws a confirmation still open (`program_cancel`); a Connect whose key
-  window closes after the page was left writes nothing.
+- **Writes go to the file shown:** each write sends the pinned targets of the reading on screen (the
+  add-on refuses a file that changed since). Pi's Update plugin and Uninstall plugin also send the
+  reading's pin of the plugin's folder: the add-on refuses them when that folder, or the agent
+  folder holding it, changed since, and otherwise acts only in that agent folder (see [Pi](#pi)). While a write or its confirmation waits, the
+  file and environment choices are locked. Each write's `program_call` carries a ticket, and leaving
+  the page withdraws a confirmation still open (`program_cancel`); a Connect whose key window closes
+  after the page was left writes nothing.
 - **Connect {tool}** is one press. It uses the vault's key bound to this add-on and to the pluxy the
   app is connected to (or the one the person chose); with none, it makes one with
   `client_key_capture`, named for the tool (`Claude Code`, `Codex`, `Claude Desktop`) in the vault
@@ -1428,9 +1428,21 @@ spaces or control characters, of at most 240 characters), and the **Pi plugin**:
 installed copy's version is unknown; the tool's copy replaces it) and **Uninstall plugin** (asks
 first; its entry and folder go, the connection settings stay). **Disconnect** and **Restore
 backup** also remove the plugin's folder once `settings.json` no longer lists it. Pi's three files
-are pinned as on every page, but the plugin's folder is not yet: Install plugin, Update plugin,
-Uninstall plugin and that removal act on the plugin folder in the agent folder as the tool finds it
-when it runs, not on one the reading pinned. **Start Pi** asks the tool for its recipe (`pi` in a
+are pinned as on every page, and Update plugin and Uninstall plugin are pinned to the plugin's
+folder the reading found: the add-on refuses them, before it moves or removes the plugin, when that
+folder or the agent folder holding it is not the one read (a link pointed elsewhere, a folder moved
+or replaced, another copy put there, its marker changed), and Uninstall plugin removes no folder
+when the reading found none. Past that check the add-on works through the agent folder it read, so
+a link pointed elsewhere then changes nothing; a copy moved aside that is not the one read goes back
+under its name and the write is refused; the old copy is removed only once the new one is in its
+place and the old one is checked again; and a hidden copy it made or moved is removed or put back
+only while it is that copy. A stop part way through is put back, or finished, the next time the
+add-on starts; what it cannot put back (something else is under the plugin's name) or remove is
+left where it is and named in that start's report (see the
+[app tools README](../app-tools/README.md#pi-setup)). Install plugin acts on the plugin folder in
+the agent folder as the tool finds it when it runs; when Connect then fails to write the files, the
+copy it installed goes again. The removal after Disconnect and Restore backup acts in the agent
+folder those files were written in. **Start Pi** asks the tool for its recipe (`pi` in a
 terminal, no arguments; `~/.pi/agent/bin/pi` or `~/.local/bin/pi`, where Pi's installer puts it,
 when one exists). Pi has no desktop app.
 
