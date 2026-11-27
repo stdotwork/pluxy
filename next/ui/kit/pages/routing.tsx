@@ -9,8 +9,8 @@ import { Icon } from "../icons";
 import {
   expireWindows,
   type Outcome,
-  Phases,
   refreshWord,
+  StaleNotice,
   StatePane,
   tryAgainWord,
   useShownAfter,
@@ -213,6 +213,15 @@ export function RoutingPage() {
   const all = [accounts, settings, chains];
   const nothingYet = all.every((l) => l.phase === "loading");
   const nothingRead = all.every((l) => l.phase === "failed" && l.data === undefined);
+  const staleReads = allLoads.filter((l) => l.phase === "failed" && l.data !== undefined);
+  const staleTimes = staleReads.map((l) => l.at).filter((at): at is number => at !== undefined);
+  const stale =
+    staleReads.length > 0
+      ? {
+          at: staleTimes.length > 0 ? Math.min(...staleTimes) : undefined,
+          error: staleReads[0]?.error,
+        }
+      : undefined;
   const weighted = settings.data?.routing.strategy === "weighted-round-robin";
   return (
     <>
@@ -242,32 +251,34 @@ export function RoutingPage() {
         />
       ) : (
         <div class="routing-page">
+          {stale && <StaleNotice at={stale.at} error={stale.error} onRetry={reloadAll} />}
           <div class="routing-layout">
             <div class="routing-main">
               <section class="routing-order" aria-labelledby="routing-order-h">
                 <h2 id="routing-order-h">{t("orderHeading")}</h2>
                 {error && <Notice tone="danger">{p.text(error, list.flatMap(accountIdentities))}</Notice>}
-                <Phases
-                  load={accounts}
-                  loading={t("loadingOrder")}
-                  failed={{ title: t("failed") }}
-                  isEmpty={() => false}
-                  empty={null}
-                >
-                  {() => (
-                    <AccountOrder
-                      accounts={list}
-                      windows={windows}
-                      running={running}
-                      weighted={weighted}
-                      busy={saving > 0}
-                      quietAllFixes={editorOpen}
-                      change={change}
-                      onTurnOn={turnOn}
-                      onClearCooldown={clearCooldown}
-                    />
-                  )}
-                </Phases>
+                {accounts.phase === "loading" ? (
+                  <StatePane kind="loading" title={t("loadingOrder")} />
+                ) : accounts.data === undefined ? (
+                  <StatePane
+                    kind="failed"
+                    title={t("failed")}
+                    details={accounts.error}
+                    primary={{ label: tryAgainWord(), onClick: reloadAll }}
+                  />
+                ) : (
+                  <AccountOrder
+                    accounts={list}
+                    windows={windows}
+                    running={running}
+                    weighted={weighted}
+                    busy={saving > 0}
+                    quietAllFixes={editorOpen}
+                    change={change}
+                    onTurnOn={turnOn}
+                    onClearCooldown={clearCooldown}
+                  />
+                )}
               </section>
               <Fallbacks
                 chains={chains}
@@ -277,19 +288,23 @@ export function RoutingPage() {
                 yaml={yaml || config.data?.format === "yaml"}
                 onYaml={() => setYaml(true)}
                 onOpenChange={setEditorOpen}
+                onRetry={reloadAll}
               />
             </div>
             <aside class="routing-rules-pane" aria-labelledby="routing-rules-h">
               <h2 id="routing-rules-h">{t("rulesHeading")}</h2>
-              <Phases
-                load={settings}
-                loading={t("loadingRules")}
-                failed={{ title: t("failedRules") }}
-                isEmpty={() => false}
-                empty={null}
-              >
-                {(data) => <Rules settings={data} reload={settings.reload} />}
-              </Phases>
+              {settings.phase === "loading" ? (
+                <StatePane kind="loading" title={t("loadingRules")} />
+              ) : settings.data === undefined ? (
+                <StatePane
+                  kind="failed"
+                  title={t("failedRules")}
+                  details={settings.error}
+                  primary={{ label: tryAgainWord(), onClick: reloadAll }}
+                />
+              ) : (
+                <Rules settings={settings.data} reload={settings.reload} />
+              )}
             </aside>
           </div>
         </div>

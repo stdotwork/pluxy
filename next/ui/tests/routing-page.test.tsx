@@ -566,6 +566,106 @@ test("a failed refresh keeps the previous freshness stamp instead of saying Upda
   }
 });
 
+test("one failed refresh across every read shows one stale notice, keeps an empty fallback list, and Try again reloads everything including limits", async () => {
+  let failRefresh = false;
+  const calls: string[] = [];
+  const base: Record<string, Answer> = {
+    "GET /accounts": ok({ accounts: [account("a1"), account("a2")] }),
+    "GET /accounts/a1/quota": ok({
+      quota: { plan: "Pro", limits: [{ id: "5h", window_seconds: 5 * 3600, used_percent: 15 }] },
+    }),
+    "GET /accounts/a2/quota": ok({
+      quota: { plan: "Pro", limits: [{ id: "5h", window_seconds: 5 * 3600, used_percent: 15 }] },
+    }),
+    "GET /settings": ok(settings()),
+    "GET /chains": ok({
+      chains: [
+        {
+          name: "claude-opus-4-7",
+          steps: [{ model: "claude-opus-4-7" }, { model: "gpt-5.5", provider: "pluxy/codex" }],
+        },
+      ],
+    }),
+    "GET /models": ok({ models: [] }),
+    "GET /config": ok({ format: "json", hash: "x", content: "{}" }),
+    "GET /status": ok({ extensions: [{ id: "pluxy/claude" }] }),
+  };
+  const host = {
+    call: async (method: Method, path: string): Promise<Reply<unknown>> => {
+      calls.push(`${method} ${path}`);
+      if (method === "GET" && failRefresh) return hiccup;
+      const ans = base[`${method} ${path}`];
+      return ans && ans !== "pending" ? ans : ok({});
+    },
+    signedIn: () => true,
+    prefs: { get: () => null, set: () => {} },
+    features: new Set(),
+  } as unknown as Host;
+  const kit = {
+    host,
+    api: api(host),
+    themes: { resolved: { layout: { tabs: "top" } }, subscribe: () => () => {} },
+    unauthorized: () => {},
+    extensionsChanged: () => {},
+  } as unknown as Kit;
+  const live = await mountIn(
+    <KitContext.Provider value={kit}>
+      <RoutingPage />
+    </KitContext.Provider>,
+  );
+  expect(live.text()).toContain("a1");
+  expect(live.text()).toContain("claude-opus-4-7");
+  expect(live.text()).toContain("How a group shares requests");
+
+  failRefresh = true;
+  await act(async () => {
+    button(live.root, "Refresh").dispatchEvent(new Event("click"));
+  });
+  await settle();
+  expect(live.text().match(/Could not refresh\./g)).toHaveLength(1);
+  expect(all(live.root, "button").filter((b) => b.textContent === "Try again")).toHaveLength(1);
+  expect(live.text()).toContain("a1");
+  expect(live.text()).toContain("claude-opus-4-7");
+  expect(live.text()).toContain("How a group shares requests");
+
+  // Clicking Try again reloads every read and expires cached limits.
+  failRefresh = false;
+  calls.length = 0;
+  await act(async () => {
+    button(live.root, "Try again").dispatchEvent(new Event("click"));
+  });
+  await settle();
+  for (const path of [
+    "GET /accounts",
+    "GET /settings",
+    "GET /chains",
+    "GET /models",
+    "GET /config",
+    "GET /status",
+    "GET /accounts/a1/quota",
+  ]) {
+    expect(calls).toContain(path);
+  }
+  expect(live.text()).not.toContain("Could not refresh.");
+
+  // An empty fallback list also stays visible under the single stale notice instead of being
+  // replaced by "Could not read the fallbacks.".
+  base["GET /chains"] = ok({ chains: [] });
+  await act(async () => {
+    button(live.root, "Refresh").dispatchEvent(new Event("click"));
+  });
+  await settle();
+  expect(live.text()).toContain("No fallbacks yet.");
+  failRefresh = true;
+  await act(async () => {
+    button(live.root, "Refresh").dispatchEvent(new Event("click"));
+  });
+  await settle();
+  expect(live.text().match(/Could not refresh\./g)).toHaveLength(1);
+  expect(live.text()).toContain("No fallbacks yet.");
+  expect(live.text()).not.toContain("Could not read the fallbacks.");
+});
+
 test("saving a rule shows a Saved tick beside it", async () => {
   const page = await mount();
   const box = toggle(page.root, "Keep a conversation on one account");

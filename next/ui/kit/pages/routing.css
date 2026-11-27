@@ -28,10 +28,6 @@
 
   /* Over data from an earlier read, when a refresh failed: words keep their normal colours so
      muted, amber and red text never drop under 4.5:1; only bars and marks fade. */
-  .routing-page .stale-notice {
-    margin-top: calc(var(--s) * 2);
-  }
-
   .routing-page
     .stale-notice
     + *
