@@ -1,929 +1,1083 @@
-// The Setup page's states from recorded GET /setup bodies, with a fake host, and the shell's gate.
-import { expect, test } from "bun:test";
-import type { VNode } from "preact";
-import render from "preact-render-to-string";
-import { api, type ImportReport, type Package, type Setup, type SetupApplyResult } from "../kit/api";
-import type { Feature, Host, Method, Reply } from "../kit/host";
+// The Setup page: its three steps, what each shows and sends, the import line above them, and
+// the one finish. Against a fake core (setupWorld.tsx), through Preact's DOM renderer.
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import type { ImportReport } from "../kit/api";
+import { SetupPage } from "../kit/pages/setup";
+import { defaultTestAccount, joinNames, kindGroups, orderedKinds } from "../kit/pages/setup.helpers";
+import { PrivacyContext, privacyMasks } from "../kit/privacy";
+import { all, fakeWindow, restoreDom } from "./fakeDom";
 import {
-  type ImportState,
-  importCommand,
-  importProblem,
-  neededPicks,
-  type SetupOptions,
-  SetupView,
-} from "../kit/pages/setup";
-import {
-  type Choices,
-  hasProvider,
-  isTicked,
-  onThisMachine,
-  pickStatuses,
-  type Results,
-  scanState,
-  start,
-  toInstall,
-  withKey,
-} from "../kit/pages/setup.helpers";
-import { setupGate } from "../kit/shell";
-import { type Kit, KitContext } from "../kit/ui";
+  account,
+  attribute,
+  box,
+  buttonIn,
+  CLAUDE_PICK,
+  CODEX_PICK,
+  choose,
+  client,
+  descend,
+  flush,
+  hasButton,
+  heading,
+  IMPORT,
+  kindName,
+  kindRow,
+  kindRows,
+  linkIn,
+  must,
+  openStep,
+  pick,
+  press,
+  step,
+  steps,
+  tick,
+  withPart,
+  world,
+} from "./setupWorld";
 
-const core = { listen: "127.0.0.1:8317", reachable_from_network: false };
-const noClients = ["claude-code", "codex", "opencode", "pi", "omp"].map((id) => ({
-  id,
-  name:
-    { "claude-code": "Claude Code", codex: "Codex CLI", opencode: "OpenCode", pi: "Pi", omp: "Oh My Pi" }[
-      id
-    ] ?? id,
-  installed: false,
-  config: `~/.${id}/settings.json`,
-  state: "not-configured" as const,
-}));
-const pick = (id: string, title: string, more: Partial<Setup["picks"][number]> = {}) => ({
-  id,
-  kind: "provider",
-  title,
-  summary: `${title} subscriptions and API keys`,
-  installed: false,
-  suggested: false,
-  ...more,
+/** Lets the page's one-second scan poll run once, and what it reads settle. */
+async function tickTimers() {
+  await new Promise((r) => setTimeout(r, 1100));
+  await flush();
+}
+
+const place = { hash: "#/setup" };
+const original = Object.getOwnPropertyDescriptor(globalThis, "location");
+beforeEach(() => {
+  place.hash = "#/setup";
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+});
+afterEach(() => {
+  restoreDom();
+  if (original) Object.defineProperty(globalThis, "location", original);
+  else Reflect.deleteProperty(globalThis, "location");
 });
 
-/** A new install whose machine holds nothing pluxy looks for. */
-const nothingFound: Setup = {
-  first_run: true,
-  scanning: false,
-  scanned_at: "2026-11-19T21:20:40Z",
-  found: { clients: noClients, sign_ins: [], imports: [], core },
-  picks: [pick("pluxy/codex", "Codex"), pick("pluxy/claude", "Claude")],
-};
+const ACC = account("acc_00000001", { label: "Work" });
+const CONNECTED = client("claude-code", "Claude Code", { state: "configured" });
 
-/** A new install on a machine with Claude Code, a Codex sign-in and a CLIProxyAPI setup. */
-const found: Setup = {
-  first_run: true,
-  scanning: false,
-  scanned_at: "2026-11-19T21:20:40Z",
-  found: {
-    clients: [
-      {
-        ...noClients[0],
-        id: "claude-code",
-        name: "Claude Code",
-        installed: true,
-        version: "2.4.1",
-        config: "~/.claude/settings.json",
-        state: "not-configured",
-      },
-      ...noClients.slice(1),
+// ---- the steps ----------------------------------------------------------------------------------
+
+test("three steps in order, and nothing a scan found is a step of its own", async () => {
+  const w = world({
+    signIns: [
+      { provider: "pluxy/claude", from: "~/.claude", label: "Claude Code is signed in on this computer" },
     ],
-    sign_ins: [{ provider: "pluxy/codex", from: "codex", label: "Codex is signed in on this computer" }],
-    imports: [
-      {
-        kind: "cliproxyapi",
-        config: "~/.cli-proxy-api/config.yaml",
-        auth_dir: "~/.cli-proxy-api",
-        accounts: 7,
-      },
-    ],
-    core: { listen: "0.0.0.0:8317", reachable_from_network: true },
-  },
-  picks: [
-    pick("pluxy/codex", "Codex", { suggested: true, because: "Codex is signed in on this computer" }),
-    pick("pluxy/claude", "Claude", { suggested: true, because: "Claude Code is installed on this computer" }),
-    pick("pluxy/gemini", "Gemini"),
-    { ...pick("pluxy/claude-code", "Claude Code settings", { suggested: true }), kind: "client" },
-  ],
-};
+  });
+  const m = await w.mount(<SetupPage />);
+  expect(steps(m.root).map((s) => all(s, "h2")[0]?.textContent)).toEqual([
+    "Your AI accounts",
+    "Your coding tool",
+    "Check it works",
+  ]);
+  expect(withPart(m.root, "setup-import")).toHaveLength(0);
+  expect(m.text()).not.toContain("Found on");
+  expect(m.text()).toContain(
+    "pluxy lets your coding tools use your AI accounts. Three short steps set it up, and you can skip any of them.",
+  );
+});
 
-/** The first scan of a new install, still running: nothing is known yet. */
-const scanningFirst: Setup = {
-  first_run: true,
-  scanning: true,
-  found: { clients: [], sign_ins: [], imports: [], core },
-  picks: found.picks.map((p) => ({ ...p, suggested: false, because: undefined })),
-};
+test("the import line is above the steps, and only when core found a CLIProxyAPI setup", async () => {
+  const w = world({ imports: [IMPORT] });
+  const m = await w.mount(<SetupPage />);
+  const line = withPart(m.root, "setup-import")[0];
+  expect(line?.textContent).toContain(
+    "Found a CLIProxyAPI setup with 3 account files. pluxy can bring its accounts and settings across; nothing changes until you confirm.",
+  );
+  expect(line?.textContent).toContain("~/.cli-proxy-api/config.yaml");
+  const order = descend(m.root);
+  expect(order.indexOf(line as never)).toBeLessThan(order.indexOf(step(m.root, 1)));
+});
 
-/** An install whose setup is over: providers installed, a client pointed at it. */
-const allSet: Setup = {
-  first_run: false,
-  scanning: false,
-  scanned_at: "2026-11-19T21:20:40Z",
-  found: {
-    clients: [
-      { ...found.found.clients[0], state: "configured" } as Setup["found"]["clients"][number],
-      ...noClients.slice(1),
-    ],
-    sign_ins: [],
-    imports: [],
-    core,
-  },
-  picks: [
-    pick("pluxy/codex", "Codex", { installed: true }),
-    pick("pluxy/claude", "Claude", { installed: true }),
-  ],
-};
+test("a first run opens the first step not done", async () => {
+  const none = await world().mount(<SetupPage />);
+  expect(openStep(none.root)).toBe(1);
+  restoreDom();
+  const signed = await world({ accounts: [ACC] }).mount(<SetupPage />);
+  expect(openStep(signed.root)).toBe(2);
+  restoreDom();
+  const both = await world({ accounts: [ACC], clients: [CONNECTED] }).mount(<SetupPage />);
+  expect(openStep(both.root)).toBe(3);
+});
 
-interface Call {
-  method: Method;
-  path: string;
-  body?: unknown;
-}
+test("after the first run every step is folded, with what each came to, and Back to Home", async () => {
+  const w = world({
+    firstRun: false,
+    accounts: [ACC],
+    clients: [CONNECTED, client("codex", "Codex CLI", { state: "configured" })],
+  });
+  const m = await w.mount(<SetupPage />);
+  expect(openStep(m.root)).toBeUndefined();
+  expect(m.text()).toContain("Review or change your accounts and coding tools.");
+  expect(step(m.root, 1).textContent).toContain("1 account connected.");
+  expect(step(m.root, 2).textContent).toContain("Claude Code and Codex use pluxy.");
+  expect(step(m.root, 3).textContent).toContain("Not tested yet.");
+  expect(steps(m.root).map((s) => attribute(s, "data-state"))).toEqual(["done", "done", "todo"]);
+  expect(attribute(linkIn(m.root, "Back to Home"), "href")).toBe("#/");
+  expect(hasButton(m.root, "Leave setup for now")).toBe(false);
+  expect(m.text()).not.toContain("Set up pluxy");
+});
 
-/** A host that answers from answer and records what it was asked. */
-function fakeHost(answer: (call: Call) => Reply<unknown> = () => ({ status: 200, body: {} })) {
-  const calls: Call[] = [];
-  const host: Host = {
-    call: async <T,>(method: Method, path: string, body?: unknown) => {
-      calls.push({ method, path, body });
-      return answer({ method, path, body }) as Reply<T>;
+test("folded summaries when nothing is done yet", async () => {
+  const m = await world({ firstRun: false }).mount(<SetupPage />);
+  expect(step(m.root, 1).textContent).toContain("No account yet.");
+  expect(step(m.root, 2).textContent).toContain("No tool connected yet.");
+});
+
+test("step 1 counts only accounts that can take requests, and says what the others are", async () => {
+  const off = account("acc_00000001", { label: "Work", disabled: true });
+  const one = await world({ firstRun: false, accounts: [off] }).mount(<SetupPage />);
+  expect(step(one.root, 1).textContent).toContain("1 account, turned off.");
+  expect(step(one.root, 1).textContent).not.toContain("connected");
+  expect(attribute(step(one.root, 1), "data-state")).toBe("todo");
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  // A first run with only that account opens step 1, not step 2.
+  const first = await world({ accounts: [off] }).mount(<SetupPage />);
+  expect(openStep(first.root)).toBe(1);
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  const stopped = account("acc_00000002", { label: "Home", extension: "pluxy/gone" });
+  const mixed = await world({
+    firstRun: false,
+    accounts: [ACC, off, stopped],
+    running: ["pluxy/claude"],
+  }).mount(<SetupPage />);
+  expect(step(mixed.root, 1).textContent).toContain("1 account connected; 2 more cannot take requests.");
+  expect(attribute(step(mixed.root, 1), "data-state")).toBe("done");
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  const none = await world({ firstRun: false, accounts: [off, stopped], running: ["pluxy/claude"] }).mount(
+    <SetupPage />,
+  );
+  expect(step(none.root, 1).textContent).toContain("2 accounts, none can take requests.");
+});
+
+test("a scan ending or an account appearing does not move the open step", async () => {
+  const w = world({ unscanned: true, scanning: true, clients: [] });
+  const m = await w.mount(<SetupPage />);
+  expect(openStep(m.root)).toBe(1);
+  // The scan ends with a connected tool, and an account is added in another window.
+  w.state.setup.scanning = false;
+  w.state.setup.scanned_at = "2026-11-20T11:00:00Z";
+  w.state.setup.found.clients = [CONNECTED];
+  w.state.accounts.push(ACC);
+  fakeWindow().dispatch("focus");
+  await tickTimers();
+  expect(step(m.root, 1).textContent).toContain("1 account connected.");
+  expect(openStep(m.root)).toBe(1);
+  expect(step(m.root, 2).textContent).toContain("Claude Code uses pluxy.");
+});
+
+test("Skip and Continue open the next step and move focus to its heading; Open opens that step", async () => {
+  const w = world();
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(step(m.root, 1), "Skip"));
+  expect(openStep(m.root)).toBe(2);
+  expect(m.document.activeElement).toBe(heading(m.root, 2));
+  await press(buttonIn(step(m.root, 2), "Skip"));
+  expect(openStep(m.root)).toBe(3);
+  expect(m.document.activeElement).toBe(heading(m.root, 3));
+  await press(buttonIn(step(m.root, 1), "Open"));
+  expect(openStep(m.root)).toBe(1);
+  expect(m.document.activeElement).toBe(heading(m.root, 1));
+});
+
+test("every step can be skipped: Skip on steps 1 and 2, Finish without testing on step 3", async () => {
+  const m = await world().mount(<SetupPage />);
+  expect(hasButton(step(m.root, 1), "Skip")).toBe(true);
+  await press(buttonIn(step(m.root, 1), "Skip"));
+  expect(hasButton(step(m.root, 2), "Skip")).toBe(true);
+  await press(buttonIn(step(m.root, 2), "Skip"));
+  expect(hasButton(step(m.root, 3), "Finish without testing")).toBe(true);
+  expect(hasButton(m.root, "Leave setup for now")).toBe(true);
+  expect(m.text()).toContain("It won't open by itself again; it stays under Settings.");
+});
+
+test("Continue, not Skip, once a step is done", async () => {
+  const m = await world({ accounts: [ACC], clients: [CONNECTED] }).mount(<SetupPage />);
+  await press(buttonIn(step(m.root, 1), "Open"));
+  expect(attribute(buttonIn(step(m.root, 1), "Continue"), "data-variant")).toBe("primary");
+  await press(buttonIn(step(m.root, 1), "Continue"));
+  expect(attribute(buttonIn(step(m.root, 2), "Continue"), "data-variant")).toBe("primary");
+});
+
+// ---- step 1: which kinds -----------------------------------------------------------------------
+
+const EIGHT = [
+  CLAUDE_PICK,
+  pick("pluxy/codex", "Codex", { suggested: true, because: "Codex CLI is installed on this computer" }),
+  pick("pluxy/gemini", "Gemini CLI"),
+  pick("pluxy/openai-compatible", "OpenAI Compatible"),
+  pick("pluxy/kimi", "Kimi", { suggested: true, because: "Kimi is signed in on this computer" }),
+  pick("pluxy/qwen", "Qwen"),
+  pick("pluxy/iflow", "iFlow"),
+  pick("pluxy/vertex", "Vertex AI"),
+];
+const FIVE_TOOLS = ["claude-code", "codex-setup", "opencode", "pi-setup", "omp-setup"].map((id) =>
+  pick(`pluxy/${id}`, `Tool package ${id}`, { kind: "client", suggested: id === "claude-code" }),
+);
+
+test("the kinds: found ones first and ticked with why, then the four by plain name, the rest under More", async () => {
+  const w = world({ picks: [...EIGHT, ...FIVE_TOOLS] });
+  const m = await w.mount(<SetupPage />);
+  expect(m.text()).toContain("Tick the kinds of account you have.");
+  expect(m.text()).not.toContain("Tool package");
+  expect(kindRows(m.root).map(kindName)).toEqual([
+    "ChatGPT (Codex)",
+    "Kimi",
+    "Claude",
+    "Gemini",
+    "Another service with an API key",
+  ]);
+  expect(box(kindRow(m.root, "ChatGPT (Codex)"))?.checked).toBe(true);
+  expect(kindRow(m.root, "ChatGPT (Codex)").textContent).toContain("Codex CLI is installed on this computer");
+  expect(box(kindRow(m.root, "Kimi"))?.checked).toBe(true);
+  expect(box(kindRow(m.root, "Claude"))?.checked).toBe(false);
+  expect(kindRow(m.root, "Claude").textContent).toContain(
+    "Claude models with a Claude subscription or an Anthropic API key.",
+  );
+  const more = buttonIn(m.root, "More (3)");
+  expect(attribute(more, "aria-expanded")).toBe("false");
+  await press(more);
+  expect(kindRows(m.root).map(kindName).slice(5)).toEqual(["Qwen", "iFlow", "Vertex AI"]);
+  expect(attribute(buttonIn(m.root, "Hide more"), "aria-expanded")).toBe("true");
+});
+
+test("Add sends the ticked IDs; a failed one stays ticked with why, and Add tries it again", async () => {
+  const w = world({
+    picks: EIGHT,
+    reply: (c) => {
+      if (c.method !== "POST" || c.path !== "/setup/apply") return undefined;
+      const ids = (c.body as { picks: string[] }).picks;
+      for (const id of ids)
+        if (id !== "pluxy/gemini") must(w.state.setup.picks.find((p) => p.id === id)).installed = true;
+      return {
+        status: 200,
+        body: {
+          results: ids.map((id) =>
+            id === "pluxy/gemini"
+              ? { id, status: "error", error: "the registry did not answer." }
+              : { id, status: "done" },
+          ),
+        },
+      };
     },
-    signedIn: () => true,
-    signIn: async () => undefined,
-    signOut: () => {},
-    prefs: { get: () => null, set: () => {} },
-    features: new Set<Feature>(),
-  };
-  return { host, calls, api: api(host) };
-}
+  });
+  const m = await w.mount(<SetupPage />);
+  await tick(must(box(kindRow(m.root, "Gemini"))), true);
+  await press(buttonIn(m.root, "Add ChatGPT (Codex), Gemini and Kimi"));
+  expect(w.sent("POST", "/setup/apply").map((c) => c.body)).toEqual([
+    { picks: ["pluxy/codex", "pluxy/gemini", "pluxy/kimi"] },
+  ]);
+  expect(w.changed.times).toBe(1);
+  expect(kindRow(m.root, "Gemini").textContent).toContain(
+    "Could not add Gemini: the registry did not answer.",
+  );
+  expect(box(kindRow(m.root, "Gemini"))?.checked).toBe(true);
+  expect(kindRow(m.root, "ChatGPT (Codex)").textContent).toContain("Added");
+  expect(box(kindRow(m.root, "ChatGPT (Codex)"))).toBeUndefined();
+  await press(buttonIn(m.root, "Add Gemini"));
+  expect(w.sent("POST", "/setup/apply").map((c) => c.body)).toEqual([
+    { picks: ["pluxy/codex", "pluxy/gemini", "pluxy/kimi"] },
+    { picks: ["pluxy/gemini"] },
+  ]);
+});
 
-const html = (node: VNode) => {
-  const { host } = fakeHost();
-  const kit = { host, api: api(host), unauthorized: () => {}, extensionsChanged: () => {} } as Kit;
-  return render(<KitContext.Provider value={kit}>{node}</KitContext.Provider>);
-};
+test("nothing ticked and nothing added: Add waits, with Tick at least one", async () => {
+  const m = await world().mount(<SetupPage />);
+  const add = buttonIn(m.root, "Add");
+  expect(add.disabled).toBe(true);
+  expect(m.text()).toContain("Tick at least one.");
+});
 
-const nothing = () => {};
-function view(
-  setup: Setup,
-  more: {
-    choices?: Choices;
-    results?: Results;
-    accounts?: number;
-    remote?: boolean;
-    options?: SetupOptions;
-    bringing?: ImportState | "offered";
-    packages?: Package[];
-  } = {},
-) {
-  const results = more.results ?? {};
-  return html(
-    <SetupView
-      setup={setup}
-      options={more.options}
-      remote={more.remote ?? false}
-      choices={more.choices ?? {}}
-      results={results}
-      packages={more.packages}
-      accounts={more.accounts ?? 0}
-      bring={
-        more.bringing && {
-          state: more.bringing === "offered" ? undefined : more.bringing,
-          onBring: nothing,
-          onClose: nothing,
-        }
-      }
-      onLook={nothing}
-      onTick={nothing}
-      onStart={nothing}
-      onAdded={nothing}
-      onFinish={nothing}
+test("an added kind that does not run says so and links to Extensions", async () => {
+  const w = world({
+    picks: [{ ...CLAUDE_PICK, installed: true }],
+    packages: [
+      {
+        id: "pluxy/claude",
+        version: "1",
+        registry: "r",
+        url: "",
+        sha256: "",
+        enabled: false,
+        installed_at: "",
+        state: "disabled",
+      },
+    ],
+  });
+  const m = await w.mount(<SetupPage />);
+  const row = kindRow(m.root, "Claude");
+  expect(row.textContent).toContain("Added, not running");
+  expect(attribute(linkIn(row, "Open Extensions"), "href")).toBe("#/extensions");
+});
+
+test("no kinds to add says so and offers Extensions, never a build command", async () => {
+  const m = await world({ picks: [], registries: 0 }).mount(<SetupPage />);
+  expect(step(m.root, 1).textContent).toContain("This copy of pluxy has no kinds of account to add.");
+  expect(attribute(linkIn(step(m.root, 1), "Open Extensions"), "href")).toBe("#/extensions");
+  expect(m.text()).not.toContain("go run");
+});
+
+// ---- step 1: signing in ------------------------------------------------------------------------
+
+test("once a kind runs the list folds, and Add an account offers only the added kinds, in the step's order", async () => {
+  const w = world({
+    picks: [
+      { ...CLAUDE_PICK, installed: true },
+      { ...CODEX_PICK, installed: true },
+      pick("pluxy/gemini", "Gemini CLI"),
+    ],
+    signIns: [
+      { provider: "pluxy/claude", from: "~/.claude", label: "Claude Code is signed in on this computer" },
+    ],
+  });
+  const m = await w.mount(<SetupPage />);
+  const one = step(m.root, 1);
+  expect(one.textContent).toContain("Added: Claude and ChatGPT (Codex).");
+  expect(one.textContent).toContain(
+    "Claude Code is signed in on this computer. Sign in below with the same account.",
+  );
+  expect(withPart(one, "method-group").map((g) => all(g, "h2")[0]?.textContent)).toEqual([
+    "Claude",
+    "ChatGPT (Codex)",
+  ]);
+  expect(one.textContent).not.toContain("ID");
+  await press(buttonIn(one, "Add another kind"));
+  expect(kindRows(m.root).map(kindName)).toEqual(["Claude", "ChatGPT (Codex)", "Gemini"]);
+});
+
+test("after a sign-in here the count shows above the form, which keeps its done state", async () => {
+  const w = world({ picks: [{ ...CLAUDE_PICK, installed: true }] });
+  const m = await w.mount(<SetupPage />);
+  await press(
+    must(all(step(m.root, 1), "button").find((b) => attribute(b, "aria-label") === "Start: Claude sign-in")),
+  );
+  const one = step(m.root, 1);
+  expect(one.textContent).toContain("1 account connected.");
+  expect(attribute(linkIn(one, "See them on Accounts"), "href")).toBe("#/accounts");
+  expect(withPart(one, "account-added")).toHaveLength(1);
+  expect(attribute(buttonIn(one, "Continue"), "data-variant")).toBe("primary");
+});
+
+test("accounts already there: the count and Add another account, which opens the form", async () => {
+  const w = world({ picks: [{ ...CLAUDE_PICK, installed: true }], accounts: [ACC], firstRun: false });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(step(m.root, 1), "Open"));
+  const one = step(m.root, 1);
+  expect(one.textContent).toContain("1 account connected.");
+  expect(withPart(one, "method-group")).toHaveLength(0);
+  await press(buttonIn(one, "Add another account"));
+  expect(withPart(step(m.root, 1), "method-group")).toHaveLength(1);
+});
+
+// ---- step 2 ------------------------------------------------------------------------------------
+
+test("step 2 is the Tools list: Set up shows the steps, and Make key puts a key named for the tool in the text", async () => {
+  const w = world({ accounts: [ACC] });
+  const m = await w.mount(<SetupPage />);
+  expect(openStep(m.root)).toBe(2);
+  const two = step(m.root, 2);
+  expect(two.textContent).toContain("Detected on this computer.");
+  const row = must(withPart(two, "tool-row")[0]);
+  await press(buttonIn(row, "Set up"));
+  await press(buttonIn(row, "Make key"));
+  expect(w.sent("POST", "/client-keys").map((c) => c.body)).toEqual([{ label: "Claude Code" }]);
+  expect(all(row, "pre")[0]?.textContent).toContain('"key": "sk-secret-1"');
+});
+
+test("a key made in step 2 is gone once the step folds: reopened, the text has no key and Make key is back", async () => {
+  const w = world({ accounts: [ACC] });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(must(withPart(step(m.root, 2), "tool-row")[0]), "Set up"));
+  await press(buttonIn(must(withPart(step(m.root, 2), "tool-row")[0]), "Make key"));
+  expect(m.text()).toContain("sk-secret-1");
+  // Fold step 2 by opening step 1, then open step 2 again.
+  await press(buttonIn(step(m.root, 1), "Open"));
+  expect(m.text()).not.toContain("sk-secret-1");
+  await press(buttonIn(step(m.root, 2), "Open"));
+  const row = must(withPart(step(m.root, 2), "tool-row")[0]);
+  if (hasButton(row, "Set up")) await press(buttonIn(row, "Set up"));
+  expect(m.text()).not.toContain("sk-secret-1");
+  expect(all(row, "pre")[0]?.textContent).toContain('"key": "<client-key>"');
+  expect(hasButton(row, "Make key")).toBe(true);
+});
+
+test("with no account, step 2's notice opens step 1", async () => {
+  const m = await world().mount(<SetupPage />);
+  await press(buttonIn(step(m.root, 1), "Skip"));
+  const two = step(m.root, 2);
+  expect(two.textContent).toContain(
+    "pluxy has no accounts yet, so a coding tool you set up here will get errors.",
+  );
+  await press(buttonIn(two, "Add an account"));
+  expect(openStep(m.root)).toBe(1);
+});
+
+test("a pluxy on another computer says so in step 2", async () => {
+  for (const [init, options] of [
+    [{ address: "http://10.0.0.5:8317" }, undefined],
+    [{}, { isRemote: true }],
+  ] as const) {
+    const m = await world({ accounts: [ACC], ...init }).mount(<SetupPage options={options} />);
+    expect(step(m.root, 2).textContent).toContain("Detected on the computer pluxy runs on.");
+    expect(step(m.root, 2).textContent).not.toContain("Detected on this computer.");
+    restoreDom();
+    Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  }
+  const local = await world({ accounts: [ACC], address: "http://10.0.0.5:8317" }).mount(
+    <SetupPage options={{ isRemote: false }} />,
+  );
+  expect(step(local.root, 2).textContent).toContain("Detected on this computer.");
+});
+
+test("network reach is said only when core says other computers can reach it", async () => {
+  const far = await world({ accounts: [ACC], reachable: true }).mount(<SetupPage />);
+  expect(step(far.root, 2).textContent).toContain("Other computers on your network can reach pluxy.");
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  const near = await world({ accounts: [ACC] }).mount(<SetupPage />);
+  expect(step(near.root, 2).textContent).not.toContain("Other computers on your network");
+});
+
+test("the host's tool button and its own tools are used in step 2", async () => {
+  const extra = client("hermes", "Hermes Agent", { state: "configured" });
+  const m = await world({ accounts: [ACC] }).mount(
+    <SetupPage
+      options={{ toolAction: (c) => <a href={`#/${c.id}`}>Open {c.name}</a>, extraTools: [extra] }}
     />,
   );
-}
-
-/** The labels of the page's primary buttons: there is one at a time. */
-const primary = (page: string) =>
-  [...page.matchAll(/data-variant="primary"[^>]*>([^<]*)</g)].map((m) => m[1]);
-
-/** How many checkboxes the page shows ticked. */
-const ticked = (page: string) => page.match(/<input type="checkbox" checked/g)?.length ?? 0;
-
-test("a first run with nothing found offers every provider unticked, and may start without one", () => {
-  const page = view(nothingFound);
-  expect(page).toContain("Found no clients, sign-ins, or CLIProxyAPI setups.");
-  expect(page).toContain("pluxy listens on ");
-  expect(page).not.toContain("Other machines on the network");
-  expect(page).toContain("<strong>Codex</strong>");
-  expect(ticked(page)).toBe(0);
-  expect(toInstall(nothingFound, {}, {})).toEqual([]);
-  expect(page).toContain("pluxy will run with no provider");
-  expect(primary(page)).toEqual(["Start without a provider"]);
-  // An account comes after a provider; a client's text can be shown at once.
-  expect(page).toContain("tick one above and press Start");
-  expect(page).not.toContain("Sign-in methods");
-  expect(page).toContain("Found no clients on this machine. Open Other clients below to set one up.");
-  expect(page).toContain("Other clients (5)");
-  expect(page).toContain(">Finish</button>");
+  await press(buttonIn(step(m.root, 1), "Open"));
+  await press(buttonIn(step(m.root, 2), "Open"));
+  const two = step(m.root, 2);
+  expect(attribute(linkIn(two, "Open Claude Code"), "href")).toBe("#/claude-code");
+  expect(two.textContent).toContain("Hermes Agent");
+  expect(hasButton(two, "Set up")).toBe(false);
 });
 
-test("the account part says what leads to an account: Start, a tick first, or the Extensions page", () => {
-  const after = /This comes after (Start|Install)/;
-  // A provider is ticked: Start installs it, and the account comes after.
-  expect(view(found)).toContain("This comes after Start");
-  // Providers are offered and none is ticked: the button there ends setup, so the words say to tick.
-  const unticked = view(nothingFound);
-  expect(primary(unticked)).toEqual(["Start without a provider"]);
-  expect(unticked).not.toMatch(after);
-  expect(unticked).toContain("tick one above and press Start");
-  // No provider is offered: nothing on this page leads to an account, and the words say where to go.
-  const none = view({ ...nothingFound, picks: [] });
-  expect(none).not.toMatch(after);
-  expect(none).not.toContain("tick one above");
-  expect(none).toMatch(/Install one on the <a href="#\/extensions">Extensions<\/a> page/);
-  // After setup the page has no Install button until a provider is ticked.
-  const later = view({ ...nothingFound, first_run: false });
-  expect(later).not.toContain(">Install</button>");
-  expect(later).not.toMatch(after);
-  expect(later).toContain("tick one above and press Install");
-  expect(view({ ...nothingFound, first_run: false }, { choices: { "pluxy/codex": true } })).toContain(
-    "This comes after Install",
-  );
-  expect(view({ ...nothingFound, first_run: false, picks: [] })).toMatch(/<a href="#\/extensions">/);
+test("Refresh in step 2 asks pluxy to look again and tells the host", async () => {
+  let refreshed = 0;
+  const w = world({ accounts: [ACC] });
+  const m = await w.mount(<SetupPage options={{ onRefresh: () => refreshed++ }} />);
+  await press(buttonIn(step(m.root, 2), "Refresh"));
+  expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
+  expect(refreshed).toBe(1);
 });
 
-test("while the first scan runs, Start waits for what pluxy will suggest", () => {
-  const page = view(scanningFirst);
-  // Suggestions come with the scan's end: until then nothing is ticked, and that is not a choice.
-  expect(page).not.toContain("pluxy will run with no provider");
-  expect(page).not.toContain("Start without a provider");
-  expect(primary(page)).toEqual([]);
-  expect(page).toContain("pluxy is still looking");
-  // Finish stays, and a provider the person ticks meanwhile can be started.
-  expect(page).toContain(">Finish</button>");
-  expect(primary(view(scanningFirst, { choices: { "pluxy/gemini": true } }))).toEqual(["Start"]);
-  // A later scan runs over a kept one, whose suggestions stand: Start does not wait for it.
-  expect(primary(view({ ...nothingFound, scanning: true }))).toEqual(["Start without a provider"]);
-});
+// ---- words --------------------------------------------------------------------------------------
 
-test("found clients, a sign-in and a CLIProxyAPI setup are named, and what they suggest is ticked", () => {
-  const page = view(found, { remote: true });
-  expect(page).toContain("Found on the machine pluxy runs on");
-  expect(page).toContain("<strong>Claude Code 2.4.1</strong>");
-  expect(page).toContain("Does not point at pluxy yet");
-  expect(page).toContain("<strong>Codex is signed in on this computer</strong>");
-  expect(page).toContain("<strong>A CLIProxyAPI setup with 7 accounts</strong>");
-  expect(page).toContain("pluxy import cpa ~/.cli-proxy-api/config.yaml");
-  expect(page).toContain("Other machines on the network can reach pluxy at this address.");
-  // The two suggested providers are ticked, with why; the client pick is no checkbox at all.
-  expect(ticked(page)).toBe(2);
-  expect(page).toContain("Claude Code is installed on this computer");
-  expect(page).not.toContain("Claude Code settings");
-  expect(toInstall(found, {}, {})).toEqual(["pluxy/codex", "pluxy/claude"]);
-  expect(page).toContain("Start installs: Codex, Claude.");
-  expect(primary(page)).toEqual(["Start"]);
-  expect(page).toContain("Other clients (4)");
-  // With its provider installed and no account, the sign-in found is named above the sign-in.
-  const named = "Codex is signed in on this computer. You can sign in to the same account here.";
-  expect(page).not.toContain(named);
-  expect(view(found, { results: { "pluxy/claude": { status: "done" } } })).not.toContain(named);
-  expect(view(found, { results: { "pluxy/codex": { status: "done" } } })).toContain(named);
-  // With an account, the part is one line.
-  const connected = view(found, { results: { "pluxy/codex": { status: "done" } }, accounts: 2 });
-  expect(connected).toContain("2 accounts connected.");
-  expect(connected).not.toContain(named);
-});
-
-test("a client's state is said in words, and a refused file says why that is fine", () => {
-  const withState = (state: Setup["found"]["clients"][number]["state"]) =>
-    view({
-      ...found,
-      found: {
-        ...found.found,
-        clients: [{ ...found.found.clients[0], state } as Setup["found"]["clients"][number]],
-      },
-    });
-  expect(withState("configured")).toContain("Points at this pluxy");
-  expect(withState("needs-update")).toContain("Its settings need an update to work with this pluxy");
-  expect(withState("refused")).toContain("pluxy would not change ~/.claude/settings.json");
-  expect(withState("refused")).toContain("you paste the text yourself");
-});
-
-test("a tool whose settings core does not read says Not checked, with no badge and nothing to paste", () => {
-  const desktop = {
-    id: "claude-desktop",
-    name: "Claude Desktop",
-    installed: true,
-    config: "~/.config/Claude-3p/claude_desktop_config.json",
-    state: "unchecked" as const,
-  };
-  const page = view({
-    ...found,
-    found: {
-      ...found.found,
-      clients: [...found.found.clients.slice(0, 1), desktop, ...found.found.clients.slice(1)],
-    },
-  });
-  const row = page.match(/<li data-part="setup-client" data-state="unchecked">.*?<\/li>/s)?.[0] ?? "";
-  expect(row).toContain("Claude Desktop");
-  expect(row).toContain('<span class="muted">Not checked</span>');
-  expect(row).not.toContain("badge");
-  expect(row).not.toContain("Does not point at pluxy yet");
-  expect(row).not.toContain("<button");
-  // Claude Code, whose settings core reads, keeps its paste button.
-  expect(page).toContain("Show what to paste");
-  // Found too: the line for the tool says no more than that.
-  expect(page).toContain('Claude Desktop</strong><span class="muted">Not checked</span>');
-
-  // Not installed, it is still one of the other clients: Not found, and nothing to paste either.
-  const absent = view({
-    ...nothingFound,
-    found: { ...nothingFound.found, clients: [{ ...desktop, installed: false }] },
-  });
-  const other = absent.match(/<li data-part="setup-client" data-state="not-found">.*?<\/li>/s)?.[0] ?? "";
-  expect(other).toContain("Not found on this machine");
-  expect(other).not.toContain("<button");
-});
-
-test("the first scan says pluxy is looking, and the person's ticks survive the replies that follow", () => {
-  expect(scanState(scanningFirst)).toBe("first");
-  const page = view(scanningFirst);
-  expect(page).toContain("pluxy is looking at this machine.");
-  expect(page).not.toContain("Found no clients");
-  expect(page).not.toContain("Found no clients on this machine.");
-  expect(page).toContain(">Refreshing…</button>");
-
-  // While it runs, the person ticks Gemini and, once Codex is suggested, unticks it.
-  const choices: Choices = { "pluxy/gemini": true, "pluxy/codex": false };
-  expect(toInstall(scanningFirst, choices, {})).toEqual(["pluxy/gemini"]);
-  expect(scanState(found)).toBe("done");
-  // The scan's suggestion (Claude) arrives ticked; the person's own two choices stand.
-  expect(toInstall(found, choices, {})).toEqual(["pluxy/claude", "pluxy/gemini"]);
-  expect(found.picks.filter((p) => isTicked(p, choices, {})).map((p) => p.id)).not.toContain("pluxy/codex");
-  expect(ticked(view(found, { choices }))).toBe(2);
-  expect(scanState({ ...found, scanning: true })).toBe("again");
-  expect(view({ ...found, scanning: true })).toContain("<strong>Claude Code 2.4.1</strong>");
-  expect(scanState({ ...nothingFound, scanned_at: undefined })).toBe("never");
-});
-
-test("Start sends only ticked providers; a failed one says why and is sent again alone", async () => {
-  const replies: SetupApplyResult[][] = [
-    [
-      { id: "pluxy/codex", status: "done" },
-      { id: "pluxy/claude", status: "error", error: "the archive's digest does not match" },
+test("no developer command and no 'this machine' anywhere on the page", async () => {
+  const w = world({
+    imports: [IMPORT],
+    reply: (c) => (c.path === "/setup/import" ? { status: 200, body: REPORT } : undefined),
+    picks: [{ ...CLAUDE_PICK, installed: true }, ...EIGHT.slice(1)],
+    signIns: [
+      { provider: "pluxy/claude", from: "~/.claude", label: "Claude Code is signed in on this computer" },
     ],
-    [{ id: "pluxy/claude", status: "done" }],
-  ];
-  const fake = fakeHost(() => ({ status: 200, body: { results: replies.shift() } }));
-  // A ticked client pick is never sent.
-  const choices: Choices = { "pluxy/claude-code": true };
-
-  const first = await start(fake.api, found, choices, {});
-  expect(fake.calls).toEqual([
-    { method: "POST", path: "/setup/apply", body: { picks: ["pluxy/codex", "pluxy/claude"] } },
-  ]);
-  expect(first.results).toEqual({
-    "pluxy/codex": { status: "done", error: undefined },
-    "pluxy/claude": { status: "error", error: "the archive's digest does not match" },
+    accounts: [ACC],
   });
-  const page = view(found, { choices, results: first.results });
-  expect(page).toContain('data-part="setup-pick" data-state="installed"');
-  expect(page).toContain('data-part="setup-pick" data-state="failed"');
-  expect(page).toContain(
-    "Could not install Claude: the archive's digest does not match<br/>Press Start to try again.",
-  );
-  expect(page).toContain("Start installs: Claude.");
-
-  const second = await start(fake.api, found, choices, first.results);
-  expect(fake.calls[1]).toEqual({ method: "POST", path: "/setup/apply", body: { picks: ["pluxy/claude"] } });
-  expect(second.results["pluxy/codex"]?.status).toBe("done");
-  expect(second.results["pluxy/claude"]?.status).toBe("done");
-  expect(view(found, { choices, results: second.results })).not.toContain("Could not install");
-  expect(toInstall(found, choices, second.results)).toEqual([]);
-  expect(primary(view(found, { choices, results: second.results }))).toEqual(["Finish"]);
-
-  // A call that fails as a whole changes no result.
-  const down = fakeHost(() => ({ status: 0 }));
-  const failed = await start(down.api, found, choices, first.results);
-  expect(failed.reply.status).toBe(0);
-  expect(failed.results).toBe(first.results);
-});
-
-/** An installed package as GET /packages shows it: enabled and active unless said otherwise. */
-const pkg = (more: Partial<Package> = {}): Package => ({
-  id: "pluxy/gemini",
-  version: "1.0.0",
-  registry: "bundled",
-  url: "https://packages.example.test/gemini",
-  sha256: "0".repeat(64),
-  enabled: true,
-  installed_at: "2026-11-20T10:00:00Z",
-  state: "active",
-  ...more,
-});
-
-test("a pick core kept after a failed start says it is installed and not running", () => {
-  // Core keeps a package whose program does not start: the next /setup says it is installed.
-  const kept: Setup = {
-    ...found,
-    picks: found.picks.map((p) => (p.id === "pluxy/claude" ? { ...p, installed: true } : p)),
-  };
-  const results: Results = { "pluxy/claude": { status: "error", error: "the program exited at once" } };
-  const page = view(kept, { results });
-
-  // The row says it is not running, and names the error and where to look, instead of "Installed".
-  expect(page).toContain('data-tone="warn">Installed, not running<');
-  expect(page).not.toContain('data-tone="ok">Installed<');
-  expect(page).toContain(
-    "Installed Claude, but it failed to start: the program exited at once<br/>Look at it on the Extensions page.",
-  );
-  // It is not the notice for a pick that was never installed, and Start does not send it again.
-  expect(page).not.toContain("Could not install");
-  expect(toInstall(kept, {}, results)).not.toContain("pluxy/claude");
-  // Its checkbox stays as an installed pick's: ticked, and disabled.
-  expect(page).toContain('<input type="checkbox" checked disabled');
-
-  // It is no running provider: Finish does not take the page's primary button.
-  expect(hasProvider(kept, results)).toBe(false);
-
-  // With nothing left to install but that failed pick, Finish no longer takes the primary button:
-  // the Start part offers to start without a provider instead.
-  const onlyFailed: Setup = {
-    ...nothingFound,
-    picks: [pick("pluxy/claude", "Claude", { installed: true })],
-  };
-  const noProvider = view(onlyFailed, { results });
-  expect(noProvider).toContain("pluxy has no active provider");
-  expect(primary(noProvider)).toEqual(["Start without a provider"]);
-  expect(noProvider).toContain('data-variant="quiet">Finish</button>');
-});
-
-test("only a provider that is enabled and has not failed counts as running", () => {
-  // A pick installed by a Start that worked is a running provider.
-  expect(hasProvider(allSet, {})).toBe(true);
-  expect(hasProvider(found, { "pluxy/claude": { status: "done" } })).toBe(true);
-  // One whose Start failed is not, whatever core says about the install.
-  const failedPick: Setup = {
-    ...nothingFound,
-    picks: [pick("pluxy/claude", "Claude", { installed: true })],
-  };
-  expect(hasProvider(failedPick, { "pluxy/claude": { status: "error", error: "no start" } })).toBe(false);
-  // A package counts only when it is enabled and has not failed.
-  const noPicks: Setup = { ...nothingFound, picks: [] };
-  expect(hasProvider(noPicks, {}, [pkg()])).toBe(true);
-  expect(hasProvider(noPicks, {}, [pkg({ enabled: false, state: "disabled" })])).toBe(false);
-  expect(hasProvider(noPicks, {}, [pkg({ state: "failed" })])).toBe(false);
-  expect(hasProvider(noPicks, {}, [pkg({ state: "crashed" })])).toBe(false);
-  expect(hasProvider(noPicks, {}, [pkg({ state: "quarantined" })])).toBe(false);
-  // An installed pick whose package is disabled or has failed is not running, whatever the pick says.
-  const installed: Setup = {
-    ...nothingFound,
-    picks: [pick("pluxy/claude", "Claude", { installed: true })],
-  };
-  const claude = (more: Partial<Package> = {}) => pkg({ id: "pluxy/claude", ...more });
-  expect(hasProvider(installed, {}, [claude()])).toBe(true);
-  expect(hasProvider(installed, {}, [claude({ enabled: false, state: "disabled" })])).toBe(false);
-  expect(hasProvider(installed, {}, [claude({ state: "failed" })])).toBe(false);
-  expect(hasProvider(installed, {}, [claude({ state: "crashed" })])).toBe(false);
-  expect(hasProvider(installed, {}, [claude({ state: "quarantined" })])).toBe(false);
-  // Another provider that runs still counts.
-  expect(hasProvider(installed, {}, [claude({ state: "crashed" }), pkg()])).toBe(true);
-  // A client pick's package is a client, not a provider.
-  const clientPick: Setup = {
-    ...nothingFound,
-    picks: [{ ...pick("pluxy/claude-code", "Claude Code settings"), kind: "client" }],
-  };
-  expect(hasProvider(clientPick, {}, [pkg({ id: "pluxy/claude-code" })])).toBe(false);
-});
-
-test("a pick shown as not running is never the provider the page counts as running", () => {
-  const installed: Setup = {
-    ...nothingFound,
-    picks: [pick("pluxy/claude", "Claude", { installed: true })],
-  };
-  const claude = (more: Partial<Package> = {}) => pkg({ id: "pluxy/claude", ...more });
-  const start: Results = { "pluxy/claude": { status: "error", error: "the program exited at once" } };
-  const done: Results = { "pluxy/claude": { status: "done" } };
-  const cases: { name: string; results: Results; packages?: Package[]; runs: boolean }[] = [
-    // The Start failed, then the package came up: it runs, whatever the old result says.
-    { name: "a failed Start, then a healthy package", results: start, packages: [claude()], runs: true },
-    { name: "a failed Start, no package list yet", results: start, runs: false },
-    { name: "a failed Start, package not listed", results: start, packages: [], runs: false },
-    {
-      name: "a failed Start, package turned off",
-      results: start,
-      packages: [claude({ enabled: false, state: "disabled" })],
-      runs: false,
-    },
-    {
-      name: "a failed Start, package failed",
-      results: start,
-      packages: [claude({ state: "failed" })],
-      runs: false,
-    },
-    { name: "a done Start, healthy package", results: done, packages: [claude()], runs: true },
-    {
-      name: "a done Start, package turned off",
-      results: done,
-      packages: [claude({ enabled: false, state: "disabled" })],
-      runs: false,
-    },
-    { name: "a done Start, no package list yet", results: done, runs: true },
-    { name: "no Start, package crashed", results: {}, packages: [claude({ state: "crashed" })], runs: false },
-    { name: "no Start, healthy package", results: {}, packages: [claude()], runs: true },
-  ];
-  for (const c of cases) {
-    const page = view(installed, { results: c.results, packages: c.packages });
-    const row = page.split('<li data-part="setup-pick"')[1]?.split("</li>")[0] ?? "";
-    const tones = [...row.matchAll(/data-part="badge" data-tone="(\w+)"/g)].map((m) => m[1]);
-    // The row says not running (a warn badge) exactly when no provider runs, and the account
-    // part, which opens for a running provider, agrees.
-    expect([c.name, tones, hasProvider(installed, c.results, c.packages)]).toEqual([
-      c.name,
-      [c.runs ? "ok" : "warn"],
-      c.runs,
-    ]);
-    expect([c.name, page.includes('class="add-account stack"')]).toEqual([c.name, c.runs]);
-    // And both read the one status.
-    expect([c.name, pickStatuses(installed, c.results, c.packages)[0]?.status.state]).toEqual([
-      c.name,
-      c.runs ? "running" : "stopped",
-    ]);
+  const m = await w.mount(<SetupPage />);
+  const seen: string[] = [m.text()];
+  for (const n of [1, 2, 3]) {
+    if (hasButton(step(m.root, n), "Open")) await press(buttonIn(step(m.root, n), "Open"));
+    seen.push(m.text());
+  }
+  await press(buttonIn(step(m.root, 2), "Open"));
+  await press(buttonIn(must(withPart(m.root, "tool-row")[0]), "Set up"));
+  seen.push(m.text());
+  // The import preview, with its lists: text in a closed <details> is in textContent too.
+  await press(buttonIn(line(m.root), "Preview import"));
+  expect(withPart(m.root, "setup-report")).toHaveLength(1);
+  seen.push(m.text());
+  for (const text of seen) {
+    for (const banned of [
+      "go run",
+      "pluxy model list",
+      "pluxy key add",
+      "pluxy import",
+      "this machine",
+      "pluxy-pack",
+    ])
+      expect(text).not.toContain(banned);
   }
 });
 
-test("with the only installed provider disabled, the page offers no sign-in and Finish is not primary", () => {
-  const installed: Setup = {
-    ...nothingFound,
-    picks: [pick("pluxy/claude", "Claude", { installed: true })],
-  };
-  const running = view(installed, { packages: [pkg({ id: "pluxy/claude" })] });
-  expect(running).toContain('class="add-account stack"');
-  expect(primary(running)).toEqual(["Finish"]);
+// ---- step 3 ------------------------------------------------------------------------------------
 
-  const disabled = view(installed, {
-    packages: [pkg({ id: "pluxy/claude", enabled: false, state: "disabled" })],
-  });
-  expect(disabled).not.toContain('class="add-account stack"');
-  // The pick says it is not running and why, in place of the Installed badge.
-  expect(disabled).toContain('data-tone="warn">Installed, not running<');
-  expect(disabled).not.toContain('data-tone="ok">Installed<');
-  expect(disabled).toContain("Claude is installed but turned off.<br/>Look at it on the Extensions page.");
-  // With nothing left to tick, Start and the account part point at Extensions, not at ticking.
-  expect(disabled).toContain(
-    'Claude: installed but not running, so pluxy has no active provider. Enable or inspect on <a href="#/extensions">Extensions</a>.',
+test("the test sends no model by default, says what passed, and offers Finish setup", async () => {
+  const w = world({ accounts: [ACC], clients: [CONNECTED] });
+  const m = await w.mount(<SetupPage />);
+  const three = step(m.root, 3);
+  expect(three.textContent).toContain(
+    "This sends one short test message through Work. It counts against that account's use.",
   );
-  expect(disabled).toContain(
-    'This comes after a provider, and the one installed is not running. Look at it on the <a href="#/extensions">Extensions</a> page.',
-  );
-  expect(disabled).not.toContain("Nothing is ticked");
-  expect(disabled).not.toContain("tick one above");
-
-  // A package that crashed names its error; one with none still says it is not running.
-  const crashed = view(installed, {
-    packages: [pkg({ id: "pluxy/claude", state: "crashed", error: "exit status 2" })],
-  });
-  expect(crashed).toContain("Installed Claude, but it failed to start: exit status 2<br/>");
-  const failed = view(installed, { packages: [pkg({ id: "pluxy/claude", state: "failed" })] });
-  expect(failed).toContain("Claude is installed but is not running.<br/>");
-
-  // With another provider still to tick, the page keeps its words about ticking.
-  const another: Setup = { ...installed, picks: [...installed.picks, pick("pluxy/codex", "Codex")] };
-  const tickable = view(another, {
-    packages: [pkg({ id: "pluxy/claude", enabled: false, state: "disabled" })],
-  });
-  expect(tickable).toContain('data-tone="warn">Installed, not running<');
-  expect(tickable).toContain("Nothing is ticked");
-  expect(tickable).toContain("tick one above and press Start");
-  expect(primary(disabled)).toEqual(["Start without a provider"]);
-  expect(disabled).toContain('data-variant="quiet">Finish</button>');
+  expect(all(three, "select")).toHaveLength(0);
+  await press(buttonIn(three, "Send a test request"));
+  expect(
+    w.sent("POST", "/accounts/acc_00000001/test").map((c) => (c.body as { model?: string }).model),
+  ).toEqual([undefined]);
+  const passed = withPart(step(m.root, 3), "setup-test")[0];
+  expect(passed?.textContent).toContain("It works: Work replied in 420 ms using model-a.");
+  expect(descend(must(passed)).some((n) => attribute(n, "aria-label") === "Succeeded")).toBe(true);
+  expect(attribute(buttonIn(step(m.root, 3), "Finish setup"), "data-variant")).toBe("primary");
+  // Folded, the step says what passed.
+  await press(buttonIn(step(m.root, 1), "Open"));
+  expect(step(m.root, 3).textContent).toContain("Passed: model-a in 420 ms.");
 });
 
-test("a pick that was installed and started keeps its Installed badge and offers Finish", () => {
-  const done = { ...found, picks: found.picks.map((p) => ({ ...p, installed: true })) };
-  const results: Results = { "pluxy/claude": { status: "done" } };
-  const page = view(done, { results, accounts: 2 });
-  expect(page).toContain('data-tone="ok">Installed<');
-  expect(page).not.toContain("Installed, not running");
-  expect(page).not.toContain("did not start");
-  expect(hasProvider(done, results)).toBe(true);
-  expect(primary(page)).toEqual(["Finish"]);
-});
-
-test("opened again after setup, the page is a status and offers no Finish", () => {
-  const page = view(allSet, { accounts: 2 });
-  expect(page).toContain("Setup is finished.");
-  expect(page).toContain("Every provider on the list is installed.");
-  expect(page).toContain("2 accounts connected.");
-  expect(page).toContain("Points at this pluxy");
-  expect(page).not.toContain(">Finish</button>");
-  expect(page).not.toContain(">Start</button>");
-  expect(page).not.toContain("Start without a provider");
-  expect(ticked(page)).toBe(2); // installed: shown ticked, and cannot be changed
-  expect(page.match(/<input type="checkbox" checked disabled/g)?.length).toBe(2);
-  // One more provider can still be installed from here.
-  const more = { ...allSet, picks: [...allSet.picks, pick("pluxy/gemini", "Gemini")] };
-  expect(view(more, { accounts: 2 })).not.toContain(">Install</button>");
-  expect(view(more, { accounts: 2 })).toContain("Tick the ones you have an account for.");
-  expect(view(more, { accounts: 2, choices: { "pluxy/gemini": true } })).toContain(">Install</button>");
-});
-
-test("once Start has installed what was ticked, its part goes and the first line stops promising it", () => {
-  const before = view(found);
-  expect(before).toContain(
-    "Nothing is installed until you press Start, and nothing on this page is required.",
-  );
-  expect(before).toContain("<h2>Start</h2>");
-  expect(before).toContain("Start installs: Codex, Claude.");
-
-  const done: Results = { "pluxy/codex": { status: "done" }, "pluxy/claude": { status: "done" } };
-  const after = view(found, { results: done });
-  expect(toInstall(found, {}, done)).toEqual([]);
-  expect(after).not.toContain("<h2>Start</h2>");
-  expect(after).not.toContain("Nothing more to install.");
-  expect(after).not.toContain("until you press Start");
-  expect(after).toContain(
-    "pluxy looks at this machine and offers what fits. Nothing on this page is required.",
-  );
-  expect(primary(after)).toEqual(["Finish"]);
-
-  // With no provider to offer, Start installs nothing either.
-  expect(view({ ...nothingFound, picks: [] })).not.toContain("until you press Start");
-});
-
-test("after setup, what Install will do is said in plain words", () => {
-  const more = { ...allSet, picks: [...allSet.picks, pick("pluxy/gemini", "Gemini")] };
-  const page = view(more, { accounts: 2, choices: { "pluxy/gemini": true } });
-  expect(page).toContain("This installs Gemini.");
-  expect(page).not.toContain("Install installs");
-});
-
-test("the paste text takes a new client key where its placeholder stood", () => {
-  const content = '{"env": {"ANTHROPIC_AUTH_TOKEN": "<client-key>"}}';
-  expect(withKey(content, "<client-key>")).toBe(content);
-  expect(withKey(content, "<client-key>", "sk-new")).toBe('{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-new"}}');
-});
-
-test("the paste call names the client, and a key when asked", async () => {
-  const fake = fakeHost();
-  await fake.api.clientPaste("pluxy/pi-setup");
-  await fake.api.clientPaste("claude-code", "key 1");
-  expect(fake.calls.map((c) => c.path)).toEqual([
-    "/setup/clients/pluxy%2Fpi-setup/paste",
-    "/setup/clients/claude-code/paste?key_id=key%201",
+test("a chosen model is sent; excluded models are not offered", async () => {
+  const w = world({ accounts: [ACC], clients: [CONNECTED] });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(step(m.root, 3), "Choose a model"));
+  const select = must(all(step(m.root, 3), "select")[0]);
+  expect(all(select, "option").map((o) => o.textContent)).toEqual([
+    "First model the account offers",
+    "model-a",
+    "model-b",
   ]);
+  await choose(select, "model-b");
+  await press(buttonIn(step(m.root, 3), "Send a test request"));
+  expect(
+    w.sent("POST", "/accounts/acc_00000001/test").map((c) => (c.body as { model?: string }).model),
+  ).toEqual(["model-b"]);
 });
 
-test("core on another machine than the browser is said to be so", () => {
-  expect(onThisMachine(undefined)).toBe(true);
-  expect(onThisMachine("http://127.0.0.1:8317")).toBe(true);
-  expect(onThisMachine("http://localhost:8317")).toBe(true);
-  expect(onThisMachine("http://[::1]:8317")).toBe(true);
-  expect(onThisMachine("https://pluxy.example:8317")).toBe(false);
-});
-
-test("the gate opens Setup on a first run, unless the address names a page or core lacks the call", () => {
-  const firstRun: Reply<{ first_run: boolean }> = { status: 200, body: { first_run: true } };
-  expect(setupGate(firstRun, "")).toEqual({ offered: true, open: true });
-  expect(setupGate(firstRun, "#/")).toEqual({ offered: true, open: true });
-  // A named page wins.
-  expect(setupGate(firstRun, "#/accounts")).toEqual({ offered: true, open: false });
-  expect(setupGate({ status: 200, body: { first_run: false } }, "")).toEqual({ offered: true, open: false });
-  // A core without the call: no page and no gate.
-  expect(setupGate({ status: 404, error: { code: "not_found", message: "no such call" } }, "")).toEqual({
-    offered: false,
-    open: false,
+test("a refused sign-in says so, with Sign in again, Test again and Finish anyway", async () => {
+  const w = world({
+    accounts: [ACC],
+    clients: [CONNECTED],
+    reply: (c) =>
+      c.path.endsWith("/test")
+        ? {
+            status: 200,
+            body: {
+              result: {
+                ok: false,
+                model: "model-a",
+                latency_ms: 80,
+                error: { code: "auth", message: "the key was refused." },
+              },
+            },
+          }
+        : undefined,
   });
-  // A core that could not be asked keeps the page, which then says what failed, and opens nothing.
-  expect(setupGate({ status: 0 }, "")).toEqual({ offered: true, open: false });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(step(m.root, 3), "Send a test request"));
+  const three = step(m.root, 3);
+  expect(three.textContent).toContain("Sign-in refused: the key was refused");
+  expect(attribute(linkIn(three, "Sign in again"), "href")).toBe("#/accounts/acc_00000001/sign-in");
+  // Signing in again is what fixes it, so it is the filled button.
+  expect(attribute(linkIn(three, "Sign in again"), "data-variant")).toBe("primary");
+  expect(attribute(buttonIn(three, "Test again"), "data-variant")).toBe("quiet");
+  expect(hasButton(three, "Test again")).toBe(true);
+  expect(hasButton(three, "Finish anyway")).toBe(true);
+  expect(hasButton(three, "Finish setup")).toBe(false);
 });
 
-test("a host's client action adds its button and its sentence to the clients it names, beside the paste text", () => {
-  const hint = "Set up opens the client's own page.";
-  const options: SetupOptions = {
-    clientAction: (client) =>
-      client === "claude-code" ? { label: "Set up", page: "claude-code" } : undefined,
-    clientActionHint: hint,
-  };
-  const row = (page: string) =>
-    page.match(/<li data-part="setup-client" data-state="not-configured">.*?<\/li>/s)?.[0] ?? "";
-  const buttons = (part: string) => [...part.matchAll(/<button[^>]*>([^<]*)</g)].map((m) => m[1]);
-
-  // Without a host action the row has the paste button alone, and no sentence.
-  const plain = view(found);
-  expect(buttons(row(plain))).toEqual(["Show what to paste"]);
-  expect(plain).not.toContain(hint);
-
-  // With one, Claude Code (found installed) gets the button; the page still has one primary button.
-  const page = view(found, { options });
-  expect(buttons(row(page))).toEqual(["Set up", "Show what to paste"]);
-  expect(page).toContain(hint);
-  expect(page.match(/>Set up</g)?.length).toBe(1);
-  expect(primary(page)).toEqual(["Start"]);
-
-  // A client whose settings file was refused gets none either: its row says to paste the text, and
-  // with no other client to act on the sentence is left out.
-  const refused = view(
-    {
-      ...found,
-      found: {
-        ...found.found,
-        clients: found.found.clients.map((c) => (c.id === "claude-code" ? { ...c, state: "refused" } : c)),
-      },
-    },
-    { options },
+test("with privacy mode on, a failed test's message hides the account's name", async () => {
+  const w = world({
+    accounts: [account("acc_00000001", { label: "Juniper Lab" })],
+    clients: [CONNECTED],
+    reply: (c) =>
+      c.path.endsWith("/test")
+        ? {
+            status: 200,
+            body: {
+              result: {
+                ok: false,
+                model: "model-a",
+                latency_ms: 80,
+                error: { code: "auth", message: "the key for Juniper Lab was refused." },
+              },
+            },
+          }
+        : undefined,
+  });
+  const m = await w.mount(
+    <PrivacyContext.Provider value={privacyMasks(true)}>
+      <SetupPage />
+    </PrivacyContext.Provider>,
   );
-  const refusedRow = refused.match(/<li data-part="setup-client" data-state="refused">.*?<\/li>/s)?.[0] ?? "";
-  expect(refusedRow).toContain("you paste the text yourself");
-  expect(buttons(refusedRow)).toEqual(["Show what to paste"]);
-  expect(refused).not.toContain(hint);
-
-  // A client that was not found gets none, and with no client to act on the sentence is left out.
-  const none = view(nothingFound, { options });
-  expect(none).not.toContain(">Set up<");
-  expect(none).not.toContain(hint);
-  const other: SetupOptions = { ...options, clientAction: () => undefined };
-  expect(view(found, { options: other })).not.toContain(hint);
+  await press(buttonIn(step(m.root, 3), "Send a test request"));
+  const three = step(m.root, 3);
+  expect(three.textContent).toContain("Sign-in refused: the key for");
+  expect(three.textContent).not.toContain("Juniper");
 });
 
-/** A dry run's report as core writes one: its three lists, and a provider the accounts need. */
-const dryReport: ImportReport = {
+test("a config-file account's refused key leads to See what to do", async () => {
+  const w = world({
+    accounts: [account("acc_00000001", { source: "config", label: "Work" })],
+    clients: [CONNECTED],
+    reply: (c) =>
+      c.path.endsWith("/test")
+        ? {
+            status: 200,
+            body: {
+              result: { ok: false, model: "m", latency_ms: 1, error: { code: "permission", message: "no" } },
+            },
+          }
+        : undefined,
+  });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(step(m.root, 3), "Send a test request"));
+  expect(attribute(linkIn(step(m.root, 3), "See what to do"), "href")).toBe("#/accounts/acc_00000001");
+});
+
+test("a provider that fails first (502) reads with K3's failure word", async () => {
+  const w = world({
+    accounts: [ACC],
+    clients: [CONNECTED],
+    reply: (c) =>
+      c.path.endsWith("/test")
+        ? { status: 502, error: { code: "unavailable", message: "connection refused" } }
+        : undefined,
+  });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(step(m.root, 3), "Send a test request"));
+  expect(step(m.root, 3).textContent).toContain("Provider unreachable: connection refused");
+  expect(hasButton(step(m.root, 3), "Sign in again")).toBe(false);
+});
+
+test("an account with no models says there is nothing to test it with", async () => {
+  const w = world({
+    accounts: [ACC],
+    clients: [CONNECTED],
+    reply: (c) =>
+      c.path.endsWith("/test")
+        ? { status: 422, error: { code: "invalid_request", message: "no models" } }
+        : undefined,
+  });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(step(m.root, 3), "Send a test request"));
+  expect(step(m.root, 3).textContent).toContain(
+    "This account lists no models, so there is nothing to test it with.",
+  );
+  expect(hasButton(step(m.root, 3), "Finish anyway")).toBe(true);
+  expect(hasButton(step(m.root, 3), "Test again")).toBe(false);
+});
+
+test("an account gone since the page read them: the accounts are read again and the default picked again", async () => {
+  const w = world({
+    accounts: [ACC, account("acc_00000002", { label: "Home" })],
+    clients: [CONNECTED],
+    reply: (c) => {
+      if (c.path !== "/accounts/acc_00000001/test") return undefined;
+      w.state.accounts.splice(0, 1);
+      return { status: 404, error: { code: "not_found", message: "no such account" } };
+    },
+  });
+  const m = await w.mount(<SetupPage />);
+  const reads = w.sent("GET", "/accounts").length;
+  await press(buttonIn(step(m.root, 3), "Send a test request"));
+  expect(w.sent("GET", "/accounts").length).toBeGreaterThan(reads);
+  expect(step(m.root, 3).textContent).toContain("test message through Home.");
+});
+
+test("with two accounts an Account choice shows, naming each one's kind, and the chosen one is tested", async () => {
+  const w = world({
+    accounts: [ACC, account("acc_00000002", { label: "Home", extension: "pluxy/codex" })],
+    clients: [CONNECTED],
+  });
+  const m = await w.mount(<SetupPage />);
+  const select = must(all(step(m.root, 3), "select")[0]);
+  expect(all(select, "option").map((o) => o.textContent)).toEqual(["Work (Claude)", "Home (Codex)"]);
+  await choose(select, "acc_00000002");
+  await press(buttonIn(step(m.root, 3), "Send a test request"));
+  expect(w.sent("POST", "/accounts/acc_00000002/test")).toHaveLength(1);
+});
+
+test("no account that can take a test: Add an account opens step 1, or finish without testing", async () => {
+  const w = world({
+    accounts: [
+      account("acc_00000001", { disabled: true }),
+      account("acc_00000002", { extension: "pluxy/gone" }),
+    ],
+    clients: [CONNECTED],
+    running: ["pluxy/claude"],
+  });
+  const m = await w.mount(<SetupPage />);
+  // Neither account can take requests, so step 1 is not done and opens first.
+  expect(openStep(m.root)).toBe(1);
+  await press(buttonIn(step(m.root, 3), "Open"));
+  const three = step(m.root, 3);
+  expect(three.textContent).toContain("There is no account to test yet.");
+  expect(hasButton(three, "Finish without testing")).toBe(true);
+  await press(buttonIn(three, "Add an account"));
+  expect(openStep(m.root)).toBe(1);
+});
+
+test("the default test account: the one added here, else the first Serving, else the first that can take one", () => {
+  const off = account("a", { disabled: true });
+  const cooling = account("b", {
+    cooldowns: [{ kind: "rate_limit", scope: "account", until: "2999-01-01T00:00:00Z" }] as never,
+  });
+  const serving = account("c");
+  const later = account("d");
+  expect(defaultTestAccount([off, cooling, serving, later], undefined, "d")?.id).toBe("d");
+  expect(defaultTestAccount([off, cooling, serving, later])?.id).toBe("c");
+  expect(defaultTestAccount([off, cooling])?.id).toBe("b");
+  expect(defaultTestAccount([off])).toBeUndefined();
+});
+
+// ---- finishing ----------------------------------------------------------------------------------
+
+test("every finish button sends POST /setup/done, tells the host, and goes Home", async () => {
+  const cases: [
+    string,
+    Parameters<typeof world>[0],
+    (m: Awaited<ReturnType<ReturnType<typeof world>["mount"]>>) => Promise<void>,
+  ][] = [
+    ["Leave setup for now", {}, async () => {}],
+    ["Finish without testing", { accounts: [ACC], clients: [CONNECTED] }, async () => {}],
+    [
+      "Finish setup",
+      { accounts: [ACC], clients: [CONNECTED] },
+      async (m) => press(buttonIn(step(m.root, 3), "Send a test request")),
+    ],
+    [
+      "Finish anyway",
+      {
+        accounts: [ACC],
+        clients: [CONNECTED],
+        reply: (c) =>
+          c.path.endsWith("/test")
+            ? { status: 502, error: { code: "upstream", message: "down" } }
+            : undefined,
+      },
+      async (m) => press(buttonIn(step(m.root, 3), "Send a test request")),
+    ],
+  ];
+  for (const [label, init, before] of cases) {
+    place.hash = "#/setup";
+    let finished = 0;
+    const w = world(init);
+    const m = await w.mount(<SetupPage options={{ onFinish: () => finished++ }} />);
+    await before(m);
+    await press(buttonIn(m.root, label));
+    expect([label, w.sent("POST", "/setup/done").length, finished, place.hash]).toEqual([label, 1, 1, "#/"]);
+    restoreDom();
+    Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  }
+});
+
+test("a finish that fails stays, with why", async () => {
+  let finished = 0;
+  const w = world({
+    reply: (c) =>
+      c.path === "/setup/done"
+        ? { status: 500, error: { code: "internal", message: "disk full." } }
+        : undefined,
+  });
+  const m = await w.mount(<SetupPage options={{ onFinish: () => finished++ }} />);
+  await press(buttonIn(m.root, "Leave setup for now"));
+  expect(m.text()).toContain("Could not finish setup: disk full.");
+  expect(finished).toBe(0);
+  expect(place.hash).toBe("#/setup");
+});
+
+test("a 401 from any call signs out", async () => {
+  const w = world({
+    reply: (c) =>
+      c.path === "/setup/done" ? { status: 401, error: { code: "auth", message: "no" } } : undefined,
+  });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(m.root, "Leave setup for now"));
+  expect(w.signedOut.times).toBe(1);
+});
+
+test("loading and failed panes", async () => {
+  const never = await world({
+    reply: (c) => (c.path === "/setup" ? new Promise(() => {}) : undefined),
+  }).mount(<SetupPage />);
+  expect(never.text()).toContain("Checking what pluxy already has…");
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  const w = world({
+    reply: (c) =>
+      c.path === "/setup" ? { status: 500, error: { code: "internal", message: "boom" } } : undefined,
+  });
+  const m = await w.mount(<SetupPage />);
+  expect(m.text()).toContain("Could not read setup.");
+  expect(hasButton(m.root, "Try again")).toBe(true);
+});
+
+// ---- the import --------------------------------------------------------------------------------
+
+const REPORT: ImportReport = {
   dry_run: true,
   brought: [
-    { what: "api-keys", as: "1 client key" },
-    { what: "auth file", name: "gemini-work.json", as: "pluxy/gemini account gemini-work" },
+    { what: "auth file", name: "claude-work.json", as: "pluxy/claude account claude-work" },
+    { what: "api-keys" },
   ],
   changed: [
+    // Core's own words for a listen it cannot change (internal/legacy/config.go).
     {
       what: "port",
-      from: "0.0.0.0:8317",
-      to: "127.0.0.1:8317",
-      why: "core keeps listening on 127.0.0.1:8317: listen cannot change while core runs",
-      keep_with: '"listen": "0.0.0.0:8317" in pluxy\'s config file, then restart core',
+      why: "listen cannot change while pluxy runs",
+      keep_with: '"listen": ":8317" in pluxy\'s config file, then restart core',
     },
   ],
-  not_brought: [
-    { what: "debug", why: "this core writes no debug-level log lines" },
-    { what: "management.secret-key", why: "pluxy keeps its own management key" },
-    { what: "auth file", name: "claude-a.json", why: "core already has an account claude-a, which it keeps" },
-    { what: "auth file", name: "kiro-a.json", why: "pluxy has no provider for it" },
-  ],
-  needs: [
-    { pick: "pluxy/gemini", why: "1 account needs it" },
-    { pick: "example/other", why: "2 accounts need it" },
-  ],
+  not_brought: [{ what: "auth file", name: "qwen-a.json", why: "no extension takes it" }],
+  needs: [{ pick: "pluxy/claude", why: "2 accounts need it" }],
 };
-const config = "~/.cli-proxy-api/config.yaml";
 
-test("a found CLIProxyAPI setup offers to bring it across, with the command beside it", () => {
-  const page = view(found, { bringing: "offered" });
-  expect(page).toContain(">Bring it across</button>");
-  expect(page).toContain("writes nothing until you confirm");
-  // The command does what the button does: it names the folder the accounts were counted in.
-  expect(page).toContain("<summary>Or use the command</summary>");
-  expect(importCommand(found.found.imports[0] as Setup["found"]["imports"][number])).toBe(
-    "pluxy import cpa ~/.cli-proxy-api/config.yaml --auth-dir ~/.cli-proxy-api",
-  );
-  expect(importCommand({ kind: "cliproxyapi", config, auth_dir: "~/.cli-proxy-api", accounts: 0 })).toBe(
-    "pluxy import cpa ~/.cli-proxy-api/config.yaml",
-  );
-  // The offer does not take the page's one primary button.
-  expect(primary(page)).toEqual(["Start"]);
-  expect(view(found, { bringing: { config, busy: "checking" } })).toContain(">Checking…</button>");
-});
-
-test("the dry run's report shows core's three lists with counts, what is needed, and asks before importing", () => {
-  const page = view(found, { bringing: { config, report: dryReport } });
-  expect(page).toContain("Nothing is written yet.");
-  expect(page).toContain("<summary>Comes across (2)</summary>");
-  expect(page).toContain("<summary>Different in pluxy (1)</summary>");
-  expect(page).toContain("<summary>Does not come across (4)</summary>");
-  expect(page).toContain('<strong class="mono">auth file gemini-work.json</strong>');
-  expect(page).toContain("pluxy/gemini account gemini-work");
-  expect(page).toContain("core already has an account claude-a, which it keeps");
-  expect(page).toContain("pluxy has no provider for it");
-  // A row that stays behind says why, the management key included.
-  expect(page).toContain("pluxy keeps its own management key");
-  expect(page).toContain("&quot;listen&quot;: &quot;0.0.0.0:8317&quot; in pluxy's config file");
-  expect(page).toContain("Gemini is not installed, and 1 account needs it. You can install it once");
-  expect(page).toContain("example/other is not installed, and 2 accounts need it.");
-  expect(page).toContain(">Bring it across now</button>");
-  expect(page).toContain(">Cancel</button>");
-  // The row's own button and the command make way for the report.
-  expect(page).not.toContain(">Bring it across</button>");
-  expect(page).not.toContain("Or use the command");
-});
-
-test("after the import the report says what was brought, and where to install what the accounts need", () => {
-  const report: ImportReport = { ...dryReport, dry_run: false };
-  // Gemini is on the page's list, so it is ticked; a package the page does not offer is not.
-  expect(neededPicks(found, report)).toEqual({ "pluxy/gemini": true });
-
-  const page = view(found, { bringing: { config, report, done: true } });
-  expect(page).toContain("Done. This is what was brought across:");
-  expect(page).toContain("<summary>Brought across (2)</summary>");
-  expect(page).toContain("<summary>Not brought across (4)</summary>");
-  expect(page).toContain("It is ticked under Providers: press Start to install it.");
-  expect(page).toContain(
-    "example/other is not installed, and 2 accounts need it. Install it on the Extensions page.",
-  );
-  expect(page).toContain(">Close</button>");
-  expect(page).not.toContain("Bring it across now");
-  // The import keeps pluxy's management key, so there is no new key and no sign-in to send to.
-  expect(page).not.toContain("Sign in again");
-  expect(page).not.toContain("New management key");
-});
-
-/** The same machine once core has a record of the setup's import. */
-function brought(last: { brought: number; changed: number; not_brought: number }): Setup {
-  const at = "2026-11-20T08:30:05Z";
-  return {
-    ...found,
-    found: {
-      ...found.found,
-      imports: found.found.imports.map((row) => ({ ...row, last_import: { at, ...last } })),
+const importing = (
+  answer?: (dry: boolean) => { status: number; body?: unknown; error?: { code: string; message: string } },
+) =>
+  world({
+    imports: [IMPORT],
+    reply: (c) => {
+      if (c.path !== "/setup/import") return undefined;
+      const dry = (c.body as { dry_run: boolean }).dry_run;
+      return answer?.(dry) ?? { status: 200, body: { ...REPORT, dry_run: dry } };
     },
-  };
-}
-
-test("a setup core has brought across says so, when and with what counts, and offers only the command", () => {
-  const last = { brought: 4, changed: 2, not_brought: 3 };
-  const at = new Date("2026-11-20T08:30:05Z").toLocaleString();
-  for (const bringing of ["offered", undefined] as const) {
-    const page = view(brought(last), { bringing });
-    expect(page).toContain('data-part="setup-import" data-state="brought"');
-    expect(page).toContain("<strong>A CLIProxyAPI setup with 7 accounts</strong>");
-    expect(page).toContain(
-      '<span class="mono">~/.cli-proxy-api/config.yaml</span>, and was brought across ' +
-        `<time datetime="2026-11-20T08:30:05Z" title="${at}" data-part="time">`,
-    );
-    // The numbers count rows of the report, settings and auth files alike: never accounts.
-    expect(page).toContain(
-      "Of its settings and auth files: 4 brought across, 2 different in pluxy, 3 not brought across.",
-    );
-    expect(page).toContain(">Brought across</span>");
-    // No button offers it again; the command still can, and says what a second import does.
-    expect(page).not.toContain(">Bring it across</button>");
-    expect(page).not.toContain("writes nothing until you confirm");
-    expect(page).not.toContain("Or use the command");
-    expect(page).toContain("<summary>Bring it across again</summary>");
-    expect(page).toContain("Run this where pluxy is installed to overwrite changed settings");
-    expect(page).toContain(
-      "<pre>pluxy import cpa ~/.cli-proxy-api/config.yaml --auth-dir ~/.cli-proxy-api</pre>",
-    );
-  }
-  // A list that held no row is left out.
-  const clean = view(brought({ brought: 5, changed: 0, not_brought: 0 }), { bringing: "offered" });
-  expect(clean).toContain("Of its settings and auth files: 5 brought across.");
-  expect(clean).not.toContain("not brought across");
-  expect(clean).not.toContain("different in pluxy");
-});
-
-test("the report of an import just made stays until it is closed, whatever core has recorded", () => {
-  const report: ImportReport = { ...dryReport, dry_run: false };
-  const page = view(brought({ brought: 2, changed: 1, not_brought: 4 }), {
-    bringing: { config, report, done: true },
   });
-  expect(page).toContain('data-part="setup-import" data-state="done"');
-  expect(page).toContain("Done. This is what was brought across:");
-  expect(page).toContain(">Close</button>");
-  expect(page).not.toContain("and was brought across");
-  expect(page).not.toContain("Bring it across again");
+const line = (root: Parameters<typeof withPart>[0]) => must(withPart(root, "setup-import")[0]);
+const imports = (w: ReturnType<typeof world>) =>
+  w.sent("POST", "/setup/import").map((c) => (c.body as { dry_run: boolean }).dry_run);
+
+test("the preview comes first: nothing is imported until Import now, from that preview", async () => {
+  const w = importing();
+  const m = await w.mount(<SetupPage />);
+  expect(hasButton(line(m.root), "Import now")).toBe(false);
+  await press(buttonIn(line(m.root), "Preview import"));
+  expect(imports(w)).toEqual([true]);
+  expect(w.sent("POST", "/setup/import")[0]?.body).toEqual({
+    config: "~/.cli-proxy-api/config.yaml",
+    auth_dir: "~/.cli-proxy-api/auths",
+    dry_run: true,
+  });
+  const report = must(withPart(m.root, "setup-report")[0]);
+  expect(report.textContent).toContain(
+    "Importing would bring across 2, set 1 differently in pluxy and leave out 1.",
+  );
+  expect(all(report, "summary").map((s) => s.textContent)).toEqual([
+    "Will import (2)",
+    "Set differently in pluxy (1)",
+    "Left out (1)",
+  ]);
+  expect(report.textContent).toContain("listen cannot change while pluxy runs");
+  expect(report.textContent).toContain(
+    'To keep it: "listen": ":8317" in pluxy\'s config file, then restart core',
+  );
+  await press(buttonIn(line(m.root), "Cancel"));
+  expect(withPart(m.root, "setup-report")).toHaveLength(0);
+  expect(imports(w)).toEqual([true]);
+  await press(buttonIn(line(m.root), "Preview import"));
+  await press(buttonIn(line(m.root), "Import now"));
+  expect(imports(w)).toEqual([true, true, false]);
+  // Import now sends exactly what was previewed.
+  const [, preview, done] = w.sent("POST", "/setup/import").map((c) => c.body);
+  expect(done).toEqual({ ...(preview as object), dry_run: false });
+  expect(line(m.root).textContent).toContain("Imported.");
+  expect(line(m.root).textContent).not.toContain("nothing changes until you confirm");
+  expect(line(m.root).textContent).toContain("The imported accounts need Claude. They are ticked in step 1.");
+  expect(box(kindRow(m.root, "Claude"))?.checked).toBe(true);
+  expect(kindRow(m.root, "Claude").textContent).toContain("2 accounts need it");
+  await press(buttonIn(line(m.root), "Close"));
+  expect(withPart(m.root, "setup-report")).toHaveLength(0);
 });
 
-test("each refusal is said in words a person can act on", () => {
-  const refused = (status: number, message: string, dryRun = true) =>
-    importProblem({ status, error: { code: "x", message } }, dryRun);
-  expect(importProblem({ status: 200, body: dryReport }, true)).toEqual({});
-  expect(refused(400, "there is no file at /home/a/.cli-proxy-api/config.yaml").problem).toBe(
-    "Could not read the CLIProxyAPI setup: there is no file at /home/a/.cli-proxy-api/config.yaml. Check the file and permissions, then press Refresh. Nothing changed.",
-  );
-  expect(refused(422, "config.yaml: port must be a number").problem).toBe(
-    "Cannot import this setup: config.yaml: port must be a number. Fix it in CLIProxyAPI and try again. Nothing changed.",
-  );
-  expect(refused(500, "disk full.").problem).toBe("pluxy could not bring the setup across: disk full.");
-  expect(importProblem({ status: 0 }, true).problem).toContain("nothing was read or changed");
-  expect(importProblem({ status: 0 }, false).problem).toContain("the import status is unknown");
+const refusals: [number, string, string | undefined][] = [
+  [
+    400,
+    "Could not read the CLIProxyAPI setup: there is no file at x. Fix the file, then try again. Nothing changed.",
+    undefined,
+  ],
+  [422, "This setup cannot be imported: port is not a number. Nothing changed.", undefined],
+  [
+    409,
+    "This pluxy keeps its settings in config.yaml, which import cannot change. Nothing changed.",
+    "pluxy init",
+  ],
+  [
+    404,
+    "This pluxy is too old to import from here.",
+    "pluxy import cpa ~/.cli-proxy-api/config.yaml --auth-dir ~/.cli-proxy-api/auths",
+  ],
+  [0, "pluxy did not answer, so nothing was read or changed.", undefined],
+];
 
-  // A core on a config.yaml takes no import: the page says how to get to one that does.
-  const yaml = refused(409, "core runs on a config.yaml", false);
-  expect(yaml.show).toBe("init");
-  const onYaml = view(found, { bringing: { config, ...yaml } });
-  expect(onYaml).toContain("pluxy uses config.yaml");
-  expect(onYaml).toContain("<pre>pluxy init</pre>");
-  expect(onYaml).toContain(">Bring it across</button>");
-
-  // An older core has no such call: the row names the command, as it did before, and no button.
-  const old = refused(404, "not found");
-  expect(old.show).toBe("command");
-  const onOld = view(found, { bringing: { config, ...old } });
-  expect(onOld).toContain("This pluxy is an older one");
-  expect(onOld).toContain("run this where pluxy is installed:");
-  expect(onOld).toContain(
-    "<pre>pluxy import cpa ~/.cli-proxy-api/config.yaml --auth-dir ~/.cli-proxy-api</pre>",
-  );
-  expect(onOld).not.toContain(">Bring it across</button>");
-  expect(onOld).not.toContain("Or use the command");
+test("each refusal of the preview says its words, drops the preview, and only 404 and 409 offer More details", async () => {
+  for (const [status, words, command] of refusals) {
+    const message =
+      status === 400 ? "there is no file at x." : status === 422 ? "port is not a number" : "refused";
+    const w = importing(() => ({ status, error: status ? { code: "x", message } : undefined }));
+    const m = await w.mount(<SetupPage />);
+    await press(buttonIn(line(m.root), "Preview import"));
+    const l = line(m.root);
+    expect([status, l.textContent.includes(words)]).toEqual([status, true]);
+    expect(withPart(m.root, "setup-report")).toHaveLength(0);
+    const details = all(l, "summary").find((s) => s.textContent === "More details");
+    expect([status, details !== undefined]).toEqual([status, command !== undefined]);
+    if (command) expect(all(l, "pre")[0]?.textContent).toBe(command);
+    restoreDom();
+    Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  }
 });
 
-test("when core has no extension registry, Setup says so and names what to do next", () => {
-  const noReg = view({ ...nothingFound, picks: [], registries: 0 });
-  expect(noReg).toContain("This build has no extension registry");
-  expect(noReg).toContain("go run ./cmd/pluxy-pack -out");
-  expect(noReg).toContain("-bundled");
-  expect(noReg).not.toContain("Check the Extensions page to install one.");
-  expect(noReg).not.toContain("#/extensions");
+test("a lost reply to Import now says it is not known whether it ran, and Refresh looks again", async () => {
+  const w = importing((dry) => (dry ? { status: 200, body: REPORT } : { status: 0 }));
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(line(m.root), "Preview import"));
+  await press(buttonIn(line(m.root), "Import now"));
+  expect(line(m.root).textContent).toContain(
+    "pluxy did not answer, so it is not known whether the import ran. Press Refresh to see.",
+  );
+  expect(withPart(m.root, "setup-report")).toHaveLength(0);
+  expect(hasButton(line(m.root), "Import now")).toBe(false);
+  await press(buttonIn(line(m.root), "Refresh"));
+  expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
+  // Core has no record of the import: it did not run, and a new preview can start.
+  expect(line(m.root).textContent).not.toContain("not known whether the import ran");
+  expect(line(m.root).textContent).toContain("The import did not run: pluxy has no record of it.");
+  expect(hasButton(line(m.root), "Preview import")).toBe(true);
+});
 
-  // With a registry configured (even if no setup picks match), the no-registry message does not appear.
-  const hasReg = view({ ...nothingFound, picks: [], registries: 1 });
-  expect(hasReg).not.toContain("This build has no extension registry");
-  expect(hasReg).toContain("Check the Extensions page to install one.");
+test("after a lost reply to Import now, Refresh shows core's record when the import ran", async () => {
+  const w = importing((dry) => {
+    if (dry) return { status: 200, body: REPORT };
+    // Core ran it and kept the record; the reply was lost on the way.
+    w.state.setup.found.imports = [
+      { ...IMPORT, last_import: { at: "2026-11-20T10:30:00Z", brought: 2, changed: 1, not_brought: 1 } },
+    ];
+    return { status: 0 };
+  });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(line(m.root), "Preview import"));
+  await press(buttonIn(line(m.root), "Import now"));
+  await press(buttonIn(line(m.root), "Refresh"));
+  expect(line(m.root).textContent).not.toContain("not known whether the import ran");
+  expect(line(m.root).textContent).toContain("Imported a CLIProxyAPI setup");
+  expect(attribute(line(m.root), "data-state")).toBe("imported");
+});
+
+test("a preview is dropped when the auth folder changes under it: Import now cannot send the old one", async () => {
+  const w = importing();
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(line(m.root), "Preview import"));
+  expect(hasButton(line(m.root), "Import now")).toBe(true);
+  // A new scan finds the same config naming another auth folder.
+  w.state.setup.found.imports = [{ ...IMPORT, auth_dir: "~/elsewhere/auths" }];
+  await press(buttonIn(step(m.root, 2), "Open"));
+  await press(buttonIn(step(m.root, 2), "Refresh"));
+  expect(hasButton(line(m.root), "Import now")).toBe(false);
+  expect(withPart(m.root, "setup-report")).toHaveLength(0);
+  expect(imports(w)).toEqual([true]);
+  // The next preview, and the import from it, name the new folder.
+  await press(buttonIn(line(m.root), "Preview import"));
+  await press(buttonIn(line(m.root), "Import now"));
+  expect(w.sent("POST", "/setup/import").map((c) => (c.body as { auth_dir?: string }).auth_dir)).toEqual([
+    "~/.cli-proxy-api/auths",
+    "~/elsewhere/auths",
+    "~/elsewhere/auths",
+  ]);
+});
+
+test("an import that needs a kind this pluxy does not offer says so by name, with Open Extensions", async () => {
+  const report = {
+    ...REPORT,
+    needs: [
+      { pick: "pluxy/claude", why: "2 accounts need it" },
+      { pick: "pluxy/antigravity", why: "1 account needs it, and pluxy does not ship it" },
+    ],
+  };
+  const w = importing((dry) => ({ status: 200, body: { ...report, dry_run: dry } }));
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(line(m.root), "Preview import"));
+  await press(buttonIn(line(m.root), "Import now"));
+  const l = line(m.root);
+  expect(l.textContent).toContain("The imported accounts need Claude. They are ticked in step 1.");
+  expect(l.textContent).toContain(
+    "This pluxy does not offer Antigravity, so the accounts that need it cannot be used yet.",
+  );
+  expect(attribute(linkIn(l, "Open Extensions"), "href")).toBe("#/extensions");
+  expect(m.text()).not.toContain("pluxy/antigravity");
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  // Only kinds it does not offer: nothing is said to be ticked.
+  const only = importing((dry) => ({
+    status: 200,
+    body: { ...report, needs: [report.needs[1]], dry_run: dry },
+  }));
+  const o = await only.mount(<SetupPage />);
+  await press(buttonIn(line(o.root), "Preview import"));
+  await press(buttonIn(line(o.root), "Import now"));
+  expect(line(o.root).textContent).not.toContain("ticked in step 1");
+  expect(line(o.root).textContent).toContain("This pluxy does not offer Antigravity");
+});
+
+test("with privacy mode on, the import report hides account file names", async () => {
+  const report: ImportReport = {
+    dry_run: true,
+    brought: [{ what: "auth file", name: "claude-alice@example.com.json" }],
+    changed: [],
+    not_brought: [{ what: "auth file", name: "juniper_lab.json", why: "juniper_lab has no type" }],
+    needs: [],
+  };
+  const w = importing(() => ({ status: 200, body: report }));
+  const m = await w.mount(
+    <PrivacyContext.Provider value={privacyMasks(true)}>
+      <SetupPage />
+    </PrivacyContext.Provider>,
+  );
+  await press(buttonIn(line(m.root), "Preview import"));
+  const text = must(withPart(m.root, "setup-report")[0]).textContent;
+  expect(text).toContain("auth file");
+  expect(text).not.toContain("alice");
+  expect(text).not.toContain("juniper");
+});
+
+test("Try again after a 400 looks again, then starts a new preview of what the new scan found", async () => {
+  let first = true;
+  const w = importing(() => {
+    if (!first) return { status: 200, body: REPORT };
+    first = false;
+    // The next scan finds the config naming another auth folder.
+    w.state.setup.found.imports = [{ ...IMPORT, auth_dir: "~/fresh/auths" }];
+    return { status: 400, error: { code: "invalid_request", message: "no file" } };
+  });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(line(m.root), "Preview import"));
+  await press(buttonIn(line(m.root), "Try again"));
+  expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
+  expect(imports(w)).toEqual([true, true]);
+  expect(w.sent("POST", "/setup/import").map((c) => (c.body as { auth_dir?: string }).auth_dir)).toEqual([
+    "~/.cli-proxy-api/auths",
+    "~/fresh/auths",
+  ]);
+  expect(withPart(m.root, "setup-report")).toHaveLength(1);
+});
+
+test("a 401 from the import signs out", async () => {
+  const w = importing(() => ({ status: 401, error: { code: "auth", message: "no" } }));
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(line(m.root), "Preview import"));
+  expect(w.signedOut.times).toBe(1);
+});
+
+test("an earlier import reads as done, and Import again starts a preview", async () => {
+  const w = world({
+    imports: [
+      { ...IMPORT, last_import: { at: "2026-11-20T09:00:00Z", brought: 4, changed: 1, not_brought: 1 } },
+    ],
+  });
+  const m = await w.mount(<SetupPage />);
+  expect(line(m.root).textContent).toContain("Imported a CLIProxyAPI setup");
+  await press(buttonIn(line(m.root), "Import again"));
+  expect(imports(w)).toEqual([true]);
+});
+
+// ---- helpers -------------------------------------------------------------------------------------
+
+test("kinds are grouped found, main, more; an import's needs count as found", () => {
+  const setup = { picks: [...EIGHT, ...FIVE_TOOLS] } as never;
+  const groups = kindGroups(setup, new Set(["pluxy/qwen"]));
+  expect(groups.found.map((p) => p.id)).toEqual(["pluxy/codex", "pluxy/kimi", "pluxy/qwen"]);
+  expect(groups.main.map((p) => p.id)).toEqual(["pluxy/claude", "pluxy/gemini", "pluxy/openai-compatible"]);
+  expect(groups.more.map((p) => p.id)).toEqual(["pluxy/iflow", "pluxy/vertex"]);
+  expect(orderedKinds(setup)).toHaveLength(8);
+  expect(joinNames(["A"])).toBe("A");
+  expect(joinNames(["A", "B", "C"])).toBe("A, B and C");
 });

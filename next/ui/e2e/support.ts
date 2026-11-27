@@ -164,7 +164,7 @@ const TITLES: Record<string, string> = {
   usage: "Requests",
   "activity/usage": "Usage",
   settings: "General",
-  setup: "Set up pluxy",
+  setup: "Setup",
   config: "Config",
   system: "System",
   extensions: "Extensions",

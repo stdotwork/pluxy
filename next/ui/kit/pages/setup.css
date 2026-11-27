@@ -1,61 +1,82 @@
+/* The Setup page: three numbered steps down a hairline, one open at a time, with the import line
+   above them and the way to finish under them. Rows inside come from the shared parts and the
+   Tools page; this sets what lies around them. Tokens only. */
 @layer kit {
-  .setup-hint,
-  .setup-done {
+  .setup {
+    container-type: inline-size;
+    max-width: 52em;
+    gap: calc(var(--s) * 4);
+  }
+
+  .setup p {
     margin: 0;
   }
 
-  .setup-rows {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
+  .setup-intro {
+    max-width: 40em;
   }
 
-  .setup-rows > li {
+  /* ---- the import line ---- */
+
+  .setup-import {
     display: grid;
-    gap: calc(var(--s) * 1);
-    padding: calc(var(--s) * 2.5) 0;
+    gap: calc(var(--s) * 3);
+    padding: calc(var(--s) * 3) 0;
     border-top: var(--px-shape-border) solid var(--px-color-border);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
     min-width: 0;
   }
 
-  .setup-rows > li:first-child {
-    border-top: 0;
-    padding-top: 0;
-  }
-
-  .setup-rows > li:last-child {
-    padding-bottom: 0;
-  }
-
-  .setup-row-head,
-  .setup-line {
+  .setup-import-line {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: calc(var(--s) * 3);
     flex-wrap: wrap;
+    gap: calc(var(--s) * 2) calc(var(--s) * 4);
   }
 
-  .setup-row-head > .check {
-    align-items: start;
-    flex: 1 1 16em;
+  .setup-import-line > p {
+    flex: 1 1 24em;
+    min-width: 0;
+  }
+
+  .setup-import-path {
+    overflow-wrap: anywhere;
+  }
+
+  .setup-import-refusal,
+  .setup-report {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  /* A list item still, so the disclosure keeps its marker. */
+  .setup-report-list > summary,
+  .setup-import-details > summary {
     cursor: pointer;
+    padding-block: calc((var(--px-size-control) - 1.5em) / 2);
+    color: var(--px-color-text-muted);
   }
 
-  .setup-row-head > .check input {
-    margin-top: 0.3em;
+  .setup-report-rows {
+    list-style: none;
+    margin: 0 0 calc(var(--s) * 2);
+    padding: 0 0 0 calc(var(--s) * 4);
+    display: grid;
+    gap: calc(var(--s) * 2);
   }
 
-  .setup-pick-text {
+  .setup-report-rows > li {
     display: grid;
     gap: calc(var(--s) * 0.5);
     min-width: 0;
-    flex: 1 1 16em;
+    overflow-wrap: anywhere;
   }
 
-  .setup-line > span {
-    flex: 1 1 16em;
+  .setup-import-details {
+    display: grid;
+    gap: calc(var(--s) * 2);
   }
 
   .setup-code {
@@ -77,47 +98,229 @@
     white-space: pre;
   }
 
-  .setup-report > details > summary {
-    cursor: pointer;
-    font-weight: 600;
-  }
+  /* ---- the steps ---- */
 
-  .setup-report-rows {
+  .setup-steps {
     list-style: none;
-    margin: calc(var(--s) * 2) 0 0;
+    margin: 0;
     padding: 0;
+  }
+
+  .setup-step {
+    position: relative;
     display: grid;
-    gap: calc(var(--s) * 2);
+    grid-template-columns: calc(var(--px-size-control) + var(--s) * 1) minmax(0, 1fr);
+    gap: 0 calc(var(--s) * 4);
+    padding-bottom: calc(var(--s) * 6);
   }
 
-  .setup-report-rows > li {
+  /* The hairline that joins one number to the next. */
+  .setup-step:not(:last-child)::before {
+    content: "";
+    position: absolute;
+    left: calc((var(--px-size-control) + var(--s) * 1) / 2);
+    top: calc(var(--px-size-control) + var(--s) * 2);
+    bottom: calc(var(--s) * 1);
+    width: var(--px-shape-border);
+    background: var(--px-color-border);
+  }
+
+  .setup-step-mark {
     display: grid;
-    gap: calc(var(--s) * 0.5);
-    min-width: 0;
-    overflow-wrap: anywhere;
+    place-items: center;
+    width: calc(var(--px-size-control) + var(--s) * 1);
+    height: calc(var(--px-size-control) + var(--s) * 1);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: 50%;
+    color: var(--px-color-text-muted);
+    background: var(--px-color-bg);
+    font-variant-numeric: tabular-nums;
   }
 
-  .setup-code-how {
-    margin-top: calc(var(--s) * 2);
+  .setup-step[data-state="open"] .setup-step-mark {
+    color: var(--px-color-bg);
+    background: var(--px-color-text);
+    border-color: var(--px-color-text);
   }
 
-  .setup-paste {
-    margin-top: calc(var(--s) * 2);
-    min-width: 0;
+  .setup-step[data-state="done"] .setup-step-mark {
+    color: var(--px-color-ok);
+    border-color: var(--px-color-ok);
   }
 
-  .setup-file {
+  .setup-step-body {
     display: grid;
-    gap: calc(var(--s) * 2);
+    gap: calc(var(--s) * 1);
     min-width: 0;
   }
 
-  .setup-others > summary {
-    cursor: pointer;
+  .setup-step-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 3);
+    min-height: calc(var(--px-size-control) + var(--s) * 1);
+  }
+
+  .setup-step-head h2 {
+    margin: 0;
+    font-size: var(--px-font-size-title);
+  }
+
+  .setup-step-head h2:focus {
+    outline: none;
+  }
+
+  .setup-step-head h2:focus-visible {
+    outline: 2px solid var(--px-color-focus, var(--px-color-accent));
+    outline-offset: 2px;
+  }
+
+  .setup-step[data-state="todo"] .setup-step-head h2 {
+    color: var(--px-color-text-muted);
+    font-weight: var(--px-font-weight-normal, 400);
+  }
+
+  .setup-step-summary {
     color: var(--px-color-text-muted);
   }
 
-  .setup-others > .setup-rows {
-    margin-top: calc(var(--s) * 3);
+  .setup-step-open {
+    display: grid;
+    gap: calc(var(--s) * 4);
+    padding-top: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  /* Step 2 is titled already: the Tools list's own heading would say it twice. */
+  .setup-step-open .tools-heading {
+    display: none;
+  }
+
+  .setup-line {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2) calc(var(--s) * 4);
+  }
+
+  .setup-next {
+    padding-top: calc(var(--s) * 1);
+  }
+
+  /* ---- step 1 ---- */
+
+  .setup-kinds,
+  .setup-sign-in {
+    display: grid;
+    gap: calc(var(--s) * 3);
+    min-width: 0;
+  }
+
+  .setup-picks {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .setup-pick {
+    display: grid;
+    gap: calc(var(--s) * 1);
+    padding: calc(var(--s) * 2.5) calc(var(--s) * 1);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    min-width: 0;
+  }
+
+  .setup-pick-row {
+    display: flex;
+    align-items: flex-start;
+    gap: calc(var(--s) * 3);
+    min-width: 0;
+  }
+
+  .setup-pick-check {
+    cursor: pointer;
+  }
+
+  .setup-pick-check input {
+    flex: none;
+    margin: 0.25em 0 0;
+  }
+
+  .setup-pick-text {
+    display: grid;
+    gap: calc(var(--s) * 0.5);
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .setup-pick-stopped {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: calc(var(--s) * 2);
+  }
+
+  .setup-pick-error {
+    color: var(--px-color-danger);
+  }
+
+  .setup-embed {
+    min-width: 0;
+  }
+
+  /* ---- step 3 ---- */
+
+  .setup-field {
+    display: grid;
+    gap: calc(var(--s) * 1);
+    width: min(100%, 24em);
+  }
+
+  .setup-field select {
+    min-height: var(--px-size-control);
+  }
+
+  .setup-model {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    justify-items: start;
+  }
+
+  .setup-passed {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+  }
+
+  .setup-model-name {
+    white-space: nowrap;
+  }
+
+  .setup-passed .icon {
+    flex: none;
+    color: var(--px-color-ok);
+  }
+
+  /* ---- under the list ---- */
+
+  .setup-later {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2) calc(var(--s) * 3);
+  }
+
+  /* A narrow page: the path moves into its title, and the marks take less room. */
+  @container (max-width: 560px) {
+    .setup-import-path {
+      display: none;
+    }
+
+    .setup-step {
+      gap: 0 calc(var(--s) * 3);
+    }
   }
 }

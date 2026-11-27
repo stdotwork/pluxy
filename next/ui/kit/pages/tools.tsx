@@ -166,9 +166,16 @@ export interface ToolsState {
   older: boolean;
   /** A scan asked for from this page failed, with why. */
   scanError?: string;
+  /** A scan asked for from this page is running. */
+  scanBusy: boolean;
   accounts: Loaded<{ accounts: Account[] }>;
   /** Asks pluxy to scan again, then reads what it found. */
   scan(): Promise<void>;
+  /**
+   * Asks pluxy to scan again and waits until it has (pluxy scans in the background): gives the
+   * setup read once the scan is over, none when asking or reading failed.
+   */
+  rescan(): Promise<Setup | undefined>;
 }
 
 export function useToolsState(): ToolsState {
@@ -181,16 +188,34 @@ export function useToolsState(): ToolsState {
   });
   const accounts = useLoad(api.accounts);
   const [scanError, setScanError] = useState<string>();
+  const [scanBusy, setScanBusy] = useState(false);
   const scanning = useRef(false);
-  const scan = async () => {
-    if (scanning.current) return;
+  // Asks for a scan; true when pluxy took the request.
+  const start = async (): Promise<boolean> => {
+    if (scanning.current) return false;
     scanning.current = true;
+    setScanBusy(true);
     setScanError(undefined);
     const reply = await api.scanSetup();
     scanning.current = false;
-    if (reply.status === 401) return unauthorized();
-    setScanError(problem(reply));
+    setScanBusy(false);
+    if (reply.status === 401) {
+      unauthorized();
+      return false;
+    }
+    const why = problem(reply);
+    setScanError(why);
     setup.reload();
+    return why === undefined;
+  };
+  const scan = async () => {
+    await start();
+  };
+  // Who waits for a scan to be over, given the setup read then (none when the read failed).
+  const waiting = useRef<((found: Setup | undefined) => void)[]>([]);
+  const rescan = async (): Promise<Setup | undefined> => {
+    if (!(await start())) return undefined;
+    return new Promise((resolve) => waiting.current.push(resolve));
   };
   // A pluxy that never scanned scans once as the page opens; while it scans, the page asks again
   // every second (not while hidden), and stops when the scan is over or the page is left.
@@ -203,7 +228,22 @@ export function useToolsState(): ToolsState {
     void scan();
   }, [data]);
   usePoll(() => !setup.loading && setup.reload(), 1000, running);
-  return { setup, older: setup.phase === "failed" && status.current === 404, scanError, accounts, scan };
+  useEffect(() => {
+    if (waiting.current.length === 0 || setup.loading) return;
+    if (setup.phase !== "failed" && (!data || data.scanning)) return;
+    const done = waiting.current;
+    waiting.current = [];
+    for (const resolve of done) resolve(setup.phase === "failed" ? undefined : data);
+  }, [data, setup.loading]);
+  return {
+    setup,
+    older: setup.phase === "failed" && status.current === 404,
+    scanError,
+    scanBusy,
+    accounts,
+    scan,
+    rescan,
+  };
 }
 
 /** When the data on screen was last read, for a notice that a refresh failed over it. */
