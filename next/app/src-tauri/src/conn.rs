@@ -1801,13 +1801,102 @@ fn check_key(client: &Client, key: &str) -> Result<(), String> {
             _ => "core could not be reached or its reply could not be read",
         }
         .into()),
-        s => Err(format!("core answered {s}")),
+        403 if r
+            .error
+            .as_ref()
+            .is_some_and(|e| e.code == "remote_disabled") =>
+        {
+            Err(REMOTE_MANAGEMENT_OFF.into())
+        }
+        s => Err(match r.error.as_ref().filter(|e| !e.message.is_empty()) {
+            Some(e) => format!("core answered {s}: {}", e.message),
+            None => format!("core answered {s}"),
+        }),
     }
 }
+
+/// What the person reads when core refuses a call from this computer because remote management
+/// is off (403 `remote_disabled`). The panel says the same in `refusal`
+/// (next/ui/panel/browserHost.ts).
+const REMOTE_MANAGEMENT_OFF: &str = "core answers only the computer it runs on. To sign in from here, set \"management_allow_remote\" to true in core's config.json on that computer (run pluxy help there to see where the file is), save it, and try again. Core picks the change up by itself.";
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serves one reply to the first connection and returns the address it listens on.
+    fn answer_once(reply: &'static str) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0];
+            while !head.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                head.push(byte[0]);
+            }
+            stream.write_all(reply.as_bytes()).unwrap();
+        });
+        base
+    }
+
+    /// What `check_key` tells a person for each way core can refuse `GET /status`: remote
+    /// management off says what to change, any other refusal carries core's own reason, and the
+    /// cases it already named keep their words.
+    #[test]
+    fn check_key_says_why_core_refused() {
+        let json = |status: &str, body: &str| -> &'static str {
+            Box::leak(
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .into_boxed_str(),
+            )
+        };
+        let asked = |reply: &'static str| {
+            check_key(&Client::new(&answer_once(reply), None), "a-key").unwrap_err()
+        };
+        // The words core's real gate gives, from internal/server/manage.go.
+        let off = asked(json(
+            "403 Forbidden",
+            r#"{"error":{"code":"remote_disabled","message":"remote management is off: the management API answers only this machine (management_allow_remote turns on other machines)"}}"#,
+        ));
+        assert_eq!(off, REMOTE_MANAGEMENT_OFF);
+        assert!(off.contains("\"management_allow_remote\" to true"), "{off}");
+        assert_eq!(
+            asked(json("403 Forbidden", r#"{"error":{"code":"blocked","message":"too many failed management keys from this address; try again in 29m58s"}}"#)),
+            "core answered 403: too many failed management keys from this address; try again in 29m58s"
+        );
+        assert_eq!(
+            asked(json(
+                "500 Internal Server Error",
+                r#"{"error":{"code":"internal","message":"core could not finish"}}"#
+            )),
+            "core answered 500: core could not finish"
+        );
+        // No reason from core (a proxy in front of it, say): the status alone, as before.
+        assert_eq!(
+            asked("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+            "core answered 502"
+        );
+        assert_eq!(
+            asked(json(
+                "401 Unauthorized",
+                r#"{"error":{"code":"unauthorized","message":"invalid management key"}}"#
+            )),
+            "core refused this key"
+        );
+        assert_eq!(
+            asked(json(
+                "404 Not Found",
+                r#"{"error":{"code":"not_found","message":"x"}}"#
+            )),
+            "no pluxy management API answered at this address"
+        );
+    }
 
     /// N1: a call taken before the app's core is stopped refuses from the moment the stop
     /// begins, while the core drains; and no other program can listen on the core's address

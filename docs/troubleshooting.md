@@ -218,6 +218,8 @@ Then restart core.
 
 Open `http://127.0.0.1:8317/panel/` (or the `listen` address core printed). The sign-in screen asks for the **Management key**: paste `management_key` from `config.json` and click **Sign in**.
 
+If sign-in from another computer says `core answers only the computer it runs on`, core's remote management is off: it answers management calls only from the computer it runs on (core's reply is 403 `remote_disabled`). On that computer, set `"management_allow_remote": true` in core's `config.json` and save it; core picks the change up by itself, so try again. Any other refusal at sign-in is shown as `core answered <status>:` followed by core's own reason.
+
 If the panel prints `Core refused the management key. Sign in again.`, verify you used `management_key` rather than a client key from `client_keys`. Five wrong keys in a row from another machine block that address for 30 minutes (403 `blocked`); requests from core's own machine are never blocked.
 
 ## Seeing what happened

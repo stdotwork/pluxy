@@ -116,3 +116,24 @@ test("a normal 401 still signs out and clears its rejected stored key", async ()
   expect(host.signedIn()).toBe(false);
   expect(local.getItem("pluxy.key")).toBeNull();
 });
+
+test("sign-in says why core refused it, and keeps the words for the cases it already named", async () => {
+  const error = (code: string, message: string) => ({ error: { code, message } });
+  const asked = async (status: number, body?: unknown) => {
+    const { host } = tab();
+    globalThis.fetch = (async () => response(status, body)) as unknown as typeof fetch;
+    return host.signIn("k", false);
+  };
+  const off = await asked(403, error("remote_disabled", "remote management is off: ..."));
+  expect(off).toContain('set "management_allow_remote" to true in core\'s config.json');
+  expect(
+    await asked(
+      403,
+      error("blocked", "too many failed management keys from this address; try again in 29m58s"),
+    ),
+  ).toBe("core answered 403: too many failed management keys from this address; try again in 29m58s");
+  expect(await asked(502)).toBe("core answered 502");
+  expect(await asked(401, error("unauthorized", "invalid management key"))).toBe("core refused this key");
+  expect(await asked(404)).toBe("no pluxy management API answered at this address");
+  expect(await asked(200, {})).toBeUndefined();
+});
