@@ -1,35 +1,40 @@
 # pluxy
 
-pluxy (plug + proxy) is a proxy that runs on your machine and serves the OpenAI, Anthropic, Gemini
-and Codex APIs from the accounts you already have: subscription sign-ins and API keys. Your coding
-tools talk to pluxy, and pluxy picks an account for each request.
+pluxy is an AI API router that pools the accounts you already have (subscription sign-ins such as
+ChatGPT, Claude or Kimi, and API keys) and serves them to coding tools behind OpenAI-, Anthropic-,
+Gemini- and Codex-compatible APIs, picking an account for each request. It does the job CLIProxyAPI
+and EasyCLIProxyAPI do, built like the Pi coding agent: a small core with extensions you add,
+applied to a router like LiteLLM, CLIProxyAPI or 9router. Nothing is installed at first; you add
+only the providers you use.
 
-## What it is for
+## What it solves
 
-If you run coding agents on subscription accounts, you have probably met these:
+- **An account hits its limit mid-task.** pluxy holds several accounts for a provider; when one is
+  refused for a rate or usage limit, the request moves to the next account that serves the model as
+  long as no part of the reply has reached the client.
+- **An account stays blocked after its limit resets.** pluxy blocks an account for as long as the
+  provider said, checks long blocks every 15 minutes, and ends the block once the limit is no longer
+  full. `pluxy account list` shows why each account is blocked and until when;
+  `pluxy account clear <id>` ends a block now.
+- **You cannot see what is left.** `pluxy account quota <id>` and the panel's Home and Accounts
+  pages show each account's usage limits as the provider reports them. `pluxy usage` counts requests
+  and tokens by model, account, client key or provider from a record kept on disk.
+- **Setup means writing a config file by hand.** The first start writes the config. Guided setup
+  (**Set up pluxy** in the panel, or `pluxy setup`) checks this computer, suggests matching
+  providers, and installs only the ones you pick.
+- **Every coding tool wants different settings.** `pluxy client show <tool>` prints what to paste
+  into Claude Code, Codex, OpenCode, Pi or Oh My Pi.
 
-- **An account hits its limit in the middle of a task.** pluxy holds several accounts for a
-  provider. When one is refused for its rate or usage limit, the request goes to the next account
-  that serves the model, as long as no part of the reply has reached the client.
-- **An account stays blocked after its limit has reset.** pluxy blocks an account for as long as
-  the provider said. While a long block lasts, pluxy checks every 15 minutes whether the limit is
-  still full, and ends the block when it is not. `pluxy account list` says why each account is
-  blocked and until when; `pluxy account clear <id>` ends a block now.
-- **You cannot see what is left.** `pluxy account quota <id>` and the panel's Quota page show
-  each account's limits as the provider reports them. `pluxy usage` counts requests and tokens by
-  model, account, client key or provider, from a record kept on disk.
-- **Setup means writing a config file by hand.** The first start writes the config. A setup page
-  then looks at the machine, offers the providers that fit what it found, and installs only the
-  ones you pick.
-- **Every tool wants different settings.** `pluxy client show <tool>` prints what to paste into
-  Claude Code, Codex, OpenCode, Pi or Oh My Pi.
+## Three parts
 
-pluxy has three parts: the core (the proxy itself, a Go program), a web panel the core serves at
-`/panel/`, and a desktop app that runs or connects to a core (Linux only for now). Each kind of
-account is served by a provider extension, a separate program the core starts: Claude, Codex and
-ChatGPT, Gemini, Grok, Kimi Code, Meta Muse, Devin, and any OpenAI-compatible API.
-
-![The panel's setup page: what pluxy found on the machine, the providers to install, and the steps to connect an account and point a client at pluxy](docs/images/setup.png)
+- **Core and the `pluxy` command** (Go): Core is the proxy itself and its `pluxy` command, mainly
+  for agents and scripts. Each kind of upstream runs as a separate provider extension that core
+  starts: Claude, Codex and ChatGPT, Gemini, Grok, Kimi Code, Meta Muse, Devin, and any
+  OpenAI-compatible API.
+- **The web panel**: Core serves a web panel at `/panel/` for managing a core on a computer without
+  a screen or in a container.
+- **The desktop app** (Linux only for now): The app runs a core on its own computer or connects to
+  one elsewhere, and sets up coding tools.
 
 ## Quick start
 
@@ -147,45 +152,32 @@ the same record. `./pluxy help` lists every command.
 
 ## Where to read more
 
-[docs/README.md](docs/README.md) lists every page.
+[docs/README.md](docs/README.md) is the index of every page. Start with these:
 
 | You want to | Read |
 | --- | --- |
 | Build pluxy, start it, or run it in a container | [docs/setup.md](docs/setup.md) |
-| Set up a coding tool or another client | [docs/clients.md](docs/clients.md) |
-| Add an account, and know each provider's options | [docs/providers.md](docs/providers.md) |
-| Know how a request picks an account, and set up fallbacks | [docs/routing.md](docs/routing.md) |
-| Install or remove extensions | [docs/extensions.md](docs/extensions.md) |
-| See usage, logs and request logs | [docs/usage-and-logs.md](docs/usage-and-logs.md) |
-| Move from CLIProxyAPI | [docs/moving-from-cpa.md](docs/moving-from-cpa.md) |
-| Fix a problem or find out why a request failed | [docs/troubleshooting.md](docs/troubleshooting.md) |
-| Look up a config setting | [docs/config.md](docs/config.md) |
-| Know what carries over when a client and a provider speak different APIs | [docs/translation.md](docs/translation.md) |
-| Look up a `pluxy` command | [docs/cli.md](docs/cli.md) |
-| Call the management API | [docs/management-api.md](docs/management-api.md) |
-| Use the desktop app | [next/app/README.md](next/app/README.md) |
-| Write a provider extension | [next/protocol/TUTORIAL.md](next/protocol/TUTORIAL.md) |
-| Know why pluxy is built this way | [docs/design.md](docs/design.md) |
-| Know what pluxy costs in time and memory | [docs/perf.md](docs/perf.md) |
-| Build, test or change pluxy | [AGENTS.md](AGENTS.md) |
+| Add an account and check each provider's options | [docs/providers.md](docs/providers.md) |
+| Connect a coding tool or another client | [docs/clients.md](docs/clients.md) |
+| Understand account picking, blocks and fallback chains | [docs/routing.md](docs/routing.md) |
+| Look up a config setting or environment variable | [docs/config.md](docs/config.md) |
+| Find out why a request failed or fix a problem | [docs/troubleshooting.md](docs/troubleshooting.md) |
 
 ## What is in this repository
 
-Everything is in `next/`:
-
-| Folder | Component |
+| Folder | What it holds |
 | --- | --- |
-| `next/` | The core, its extension protocol and the provider extensions ([README](next/README.md)) |
-| `next/ui/` | The UI kit: the web panel, and the pages the desktop app shares with it ([README](next/ui/README.md)) |
+| `next/` | Core, the `pluxy` command, the extension protocol and the provider extensions ([README](next/README.md)) |
+| `next/ui/` | The UI kit and the web panel core embeds ([README](next/ui/README.md)) |
 | `next/app/` | The desktop app ([README](next/app/README.md)) |
+| `next/app-tools/` | Optional native tools the desktop app runs on demand ([README](next/app-tools/README.md)) |
 
 ## Credits and license
 
-pluxy started as Soul4723's forks of router-for-me's
-[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) core,
-[EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) desktop app and
-[Cli-Proxy-API-Management-Center](https://github.com/router-for-me/Cli-Proxy-API-Management-Center)
-web panel. The new core, panel and desktop app in `next/` replaced the three forks, which have been
-removed. Their MIT notices, the Pi adapter's in `next/app-tools/pi-setup/adapter/`, and the files
-`next/` keeps or adapts from each are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The root
-license is not decided yet.
+pluxy began as Soul4723's forks of router-for-me's
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI),
+[EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI) and
+[Cli-Proxy-API-Management-Center](https://github.com/router-for-me/Cli-Proxy-API-Management-Center),
+which have since been replaced and removed. Their MIT notices, the Pi adapter's in
+`next/app-tools/pi-setup/adapter/`, and the files `next/` keeps or adapts from upstream projects are
+in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The root license is not decided yet.
