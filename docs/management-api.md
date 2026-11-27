@@ -232,7 +232,7 @@ the document with `PUT /config`.
 
 In a `config.yaml`, `payload` is at `requests.payload` (or at `payload` when the file has only that)
 and `proxy-url` at `requests.proxy-url` (or `proxy-url`). `routing.timeouts` and `routing.ignition`
-have no name in a `config.yaml`: a `PATCH` that sets either there is refused with 422 `refused`, and
+have no name in a `config.yaml`: a `PATCH` that sets either there is refused with 400 `invalid_request`, and
 `null` changes nothing there. A `config.yaml` that sets window ignition does so in
 `plugins.configs.lamplighter`, which core reads as `routing.ignition` but does not write.
 

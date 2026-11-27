@@ -602,8 +602,10 @@ you set always wins: `api.deepseek.com` takes `developer_role` `system`, `string
 - A service that lacks a side endpoint fails only that request when it answers 404 there without
   naming a missing model, and blocks no model on the account. This holds for compaction
   (`/responses/compact`), embeddings (`/embeddings`) and the Images API (`/images/generations` and
-  `/images/edits`). A 404 that says the model is unknown, and any 404 from the generation path itself,
-  still blocks as usual.
+  `/images/edits`). A 404 that says the model is unknown still blocks as usual on compaction and the
+  Images API, and so does any 404 from the generation path itself. On embeddings it does not: the
+  account is taken as unable to embed with that model, and core tries the model's next account (a
+  400 when none can), without blocking the model for generation.
 - A service tier or verbosity from a client in another format is sent only to the hosts whose
   documentation names the field: `api.openai.com` (Chat and Responses wires), `api.anthropic.com`
   (Messages wire, service tier `auto` and `default`) and `generativelanguage.googleapis.com` (Gemini
