@@ -36,8 +36,10 @@ each.
    ```
 
    A browser sign-in prints a link, a device-code sign-in prints a link and a code, and the command
-   waits until you finish in the browser. `--no-wait` prints the link or code and returns; the sign-in
-   then finishes inside core. See [the CLI](cli.md) for every account command and flag.
+   waits until you finish in the browser. `--no-wait` prints the link or code and returns, and the
+   sign-in goes on in core; use it for a device code. Do not use it for a sign-in that asks you to
+   paste something back (Claude's `subscription`): the command asks for it while it waits. See
+   [the CLI](cli.md) for every account command and flag.
 
 3. **Check it.** `pluxy account test <id>` sends one small request through the account;
    `pluxy account models <id>` lists the models it serves; `pluxy account quota <id>` shows its plan
@@ -93,7 +95,7 @@ What each method does with what you give it:
 | --- | --- |
 | The key is checked with a call that costs nothing, and refused if the provider says it is wrong | Claude `api_key`, Codex `api_key`, Gemini `api_key` (not a Vertex express mode key), xAI `api_key`, Kimi `api_key`, OpenAI Compatible |
 | The token is checked, and refused only if the provider rejects it | Devin `token` |
-| The key or token is stored as entered, unchecked | Claude `setup_token`, Meta `api_key`, Gemini `api_key` with Vertex settings |
+| The key or token is stored without asking the provider | Claude `setup_token` (it must contain `sk-ant-oat`), Meta `api_key`, Gemini `api_key` with Vertex settings, and a Codex `api_key` for a host other than OpenAI's that has no model list |
 | The provider's page signs you in | every `browser`, `device`, `subscription` and `siwc` method |
 
 Gemini's `service_account` method fetches an access token with the key, which is the check.
@@ -126,8 +128,9 @@ or a Claude subscription.
   listens on that address; pasting is the only way back.
 - `api_key`: an Anthropic API key, checked with `GET /v1/models`. A key that contains `sk-ant-oat` is
   a setup token and is treated as one.
-- `setup_token`: the token `claude setup-token` prints. It is kept as entered and not checked,
-  because no call checks it without spending from the subscription. It is never renewed.
+- `setup_token`: the token `claude setup-token` prints. pluxy refuses a value that does not contain
+  `sk-ant-oat`, and keeps one that does without asking Anthropic, because no call checks it without
+  spending from the subscription. It is never renewed.
 
 pluxy sends any key that contains `sk-ant-oat` as a subscription token, however it was added.
 
@@ -139,7 +142,7 @@ lists nothing, pluxy uses the extension's built-in list.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `base_url` | `https://api.anthropic.com` | Where the Messages API is. A trailing `/v1` or `/v1/messages` is dropped. |
-| `cache_ttl` | `"5m"` | How long the `cache_control` markers pluxy adds to translated requests last: `"5m"` or `"1h"`. A client's own cache markers keep their own lifetime. |
+| `cache_ttl` | `"5m"` | How long the `cache_control` markers pluxy adds to translated requests last: `"5m"` or `"1h"`. A Responses client's own `prompt_cache_retention` or `prompt_cache_options.ttl` takes precedence for that request. |
 | `model_level_cooling` | `false` | `true`: a used-up 5-hour or weekly limit blocks only the model that hit it. `false`: it blocks the whole account. |
 | `rebuild_mid_system_message` | `false` | `true`: system messages in the middle of a conversation are moved into the top-level system prompt, for an upstream that refuses them there. |
 | `client_id` | Claude's own | The OAuth client the `subscription` sign-in uses. |
@@ -177,8 +180,8 @@ Sign in with ChatGPT (SIWC).
 
 **Models.** For a ChatGPT subscription, pluxy reads the model catalog of the ChatGPT backend. When
 that fails or is empty it uses the built-in list for the account's plan (free, plus, team, pro;
-business and go use the team list). An API key and a SIWC account always use the built-in list: an
-API key gets the pro list. Every list ends with the image models `gpt-image-1.5`, `gpt-image-2`,
+business and go use the team list; any other plan gets the pro list). An API key and a SIWC account
+always use the built-in list: an API key gets the pro list. Every list ends with the image models `gpt-image-1.5`, `gpt-image-2`,
 `gpt-image-2.5`, `gpt-image-2.5-flare` and `gpt-image-2.5-sunburst`, except a SIWC account's, which
 has none.
 
@@ -194,7 +197,7 @@ has none.
 | `image_generation_tool` | `true` | Offer the hosted `image_generation` tool to requests. Never offered to a free plan, a SIWC account or a model whose name ends in `spark`. |
 | `image_generation_off_models` | none | Model names, or patterns with `*` and `?` (any case), that are not offered the `image_generation` tool. Matched against the model name sent upstream. |
 | `websockets` | `false` | Send a Responses WebSocket client's turns over one upstream WebSocket per client socket. When the upstream drops it mid-turn, the client gets `upstream_websocket_lost` and sends the conversation again. |
-| `alpha_search` | `false` | Let an API key account serve Codex's Alpha Search. A ChatGPT sign-in always does. |
+| `alpha_search` | `false` | Let an API key account serve Codex's Alpha Search. The account also needs a `base_url` of its own. A ChatGPT sign-in always serves it. |
 | `prompt_cache_retention_passthrough` | `false` | Send the client's `prompt_cache_retention` on, for an upstream that takes it. A SIWC account never sends it. |
 | `signin_with_chatgpt_identifier` | `pluxy` | The name a SIWC sign-in gives this program, shown on the sign-in page. |
 
@@ -209,7 +212,8 @@ has none.
   limits, any extra per-model limit, the credit balance and the number of manual resets. An API key
   has none.
 - A refusal that says the model or turn is at capacity blocks that model on that account, not the
-  account. The client sees a 429 and core tries another account.
+  account. The client sees a 429 and core tries another account, unless the refusal came inside a
+  reply that had already started: that request is not tried again.
 - The free ChatGPT plan, and an account with `"images": false`, do not serve the Images API.
 
 ## Gemini
@@ -233,6 +237,8 @@ input), makes the account `vertex-<project_id>` with `vertex.project` set from t
 `vertex.location` set to `us-central1`, and signs in. To use another location, change the account's
 `vertex` setting afterwards. When the account `vertex-<project_id>` already exists, the command signs
 in to it again, and only a key of the same service account (the same `client_email`) replaces its key.
+An existing account of that ID that is not the same project's Vertex service account, or that is
+written in the config file, refuses the import.
 
 **Models.** A Gemini API account reads `GET {base_url}/v1beta/models` and falls back to the built-in
 Gemini list when that fails or is empty. A Vertex AI account always uses the built-in Vertex list.
@@ -262,17 +268,15 @@ In a config file, a service account's credential holds only the secret part of t
 **Limits and quirks.**
 
 - Google reports no remaining quota for these accounts. Quota shows the values from the account's
-  last HTTP 429 reply, labelled with when it was seen. It is kept in memory only, so core's restart
-  clears it, and an account that never got a 429 shows none.
+  last HTTP 429 reply, labelled with when it was seen. It is kept in the extension's memory only, so
+  it is lost when core restarts or stops the idle extension (by default after 10 minutes without
+  requests), and an account that never got a 429 shows none.
 - The Interactions API is served only by accounts with `"interactions": true`. A request that names an
   `agent` (such as Deep Research) goes to any such account. Thinking suffixes on the model name are
   refused there; set `generation_config.thinking_level` instead.
 - Embeddings (`POST /v1/embeddings`), speech and transcription (`POST /v1/audio/speech` and
   `/v1/audio/transcriptions`) and Responses compaction (`POST /v1/responses/compact`) are served on
   every Gemini account. Speech returns `pcm` or `wav` only, not the default `mp3`.
-- Every request to the Gemini API or Vertex AI that Google would refuse for its turn order is changed
-  first: an empty user turn is added before a first model turn and after a last model turn (a last
-  turn of function responses stays).
 - Keys for Google's sovereign-cloud universes name their own token endpoint and are not supported.
 
 ## xAI (Grok)
@@ -306,9 +310,11 @@ video and speech models, which need endpoints pluxy does not send to.
   An API key's requests name `pluxy-xai/<version>`.
 - Every client format goes to xAI's Responses API. A request with more than 200 tools keeps the first
   200, the most xAI accepts.
-- A 429 that says the free usage is used up blocks that model on the account for 24 hours.
+- A 429 that says the free usage is used up holds that model back on the account for up to 24 hours.
+  Core checks a hold that long every 15 minutes and lifts it early when the account's quota shows
+  room (see [Routing](routing.md)).
 - Quota for a Grok account shows the weekly credit window, monthly credits, the pay-as-you-go cap and
-  use, and the prepaid balance, in dollars. An API key has none.
+  use, and the prepaid balance. The last three are in dollars. An API key has none.
 - Responses compaction is served for API keys and Grok accounts. For a Grok account on the CLI chat
   endpoint, which has no compaction endpoint, it goes to xAI's official API instead.
 
@@ -337,15 +343,18 @@ Extension `pluxy/kimi`. Moonshot AI's Kimi Code subscription.
 - The token is renewed five minutes before it expires.
 - Each client format goes to Kimi's matching endpoint (Chat Completions, Responses, Messages). A
   Gemini request is translated to Chat Completions. Kimi names its coding models differently: `kimi-k2.8`
-  is sent as `kimi-for-coding`, and other names lose their `kimi-` prefix.
-- Requests name pluxy in Kimi's device headers, with a device ID made at sign-in. An API key has none.
+  and the other `kimi-k2.x-code` names are sent as `kimi-for-coding` (or `kimi-for-coding-highspeed`),
+  and any other name loses its `kimi-` prefix.
+- Chat Completions and Responses requests name pluxy in Kimi's device headers, with a device ID made
+  at sign-in (an API key has none). A Messages request carries the client's own Messages headers.
 - A token count goes to Kimi's own count endpoint.
 - Quota for a device sign-in shows each limit Kimi reports, the weekly limit, and the monthly and
   monthly coding limits, with the plan. An API key has none.
 - A 429 that says the quota is used up is reported as a used-up quota, not a rate limit.
-- The Messages replay: when a Messages client resends an earlier tool-use turn without its signed
-  thinking, pluxy puts the thinking back from memory, for up to an hour and until core stops the idle
-  extension (after 10 minutes without requests) or restarts it.
+- Thinking replay: when a Messages client from Claude Code resends an earlier tool-use turn without
+  its signed thinking, pluxy puts the thinking back. It keeps each turn in the extension's memory for
+  an hour after the turn was last used, and loses all of them when core stops the idle extension (by
+  default after 10 minutes without requests) or restarts it.
 
 ## Muse (Meta)
 
@@ -373,8 +382,9 @@ Extension `pluxy/meta`. Meta's Muse models on `api.meta.ai`.
   which makes a new key from the device token.
 - Every request is streamed (a client that wants one reply gets the stream gathered), and requests
   with tools also carry Muse Code's own `muse` tool namespace, which Meta wants.
-- A 429 that says the subscription quota is used up is reported as a used-up quota until Meta's reset
-  time. A 404 holds the account back from the model until then, or for five minutes.
+- A 429 that says the subscription quota is used up is reported as a used-up quota until the reset
+  time Meta gives (else its `Retry-After`, else core's usual backoff). A 404 holds the account back
+  from the model until that time, or for five minutes.
 - Quota for a device sign-in shows the usage limit, the weekly limit and the plan. To read it pluxy
   asks Meta's key endpoint for a new key and throws it away. An API key has none.
 - Meta has no token count endpoint, and pluxy does not do compaction through Meta.
@@ -392,13 +402,15 @@ server, as Devin's CLI talks to it.
 - `token`: a session token (`devin-session-token$...`) you already have, checked against Devin's
   profile endpoint. Only a refusal of the token fails it.
 
-The account's name is its Devin user name.
+The account is named after its Devin user name, or its user ID when Devin gives no user name.
 
 **Models.** The extension's built-in catalog (SWE, Claude, GPT, Gemini, Kimi, GLM, DeepSeek, Grok and
 other models), the same for every Devin account. Devin names a model and its reasoning effort as one
 ID (`claude-opus-5-5-medium`). A client asks for `claude-opus-5-5` (or `devin/claude-opus-5-5`) and
 pluxy adds the request's reasoning effort, or the model's default, moved to the nearest effort the
-model has. A name that already ends in an effort is sent as it is.
+model has. A name that already ends in an effort is sent as it is, and so is a model that is not in
+pluxy's catalog (with the request's effort added when it has one). A few models name their efforts as
+variants instead: SWE-1.7, SWE-1.6, GLM-5.2 and the Claude 4.6 models.
 
 **Options** (account `settings`, all optional):
 
@@ -411,7 +423,6 @@ model has. A name that already ends in an effort is sent as it is.
 **Limits and quirks.**
 
 - The session token does not expire and has no renewal. When Devin refuses it, sign in again.
-- A request that names no model gets `swe-2`.
 - Devin has no place for some client fields (parallel tool calls off, strict tool arguments, files
   other than text and base64 images, namespace and freeform tools such as `apply_patch`). pluxy
   reports each as dropped, and refuses the request under the config's `drop_policy` `reject`.
@@ -439,8 +450,9 @@ pluxy checks the key with `GET {base_url}/models`, using the header that `wire_a
 accepts any 2xx reply. A wrong base URL that answers 2xx is accepted too. The base URL and wire API
 are kept as the account's settings. An account that signs in again needs only the key.
 
-**Models.** Read from `GET {base_url}/models` (in OpenAI's list shape or Gemini's). When that fails,
-the account serves the models its `models` setting names, or any model when it names none.
+**Models.** An account that lists `models` of its own serves those, and pluxy reads nothing. Otherwise
+pluxy reads `GET {base_url}/models` (in OpenAI's list shape or Gemini's). A later read that fails keeps
+the last good list; an account whose first read failed serves any model until a read works.
 
 **Options** (account `settings`):
 
@@ -452,7 +464,7 @@ the account serves the models its `models` setting names, or any model when it n
 | `reasoning_levels` | `["low", "medium", "high"]` | The reasoning efforts the service accepts, from `none`, `minimal`, `low`, `medium`, `high`, `xhigh` and `max`. An effort outside the list is sent as the nearest one, and reported. Chat and Responses wires only. |
 | `developer_role` | `developer` | `developer` or `system`: the role a developer message goes as, on the Chat wire. |
 | `string_content` | `false` | `true`: a message whose content is only text parts is sent as one string, on the Chat wire. |
-| `reasoning_passback` | unset | On the Chat wire: `true` sends earlier assistant turns' `reasoning_content` back, `false` sends none, unset leaves what the client sent. |
+| `reasoning_passback` | unset | On the Chat wire: `true` sends earlier assistant turns' `reasoning_content` back, only for a request with tools and with thinking not turned off (a turn with none gets a blank one). `false` sends none. Unset leaves what the client sent. |
 
 For some hosts pluxy fills the three Chat-wire shaping settings when you leave them unset, and a value
 you set always wins: `api.deepseek.com` takes `developer_role` `system`, `string_content` `true` and
@@ -466,10 +478,11 @@ you set always wins: `api.deepseek.com` takes `developer_role` `system`, `string
 - Responses compaction is served on `responses` and `chat` accounts. The Images API is served on
   `chat` and `responses` accounts, for any model the account lists. Neither is served on `messages`
   or `gemini` accounts.
-- Token counts come from the upstream's own count endpoint on a `messages` or `gemini` wire. On a
-  `chat` or `responses` wire core estimates the count.
-- A service that lacks a side endpoint (embeddings, images, token counts, compaction) fails only that
-  request when it answers 404 without naming a missing model, and blocks no model on the account.
+- Token counts (Messages and Gemini count requests) come from the upstream's own count endpoint on a
+  `messages` or `gemini` wire. On a `chat` or `responses` wire core estimates the count, and so it
+  does when the upstream answers 404 to the count.
+- A service that lacks a side endpoint (embeddings, images, compaction) fails only that request when
+  it answers 404 without naming a missing model, and blocks no model on the account.
 - A service tier or verbosity from a client in another format is sent only to the hosts whose
   documentation names the field: `api.openai.com` (Chat and Responses wires), `api.anthropic.com`
   (Messages wire, service tier `auto` and `default`) and `generativelanguage.googleapis.com` (Gemini
@@ -483,7 +496,9 @@ core's credential store: the `credentials` folder beside the config file (the co
 the extension that created an account ever receives its credential, and core removes the credential
 from what an extension sends back.
 
-Core renews an account's credential through its extension shortly before it expires:
+An account's credential is due for renewal a set time before it expires, and core renews it through
+its extension the next time a request uses the account. An account nobody uses is not renewed in
+between. The lead time is:
 
 | Provider and method | Renewed |
 | --- | --- |
@@ -503,9 +518,10 @@ Core renews an account's credential through its extension shortly before it expi
 When the provider refuses the credential for good (the refresh token is revoked, the password was
 changed), the account shows "Needs sign-in". Sign in again from its page, or with
 `pluxy account login <id> --method <method>`. The new sign-in must be to the same upstream account:
-when the provider says who signed in, the e-mail address and account ID must match what pluxy stored,
-or the sign-in fails and the account keeps its old credential. To use another account, add it as a new
-one.
+every identity field the provider reported at the first sign-in (an e-mail address, an account ID, a
+user ID) must match, ignoring case, or the sign-in fails and the account keeps its old credential.
+An account whose provider reported no identity (Kimi's) is checked by the label its provider gave it,
+when both sign-ins have one. To use another account, add it as a new one.
 
 `pluxy account remove <id>` removes an account and its credential. Removing an extension keeps its
 accounts: they serve again once the extension is installed again.
