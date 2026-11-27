@@ -1733,17 +1733,190 @@ fn a_connect_that_fails_takes_away_the_folders_it_made() {
     std::fs::remove_dir_all(&home).unwrap();
 }
 
+/// The three targets and create_folder the preview showed for agent while it did not exist, with
+/// the files resolved in real (what the preview made before it refused a link at `~/.pi`).
+fn unmade_input(agent: &Path, real: &Path) -> serde_json::Value {
+    let targets: Vec<_> = crate::FILES
+        .iter()
+        .map(|name| {
+            serde_json::json!({"selected": agent.join(name), "link": null,
+                "target": real.join(name),
+                "identity": {"link": null, "parent": null, "file": null}, "sha256": null})
+        })
+        .collect();
+    serde_json::json!({"targets": targets, "create_folder": agent})
+}
+
+#[test]
+fn connect_makes_no_agent_folder_through_a_link_at_pi() {
+    let (home, data) = fresh_home("pi-link");
+    let elsewhere = temp("pi-link-elsewhere");
+    link_dir(&elsewhere, &home.join(".pi"));
+    let h = home.clone();
+    let at = move || Ok(h.clone());
+    // Connect with the targets the preview named before it refused this: refused, nothing made.
+    let agent = home.join(".pi").join("agent");
+    let real = std::fs::canonicalize(&elsewhere).unwrap().join("agent");
+    let (input, secrets) = connect_input(&unmade_input(&agent, &real));
+    let r = crate::apply_in(&Mem::default(), data.clone(), &input, &secrets, &at);
+    let made: Vec<String> = files_under(&elsewhere)
+        .into_iter()
+        .map(|(p, _)| p)
+        .collect();
+    assert!(r.is_err() && made.is_empty(), "{r:?}; made {made:?}");
+    assert!(names(&elsewhere).is_empty(), "made {:?}", names(&elsewhere));
+    // The preview says why, in words.
+    let e =
+        crate::preview_in(&Mem::default(), data.clone(), &serde_json::json!({}), &at).unwrap_err();
+    assert!(
+        e.message.contains("is a link to another place") && e.message.contains("run Pi once"),
+        "{e}"
+    );
+    unlink_dir(&home.join(".pi"));
+    std::fs::remove_dir_all(&home).unwrap();
+    std::fs::remove_dir_all(&elsewhere).unwrap();
+}
+
+#[test]
+fn a_link_put_at_pi_or_its_agent_folder_after_the_preview_is_not_followed() {
+    for at_agent in [false, true] {
+        let (home, data) = fresh_home(&format!("pi-link-after-{at_agent}"));
+        let elsewhere = temp(&format!("pi-link-after-{at_agent}-elsewhere"));
+        let h = home.clone();
+        let at = move || Ok(h.clone());
+        let v =
+            crate::preview_in(&Mem::default(), data.clone(), &serde_json::json!({}), &at).unwrap();
+        let (input, secrets) = connect_input(&v);
+        let link = if at_agent {
+            std::fs::create_dir(home.join(".pi")).unwrap();
+            home.join(".pi").join("agent")
+        } else {
+            home.join(".pi")
+        };
+        link_dir(&elsewhere, &link);
+        assert!(crate::apply_in(&Mem::default(), data.clone(), &input, &secrets, &at).is_err());
+        assert!(names(&elsewhere).is_empty(), "made {:?}", names(&elsewhere));
+        unlink_dir(&link);
+        std::fs::remove_dir_all(&home).unwrap();
+        std::fs::remove_dir_all(&elsewhere).unwrap();
+    }
+}
+
+/// Clears the hook called with each folder Connect made, when dropped.
+struct Unhooked;
+
+impl Drop for Unhooked {
+    fn drop(&mut self) {
+        crate::AFTER_MAKE.with(|h| *h.borrow_mut() = None);
+    }
+}
+
+#[test]
+fn a_link_put_in_place_of_a_folder_connect_just_made_is_not_written_through() {
+    // Another program swaps `~/.pi`, or `~/.pi/agent`, for a link to another folder the moment
+    // Connect has made it.
+    for swapped in [".pi", "agent"] {
+        let (home, data) = fresh_home(&format!("pi-swap-{swapped}"));
+        let elsewhere = temp(&format!("pi-swap-{swapped}-elsewhere"));
+        let h = home.clone();
+        let at = move || Ok(h.clone());
+        let v =
+            crate::preview_in(&Mem::default(), data.clone(), &serde_json::json!({}), &at).unwrap();
+        let (input, secrets) = connect_input(&v);
+        // What was in the other folder each time Connect had made one.
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (s, e) = (seen.clone(), elsewhere.clone());
+        let _unhook = Unhooked;
+        crate::AFTER_MAKE.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |folder: &Path| {
+                s.borrow_mut().push(names(&e));
+                if folder.file_name() == Some(std::ffi::OsStr::new(swapped)) {
+                    std::fs::remove_dir(folder).unwrap();
+                    link_dir(&e, folder);
+                }
+            }))
+        });
+        let err =
+            crate::apply_in(&Mem::default(), data.clone(), &input, &secrets, &at).unwrap_err();
+        assert!(err.message.contains("changed since it was read"), "{err}");
+        assert!(
+            seen.borrow().iter().all(Vec::is_empty),
+            "made {:?} through the link",
+            seen.borrow()
+        );
+        assert!(names(&elsewhere).is_empty(), "made {:?}", names(&elsewhere));
+        // The link stays: it is not a folder Connect made.
+        let link = if swapped == ".pi" {
+            home.join(".pi")
+        } else {
+            home.join(".pi").join("agent")
+        };
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        unlink_dir(&link);
+        std::fs::remove_dir_all(&home).unwrap();
+        std::fs::remove_dir_all(&elsewhere).unwrap();
+    }
+}
+
+/// The error Pi's program answers a call of op with input, served as the app calls it.
+fn call_error(op: &str, input: serde_json::Value) -> String {
+    use pluxy_program::{read_frame, serve, write_frame, Description, Identity, MAX_INBOUND};
+    let (in_r, mut in_w) = std::io::pipe().unwrap();
+    let (mut out_r, out_w) = std::io::pipe().unwrap();
+    let identity = Identity {
+        id: "pluxy/pi-setup".into(),
+        sha256: "ab".repeat(32),
+    };
+    let description =
+        Description::from_manifest(include_bytes!("../pluxy-extension.json")).unwrap();
+    let served = std::thread::spawn(move || {
+        serve(
+            in_r,
+            out_w,
+            &identity,
+            description,
+            std::sync::Arc::new(crate::Pi),
+        )
+    });
+    assert_eq!(read_frame(&mut out_r).unwrap().unwrap()["type"], "hello");
+    let call = serde_json::json!({"type": "call", "id": "c-1", "op": op, "input": input});
+    write_frame(&mut in_w, &call, MAX_INBOUND).unwrap();
+    let f = read_frame(&mut out_r).unwrap().expect("an answer");
+    drop(in_w);
+    served.join().unwrap().unwrap();
+    assert_eq!(
+        (f["type"].as_str(), f["id"].as_str()),
+        (Some("error"), Some("c-1")),
+        "{f}"
+    );
+    f["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
 #[test]
 fn other_writes_say_in_words_that_the_agent_folder_does_not_exist_yet() {
+    let (home, data) = fresh_home("unmade-other");
+    let h = home.clone();
+    let at = move || Ok(h.clone());
+    let v = crate::preview_in(&Mem::default(), data, &serde_json::json!({}), &at).unwrap();
+    let input = serde_json::json!({"targets": v["targets"]});
     // The page maps "is not applied to these targets" to its own words (no copy from before).
     for op in ["clear", "restore"] {
-        assert!(crate::unmade_refusal(op)
-            .message
-            .contains("is not applied to these targets"));
+        let e = call_error(op, input.clone());
+        assert!(e.contains("is not applied to these targets"), "{op}: {e}");
+        assert!(
+            e.contains("Pi's agent folder does not exist yet"),
+            "{op}: {e}"
+        );
     }
     for op in ["update", "uninstall", "backup-create", "backup-restore"] {
-        assert!(crate::unmade_refusal(op)
-            .message
-            .contains("Connect makes it"));
+        let e = call_error(op, input.clone());
+        assert!(e.contains("Connect makes it"), "{op}: {e}");
     }
+    std::fs::remove_dir_all(&home).unwrap();
 }

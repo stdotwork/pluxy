@@ -70,13 +70,37 @@ fn absent(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
 }
 
-/// `~/.pi/agent` as Connect makes it, when nothing is there yet and `~/.pi` is a folder or missing
-/// too; None when something is there (it is read, or refused, as any agent folder).
+/// Whether path is a folder itself: not a link to one (nor a junction), nor anything else.
+fn real_folder(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir())
+}
+
+/// `~/.pi/agent` as Connect makes it, when nothing is there yet and `~/.pi` is missing too or a
+/// folder itself; None when something is there (it is read, or refused, as any agent folder).
+/// Refused when `~/.pi` is a link (or not a folder): Connect makes no folder through it, outside
+/// the home folder.
 fn unmade(home: &Path) -> Result<Option<Unmade>, Error> {
     let pi = home.join(".pi");
     let agent = pi.join("agent");
-    if !absent(&agent) || !(absent(&pi) || pi.is_dir()) {
+    if !absent(&agent) {
         return Ok(None);
+    }
+    if !absent(&pi) && !real_folder(&pi) {
+        let link = std::fs::symlink_metadata(&pi).is_ok_and(|m| m.file_type().is_symlink());
+        return Err(Error::invalid_request(if link {
+            format!(
+                "{} does not exist yet, and {} is a link to another place, so pluxy does not make it: run Pi once (it makes the folder), then read the settings again",
+                agent.display(),
+                pi.display()
+            )
+        } else {
+            format!(
+                "{} does not exist yet, and {} is not a folder, so pluxy cannot make it: move {} away, then read the settings again",
+                agent.display(),
+                pi.display(),
+                pi.display()
+            )
+        }));
     }
     // The resolved folder the files are pinned in once it is there.
     let (above, rest): (&Path, &[&str]) = if absent(&pi) {
@@ -373,6 +397,29 @@ fn after_files() {
 #[cfg(not(test))]
 fn after_files() {}
 
+// Tests only: called with each folder Connect has just made, or found there, for a preview that
+// named `create_folder` (where another program could put a link in its place).
+#[cfg(test)]
+type MadeHook = Box<dyn FnMut(&Path)>;
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_MAKE: std::cell::RefCell<Option<MadeHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn after_make(folder: &Path) {
+    AFTER_MAKE.with(|h| {
+        if let Some(f) = h.borrow_mut().as_mut() {
+            f(folder)
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn after_make(_: &Path) {}
+
 /// Where Pi's installer puts `pi` on os, in the order the launcher looks: on Linux and macOS
 /// (`pi.dev/install.sh`) its fallback in Pi's own folder first, then `~/.local/bin` (where it
 /// usually goes). On Windows `pi.dev/install.ps1` makes `pi.cmd` launchers, which are not npm's
@@ -547,30 +594,48 @@ fn apply_in(
     if *asked != json!(u.agent) || input["targets"] != u.targets {
         return Err(refused());
     }
+    // Each folder must be a folder itself at the path the preview named once it is made (or found),
+    // never a link put there meanwhile: the next is made in it, and the files are written in it.
+    let changed = || {
+        Error::invalid_request(format!(
+            "{} changed since it was read: read the settings again",
+            u.agent.display()
+        ))
+    };
     let made_pi = make_folder(&u.pi)?;
+    after_make(&u.pi);
     let mut made = false;
-    let r = make_folder(&u.agent).and_then(|m| {
-        made = m;
-        let mut pins = Vec::new();
-        for (i, name) in FILES.iter().enumerate() {
-            let p = Target::resolve(&Selection::File(u.agent.join(name)))?.pin;
-            if json!(p.target) != u.targets[i]["target"] || p.link.is_some() || p.sha256.is_some() {
-                return Err(Error::invalid_request(format!(
-                    "{} changed since it was read: read the settings again",
-                    u.agent.display()
-                )));
+    let r = real_folder(&u.pi)
+        .then_some(())
+        .ok_or_else(changed)
+        .and_then(|()| make_folder(&u.agent))
+        .and_then(|m| {
+            made = m;
+            after_make(&u.agent);
+            if !real_folder(&u.agent) {
+                return Err(changed());
             }
-            pins.push(p);
-        }
-        let pins: [Pin; 3] = pins.try_into().expect("three files");
-        connect(vault, data, pins, &u.agent, &s)
-    });
+            let mut pins = Vec::new();
+            for (i, name) in FILES.iter().enumerate() {
+                let p = Target::resolve(&Selection::File(u.agent.join(name)))?.pin;
+                if json!(p.target) != u.targets[i]["target"]
+                    || p.link.is_some()
+                    || p.sha256.is_some()
+                {
+                    return Err(changed());
+                }
+                pins.push(p);
+            }
+            let pins: [Pin; 3] = pins.try_into().expect("three files");
+            connect(vault, data, pins, &u.agent, &s)
+        });
     if r.is_err() {
-        // Only empty folders go: anything Pi or the write put there stays.
-        if made {
+        // Only empty folders go, and only while still folders: anything Pi or the write put
+        // there stays, and so does a link put in place of one.
+        if made && real_folder(&u.agent) {
             let _ = std::fs::remove_dir(&u.agent);
         }
-        if made_pi {
+        if made_pi && real_folder(&u.pi) {
             let _ = std::fs::remove_dir(&u.pi);
         }
     }

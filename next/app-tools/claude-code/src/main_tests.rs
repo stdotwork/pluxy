@@ -253,18 +253,116 @@ fn a_connect_that_fails_takes_away_the_folder_it_made() {
     std::fs::remove_dir_all(home).unwrap();
 }
 
+/// A link at at to the folder target: a symbolic link, or on Windows a junction (the folder link
+/// any account may make), so these tests run on every account.
+fn link_dir(target: &Path, at: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, at).unwrap();
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(at)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    }
+}
+
+/// Takes away the link at at that link_dir made.
+fn unlink_dir(at: &Path) {
+    #[cfg(unix)]
+    std::fs::remove_file(at).unwrap();
+    #[cfg(windows)]
+    std::fs::remove_dir(at).unwrap();
+}
+
+#[test]
+fn a_link_at_claude_is_read_as_its_folder_and_connect_makes_nothing_through_it() {
+    let (home, data) = (tmp(), tmp_named("-data"));
+    let elsewhere = tmp_named("-elsewhere");
+    let h = || Some(home.clone().into());
+    // Before the preview (as a dotfile manager makes it): the folder it links to is read, as
+    // before, and Connect makes no folder.
+    link_dir(&elsewhere, &home.join(".claude"));
+    let v = preview(&Mem::default(), data.clone(), &json!({}), h()).unwrap();
+    assert!(v.get("create_folder").is_none(), "{v}");
+    assert!(!is_unmade(&json!({"targets": v["targets"]})));
+    unlink_dir(&home.join(".claude"));
+    // After a preview that found no folder: refused, nothing made through it.
+    let v = preview(&Mem::default(), data.clone(), &json!({}), h()).unwrap();
+    let (input, secrets) = connect(&v);
+    link_dir(&elsewhere, &home.join(".claude"));
+    let e = apply(&Mem::default(), data, &input, &secrets, h()).unwrap_err();
+    assert!(e.message.contains("changed since it was read"), "{e}");
+    let made: Vec<_> = std::fs::read_dir(&elsewhere).unwrap().collect();
+    assert!(made.is_empty(), "made {made:?}");
+    assert!(std::fs::symlink_metadata(home.join(".claude"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    unlink_dir(&home.join(".claude"));
+    std::fs::remove_dir_all(home).unwrap();
+    std::fs::remove_dir_all(elsewhere).unwrap();
+}
+
+/// The error Claude Code's program answers a call of op with input, served as the app calls it.
+fn call_error(op: &str, input: Value) -> String {
+    use pluxy_program::{read_frame, serve, write_frame, Description, Identity, MAX_INBOUND};
+    let (in_r, mut in_w) = std::io::pipe().unwrap();
+    let (mut out_r, out_w) = std::io::pipe().unwrap();
+    let identity = Identity {
+        id: "pluxy/claude-code".into(),
+        sha256: "ab".repeat(32),
+    };
+    let description =
+        Description::from_manifest(include_bytes!("../pluxy-extension.json")).unwrap();
+    let served = std::thread::spawn(move || {
+        serve(
+            in_r,
+            out_w,
+            &identity,
+            description,
+            std::sync::Arc::new(crate::ClaudeCode),
+        )
+    });
+    assert_eq!(read_frame(&mut out_r).unwrap().unwrap()["type"], "hello");
+    let call = json!({"type": "call", "id": "c-1", "op": op, "input": input});
+    write_frame(&mut in_w, &call, MAX_INBOUND).unwrap();
+    let f = read_frame(&mut out_r).unwrap().expect("an answer");
+    drop(in_w);
+    served.join().unwrap().unwrap();
+    assert_eq!(
+        (f["type"].as_str(), f["id"].as_str()),
+        (Some("error"), Some("c-1")),
+        "{f}"
+    );
+    f["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
 #[test]
 fn other_writes_say_in_words_that_the_folder_does_not_exist_yet() {
-    use crate::unmade_refusal;
+    let (home, data) = (tmp(), tmp_named("-data"));
+    let v = preview(&Mem::default(), data, &json!({}), Some(home.clone().into())).unwrap();
+    let input = json!({"targets": v["targets"]});
     // The page maps "is not applied to these targets" to its own words (no copy from before).
     for op in ["clear", "restore"] {
-        assert!(unmade_refusal(op)
-            .message
-            .contains("is not applied to these targets"));
+        let e = call_error(op, input.clone());
+        assert!(e.contains("is not applied to these targets"), "{op}: {e}");
+        assert!(
+            e.contains("Claude Code's folder does not exist yet"),
+            "{op}: {e}"
+        );
     }
     for op in ["backup-create", "backup-restore"] {
-        assert!(unmade_refusal(op).message.contains("Connect makes it"));
+        let e = call_error(op, input.clone());
+        assert!(e.contains("Connect makes it"), "{op}: {e}");
     }
+    std::fs::remove_dir_all(home).unwrap();
 }
 
 /// A preview whose pin says sha256 of pinned, and then the bytes read.
