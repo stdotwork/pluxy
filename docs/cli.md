@@ -246,15 +246,16 @@ Marks first-run setup as done.
 
 ### `pluxy client show <tool>`
 
-Prints what to paste into a coding tool's config to point it at core: the files, the address and a
-client key placeholder ([clients.md](clients.md)). `<tool>` is `claude-code`, `codex`, `opencode`,
-`pi` or `omp`; other names for them (`claude`, `codex-cli`, `oh-my-pi`, and a setup package's ID such
-as `pluxy/pi-setup`) work too, in any letter case. The placeholder
-`<client-key>` stands for a client key of yours: pluxy never prints a stored key.
+Prints what to paste into a coding tool's config to point it at core: the files, the address, a
+client key placeholder and the model the tool starts with ([clients.md](clients.md)). `<tool>` is
+`claude-code`, `codex`, `opencode`, `pi` or `omp`; other names for them (`claude`, `codex-cli`,
+`oh-my-pi`, and a setup package's ID such as `pluxy/pi-setup`) work too, in any letter case. The
+placeholder `<client-key>` stands for a client key of yours: pluxy never prints a stored key.
 
 | Flag | What it does |
 | --- | --- |
 | `--key-id <id>` | A client key ID from `pluxy key list`: the placeholder then names that key. |
+| `--model <name>` | Model the tool starts with, one from `pluxy model list` (at most 240 characters, no control characters). Default: the best match among the models core serves (a Claude model for Claude Code, a `codex` or `gpt-` one for Codex, else the first chat model), or `<model-id>` when core serves none. |
 
 ```bash
 pluxy client show codex

@@ -1678,10 +1678,10 @@ One more managed session (`native/setup.ts`, with the stages in `src-tauri/src/n
 walks [Setup](../../docs/management-api.md#setup) on the app's first start, on the build with
 `artifact-test-trust`. Its core is a first run: nothing installed and no accounts, a bundled
 registry that offers `pluxy/claude` as a pick (`native/core-steps.ts` `firstRunSource`), and a
-stand-in `claude` printing `2.4.1 (Claude Code)` first on the PATH it inherits from the app; a
+stand-in `claude` printing `2.4.1 (Claude Code)` first on the PATH it inherits from the app, and a Claude Code sign-in file in its home (an installed `claude` alone does not tick the Claude kind); a
 curated registry offers the Claude Code page's package (`native/first-run.ts`). The window opens
 on Setup by itself (`#/setup`, "Set up pluxy") with step 1 open; the Claude kind is ticked,
-saying Claude Code is installed on this computer; "Add Claude" adds it, step 1 then says
+saying Claude Code is installed and signed in on this computer; "Add Claude" adds it, step 1 then says
 "pluxy can now connect to Claude.", and `GET /packages` through the app's host lists it; step 2's Claude Code row
 has the app's "Set up" link to `#/claude-code`, and pressing it opens the app's Claude Code page;
 back on `#/setup`, "Leave setup for now" lands on Home and `GET /setup` has `first_run` false. The next launch opens on Home; Setup, opened, is titled "Setup" with

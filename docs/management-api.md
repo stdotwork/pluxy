@@ -326,12 +326,16 @@ by the config file's path.
 ```json
 [
   {"id": "pluxy/claude", "kind": "provider", "title": "Claude", "summary": "Claude subscriptions and API keys",
-   "installed": false, "suggested": true, "because": "Claude Code is installed on this computer"}
+   "installed": false, "suggested": true, "because": "Claude Code is installed and signed in on this computer"}
 ]
 ```
 
-`suggested` is true only for a pick that something found on the machine points to. A machine where
-nothing was found gets the same list with nothing suggested.
+`suggested` is true only for a pick that something found on the machine points to. A provider pick (an
+account kind such as Claude or Codex) is pointed to by a sign-in found there (`~/.claude/.credentials.json`
+or `~/.codex/auth.json`), not by its tool being installed: an installed tool does not say the person
+has that subscription. A pick that sets up a tool is pointed to by the tool being installed (unless
+that tool's config is in state `refused`). A machine where nothing was found gets the same list with
+nothing suggested.
 
 ### Client paste text
 
@@ -345,11 +349,29 @@ nothing was found gets the same list with nothing suggested.
 | `key` | `<client-key>`, or with `key_id` `<client-key:ID (MASKED)>`: never a key's value |
 | `files` | Each file to write: `path` (from the home folder) and `content` |
 | `note` | What the files need besides themselves; left out when empty |
+| `model` | The model the files name for the tool to start with; left out when no model was asked for and core serves none (the files then hold `<model-id>`) |
+| `models` | The model names core serves now, for a person to choose `model` from |
 
 `{tool}` is the tool's ID (`claude-code`, `codex`, `opencode`, `pi`, `omp`) or another name for it
 (`claude`, `oh-my-pi`, `codex-cli`, or a setup package's ID such as `pluxy/pi-setup`, with the `/`
-written `%2F`), in any letter case. A caller on another machine whose `Host` header core cannot use gets 400 `invalid_request`. The optional query parameter `key_id` names a client key from `GET /client-keys`. 404
-`not_found` for a tool core has no text for, and for a `key_id` core does not hold.
+written `%2F`), in any letter case. A caller on another machine whose `Host` header core cannot use
+gets 400 `invalid_request`. Optional query parameters:
+
+- `key_id`: a client key ID from `GET /client-keys`; the placeholder then names that key.
+- `model`: the model the tool starts with (trimmed, at most 240 characters of valid UTF-8, no control
+  characters, else 400 `invalid_request`). Without `model`, core chooses the best match among the
+  models it serves: a model made for the tool (for Claude Code, one whose name holds `claude-opus`,
+  `claude-sonnet`, `claude`, `opus` or `sonnet`; for Codex, `codex` or `gpt-`), else the first chat
+  model (not an embedding, image, audio, speech, moderation or realtime model). When core serves no
+  chat model, `model` is left out and the files hold `<model-id>`.
+
+A coding tool asks for a model of its own unless told which one, and an account of another service
+serves none of those, so every tool's text names one: Claude Code's `model` and its three
+`ANTHROPIC_DEFAULT_*_MODEL` settings (`ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`
+and `ANTHROPIC_DEFAULT_HAIKU_MODEL`), Codex's `model`, and the default model of OpenCode, Pi and
+Oh My Pi.
+
+404 `not_found` for a tool core has no text for, and for a `key_id` core does not hold.
 
 ### Import
 

@@ -1,14 +1,15 @@
 //! The native test's Setup checks. `native/setup.ts` starts the app once per stage, with
 //! `PLUXY_APP_TEST_SETUP=<stage>`, in one session (its HOME, X server and bus), in managed mode on
 //! a first run: the session's core has nothing installed and no accounts, its bundled registry
-//! offers `pluxy/claude` as a pick, and a stand-in `claude` that prints `2.4.1 (Claude Code)`
-//! comes first on the PATH core inherits from the app. A curated device registry offers
+//! offers `pluxy/claude` as a pick, its HOME holds a Claude Code sign-in file, and a stand-in
+//! `claude` that prints `2.4.1 (Claude Code)` comes first on the PATH core inherits from the app. A
+//! curated device registry offers
 //! `pluxy/claude-code`, the Claude Code page's package, so the app offers to install it.
 //! The bundled test packages are not installed (`native_test.rs`).
 //!
 //! - `first`: the window opens on Setup by itself (`#/setup`, "Set up pluxy") with step 1, "Your AI
-//!   accounts", open; the Claude kind is ticked, saying Claude Code is installed on this computer;
-//!   "Add Claude" adds it (its row says Added, and `GET /packages` through the app's host lists it
+//!   accounts", open; the Claude kind is ticked, saying Claude Code is installed and signed in on
+//!   this computer; "Add Claude" adds it (its row says Added, and `GET /packages` through the app's host lists it
 //!   enabled); step 2, opened, has the app's one button on Claude Code's row: Install add-on, then
 //!   Turn on add-on (answered in the native confirmation), then a "Set up" link to `#/claude-code`;
 //!   pressing it opens the app's Claude Code page with "Setting up pluxy." and "Back to setup"
@@ -202,9 +203,9 @@ fn first(c: &mut Checks, app: &AppHandle) {
         until(
             app,
             5,
-            &format!("{PICK_ROW}?.textContent.includes('Claude Code is installed on this computer') === true"),
+            &format!("{PICK_ROW}?.textContent.includes('Claude Code is installed and signed in on this computer') === true"),
         ),
-        "the Claude kind says Claude Code is installed on this computer",
+        "the Claude kind says Claude Code is installed and signed in on this computer",
     );
     shot("found");
 

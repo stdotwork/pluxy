@@ -413,7 +413,7 @@ func TestCLISetupAndClientShow(t *testing.T) {
 				return
 			}
 			tool := strings.Split(strings.TrimPrefix(r.URL.Path, "/v0/management/setup/clients/"), "/")[0]
-			snip, _ := core.ClientSnippetFor(tool, "http://"+r.Host, key)
+			snip, _ := core.ClientSnippetFor(tool, "http://"+r.Host, key, r.URL.Query().Get("model"))
 			reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: "http://" + r.Host, Key: key, Note: snip.Note}
 			for _, f := range snip.Files {
 				reply.Files = append(reply.Files, management.ClientPasteFile{Path: f.Path, Content: f.Content})
@@ -487,10 +487,8 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	const placeholderHint = "Replace <client-key> with a client key: core's config file holds them, and \"pluxy key add\" makes another.\n"
 	const modelHint = "Replace <model-id> with the name of a model your accounts serve: \"pluxy model list\" lists them.\n"
 	for _, tool := range []string{"claude-code", "codex", "opencode", "pi", "omp"} {
-		want := placeholderHint
-		if tool == "opencode" || tool == "pi" || tool == "omp" {
-			want += modelHint
-		}
+		// No model was asked for and this core serves none: every tool's text holds the placeholder.
+		want := placeholderHint + modelHint
 		out, errOut, code := runWith("", false, "client", "show", tool)
 		if code != 0 || errOut != want || !strings.Contains(out, srv.URL) || strings.Contains(out, "mgmt-secret") || strings.Contains(out, "Replace") {
 			t.Errorf("client show %s: code=%d err=%q out=%q", tool, code, errOut, out)
@@ -529,9 +527,17 @@ func TestCLISetupAndClientShow(t *testing.T) {
 			t.Errorf("client show pi: %s is not plain JSON: %q", f.Path, f.Content)
 		}
 	}
+	// --model is passed to core, and the text then names that model and asks for no model.
+	if out, errOut, code := runWith("", false, "client", "show", "claude-code", "--model", "gpt-demo"); code != 0 ||
+		errOut != placeholderHint || !strings.Contains(out, `"model": "gpt-demo"`) || strings.Contains(out, "<model-id>") {
+		t.Errorf("client show --model: code=%d err=%q out=%q", code, errOut, out)
+	}
+	if got, want := takePasteCalls(), []string{"GET /v0/management/setup/clients/claude-code/paste?model=gpt-demo"}; !slices.Equal(got, want) {
+		t.Errorf("client show --model called the paste route as %q, want %q", got, want)
+	}
 	// --key-id valid vs unknown.
 	const storedHint = "Replace <client-key:k1 (sk******ab)> with that key's full value from core's config file: pluxy never prints a stored key.\n"
-	if out, errOut, code := runWith("", false, "client", "show", "claude-code", "--key-id", "k1"); code != 0 || errOut != storedHint || !strings.Contains(out, "k1") || !strings.Contains(out, "sk******ab") || strings.Contains(out, "mgmt-secret") {
+	if out, errOut, code := runWith("", false, "client", "show", "claude-code", "--key-id", "k1"); code != 0 || errOut != storedHint+modelHint || !strings.Contains(out, "k1") || !strings.Contains(out, "sk******ab") || strings.Contains(out, "mgmt-secret") {
 		t.Errorf("client show --key-id k1: code=%d err=%q out=%q", code, errOut, out)
 	}
 	if got, want := takePasteCalls(), []string{"GET /v0/management/setup/clients/claude-code/paste?key_id=k1"}; !slices.Equal(got, want) {

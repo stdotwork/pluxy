@@ -173,8 +173,10 @@ func TestSetupScanKeepApplyDone(t *testing.T) {
 	if len(sv.Picks) != 3 || sv.Picks[0].ID != "pluxy/codex" || sv.Picks[1].ID != "pluxy/claude" || sv.Picks[2].ID != "pluxy/openai-compatible" {
 		t.Fatalf("picks = %+v", sv.Picks)
 	}
-	if !sv.Picks[0].Suggested || !sv.Picks[1].Suggested || sv.Picks[2].Suggested {
-		t.Errorf("picks suggested flags: codex=%v claude=%v openai-compatible=%v", sv.Picks[0].Suggested, sv.Picks[1].Suggested, sv.Picks[2].Suggested)
+	// Codex is signed in here, so it is suggested; Claude Code is only installed, which says
+	// nothing of a Claude subscription, so Claude is not.
+	if !sv.Picks[0].Suggested || sv.Picks[1].Suggested || sv.Picks[2].Suggested {
+		t.Errorf("picks suggested flags: codex=%v claude=%v openai-compatible=%v, want true false false", sv.Picks[0].Suggested, sv.Picks[1].Suggested, sv.Picks[2].Suggested)
 	}
 
 	info, err := os.Stat(filepath.Join(cfgDir, "state", "setup.json"))
@@ -270,6 +272,13 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	home := t.TempDir()
 	fakeBin := t.TempDir()
 	writeFakeTool(t, fakeBin, "claude", `echo "2.4.1 (Claude Code)"`)
+	// A Claude Code sign-in (only its existence is seen), which is what suggests the Claude pick.
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"), []byte(`{"claudeAiOauth":"opaque"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	env := isolatedSetupEnv(home, fakeBin)
 
 	packOut := t.TempDir()
@@ -298,7 +307,8 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	}
 
 	r = runCLI(t, cliEnv, "client", "show", "claude-code")
-	if r.code != 0 || r.stderr != "Replace <client-key> with a client key: core's config file holds them, and \"pluxy key add\" makes another.\n" {
+	// This core serves no model, so the text also holds the model placeholder and says so.
+	if r.code != 0 || r.stderr != "Replace <client-key> with a client key: core's config file holds them, and \"pluxy key add\" makes another.\nReplace <model-id> with the name of a model your accounts serve: \"pluxy model list\" lists them.\n" {
 		t.Fatalf("pluxy client show claude-code: %s", r)
 	}
 	if !strings.Contains(r.stdout, base) || !strings.Contains(r.stdout, "ANTHROPIC_BASE_URL") || !strings.Contains(r.stdout, "ANTHROPIC_AUTH_TOKEN") {

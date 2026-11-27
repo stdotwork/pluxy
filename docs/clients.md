@@ -11,24 +11,29 @@ You need a running pluxy with at least one account ([setup](setup.md)).
 1. **Get a client key.** A client key is the secret a tool sends to prove it may use pluxy. The
    first one is in `client_keys` in pluxy's `config.json`. `pluxy key add` makes another and
    prints it once. `pluxy key list` shows the keys masked, with their IDs.
-2. **Get a model name.** Run `pluxy model list` and pick a name from its `MODEL` column. The
-   settings for OpenCode, Pi and Oh My Pi have a `<model-id>` to fill in; those for Claude Code and
-   Codex do not.
-3. **Print the settings.** Run `pluxy client show <tool>`, with `<tool>` one of `claude-code`,
+2. **Print the settings.** Run `pluxy client show <tool>`, with `<tool>` one of `claude-code`,
    `codex`, `opencode`, `pi` or `omp`. It prints each file to change and what goes in it, with
-   core's address already filled in. It needs core to be running. `pluxy client show <tool>
-   --key-id <id>` names the key with that ID in the output, still masked: pluxy never prints a
-   stored key.
-4. **Paste them.** In the printed text, replace `<client-key>` with the key from step 1 and
-   `<model-id>` with the name from step 2. If the file already exists, add these keys to it; do
-   not replace the file. `pluxy client show` only prints: it changes no file.
-5. **Start the tool again** so it reads the new settings.
+   core's address and a starting model already filled in. It needs core to be running.
+   - A coding tool asks for a model of its own unless told which one, and your accounts may not
+     serve that one, so every tool's output names the model it starts with. When pluxy serves
+     models, `pluxy client show <tool>` fills in the best match for the tool (a Claude model for
+     Claude Code, a `codex` or `gpt-` one for Codex, else the first chat model); when pluxy serves
+     no model yet, it puts `<model-id>` in its place.
+   - `pluxy client show <tool> --model <name>` names another model from `pluxy model list`.
+   - `pluxy client show <tool> --key-id <id>` names the key with that ID in the output, still
+     masked: pluxy never prints a stored key.
+3. **Paste them.** In the printed text, replace `<client-key>` with the key from step 1 (and
+   `<model-id>`, if core served no model yet, with a name from `pluxy model list`). If the file
+   already exists, add these keys to it; do not replace the file. In Codex's `config.toml`, keep
+   `model_provider` and `model` above the first `[table]` of the file: TOML puts a key written
+   below a table line inside that table. `pluxy client show` only prints: it changes no file.
+4. **Start the tool again** so it reads the new settings.
 
 The panel's **Tools** page shows the same settings under each tool's **Set up**, as numbered steps
-with a **Copy** button. Its **Make key** button makes a new client key and puts it into the text, so
-you do not paste it yourself. The panel's guided setup (the **Set up pluxy** page, called **Setup**
-once first-run setup is done) shows the same in its second step, "Your coding tool". The
-desktop app (`app.md`) can also write a tool's files itself.
+with a **Copy** button and a model picker when core serves models. Its **Make key** button makes a
+new client key and puts it into the text, so you do not paste it yourself. The panel's guided setup
+(the **Set up pluxy** page, called **Setup** once first-run setup is done) shows the same in its
+second step, "Your coding tool". The desktop app (`app.md`) can also write a tool's files itself.
 
 Claude Desktop, Grok Build and Hermes Agent are set up from the desktop app only; `pluxy client
 show` does not know them.
@@ -37,14 +42,16 @@ An unknown tool name fails with `pluxy: unknown client tool "<name>" (supported:
 codex, opencode, pi, omp)` and exit code 2. The command also takes these names for a tool: `claude`
 for Claude Code, `codex-cli` for Codex, and `oh-my-pi` for Oh My Pi.
 
-The examples below show core on its default address, `http://127.0.0.1:8317`. Your output has the
-address your core listens on.
+The examples below show core on its default address, `http://127.0.0.1:8317`, serving demo models
+(`claude-demo-haiku`, `gpt-demo-large`, `alpha-model`). Your output has the address your core
+listens on and the model chosen from your accounts.
 
 ## What each tool gets
 
 ### Claude Code
 
-`pluxy client show claude-code` prints:
+`pluxy client show claude-code` sets `model` and the three `ANTHROPIC_DEFAULT_*_MODEL` variables so
+Claude Code's Opus, Sonnet, Haiku and background choices resolve to a model pluxy serves:
 
 ```text
 Client: Claude Code
@@ -55,9 +62,13 @@ Address: http://127.0.0.1:8317
   "env": {
     "ANTHROPIC_AUTH_TOKEN": "<client-key>",
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-demo-haiku",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-demo-haiku",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-demo-haiku",
     "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1"
-  }
+  },
+  "model": "claude-demo-haiku"
 }
 ```
 
@@ -71,12 +82,15 @@ Address: http://127.0.0.1:8317
 
 ~/.codex/config.toml:
 model_provider = "pluxy"
+model = "gpt-demo-large"
 
 [model_providers.pluxy]
 name = "pluxy"
 base_url = "http://127.0.0.1:8317/v1"
 wire_api = "responses"
 experimental_bearer_token = "<client-key>"
+
+If config.toml already has tables (lines such as [name]), put its first two lines, model_provider and model, above the first table: a key written below a table line belongs to that table, not to the file. The [model_providers.pluxy] block can go after them.
 ```
 
 ### OpenCode
@@ -90,12 +104,12 @@ Address: http://127.0.0.1:8317
 ~/.config/opencode/opencode.jsonc:
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "pluxy/<model-id>",
+  "model": "pluxy/alpha-model",
   "provider": {
     "pluxy": {
       "models": {
-        "<model-id>": {
-          "name": "<model-id>"
+        "alpha-model": {
+          "name": "alpha-model"
         }
       },
       "name": "pluxy",
@@ -125,7 +139,7 @@ Address: http://127.0.0.1:8317
 
 ~/.pi/agent/settings.json:
 {
-  "defaultModel": "<model-id>",
+  "defaultModel": "alpha-model",
   "defaultProvider": "cliproxyapi",
   "packages": [
     "./pluxy-cliproxyapi-provider"
@@ -154,7 +168,7 @@ providers:
 
 ~/.omp/agent/config.yml:
 modelRoles:
-  default: "pluxy/<model-id>"
+  default: "pluxy/alpha-model"
 ```
 
 ## Any other client

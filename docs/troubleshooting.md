@@ -197,16 +197,29 @@ Remove the example keys from `client_keys` and run `pluxy reload`.
 ### 404 `model_not_found`
 
 ```json
-{"error":{"code":"model_not_found","message":"no account serves model \"nonexistent-model\"","pluxy":{"trace":"20261127123005-dab0474c06d38d37","tried":[],"left_out":[]},"type":"invalid_request_error"}}
+{"error":{"code":"model_not_found","message":"no account serves model \"nonexistent-model\". pluxy serves: gpt-demo-large, gpt-demo-mini. Set the tool's model to one of them, or add a model alias to an account so that \"nonexistent-model\" goes to one of them.","pluxy":{"trace":"20261127123005-dab0474c06d38d37","tried":[],"left_out":[]},"type":"invalid_request_error"}}
 ```
 
-No account serves that model name. `pluxy route nonexistent-model` shows the same: it fails with exit code 5 and prints:
+No enabled account serves that model name. `pluxy route nonexistent-model` shows the same: it fails with exit code 5 and prints:
 
 ```text
 pluxy: no account serves nonexistent-model. See pluxy model list.
 ```
 
-Run `pluxy model list` for the names clients can ask for. A model name is not served when the account
+A coding tool often causes this: it asks for a model of its own (such as Claude Code's
+`claude-opus-5-5` or Codex's `gpt-6.1-sol`) that an account of another service does not serve. When
+core serves models, the error message lists up to 8 of them (and says how many more, when there are
+more) and names the two ways to fix it; when no account serves any model yet, the message ends with
+"pluxy serves no models yet: add an account first."
+
+- **Set the tool's model** to a name pluxy serves: `pluxy client show <tool>` prints the settings
+  with a served model filled in (`--model <name>` chooses another).
+- **Add a model alias** to an account so the name the tool asks for goes to a model that account
+  serves: in the panel, open **Activity** (**Requests** tab), open the failed request and choose
+  **Add an alias** (or **Add an alias on `<account>`** when more than one account serves models); in
+  `config.json`, set `model_alias` on the account, or run `pluxy account set <id> model_alias='...'`.
+
+Run `pluxy model list` for every name clients can ask for. A model name is not served when the account
 that offers it is turned off or needs a new sign-in (see [An account is not used](#an-account-is-not-used)),
 or when the extension it needs is not installed or not enabled. When the accounts that serve a model are all
 turned off or waiting for a sign-in, the message says so instead:

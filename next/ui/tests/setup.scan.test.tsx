@@ -50,6 +50,15 @@ test("a pluxy that never scanned is asked to scan once, as the page opens", asyn
   expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
 });
 
+test("a scan that is already running as the page opens is not followed by another", async () => {
+  jest.useFakeTimers();
+  const w = world({ scanning: true, clients: [] });
+  await w.mount(<SetupPage />);
+  w.state.setup.scanning = false;
+  await advance(2000);
+  expect(w.sent("POST", "/setup/scan")).toHaveLength(0);
+});
+
 test("a first scan that fails says so at the top with Try again, and stops saying it is looking", async () => {
   let fail = true;
   const w = world({
@@ -140,13 +149,18 @@ test("while the first scan runs the page says it is looking, reads every second,
   w.state.setup.scanned_at = "2026-11-20T10:00:00Z";
   w.state.setup.found.clients = [CLAUDE_CODE];
   w.state.setup.picks = [
-    pick("pluxy/claude", "Claude", { suggested: true, because: "Claude Code is installed on this computer" }),
+    pick("pluxy/claude", "Claude", {
+      suggested: true,
+      because: "Claude Code is installed and signed in on this computer",
+    }),
   ];
   await advance(1000);
   expect(reads(w)).toBe(3);
   expect(m.text()).not.toContain(LOOKING);
   expect(box(kindRow(m.root, "Claude"))?.checked).toBe(true);
-  expect(kindRow(m.root, "Claude").textContent).toContain("Claude Code is installed on this computer");
+  expect(kindRow(m.root, "Claude").textContent).toContain(
+    "Claude Code is installed and signed in on this computer",
+  );
   expect(openStep(m.root)).toBe(1);
   await advance(3000);
   expect(reads(w)).toBe(3);
