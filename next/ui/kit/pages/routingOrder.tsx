@@ -353,7 +353,11 @@ export function AccountOrder(props: OrderProps) {
             const total = section.tiers.reduce((n, tier) => n + tier.accounts.length, 0);
             const serving = section.tiers.reduce(
               (n, tier) =>
-                n + tier.accounts.filter((a) => accountCondition(a, running).group === "serving").length,
+                n +
+                tier.accounts.filter((a) => {
+                  const c = accountCondition(a, running);
+                  return c.group === "serving" && !conditionUnchecked(a, c, running);
+                }).length,
               0,
             );
             const firstEdge = `${section.extension}:first`;

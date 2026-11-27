@@ -666,6 +666,16 @@ test("one failed refresh across every read shows one stale notice, keeps an empt
   expect(live.text()).not.toContain("Could not read the fallbacks.");
 });
 
+test("unchecked accounts are not counted as serving in the provider header when status failed", async () => {
+  const page = await mount({
+    "GET /accounts": ok({ accounts: [account("a1"), account("a2")] }),
+    "GET /status": hiccup,
+  });
+  expect(page.text()).toContain("2 accounts · 0 serving");
+  expect(page.text()).not.toContain("2 serving");
+  expect(page.text()).toContain("Not checked");
+});
+
 test("saving a rule shows a Saved tick beside it", async () => {
   const page = await mount();
   const box = toggle(page.root, "Keep a conversation on one account");
