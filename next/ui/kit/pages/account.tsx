@@ -206,8 +206,7 @@ function AccountView(props: { id: string; part: string }) {
   if (!a) {
     if (accounts.phase === "loading") {
       return (
-        <div class="account-page">
-          <StatePane kind="loading" title={t("loading")} rows={0} />
+        <div class="account-page" role="status" aria-busy="true" aria-label={t("loading")}>
           <AccountSkeleton />
         </div>
       );

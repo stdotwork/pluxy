@@ -56,7 +56,7 @@ async function open(
     models?: string[];
     privacy?: boolean;
     /** An answer to any call, ahead of the defaults. */
-    reply?: (call: Call) => Reply<unknown> | undefined;
+    reply?: (call: Call) => Reply<unknown> | Promise<Reply<unknown>> | undefined;
   } = {},
 ) {
   Object.defineProperty(globalThis, "location", { configurable: true, value: { hash } });
@@ -66,7 +66,7 @@ async function open(
     call: async (method: Method, path: string, body?: unknown): Promise<Reply<unknown>> => {
       calls.push({ method, path, body });
       const given = more.reply?.({ method, path, body });
-      if (given) return given;
+      if (given) return await given;
       if (method === "GET" && path === "/status")
         return turn(more.status) ?? { status: 200, body: { extensions: [{ id: "pluxy/claude" }] } };
       if (method === "GET" && path.startsWith("/usage?"))
@@ -589,4 +589,42 @@ test("a stale refresh sets data-stale on the account page while keeping the last
   await settle();
   const after = all(page.root, "article")[0];
   expect(after?.attributes.some((a) => a.name === "data-stale")).toBe(true);
+});
+
+test("initial load shows only the final-shape skeleton after the delay, without a second loading pane", async () => {
+  jest.useFakeTimers();
+  const pending = new Promise<Reply<unknown>>(() => {});
+  const page = await open(account(), undefined, {
+    reply: (c) => (c.method === "GET" && c.path === "/accounts" ? pending : undefined),
+  });
+  expect(
+    all(page.root, "section").filter((n) =>
+      n.attributes.some((a) => a.name === "data-part" && a.value === "state-pane"),
+    ),
+  ).toHaveLength(0);
+  expect(
+    all(page.root, "div").filter((n) =>
+      n.attributes.some((a) => a.name === "class" && a.value === "account-skeleton"),
+    ),
+  ).toHaveLength(0);
+  const status = all(page.root, "div").find((n) =>
+    n.attributes.some((a) => a.name === "role" && a.value === "status"),
+  );
+  expect(status?.attributes.find((a) => a.name === "aria-busy")?.value).toBe("true");
+  expect(status?.attributes.find((a) => a.name === "aria-label")?.value).toBe("Loading accounts…");
+
+  await act(async () => {
+    jest.advanceTimersByTime(200);
+  });
+  await settle();
+  expect(
+    all(page.root, "div").filter((n) =>
+      n.attributes.some((a) => a.name === "class" && a.value === "account-skeleton"),
+    ),
+  ).toHaveLength(1);
+  expect(
+    all(page.root, "section").filter((n) =>
+      n.attributes.some((a) => a.name === "data-part" && a.value === "state-pane"),
+    ),
+  ).toHaveLength(0);
 });
