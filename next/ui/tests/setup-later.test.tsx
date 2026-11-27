@@ -1,6 +1,7 @@
 // Home's card after Finish later (kit/pages/setupLater.tsx): shown only while this pluxy's note is
 // in the host's prefs, with the steps done and left, the way back to Setup, and Hide.
 import { afterEach, expect, test } from "bun:test";
+import { HomePage } from "../kit/pages/home";
 import { SetupLaterCard } from "../kit/pages/setupLater";
 import { all, restoreDom } from "./fakeDom";
 import { account, attribute, buttonIn, client, linkIn, press, withPart, world } from "./setupWorld";
@@ -63,5 +64,16 @@ test("a pluxy that cannot say what setup found gets no card", async () => {
       c.path === "/setup" ? { status: 404, error: { code: "not_found", message: "no" } } : undefined,
   });
   const m = await w.mount(<SetupLaterCard />);
+  expect(withPart(m.root, "setup-later")).toHaveLength(0);
+});
+
+test("Home shows the card after Finish later even with no accounts yet", async () => {
+  const w = world({ firstRun: false, prefs: { "setup-later": HERE }, accounts: [] });
+  const m = await w.mount(<HomePage />);
+  const card = withPart(m.root, "setup-later")[0];
+  expect(card?.textContent).toContain("Finish setting up pluxy");
+  expect(card?.textContent).toContain("3 steps left.");
+  expect(attribute(linkIn(card as never, "Continue setup"), "href")).toBe("#/setup");
+  await press(buttonIn(card as never, "Hide"));
   expect(withPart(m.root, "setup-later")).toHaveLength(0);
 });

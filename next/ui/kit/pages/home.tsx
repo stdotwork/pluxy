@@ -288,6 +288,7 @@ export function HomePage() {
     return (
       <>
         {head}
+        <SetupLaterCard />
         <StatePane
           kind="empty"
           title={noAccountsTitle()}
