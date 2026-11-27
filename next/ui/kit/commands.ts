@@ -27,6 +27,8 @@ export interface Command {
   /** Words that find it besides its label and hint. */
   keywords?: string[];
   icon: IconName;
+  /** Shown while nothing is typed, after the recents: the destinations and the actions. */
+  suggested?: boolean;
   /** The keys that do it without the menu, shown at the row's right where there are any. */
   shortcut?: string[];
   /** A page or an account opens here. */
@@ -78,6 +80,7 @@ export function pageCommands(
       id: `page:${home.id}:${dest}`,
       kind: "page",
       label: destinationName(dest),
+      suggested: true,
       icon: icons[dest],
       href: `#/${home.id}`,
     });
@@ -176,8 +179,8 @@ export function marks(text: string, query: string): [number, number][] {
 
 /**
  * What the menu shows for a query. With none: the recents (the commands still there), then the
- * actions, the pages and the settings; accounts only appear once their name is typed, as there
- * may be hundreds. With a query: each group's matches, best first, the groups with the best match
+ * destinations and the actions; the tabs, the settings and the accounts appear once something is
+ * typed, as there may be hundreds of them. With a query: each group's matches, best first, the groups with the best match
  * first, so Enter opens what was most likely meant.
  */
 export function arrange(query: string, commands: Command[], recents: string[]): Group[] {
@@ -186,10 +189,10 @@ export function arrange(query: string, commands: Command[], recents: string[]): 
     const recent = recents.flatMap((id) => byId.get(id) ?? []).slice(0, MAX_RECENTS);
     const kept = new Set(recent.map((c) => c.id));
     const groups: Group[] = [{ id: "recent", items: recent, more: 0 }];
-    for (const id of ["actions", "pages", "settings"] as const) {
+    for (const id of ["pages", "actions"] as const) {
       groups.push({
         id,
-        items: commands.filter((c) => GROUP_OF[c.kind] === id && !kept.has(c.id)),
+        items: commands.filter((c) => c.suggested && GROUP_OF[c.kind] === id && !kept.has(c.id)),
         more: 0,
       });
     }

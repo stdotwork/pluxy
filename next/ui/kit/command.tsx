@@ -4,7 +4,7 @@
 // opening by the pointer fades in. The same menu serves the panel and the desktop app.
 
 import type { ComponentChildren } from "preact";
-import { useEffect, useId, useRef, useState } from "preact/hooks";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import {
   accountCommands,
   arrange,
@@ -12,7 +12,6 @@ import {
   type Group,
   type GroupId,
   marks,
-  openKeys,
   opensMenu,
   pageCommands,
   pushRecent,
@@ -48,7 +47,6 @@ const t = strings("command", {
   count: { one: "{count} result", other: "{count} results" },
   toMove: "to move",
   toOpen: "to open",
-  toClose: "to close",
   copyAddress: "Copy address for tools",
   copied: "Copied",
   copyFailed: "Couldn't copy: this window may not reach the clipboard.",
@@ -119,9 +117,12 @@ export function CommandMenu(props: CommandMenuProps) {
     return () => clearTimeout(wait);
   }, [accounts.phase]);
 
+  // Focus is in the field as soon as the menu is on screen: what is typed next goes into it.
+  useLayoutEffect(() => {
+    input.current?.focus();
+  }, []);
   useEffect(() => {
     live.current = true;
-    input.current?.focus();
     return () => {
       live.current = false;
       clearTimeout(timer.current);
@@ -142,6 +143,7 @@ export function CommandMenu(props: CommandMenuProps) {
     if (address)
       actions.push({
         id: "action:copy-address",
+        suggested: true,
         kind: "action",
         label: t("copyAddress"),
         hint: address,
@@ -159,6 +161,7 @@ export function CommandMenu(props: CommandMenuProps) {
     if (props.pages.some((p) => p.id === "add-account"))
       actions.push({
         id: "action:add-account",
+        suggested: true,
         kind: "action",
         label: t("addAccount"),
         keywords: ["new", "sign in", "login", "connect"],
@@ -169,6 +172,7 @@ export function CommandMenu(props: CommandMenuProps) {
       const refresh = props.onRefresh;
       actions.push({
         id: "action:refresh",
+        suggested: true,
         kind: "action",
         label: t("refresh"),
         keywords: ["reload", "update"],
@@ -184,6 +188,7 @@ export function CommandMenu(props: CommandMenuProps) {
       const dark = themes.resolved.appearance === "dark";
       actions.push({
         id: "action:appearance",
+        suggested: true,
         kind: "action",
         label: dark ? t("toLight") : t("toDark"),
         keywords: ["theme", "appearance", "mode", dark ? "light" : "dark"],
@@ -276,7 +281,6 @@ export function CommandMenu(props: CommandMenuProps) {
     }
   };
 
-  const keys = openKeys();
   // The row number of each group's first command, in the order the keys move through them.
   const first = new Map<GroupId, number>();
   let rows = 0;
@@ -409,9 +413,6 @@ export function CommandMenu(props: CommandMenuProps) {
           </span>
           <span>
             <kbd>↵</kbd> {t("toOpen")}
-          </span>
-          <span class="command-foot-end">
-            <kbd>{keys.join(" ")}</kbd>
           </span>
         </div>
         <div class="sr-only" role="status" aria-live="polite">

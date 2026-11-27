@@ -3,7 +3,7 @@
 // block says; the shell knows nothing else about them.
 
 import { Fragment, type VNode } from "preact";
-import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api } from "./api";
 import { CommandMenu, canRefresh } from "./command";
 import { isApple, openKeys, opensMenu } from "./commands";
@@ -346,7 +346,8 @@ export function Shell(props: {
   // The command menu (command.tsx): Command K, or Control K off Apple computers, opens it from
   // anywhere in the signed-in window, except over a dialog that waits for an answer.
   const [menu, setMenu] = useState<"keyboard" | "pointer">();
-  useEffect(() => {
+  // A layout effect: the key works from the moment the navigation is on screen.
+  useLayoutEffect(() => {
     if (!signedIn) return setMenu(undefined);
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || !opensMenu(e)) return;

@@ -314,10 +314,6 @@
     margin-inline-start: calc(var(--s) * 1);
   }
 
-  .command-foot-end {
-    margin-inline-start: auto;
-  }
-
   @media (max-width: 559.98px) {
     .command-backdrop {
       padding-top: calc(var(--s) * 4);
