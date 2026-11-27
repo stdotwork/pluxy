@@ -65,7 +65,7 @@ test("Settings opens on General, and its topics are in three groups with a tip e
     ["Extensions", "The programs that connect pluxy to each provider"],
     ["Logs", "pluxy's log and failed requests"],
     ["System", "Version, models and addresses"],
-    ["Set up pluxy", "The guided setup"],
+    ["Setup", "The guided setup"],
   ]);
   await expect(topics(page).getByRole("link", { name: "General", exact: true })).toHaveAttribute(
     "aria-current",

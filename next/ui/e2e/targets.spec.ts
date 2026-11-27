@@ -105,7 +105,7 @@ const PAGES = [
   "Logs",
   "Requests",
   "Usage",
-  "Set up pluxy",
+  "Setup",
   "Config Panel",
   "System",
   "Extensions",

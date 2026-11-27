@@ -258,7 +258,9 @@ What custom CSS cannot do:
 
 ### Hooks you can rely on
 
-These stay stable within a theme contract version:
+Until pluxy's first release the contract stays at version 0, and these hooks can still change
+under it when a page is rebuilt: the Setup page's hooks were replaced this way. From the first
+release on, they stay stable within a theme contract version:
 
 | Hook | Where |
 | --- | --- |
@@ -329,10 +331,11 @@ These stay stable within a theme contract version:
 | `data-part="account-edit"` | The Edit form of an account added by login. |
 | `data-part="account-edit-row"` | One model or model alias row in the Edit form. |
 | `data-part="account-edit-discard"` | The Edit form's question before unsaved changes are discarded. |
-| `data-part="setup-found"` | The Setup page's list of what core found on its machine; `aria-busy="true"` while core looks again. |
-| `data-part="setup-pick"` | One provider on the Setup page's checklist; `data-state` is `offered`, `installed` or `failed`. |
-| `data-part="setup-client"` | One client on the Setup page; `data-state` is `not-configured`, `configured`, `needs-update`, `refused` or `not-found`. |
-| `data-part="setup-paste"` | The text to paste into a client's settings files, open under its client. |
+| `data-part="setup-step"` | One of the Setup page's three steps; `data-state` is `open`, `done` or `todo`. |
+| `data-part="setup-import"` | The line above the Setup steps when a CLIProxyAPI setup was found; `data-state` is `found`, `preview`, `done` or `imported`. |
+| `data-part="setup-report"` | What importing that setup would do, or did, in three folded lists; `data-state` is `preview` or `done`. |
+| `data-part="setup-pick"` | One kind of account in Setup's step 1; `data-state` is `offered`, `ticked`, `added`, `stopped` or `failed`. |
+| `data-part="setup-test"` | The passed test request in Setup's step 3; `data-state` is `passed`. |
 | `data-part="account-page"` | One account's own page; `data-group` is its group, as on its row |
 | `data-part="account-opening"` | The top of an account's page: its provider and plan, its condition and why, and its one fix |
 | `data-part="account-more"` | An account's "Settings, models and a test request" disclosure |

@@ -143,33 +143,45 @@ opens the Source tab with that account's ID selected; an account's "Open the set
 there. An account from a provider key section of `config.yaml` opens the Source tab with nothing
 selected, because the file does not hold its ID: core makes the ID when it reads the file.
 
-The Setup page (`#/setup`) is the one page the panel opens by itself. Once signed in, the
-shell asks core for `GET /setup`: on a first run (`first_run`), when the address names no page,
-Setup opens in place of Home. The shell does not wait for the answer, so Home
-may show for an instant. A core without the call (it answers 404) gets no Setup page and nothing
-opens by itself. The page stays among the Settings topics after setup, as a status of the same
-things.
+The Setup page (`#/setup`, `kit/pages/setup.tsx`) is the one page the panel opens by itself.
+Once signed in, the shell asks core for `GET /setup`: on a first run (`first_run`), when the
+address names no page, Setup opens in place of Home. The shell does not wait for the answer, so
+Home may show for an instant. A core without the call (it answers 404) gets no Setup page and
+nothing opens by itself. The page stays among the Settings topics after setup, titled "Setup".
 
-When core's scan found a CLIProxyAPI setup, its row on the page has "Bring it across". The button
-sends `POST /setup/import` as a dry run and shows core's report in its three lists (what comes
-across, what is different in pluxy, what does not come across and why), with the provider packages
-the accounts need; nothing is written until the person confirms. After the import the page reads
-Setup, the accounts and the packages again and ticks the providers the report says are needed, so
-Start installs them. The row also names the command that does the same, `pluxy import cpa`. A
-refusal is shown in the row with what to do about it; a core without the call (404) gets the
-command only. Once core has a record of the import (the row's `last_import`), and the report is
-closed, the row says the setup was brought across, when, and how many of its settings and auth
-files each list of the report held. It then has no button: the command is how to bring it across
-again, and the row says what that does. An import never changes core's management key: a
-management key in the CLIProxyAPI setup stays behind, and the report says why in its "does not
-come across" list.
+The page is three numbered steps, one open at a time: "Your AI accounts" (tick the kinds of
+account, which installs their providers with `POST /setup/apply`, then sign in with Add an
+account's own form, embedded), "Your coding tool" (the Tools page's list of coding tools,
+`ToolListView`, with the same rows and words) and "Check it works" (one
+`POST /accounts/{id}/test`, with no model unless the person chooses one).
+On a first run the first step not done opens; afterwards every step starts folded. Only the
+person moves the open step: data arriving updates text in place. What core's scan found shows in
+the step that uses it: a suggested kind is ticked with core's reason, a sign-in is a note above
+the form, a tool is its row. Step 1 counts as done once an account can take requests (it serves,
+or waits out a limit); its summary says what the others are, such as "1 account, turned off.". A
+key made in step 2 is held by that step, so its value is gone once the step folds.
+`Finish setup`, `Finish anyway`, `Finish without testing` and `Leave setup for now` all send
+`POST /setup/done`, call the host's `onFinish` and go to Home.
 
-A host can add one button to each client the page lists as found:
-`corePages({ setup: { clientAction, clientActionHint } })` (`SetupOptions` in `kit/pages/setup.tsx`). `clientAction` takes the client's ID from core's
-scan and returns a label and the ID of the host's page the button opens, or nothing; the hint is
-one sentence shown while a client has a button. A client whose settings file was refused gets no
-button: the page says to paste the text there. The panel passes none; the desktop app offers
-"Set up" for the clients it can set up on its own computer.
+When core's scan found a CLIProxyAPI setup, one line above the steps (`kit/pages/setupImport.tsx`)
+says so, with "Preview import". The preview sends `POST /setup/import` as a dry run and shows core's
+report in three folded lists (what it would import, what pluxy sets differently, what it leaves
+out, each with why; privacy mode hides the auth files' names). "Import now" is only possible from
+that preview, and sends the same config and auth folder; a new scan, or any other change to what
+core found, drops the preview. After the import the page reads Setup, the accounts and the
+packages again and ticks the kinds the report says the accounts need that step 1 offers; a kind
+this pluxy does not offer is named, with a link to Extensions. A refusal is shown on the line in
+plain words; only a core too old for the call (404) and one that keeps its settings in
+`config.yaml` (409) offer "More details", with the command. When "Import now" gets no reply,
+"Refresh" looks again: a new record of an import (`last_import`) means it ran, none means it did
+not. Once core has a record of an import, the line says when, with "Import again". An import
+never changes core's management key.
+
+A host adds to the page through `corePages({ setup })` (`SetupOptions` in `kit/pages/setup.tsx`),
+and the panel passes nothing: `toolAction`, `extraTools`, `localPages` and `onRefresh` go to
+step 2's `ToolList` as they do on Tools; `isRemote` overrides the page's own reading of
+`host.address`; `onFinish` runs after setup is finished. The desktop app gives a "Set up" link
+to its own page for the tools it can set up on its own computer.
 
 The Tools page (`#/tools`, `kit/pages/tools.tsx`) is where a person connects a coding tool and
 manages the keys tools send. It lists the tools core's scan found (Claude Code, Codex, OpenCode, Pi,
@@ -202,7 +214,7 @@ visit), and `POST /client-keys` sends the name with the new key.
 | Usage (`usage`) | Activity | No old panel page: the old desktop app's list of recorded requests |
 | Tools (`tools`) | Tools | No old page |
 | General (`settings`) | Settings, the first topic | No old page |
-| Set up pluxy (`setup`) | Settings, a topic | No old page |
+| Setup (`setup`) | Settings, a topic | No old page |
 | Config Panel (`config`) | Settings, a topic | Config Panel (`/config`; `/settings` and `/api-keys` led there) |
 | System (`system`) | Settings, a topic | Management Center Info (`/system`) |
 | Extensions (`extensions`) | Settings, a topic | Plugins (`/plugins`) and Plugin Store (`/plugin-store`) |

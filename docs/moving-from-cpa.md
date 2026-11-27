@@ -83,7 +83,8 @@ the **Needs** list named, once:
 ```
 
 `./pluxy account list` shows every account with the provider it needs in the `EXTENSION` column.
-The panel's **Set up pluxy** page at `/panel/` installs providers too.
+The panel's **Set up pluxy** page at `/panel/` adds providers too: its first step, "Your AI
+accounts", adds the kinds of account you tick.
 
 Antigravity is the exception. pluxy does not ship that provider, so no registry offers it, and
 `pluxy ext install pluxy/antigravity` finds nothing until you have built it yourself: the steps

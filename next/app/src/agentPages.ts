@@ -2,6 +2,8 @@
 // drives, and Beginner Mode offers the ones whose tool is installed or offered by a registry.
 // The Setup page offers the same ones, for the clients core found (setupClientAction).
 
+import { h } from "preact";
+import type { SetupClient } from "../../ui/kit/api";
 import type { SetupOptions } from "../../ui/kit/pages/setup";
 import { strings } from "../../ui/kit/strings";
 import { claudeCodePage } from "./claudeCode";
@@ -19,7 +21,6 @@ import { piPage } from "./pi";
 
 const t = strings("setupClients", {
   setUp: "Set up",
-  hint: "Set up opens the client's own page in this app. There the app writes the client's settings itself, after you confirm.",
 });
 
 export const agentPages = (): AgentPage[] => [
@@ -49,9 +50,26 @@ export const SETUP_CLIENT_PAGES: Readonly<Record<string, string>> = {
 };
 
 /**
- * What the Setup page gets from this window: "Set up" for a client core found, when this window
- * has a page for it and Beginner Mode would list it (its tool is installed on this device or
- * offered by a registry). The button opens the client's own page.
+ * The page in this window for a client core found, when the window has one and Beginner Mode would
+ * list it (its tool is installed on this device or offered by a registry). A client whose settings
+ * pluxy refused to change gets none.
+ */
+export function setupClientPage(
+  client: Pick<SetupClient, "id" | "state">,
+  agents: Pick<AgentPage, "id" | "package">[],
+  catalog?: DeviceCatalog,
+  offers?: Pick<DeviceRegistry, "name" | "packages">[],
+): string | undefined {
+  if (client.state === "refused") return undefined;
+  const id = Object.hasOwn(SETUP_CLIENT_PAGES, client.id) ? SETUP_CLIENT_PAGES[client.id] : undefined;
+  const page = agents.find((a) => a.id === id);
+  if (!page || items([page.package], catalog, offers).length === 0) return undefined;
+  return page.id;
+}
+
+/**
+ * What the Setup page gets from this window: a "Set up" link at the end of the row of a client
+ * core found, to the client's own page (setupClientPage); other rows keep the page's own steps.
  */
 export function setupClientAction(
   agents: Pick<AgentPage, "id" | "package">[],
@@ -59,13 +77,15 @@ export function setupClientAction(
   offers?: Pick<DeviceRegistry, "name" | "packages">[],
 ): SetupOptions {
   return {
-    clientAction: (client) => {
-      const id = Object.hasOwn(SETUP_CLIENT_PAGES, client) ? SETUP_CLIENT_PAGES[client] : undefined;
-      const page = agents.find((a) => a.id === id);
-      if (!page || items([page.package], catalog, offers).length === 0) return undefined;
-      return { label: t("setUp"), page: page.id };
+    toolAction: (client) => {
+      const page = setupClientPage(client, agents, catalog, offers);
+      if (!page) return undefined;
+      return h(
+        "a",
+        { class: "btn", "data-part": "button", "data-variant": "quiet", href: `#/${page}` },
+        t("setUp"),
+      );
     },
-    clientActionHint: t("hint"),
   };
 }
 

@@ -6,7 +6,7 @@
 //   so core's setup scan finds it;
 // - a curated registry offering pluxy/claude-code, the Claude Code page's package, signed by a key
 //   made here, with the test trust profile naming it: so the app's Setup page offers "Set up" for
-//   Claude Code (agentPages.ts setupClientAction). The checks never install it, so its program is
+//   Claude Code (agentPages.ts setupClientPage). The checks never install it, so its program is
 //   a placeholder.
 
 import { generateKeyPairSync, type KeyObject } from "node:crypto";
