@@ -9,6 +9,7 @@ import { useState } from "preact/hooks";
 import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { strings } from "../../ui/kit/strings";
 import { Button, ConfirmButton, Notice, PageHead, Switch, useAction, useKit } from "../../ui/kit/ui";
+import type { AgentPage } from "./addonItems";
 import { Backups } from "./backups";
 import {
   FileChoice,
@@ -34,7 +35,6 @@ import {
   PACKAGE,
   type ReadBack,
 } from "./codexForm";
-import type { AgentPage } from "./easyMode";
 import { PathText } from "./environmentBlock";
 import { plainReply, useShown } from "./toolWords";
 
@@ -591,7 +591,6 @@ export const codexPage = (): AgentPage => ({
   id: "codex",
   package: PACKAGE,
   dest: "tools",
-  kind: "topic",
   under: "tools",
   title: t("title"),
   tip: t("tip"),

@@ -8,6 +8,7 @@ import { useId, useState } from "preact/hooks";
 import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { strings } from "../../ui/kit/strings";
 import { Button, ConfirmButton, Notice, PageHead, Switch, useAction, useKit } from "../../ui/kit/ui";
+import type { AgentPage } from "./addonItems";
 import { Backups } from "./backups";
 import {
   FileChoice,
@@ -25,7 +26,6 @@ import {
   useStart,
   useToolSetup,
 } from "./clientPage";
-import type { AgentPage } from "./easyMode";
 import { PathText } from "./environmentBlock";
 import {
   attachmentDefault,
@@ -361,7 +361,6 @@ export const opencodePage = (): AgentPage => ({
   id: "opencode",
   package: PACKAGE,
   dest: "tools",
-  kind: "topic",
   under: "tools",
   title: t("title"),
   tip: t("tip"),

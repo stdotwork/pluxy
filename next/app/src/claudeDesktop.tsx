@@ -8,6 +8,7 @@ import { useId, useState } from "preact/hooks";
 import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { strings } from "../../ui/kit/strings";
 import { Button, ConfirmButton, Notice, PageHead, Switch, useAction } from "../../ui/kit/ui";
+import type { AgentPage } from "./addonItems";
 import { Backups } from "./backups";
 import {
   aliasCancelled,
@@ -38,7 +39,6 @@ import {
   useStart,
   useToolSetup,
 } from "./clientPage";
-import type { AgentPage } from "./easyMode";
 import { nativeReply, useShown } from "./toolWords";
 
 const t = strings("claudeDesktop", {
@@ -330,7 +330,6 @@ export const claudeDesktopPage = (): AgentPage => ({
   id: "claude-desktop",
   package: PACKAGE,
   dest: "tools",
-  kind: "topic",
   under: "tools",
   title: t("title"),
   tip: t("tip"),
