@@ -8,6 +8,21 @@ const API = "/v0/management";
 const KEY = "pluxy.key";
 const PREFS = "pluxy.";
 
+/**
+ * What a person reads when pluxy refused `GET /status` at sign-in with a status other than the ones
+ * the sign-in names itself. Core's reason (its error message) goes with the status; a core with
+ * remote management off gets what to change on its machine. The desktop app says the same in
+ * `check_key` (next/app/src-tauri/src/conn.rs).
+ */
+export function refusal(status: number, error?: { code: string; message: string }): string {
+  if (status === 403 && error?.code === "remote_disabled") {
+    return 'This pluxy answers only the computer it runs on. On that computer, set "management_allow_remote": true in pluxy\'s config.json (run pluxy help there to see where the file is) and save it. It picks the change up by itself, so then just sign in again.';
+  }
+  return error?.message
+    ? `The reply from pluxy was ${status}: ${error.message}`
+    : `The reply from pluxy was ${status}.`;
+}
+
 /** Storage that may be missing or refuse (private windows, blocked site data). */
 function store(kind: "localStorage" | "sessionStorage"): Storage | undefined {
   try {
@@ -121,9 +136,9 @@ export function browserHost(options?: { heard?: (answered: boolean) => void }): 
     signedIn: () => key !== null,
     async signIn(candidate, keepOnDevice) {
       const r = await send("GET", "/status", undefined, candidate);
-      if (r.status === 401) return "core refused this key";
-      if (r.status === 404) return "no pluxy management API answered at this address";
-      if (r.status !== 200) return r.status === 0 ? "core could not be reached" : `core answered ${r.status}`;
+      if (r.status === 401) return "This management key was not accepted.";
+      if (r.status === 404) return "No pluxy answered at this address.";
+      if (r.status !== 200) return r.status === 0 ? "Could not reach pluxy." : refusal(r.status, r.error);
       remember = keepOnDevice;
       keep(candidate);
       return undefined;

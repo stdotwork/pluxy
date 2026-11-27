@@ -1,7 +1,7 @@
 # UI terms
 
 The desktop app (`next/app`) and the web panel, both built from the UI kit in `next/ui`, show the
-same things: quota cards, limits, resets, auth files, cooldowns and usage. This page lists the
+same things: quota cards, limits, resets, accounts, cooldowns and usage. This page lists the
 words both use for them, so every provider and every locale says the same thing the same way. When
 you add or change a UI string, use these terms. If a term here is wrong, change it here first, then
 in both UIs.
@@ -50,8 +50,8 @@ whichever provider reports it and however the provider words it.
 
 | Concept | Term | Do not use |
 |---|---|---|
-| The page and nav entry for stored login files | `Auth Files` (owner to confirm) | `Authentication Files`, `Credentials` |
-| One such file, in body text | `auth file` | `credential file`, `OAuth file` |
+| The page and nav entry for stored sign-ins | `Accounts` (the page's tab is `All accounts`) | `Authentication Files`, `Credentials` |
+| A CLIProxyAPI sign-in file that Add an account imports, in body text | `auth file` | `credential file`, `OAuth file` |
 | The record the proxy routes requests through | `credential` | |
 | The upstream identity | `account` | |
 | An account's condition, and the groups a list sorts accounts into | `Serving`, `Cooling down`, `Limit used up`, `Needs sign-in`, `Closed by provider`, `Cannot be read`, `Provider stopped`, `Turned off`; groups `Needs you`, `Waiting`, `Serving`, `Turned off` | `Active`, `Ready` |

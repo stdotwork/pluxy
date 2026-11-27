@@ -82,12 +82,12 @@ export function addressKind(text: string, certificateFile?: string): AddressKind
 const NO_ANSWER: Record<string, string> = {
   "TLS verification or handshake failed; check the certificate authority":
     "Its certificate could not be checked. If it uses one you made yourself, give the app its certificate file.",
-  "the connection to core timed out": "It did not answer in time.",
-  "core's host name could not be resolved": "Its name could not be found.",
-  "the connection to core failed (I/O)": "The connection to it failed.",
-  "core returned an invalid HTTP response": "Something answered, but not as pluxy does.",
-  "core could not be reached or its reply could not be read": "It could not be reached.",
-  "no pluxy management API answered at this address": "No pluxy answered at this address.",
+  "The connection to pluxy timed out.": "It did not answer in time.",
+  "The host name could not be resolved.": "Its name could not be found.",
+  "The connection to pluxy failed (I/O).": "The connection to it failed.",
+  "The reply from pluxy was not a valid HTTP response.": "Something answered, but not as pluxy does.",
+  "Could not reach pluxy, or could not read its reply.": "It could not be reached.",
+  "No pluxy answered at this address.": "No pluxy answered at this address.",
 };
 
 const REFUSED_KEY = "That pluxy refused the key. Check it and try again.";
@@ -96,7 +96,7 @@ const REFUSED_KEY = "That pluxy refused the key. Check it and try again.";
 export const noAnswer = (error?: string) => !!error && Object.hasOwn(NO_ANSWER, error);
 
 /** Whether the native side's text says that pluxy answered and refused the key. */
-export const keyRefused = (error?: string) => error === "core refused this key";
+export const keyRefused = (error?: string) => error === "This management key was not accepted.";
 
 /**
  * The plain reason for one of the native side's own error texts, or undefined for any other text,

@@ -14,7 +14,7 @@ theme can change three things:
 
 Tokens and layout options are the stable part of the contract: a theme that only uses them keeps
 working as the UI changes. Custom CSS can only rely on the hooks listed under
-[Custom CSS](#custom-css); anything else in the UI's markup can change in any release.
+[Custom CSS](#custom-css); anything else in the UI's markup can change whenever the UI does.
 
 ## The file
 
@@ -48,7 +48,7 @@ working as the UI changes. Custom CSS can only rely on the hooks listed under
 | Field | Required | What it is |
 | --- | --- | --- |
 | `theme_version` | yes (pluxy files) | The contract version the file is written for. This page describes `0`. Omit for a [T3 Code theme](#t3-code-themes). |
-| `id` | yes (pluxy files) | `publisher/name`. Each part is 1 to 64 characters from `a-z`, `0-9` and `-`. Optional in a T3 Code theme, where the ID becomes `t3/<id>` or is derived from `name`. |
+| `id` | yes (pluxy files) | `publisher/name`. Each part is 1 to 64 characters from `a-z`, `0-9` and `-`; core refuses to store a theme whose publisher is `current`. Optional in a T3 Code theme, where the ID becomes `t3/<id>` or is derived from `name`. |
 | `name` | yes | The name people see. 1 to 64 characters. |
 | `description` | no | One line, up to 200 characters. |
 | `appearance` | no (yes for T3 Code) | `both` (the default for pluxy files), `light` or `dark`: the appearances the theme offers. See [Appearance](#appearance). In a `both` file, T3 Code's `canvas`, `accent` and `colors` apply to one appearance only: the one `variants` does not cover, else dark when the `canvas` seed (or, without one, `colors.canvas`) is a dark colour, else light. |
@@ -75,8 +75,6 @@ A theme file is at most 256 KiB.
   or `dark`, or repeating the file's own appearance, is ignored; a layout value the UI does not
   offer falls back to that option's default; an unknown `appearance` falls back to `both`; custom
   CSS containing `@import` is dropped as a whole.
-
-So a theme written for a later version 0 UI, with tokens this UI does not know yet, still loads.
 
 ## Tokens
 
@@ -127,15 +125,12 @@ anything.
 | `color.code-bg` | Background of the configuration source editor, log views and diffs | `var(--px-color-surface-raised)` |
 | `color.code-text` | Their text | `var(--px-color-text)` |
 
-A default written as `var(--px-…)` follows another token, so a theme that sets only the older
-tokens gets matching colours for these. It does not look exactly as it did before they existed:
-placeholder text now has one colour and full opacity in every browser (`color.placeholder`), and a
-configuration diff now has a background (`color.code-bg`), where each had only the browser's or no
-colour of its own.
+A default written as `var(--px-…)` follows another token, so a theme that does not set it gets a
+colour that matches the tokens it does set.
 
 `color.nav` and `color.input-border` are mixed from other tokens in the same way: the navigation
 is a shade darker than `color.surface`, and an input's border is `color.text-muted` faded towards
-`color.surface`, which keeps it at least 3:1 against the surface in the default theme.
+`color.surface`.
 
 ### Type
 
@@ -218,8 +213,8 @@ The window is a frame that does not scroll: the navigation, the header strip ove
 the status block at the navigation's foot stay where they are, and only the page area scrolls.
 
 A narrow window overrides `nav`, and the `data-part="shell"` element's `data-frame` says what is
-drawn. Under 820 pixels wide the navigation is the rail whatever the theme says, and a list beside
-the page (topics, or tabs with `tabs: side`) becomes a select above it. Under 560 pixels the
+drawn. Under 820 pixels wide the navigation is the rail whatever the theme says, topics become a select
+above the page, and a destination's tabs go back to the header strip even with `tabs: side`. Under 560 pixels the
 navigation is a row of icons across the top (`data-frame="bar"`). Under 720 pixels `side` shows as
 `below`.
 
@@ -235,7 +230,7 @@ The UI is light or dark. What decides it is the theme's `appearance`:
 
 | `appearance` | Light | Dark | The person's choice |
 | --- | --- | --- | --- |
-| `both` | light defaults, then `tokens` | dark defaults, then `tokens`, then `dark` | light, dark, or "system", which follows the operating system |
+| `both` | light defaults, then `tokens` | dark defaults, then `tokens`, then `dark` | Light, Dark or Follow the system (General's Appearance setting) |
 | `light` | light defaults, then `tokens` | not offered | has no effect |
 | `dark` | not offered | dark defaults, then `tokens`, then `dark` | has no effect |
 
@@ -258,16 +253,14 @@ What custom CSS cannot do:
 
 ### Hooks you can rely on
 
-Until pluxy's first release the contract stays at version 0, and these hooks can still change
-under it when a page is rebuilt: the Setup page's hooks were replaced this way. From the first
-release on, they stay stable within a theme contract version:
+When these hooks can change is in [Changes to this contract](#changes-to-this-contract).
 
 | Hook | Where |
 | --- | --- |
 | `data-appearance="light"` or `"dark"` | Root element |
 | `class="dark"` | Root element, while the appearance is dark |
 | `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `account` (one account's page), `add-account`, `routing`, `logs`, `usage` (Requests), `activity/usage` (Usage), `setup`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `account` (one account's page), `add-account`, `routing`, `logs`, `usage` (Requests), `activity/usage` (Usage), `tools`, `settings` (General), `setup`, `config`, `system`, `extensions`, `themes`, a desktop app page's ID, or an extension page's ID; `signin` while signed out |
 | `data-part="shell"` | The whole UI below the root. Signed in, `data-frame` says how the navigation is drawn: `sidebar`, `rail` or `top` (the `nav` option), or `bar` in a very narrow window; `data-narrow` is set while the window is under 820 pixels wide |
 | `data-part="nav"` | The navigation |
 | `data-part="nav-idle"` | The navigation drawn where nothing in it can be chosen yet: the desktop app before it is connected. It has the same content and the same `data-slot` |
@@ -305,7 +298,7 @@ release on, they stay stable within a theme contract version:
 | `data-part="diff-line"` | One diff line; context lines have no change attribute; `data-change` is `add` or `remove` |
 | `data-part="dialog"` | A dialog window |
 | `data-part="log"` | A core log or request log text view |
-| `data-part="log-line"` | One core log line; `data-level` is `info`, `warn` or empty for a line without a level |
+| `data-part="log-line"` | One core log line; `data-level` is `info`, `warn`, `error` or empty for a line without a level |
 | `data-part="select"` | An item's batch selection checkbox |
 | `data-part="batch"` | All accounts' bar of actions for the selected accounts, while Select is on |
 | `data-part="upload-results"` | The result of each CLIProxyAPI auth file imported on Add an account: the account it became, or why it was not added |
@@ -351,7 +344,7 @@ release on, they stay stable within a theme contract version:
 | `data-part="tool-row"` | One coding tool: its name, version, state and settings file. `data-state` is `configured`, `not-configured`, `needs-update`, `refused`, `not_installed` or `unchecked` |
 | `data-part="state-pane"` | What a whole pane shows while it loads, when it is empty, or when it could not be read; `data-kind` is `loading`, `empty` or `failed` |
 | `data-part="plan-pill"` | An account's plan as a word; `data-plan-tier` is `top` (the largest plans), `mid` or `free`. The default theme sets the tiers apart by ink weight only, never colour |
-| `data-part="limits"` | An account's limits on its row; `data-state` is `read`, `reading`, `none` or `failed` |
+| `data-part="limits"` | An account's limits on its row; `data-state` is `read`, `unread`, `reading`, `none` or `failed` |
 | `data-part="activity"` | The body of the Requests and Usage tabs |
 | `data-part="activity-filters"` | The Requests tab's filter row: All or Failed, then the lists of providers, accounts, models and keys |
 | `data-part="usage-chart"` | The Usage tab's chart of requests, a bar per hour or per day; its bars carry `data-outcome` (`success` or `failure`) |
@@ -374,7 +367,7 @@ CSS of a theme written for T3 Code matches the parts both UIs have:
 | `data-slot="dialog-popup"` | A dialog window (`data-part="dialog"`) |
 | `data-slot="sidebar"` | The navigation (`data-part="nav"`), in every `nav` layout |
 
-Every other class name, element and attribute can change in any release.
+Every other class name, element and attribute can change whenever the UI does.
 
 ## Where themes are kept
 
@@ -388,7 +381,8 @@ On the Themes page:
 
 - **Add a theme** takes a theme file, or JSON pasted into the box. The UI checks it first: a file
   it refuses is not stored, and the page says why. A theme that is added is turned on at once.
-- **Save theme file** saves the file of the theme that is on as `<name>.json`, a built-in theme's too. The
+- **Save theme file** saves the file of the theme that is on, a built-in theme's too, named after the part of its ID
+  after `/` (`pluxy/paper` saves as `paper.json`). The
   file holds the JSON that was added; its spacing and the order of its fields can differ. The
   panel downloads it; the desktop app saves it in your Downloads folder and says where. To add a
   built-in theme's file back as a theme of your own, change its `id` first: the page refuses a
@@ -439,7 +433,7 @@ extensions, shown on System.)
 
 - On the Themes page: the "Custom CSS" switch.
 - If custom CSS hides that switch: open the panel with `?safe` in the address, for example
-  `http://127.0.0.1:8400/panel/?safe`. Custom CSS then stays off, also after reloading, until the
+  `http://127.0.0.1:8317/panel/?safe`. Custom CSS then stays off, also after reloading, until the
   switch on the Themes page is turned on. The panel's sign-in page says so too, with `safeAddress` set on
   the shell: a host whose address cannot take `?safe`, such as the desktop app, leaves it out.
 
@@ -448,7 +442,8 @@ extensions, shown on System.)
 - Adding a token, a layout option, a layout value or a hook does not change `theme_version`. A UI
   that does not know them ignores them, as described above.
 - Renaming or removing any of them, or changing what one means, raises `theme_version`. A renamed
-  token keeps its old name as an alias for the whole next version.
+  token keeps its old name as an alias for the whole next version. The one exception: while
+  `theme_version` is 0, a page that is rebuilt can rename or drop its own hooks without raising it.
 - A UI refuses a theme whose `theme_version` is newer than it supports and keeps the theme it had.
 
 ## T3 Code themes
@@ -461,9 +456,6 @@ of T3 Code's file shapes are accepted when `theme_version` is absent, `name` is 
 - **Exported files** (`version: 1`, `id`, `name`, `appearance`, `colors`, and optional `canvas`,
   `accent`, `variants`, `collection`, `managed`, `css`).
 - **Short files** without `version` or `id`, using `canvas` and `accent`, `colors`, or both.
-
-A T3 Code file may also include pluxy's `tokens`, `dark`, and `layout` fields, and a pluxy
-`theme_version: 0` file may include `canvas`, `accent`, `colors`, and `variants`.
 
 ### What each field does
 
@@ -535,17 +527,15 @@ The remaining 35 roles have no pluxy token and are set only as `--app-theme-*` c
 `sidebarRowActive`, `terminalBackground`, `terminalForeground`, `terminalCursor`,
 `terminalSelection`, `terminalScrollbar`, and `terminalScrollbarHover`.
 
-For custom CSS written for T3 Code, `class="dark"` on the root element and the six `data-slot`
-attributes listed under [Hooks you can rely on](#hooks-you-can-rely-on) (`button`, `input`,
-`switch`, `select-trigger`, `dialog-popup`, and `sidebar`) match here. Every other T3 Code class
+For custom CSS written for T3 Code, `class="dark"` on the root element and the `data-slot`
+attributes listed under [Hooks you can rely on](#hooks-you-can-rely-on) match here. Every other T3 Code class
 name or selector matches nothing.
 
 ### Departures from T3 Code
 
 - **Missing roles keep pluxy defaults:** a role a file neither gives nor generates keeps pluxy's
   default token value instead of falling back to T3 Code's built-in default palette.
-- **Custom CSS uses pluxy's rules:** CSS over 128 KiB or containing `@import` is dropped with a
-  warning, and the panel's Content Security Policy blocks remote loads such as `url(https://...)`.
+- **Custom CSS uses pluxy's rules** ([Custom CSS](#custom-css)), not T3 Code's.
 
 ## Built-in themes
 
