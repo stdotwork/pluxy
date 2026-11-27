@@ -100,11 +100,17 @@ export async function openPanel(page: Page, core: Core, path = "/panel/") {
   await page.goto(core.base + path);
 }
 
-/** Signs in on the sign-in page with the management key, and waits for the shell. */
+/** Setup in the focused window, as a first run shows it: no navigation. */
+export const setupFocus = (page: Page) => page.locator('[data-part="setup-focus"]');
+
+/**
+ * Signs in on the sign-in page with the management key, and waits for the shell: its navigation,
+ * or on a first run Setup in the focused window.
+ */
 export async function signIn(page: Page, core: Core) {
   await page.getByLabel("Management key").fill(core.key);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(nav(page)).toBeVisible();
+  await expect(nav(page).or(setupFocus(page))).toBeVisible();
 }
 
 /** The tabs a destination shows in the header strip. */

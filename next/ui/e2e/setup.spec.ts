@@ -2,7 +2,7 @@
 // computer holds Claude Code (panelcore -first-run). The case walks a new install through the
 // three steps to Home.
 import { expect, test } from "@playwright/test";
-import { nav, openPanel, signIn, useCore } from "./support";
+import { nav, openPanel, setupFocus, signIn, useCore } from "./support";
 
 const core = useCore({ firstRun: true });
 
@@ -21,13 +21,17 @@ test("a first run opens Setup and its three steps lead to Finish setup and Home"
   await openPanel(page, core);
   await signIn(page, core);
 
-  // Setup opens by itself, in place of Home, on step 1.
+  // Setup opens by itself, in place of Home, on step 1: the focused window, no navigation, one
+  // step on screen under the row of three.
   await expect(page.getByRole("heading", { level: 1, name: "Set up pluxy" })).toBeVisible();
   await expect(page).toHaveURL(/#\/setup$/);
   await expect(page.locator("html")).toHaveAttribute("data-page", "setup");
-  const steps = page.locator('[data-part="setup-step"]');
+  await expect(setupFocus(page)).toBeVisible();
+  await expect(nav(page)).toHaveCount(0);
+  const steps = page.locator('[data-part="setup-stepper"] li');
   await expect(steps).toHaveCount(3);
   await expect(steps.nth(0)).toHaveAttribute("data-state", "open");
+  await expect(page.locator('[data-part="setup-step"]')).toHaveCount(1);
 
   // Step 1: the kind core suggests for Claude Code is ticked, with why; Add adds it.
   const one = page.getByRole("region", { name: "Your AI accounts" });
@@ -52,6 +56,7 @@ test("a first run opens Setup and its three steps lead to Finish setup and Home"
   const accounts = await core.mgmt<{ accounts: { extension: string }[] }>("GET", "/accounts");
   expect(accounts.body.accounts.map((a) => a.extension)).toEqual(["pluxy/claude"]);
   await one.locator(".setup-next").getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(steps.nth(0)).toHaveAttribute("data-state", "done");
 
   // Step 2: Claude Code's Set up shows the steps, and Make key puts a new key in its text.
   const two = page.getByRole("region", { name: "Your coding tool" });

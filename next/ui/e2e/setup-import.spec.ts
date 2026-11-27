@@ -1,10 +1,10 @@
 // The CLIProxyAPI import line above Setup's steps, against a real first-run core whose home folder
 // holds one (panelcore -first-run -cpa): a config.yaml and an auth folder of three made-up
-// accounts, two of them Claude's. Then Leave setup for now, and Setup reopened from Settings.
+// accounts, two of them Claude's. Then Finish later, Home's card, and Setup reopened from it.
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, test } from "@playwright/test";
-import { goTo, openPanel, signIn, useCore } from "./support";
+import { goTo, nav, openPanel, signIn, useCore } from "./support";
 
 const core = useCore({ firstRun: true, cpa: true });
 
@@ -96,29 +96,52 @@ test("a found CLIProxyAPI setup is previewed, imported, and the kind its account
   await expect(report).toBeHidden();
 
   // Closed, the line says the setup was imported, also after a reload: core keeps the record.
+  // The reload opens the first step not done (the tool), so the person goes back to step 1.
   for (const reload of [false, true]) {
-    if (reload) await page.reload();
+    if (reload) {
+      await page.reload();
+      await page
+        .locator('[data-part="setup-stepper"]')
+        .getByRole("button", { name: /Your AI accounts/ })
+        .click();
+    }
     await expect(line).toHaveAttribute("data-state", "imported");
     await expect(line).toContainText("Imported a CLIProxyAPI setup");
     await expect(line.getByRole("button", { name: "Import again" })).toBeVisible();
   }
 });
 
-test("Leave setup for now ends the first run; Setup reopened from Settings has every step folded", async ({
+test("Finish later ends the first run and leaves a card on Home; Setup reopened has every step folded", async ({
   page,
 }) => {
   await openPanel(page, core);
   await signIn(page, core);
   await page.goto(`${core.base}/panel/#/setup`);
-  await expect(page.getByText("It won't open by itself again; it stays under Settings.")).toBeVisible();
-  await page.getByRole("button", { name: "Leave setup for now", exact: true }).click();
+  await expect(
+    page.getByText("Finish later leaves a reminder on Home. Setup stays under Settings."),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Finish later", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+  await expect(nav(page)).toBeVisible();
   expect((await core.mgmt<{ first_run: boolean }>("GET", "/setup")).body.first_run).toBe(false);
+  // Home's card says what is left and leads back to Setup, now among the Settings topics.
+  const card = page.locator('[data-part="setup-later"]');
+  await expect(card).toContainText("Finish setting up pluxy");
+  await expect(card).toContainText("Your coding tool");
+  await card.getByRole("link", { name: "Continue setup" }).click();
+  await expect(page).toHaveURL(/#\/setup$/);
+  await expect(nav(page)).toBeVisible();
+  await page.goto(`${core.base}/panel/#/`);
+  await card.getByRole("button", { name: "Hide" }).click();
+  await expect(card).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
+  await expect(card).toHaveCount(0);
   await goTo(page, "Setup");
   const steps = page.locator('[data-part="setup-step"]');
   await expect(steps).toHaveCount(3);
   for (let i = 0; i < 3; i++) await expect(steps.nth(i)).not.toHaveAttribute("data-state", "open");
   await expect(page.getByText("Review or change your accounts and coding tools.")).toBeVisible();
   await expect(page.getByRole("link", { name: "Back to Home" })).toHaveAttribute("href", "#/");
-  await expect(page.getByRole("button", { name: "Leave setup for now" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Finish later" })).toHaveCount(0);
 });
