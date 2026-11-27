@@ -326,20 +326,28 @@ func TestFailedReloadKeepsActiveConfig(t *testing.T) {
 	writeConfig(t, path, lifecycleConfig(bad, g, nil))
 	check("extension that fails to start", 3, "exited before its handshake")
 
-	moved := lifecycleConfig(v1, g, nil)
-	moved["listen"] = "127.0.0.1:1"
-	writeConfig(t, path, moved)
-	check("listen address change", 4, "listen")
-
 	elsewhere := lifecycleConfig(v1, g, nil)
 	elsewhere["credentials_dir"] = filepath.Join(t.TempDir(), "elsewhere")
 	writeConfig(t, path, elsewhere)
-	check("credentials folder change", 5, "credentials_dir")
+	check("credentials folder change", 4, "credentials_dir")
 
 	open := lifecycleConfig(v1, g, nil)
 	delete(open, "client_keys")
 	writeConfig(t, path, open)
-	check("no client keys", 6, "client_keys is empty")
+	check("no client keys", 5, "client_keys is empty")
+
+	// A new listen address is no failure: the rest of the file applies, and core keeps serving on
+	// the address it has until it starts again.
+	moved := lifecycleConfig(v1, g, nil)
+	moved["listen"] = "127.0.0.1:1"
+	writeConfig(t, path, moved)
+	code, s := reload(t, base)
+	if code != http.StatusOK || s.Active.Revision != 6 || s.Desired.Revision != 6 || s.Desired.Error != "" {
+		t.Errorf("listen address change: reload status %d, active %d, desired %d with error %q; want 200 and revision 6 in use", code, s.Active.Revision, s.Desired.Revision, s.Desired.Error)
+	}
+	if body := askOK(t, base, "plain"); !strings.Contains(body, "v=0.1.0") {
+		t.Errorf("request after the listen address change answered %s", body)
+	}
 }
 
 // Core does not start on a config without client keys: it would serve anyone who reaches it.

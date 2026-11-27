@@ -139,10 +139,19 @@ export function ConfigPage() {
     if (!live.current) return reply;
     if (reply.status >= 200 && reply.status < 300 && reply.body) {
       const held = settingAt(reply.body, key);
+      // A new listen address waits for a restart: the reply says which address waits.
+      const waiting = reply.body.listen_after_restart;
       setSettings((s) =>
         s.phase === "loading" || !s.data
           ? s
-          : { phase: "ready", data: withSetting(s.data, key, held), at: Date.now() },
+          : {
+              phase: "ready",
+              data: {
+                ...withSetting(s.data, key, held),
+                ...(key === "listen" ? { listen_after_restart: waiting } : {}),
+              },
+              at: Date.now(),
+            },
       );
       void loadFile(true);
       void loadStatus();

@@ -200,6 +200,36 @@ func setupStartLine(panelBuilt bool, local, configArg, listen string) string {
 	return fmt.Sprintf("first-run setup is not finished. Next: open %s%s in a browser and sign in with the management key, or run %s", local, panel.Prefix, command)
 }
 
+// otherComputerLine is the line after the panel's address while first-run setup has not ended:
+// that address is this computer's own, so it says how to open the panel from another computer
+// (listen is the address pluxy serves on, file its config file, secure whether it serves HTTPS).
+// "" when another computer can already open it.
+func otherComputerLine(listen string, allowRemote bool, file string, secure bool) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return ""
+	}
+	scheme := "http"
+	if secure {
+		scheme = "https"
+	}
+	address := fmt.Sprintf("%s://<this computer's address>:%s%s", scheme, port, panel.Prefix)
+	ip := net.ParseIP(host)
+	switch {
+	case server.IsLoopbackHost(host):
+		return fmt.Sprintf(`that address works only on this computer. To open the panel from another computer, set "listen" to "0.0.0.0:%s" and "management_allow_remote" to true in %s (Config in the panel sets both), restart pluxy, then open %s there`, port, quoteArg(file), address)
+	case allowRemote:
+		if host == "" || ip != nil && ip.IsUnspecified() {
+			return fmt.Sprintf("another computer opens the panel at %s, using this computer's address in place of the one above", address)
+		}
+		return ""
+	case host == "" || ip != nil && ip.IsUnspecified():
+		return fmt.Sprintf(`another computer opens the panel at %s, using this computer's address in place of the one above, after "management_allow_remote" is set to true in %s (Config in the panel sets it), or its sign-in is refused`, address, quoteArg(file))
+	default:
+		return fmt.Sprintf(`another computer opens the panel at the address above after "management_allow_remote" is set to true in %s (Config in the panel sets it), or its sign-in is refused`, quoteArg(file))
+	}
+}
+
 // initConfig is pluxy init: it writes a first config, as a first start does, without starting
 // core, and returns the exit code. With no -config it writes config.json in pluxy's home, or
 // finds the one in the current folder already there.
@@ -430,6 +460,15 @@ func run(configPath string, byRule, safeMode bool, watch time.Duration, bundled 
 				configArg = "" // pluxy setup finds it as core did
 			}
 			fmt.Fprintf(os.Stderr, "pluxy: %s\n", setupStartLine(panel.Built(assets), local, configArg, cfg.Listen))
+			if panel.Built(assets) {
+				abs, err := filepath.Abs(configPath)
+				if err != nil {
+					abs = configPath
+				}
+				if line := otherComputerLine(ln.Addr().String(), cfg.ManagementAllowRemote, abs, tlsConfig != nil); line != "" {
+					fmt.Fprintf(os.Stderr, "pluxy: %s\n", line)
+				}
+			}
 		}
 	}
 
