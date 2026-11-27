@@ -21,6 +21,8 @@ export interface Pool {
   provider: string;
   /** The limit the pool counts, by its whole name ("5-hour limit"); none when no account reports one. */
   window?: string;
+  /** Its length in seconds. */
+  windowSeconds?: number;
   /** The share left, 0 to 100, on average over the accounts that serve and report it. */
   left?: number;
   /** A money balance the serving accounts report in place of a limit (unit usd), added up. */
@@ -124,6 +126,7 @@ export function poolOf(
     extension,
     provider: providerName(extension),
     window: named ? windowName(named) : undefined,
+    windowSeconds: named?.window_seconds,
     left,
     balance,
     segments,

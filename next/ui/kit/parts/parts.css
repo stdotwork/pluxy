@@ -560,6 +560,15 @@
       white-space: normal;
       overflow-wrap: anywhere;
     }
+
+    /* The reason goes under the condition word rather than squeeze beside it. */
+    .account-sub {
+      flex-wrap: wrap;
+    }
+
+    .account-word::after {
+      content: none;
+    }
   }
 
   /* A row with limits and a fix (a model cooling down) needs more room than the others: under it,
@@ -1080,10 +1089,12 @@
     box-shadow: var(--px-shadow-raised);
   }
 
+  /* The provider's name keeps its room; the limit's name goes under it when both do not fit. */
   .pool-head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: calc(var(--s) * 2);
+    gap: var(--s) calc(var(--s) * 2);
     min-width: 0;
   }
 
@@ -1100,7 +1111,7 @@
 
   /* The limit's name gives way to the provider's: it shortens first. */
   .pool-window {
-    flex: 0 100 auto;
+    flex: 0 1 auto;
     min-width: 0;
     margin-inline-start: auto;
     overflow: hidden;

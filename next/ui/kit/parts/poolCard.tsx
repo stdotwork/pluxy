@@ -20,7 +20,21 @@ const t = strings("parts.poolCard", {
   back: "+{gain}% back in {duration}",
   firstBack: "The first is back in {duration}",
   balance: "Balance",
+  fiveHour: "5-hour",
+  daily: "Daily",
+  weekly: "Weekly",
+  monthly: "Monthly",
 });
+
+/** The limit's name short enough for the card's head: 5-hour, Daily; else its whole name. */
+function shortWindow(p: Pool): string | undefined {
+  const s = p.windowSeconds;
+  if (s === 5 * 3600) return t("fiveHour");
+  if (s === 86400) return t("daily");
+  if (s === 7 * 86400) return t("weekly");
+  if (s !== undefined && s >= 28 * 86400 && s <= 31 * 86400) return t("monthly");
+  return p.window;
+}
 
 const money = (n: number) =>
   n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
@@ -70,7 +84,9 @@ export function PoolCard(props: { pool: Pool }) {
       <header class="pool-head">
         <ProviderMark extension={p.extension} />
         <h3 class="pool-name">{p.provider}</h3>
-        <span class="pool-window">{p.window ?? (p.balance !== undefined ? t("balance") : "")}</span>
+        <span class="pool-window" title={p.window}>
+          {shortWindow(p) ?? (p.balance !== undefined ? t("balance") : "")}
+        </span>
       </header>
       <p class="pool-hero">{hero}</p>
       {p.balance === undefined || p.left !== undefined ? (

@@ -149,7 +149,8 @@ test.describe("a core with accounts and requests", () => {
     const alpha = page.locator(".home-group").and(page.getByRole("region", { name: "Alpha", exact: true }));
     await expect(alpha.getByRole("link", { name: "Test account", exact: true })).toBeVisible();
     const pool = page.locator('[data-part="pool-card"][data-provider="alpha"]');
-    await expect(pool).toContainText("5-hour limit");
+    await expect(pool.locator(".pool-window")).toHaveText("5-hour");
+    await expect(pool.locator(".pool-window")).toHaveAttribute("title", "5-hour limit");
     await expect(pool).toContainText(/\d+ of \d+ serving/);
     const limits = alpha
       .locator('[data-part="account-row"]')
