@@ -579,7 +579,7 @@
       flex-wrap: wrap;
     }
 
-    .account-word::after {
+    .account-word:not(:last-child)::after {
       content: none;
     }
   }
