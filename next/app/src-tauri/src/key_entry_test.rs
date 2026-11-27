@@ -402,7 +402,11 @@ pub(super) fn owner_gone(app: &AppHandle, main: &Webview) -> Result<Webview, Str
     .map_err(|_| "could not open the window again")?;
     let main = wait_for("the window", || app.get_webview(MAIN))?;
     wait_for("the window's shell", || {
-        eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
+        eval(
+            &main,
+            "document.querySelector('[data-part=nav], [data-part=setup-focus]') !== null",
+        )
+        .filter(|v| v == true)
     })?;
     watch(&main)?;
     log(

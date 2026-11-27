@@ -787,8 +787,13 @@ fn run(app: &AppHandle) -> Result<(), String> {
         crate::quit(app);
         return Ok(());
     }
+    // The window's shell: its navigation, or on a core's first run Setup in the focused window.
     wait_for("the window's shell", || {
-        eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
+        eval(
+            &main,
+            "document.querySelector('[data-part=nav], [data-part=setup-focus]') !== null",
+        )
+        .filter(|v| v == true)
     })?;
     // The signed application update (update_native.rs), in a session of its own.
     if let Ok(dir) = std::env::var("PLUXY_APP_TEST_UPDATE") {

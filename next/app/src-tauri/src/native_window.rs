@@ -122,10 +122,15 @@ fn click_button(app: &AppHandle, selector: &str, text: &str) -> bool {
     ) == Some(json!(true))
 }
 
+/// The window's signed-in shell: its navigation, or on a core's first run Setup in the focused
+/// window, which has none.
 fn shell_ready(app: &AppHandle, secs: u64) -> bool {
     within(secs, || {
-        (main_eval(app, "document.querySelector('[data-part=nav]') !== null") == Some(json!(true)))
-            .then_some(())
+        (main_eval(
+            app,
+            "document.querySelector('[data-part=nav], [data-part=setup-focus]') !== null",
+        ) == Some(json!(true)))
+        .then_some(())
     })
     .is_some()
 }

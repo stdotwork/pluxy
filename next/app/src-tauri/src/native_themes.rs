@@ -158,7 +158,7 @@ fn shell(c: &mut Checks, app: &AppHandle) -> bool {
         until(
             app,
             60,
-            "document.querySelector('[data-part=nav]') !== null",
+            "document.querySelector('[data-part=nav], [data-part=setup-focus]') !== null",
         ),
         "the window shows the app's shell",
     )

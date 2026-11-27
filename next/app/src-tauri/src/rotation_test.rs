@@ -238,9 +238,10 @@ fn sign_in(app: &AppHandle, main: &Webview, key: &str, keep: bool) -> Result<(),
     // anew (`main.tsx`, `key={generation}`), closing the pages the old one had open, so the wait
     // is for a new shell: the old one may still be signed in (`sign_out` above is the window's
     // own call, which does not change what it shows), and a page opened in it is closed again.
+    // The shell is its navigation, or on a core's first run Setup in the focused window.
     let old_shell = eval(
         main,
-        "(window.__rotationNav = document.querySelector('[data-part=nav]')) !== null",
+        "(window.__rotationNav = document.querySelector('[data-part=nav], [data-part=setup-focus]')) !== null",
     );
     use tauri::Emitter;
     app.emit_to(tauri::EventTarget::webview(MAIN), "pluxy-connection", ())
@@ -248,7 +249,7 @@ fn sign_in(app: &AppHandle, main: &Webview, key: &str, keep: bool) -> Result<(),
     wait_for("the window's new signed-in shell", || {
         eval(
             main,
-            "(() => { const n = document.querySelector('[data-part=nav]'); return n !== null && n !== window.__rotationNav; })()",
+            "(() => { const n = document.querySelector('[data-part=nav], [data-part=setup-focus]'); return n !== null && n !== window.__rotationNav; })()",
         )
         .filter(|v| v == true)
     })?;
@@ -326,7 +327,11 @@ const REFUSALS: &str = r#"(async () => {
 fn window_ready(app: &AppHandle) -> Result<Webview, String> {
     let main = wait_for("the window", || app.get_webview(MAIN))?;
     wait_for("the window's shell", || {
-        eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
+        eval(
+            &main,
+            "document.querySelector('[data-part=nav], [data-part=setup-focus]') !== null",
+        )
+        .filter(|v| v == true)
     })?;
     watch(&main)?;
     Ok(main)

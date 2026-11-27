@@ -336,7 +336,11 @@ pub(crate) fn run(app: &AppHandle, stage: &str) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     let main = wait_for("the window", || app.get_webview(MAIN))?;
     wait_for("the window's shell", || {
-        eval(&main, "document.querySelector('[data-part=nav]') !== null").filter(|v| v == true)
+        eval(
+            &main,
+            "document.querySelector('[data-part=nav], [data-part=setup-focus]') !== null",
+        )
+        .filter(|v| v == true)
     })?;
     let text = |k: &str| {
         expect["contents"][k]
