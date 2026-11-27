@@ -619,9 +619,12 @@ function ToolRows(props: {
     const hasCustom = custom !== undefined && custom !== null && custom !== false && custom !== "";
     const opened = props.open === client.id;
     // pluxy writes the settings of the tools it can connect itself; the steps to paste them stay,
-    // as Set up by hand, until pluxy has connected the tool.
+    // as Set up by hand, until pluxy has connected the tool. A tool already connected by hand keeps
+    // its Set up alone.
     const byPluxy = !hasCustom && client.connected_by_pluxy === true;
-    const connect = !hasCustom && (byPluxy || (client.can_connect === true && client.installed));
+    const connect =
+      !hasCustom &&
+      (byPluxy || (client.can_connect === true && client.installed && client.state !== "configured"));
     const note = props.notes[client.id];
     // Next to Connect, the steps by hand are the lesser way: a ghost button.
     const toggle = (

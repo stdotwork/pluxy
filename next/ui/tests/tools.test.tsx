@@ -58,6 +58,7 @@ function world(
     make?: (call: Call) => Reply<unknown> | undefined;
     rename?: (call: Call) => Reply<unknown> | undefined;
     remove?: (call: Call) => Reply<unknown> | undefined;
+    connect?: (call: Call) => Reply<unknown> | undefined;
     used?: Record<string, number>;
     scanned?: boolean;
   } = {},
@@ -83,6 +84,9 @@ function world(
     if (method === "GET" && path === "/setup")
       return init.setup?.(call) ?? { status: 200, body: setup(false) };
     if (method === "POST" && path === "/setup/scan") return { status: 200, body: setup(false) };
+    if (method === "POST" && /^\/setup\/clients\/[^/]+\/(connect|disconnect)$/.test(path)) {
+      return init.connect?.(call) ?? { status: 404, error: { code: "not_found", message: "no such call" } };
+    }
     if (method === "GET" && path.startsWith("/setup/clients/")) {
       const id = path.split("/")[3] ?? "";
       if (!["claude-code", "codex", "opencode", "pi", "omp"].includes(id)) {
@@ -455,6 +459,125 @@ test("without extraTools one line says three tools are set up from the app; loca
     ],
   }).mount(<ToolsPage />);
   expect(listed.text()).not.toContain("are set up from the desktop app.");
+});
+
+// ---- Connect and Disconnect ---------------------------------------------------------------------
+
+const CAN = client("claude-code", "Claude Code", { can_connect: true, config: "~/.claude/settings.json" });
+
+test("a tool pluxy can connect offers Connect and Set up by hand, and says what Connect does", async () => {
+  const w = world({
+    clients: [
+      CAN,
+      client("codex", "Codex CLI", { can_connect: true, state: "configured", connected_by_pluxy: true }),
+      client("opencode", "OpenCode", { can_connect: true, state: "configured" }),
+    ],
+  });
+  const m = await w.mount(<ToolsPage />);
+  const claude = rowOf(m.root, "Claude Code");
+  expect(all(claude, "button").map((b) => b.textContent)).toEqual(["Connect", "Set up by hand"]);
+  expect(claude.textContent).toContain(
+    "Connect makes a key for Claude Code and writes it into ~/.claude/settings.json on this computer. pluxy keeps a copy of the file as it was, and Disconnect puts it back.",
+  );
+  // Connected by pluxy: Disconnect alone.
+  expect(all(rowOf(m.root, "Codex"), "button").map((b) => b.textContent)).toEqual(["Disconnect"]);
+  // Connected by hand: its Set up, and no Connect or hint.
+  const byHand = rowOf(m.root, "OpenCode");
+  expect(all(byHand, "button").map((b) => b.textContent)).toEqual(["Set up"]);
+  expect(byHand.textContent).not.toContain("Connect makes a key");
+  // A host's own button wins.
+  const app = await w.mount(<ToolsPage options={{ toolAction: () => <a href="#/claude-code">Open</a> }} />);
+  expect(hasButton(rowOf(app.root, "Claude Code"), "Connect")).toBe(false);
+});
+
+test("Connect sends the row's name for the key, reads the tools and keys again, and says what to do next", async () => {
+  let connected = false;
+  const w = world({
+    clients: [CAN],
+    connect: () => {
+      connected = true;
+      return {
+        status: 200,
+        body: {
+          client: { ...CAN, state: "configured" },
+          files: [{ path: "~/.claude/settings.json", change: "changed" }],
+        },
+      };
+    },
+    setup: () =>
+      connected
+        ? {
+            status: 200,
+            body: {
+              first_run: false,
+              scanning: false,
+              scanned_at: SCANNED,
+              found: {
+                clients: [{ ...CAN, state: "configured", connected_by_pluxy: true }],
+                sign_ins: [],
+                imports: [],
+                core: { listen: "127.0.0.1:8317", reachable_from_network: false },
+              },
+              picks: [],
+            },
+          }
+        : undefined,
+  });
+  const m = await w.mount(<ToolsPage />);
+  const before = w.calls.length;
+  await press(buttonIn(rowOf(m.root, "Claude Code"), "Connect"));
+  const sent = w.calls.slice(before);
+  expect(sent[0]).toEqual({
+    method: "POST",
+    path: "/setup/clients/claude-code/connect",
+    body: { label: "Claude Code" },
+  });
+  expect(sent.some((c) => c.method === "GET" && c.path === "/setup")).toBe(true);
+  expect(sent.some((c) => c.method === "GET" && c.path === "/client-keys")).toBe(true);
+  const row = rowOf(m.root, "Claude Code");
+  expect(row.textContent).toContain("Connected. Start Claude Code again so it reads the new settings.");
+  expect(all(row, "button").map((b) => b.textContent)).toEqual(["Disconnect"]);
+});
+
+test("a refused Connect says why under the row, and Disconnect says what it did to the file", async () => {
+  const byPluxy = { ...CAN, state: "configured" as const, connected_by_pluxy: true };
+  const refused = world({
+    clients: [CAN],
+    connect: () => ({ status: 422, error: { code: "refused", message: "~/.claude is a link." } }),
+  });
+  const m = await refused.mount(<ToolsPage />);
+  await press(buttonIn(rowOf(m.root, "Claude Code"), "Connect"));
+  expect(rowOf(m.root, "Claude Code").textContent).toContain(
+    "Could not connect Claude Code. ~/.claude is a link.",
+  );
+  expect(hasButton(rowOf(m.root, "Claude Code"), "Set up by hand")).toBe(true);
+
+  for (const [change, says] of [
+    ["restored", "Disconnected. ~/.claude/settings.json is back as it was."],
+    [
+      "merged",
+      "Disconnected. pluxy took its settings out of ~/.claude/settings.json and kept the changes made since.",
+    ],
+    ["removed", "Disconnected. pluxy removed ~/.claude/settings.json, which it had made."],
+  ] as const) {
+    const w = world({
+      clients: [byPluxy],
+      connect: (call) => ({
+        status: 200,
+        body: {
+          client: CAN,
+          files: [{ path: "~/.claude/settings.json", change }],
+          key_removed: call.path.endsWith("/disconnect"),
+        },
+      }),
+    });
+    const d = await w.mount(<ToolsPage />);
+    await press(buttonIn(rowOf(d.root, "Claude Code"), "Disconnect"));
+    expect(
+      w.calls.some((c) => c.method === "POST" && c.path === "/setup/clients/claude-code/disconnect"),
+    ).toBe(true);
+    expect(rowOf(d.root, "Claude Code").textContent).toContain(says);
+  }
 });
 
 // ---- the steps and the key made for a tool -----------------------------------------------------
