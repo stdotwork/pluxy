@@ -17,8 +17,9 @@
 //
 // With -first-run, core starts as a new install does: nothing installed, no accounts, and its
 // bundled registry offers one pick, pluxy/claude (the test extension under that ID, so setup
-// suggests it). Core runs with a new empty home folder and a PATH that holds only a claude
-// program printing a version, so its scan finds Claude Code and nothing of the machine's own.
+// suggests it). Core runs with a new home folder that holds only a Claude Code sign-in file, and a
+// PATH that holds only a claude program printing a version, so its scan finds Claude Code, signed
+// in, and nothing of the machine's own.
 // With -cpa as well, that home folder holds a CLIProxyAPI setup (~/.cli-proxy-api: a config.yaml
 // and an auth folder of three made-up accounts), which the scan finds and an import can read.
 //
@@ -412,7 +413,7 @@ func writeCPASetup(home string) error {
 }
 
 // firstRunPackage is the one package -first-run's registry offers: the test extension as the
-// pick setup suggests when it finds Claude Code.
+// pick setup suggests when it finds Claude Code signed in.
 var firstRunPackage = pkg{
 	id: "pluxy/claude", version: "0.1.0", file: "claude.tar.gz",
 	title: "Claude", summary: "Claude subscriptions and API keys", kind: "provider", tier: "pick",
@@ -440,6 +441,13 @@ func firstRunEnv(dir string) ([]string, error) {
 		return nil, err
 	}
 	if err := os.WriteFile(filepath.Join(bin, "claude"+exe), prog, 0o755); err != nil {
+		return nil, err
+	}
+	// A Claude Code sign-in, so that setup suggests the Claude pick: an installed CLI alone does not.
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"), []byte(`{"claudeAiOauth":"opaque"}`), 0o600); err != nil {
 		return nil, err
 	}
 	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {

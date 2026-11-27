@@ -144,7 +144,7 @@ function Next(props: { done: boolean; onNext: () => void; children?: ComponentCh
 export function SetupPage(props: { options?: SetupOptions }) {
   const { api, host, unauthorized, extensionsChanged } = useKit();
   const options = props.options;
-  const tools = useToolsState();
+  const tools = useToolsState({ lookAgain: true });
   const { setup: loaded, accounts } = tools;
   const packages = useLoad(api.packages);
   const status = useLoad(api.status);
