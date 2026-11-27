@@ -21,8 +21,9 @@ If you run coding agents on subscription accounts, you have probably met these:
 - **Setup means writing a config file by hand.** The first start writes the config. A setup page
   then looks at the machine, offers the providers that fit what it found, and installs only the
   ones you pick.
-- **Every tool wants different settings.** `pluxy client show <tool>` prints what to paste into
-  Claude Code, Codex, OpenCode, Pi or Oh My Pi.
+- **Every tool wants different settings.** `pluxy client connect <tool>` writes them into Claude
+  Code's or Codex's settings, and `pluxy client disconnect <tool>` puts the file back;
+  `pluxy client show <tool>` prints what to paste into Claude Code, Codex, OpenCode, Pi or Oh My Pi.
 
 pluxy has three parts: the core (the proxy itself, a Go program), a web panel the core serves at
 `/panel/`, and a desktop app that runs or connects to a core (Linux only for now). Each kind of
@@ -117,11 +118,13 @@ Check that the account answers:
 ### 5. Point a client at pluxy
 
 ```bash
-./pluxy client show claude-code
+./pluxy client connect claude-code
 ```
 
-This prints the lines to put in the tool's config file, with `<client-key>` where your client key
-goes. The other tools are `codex`, `opencode`, `pi` and `omp`; [docs/clients.md](docs/clients.md)
+This writes Claude Code's settings (`~/.claude/settings.json`) with a client key made for it, and
+keeps the file as it was: `./pluxy client disconnect claude-code` puts it back. To paste the
+settings yourself instead, `./pluxy client show claude-code` prints the lines to put in the tool's
+config file, with `<client-key>` where your client key goes. The other tools are `codex`, `opencode`, `pi` and `omp`; [docs/clients.md](docs/clients.md)
 has each one's settings, and the base URLs for any other client.
 
 ### 6. Send a request and see it counted

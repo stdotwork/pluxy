@@ -629,6 +629,40 @@ type SetupClient struct {
 	Version   string `json:"version,omitempty"`
 	Config    string `json:"config"`
 	State     string `json:"state"`
+	// CanConnect: core can write this tool's settings itself (POST /setup/clients/{id}/connect).
+	CanConnect bool `json:"can_connect,omitempty"`
+	// ConnectedByPluxy: core connected this tool and keeps its settings as they were before, which
+	// POST /setup/clients/{id}/disconnect puts back.
+	ConnectedByPluxy bool `json:"connected_by_pluxy,omitempty"`
+}
+
+// ClientConnection is the reply to POST /setup/clients/{id}/connect and .../disconnect: the tool
+// as core reads it afterwards and what changed.
+type ClientConnection struct {
+	Client SetupClient            `json:"client"`
+	Files  []ClientConnectionFile `json:"files"`
+	// Key is the client key the tool sends after a connect, masked; never its value.
+	Key *ClientKey `json:"key,omitempty"`
+	// KeyMade: the connect made Key for the tool.
+	KeyMade bool `json:"key_made,omitempty"`
+	// KeyRemoved: the disconnect removed the client key its connect had made.
+	KeyRemoved bool `json:"key_removed,omitempty"`
+}
+
+// Changes to a tool's settings file (ClientConnectionFile.Change).
+const (
+	ClientFileCreated   = "created"   // connect: there was no file
+	ClientFileChanged   = "changed"   // connect: the file's settings point the tool at core now
+	ClientFileUnchanged = "unchanged" // the file already was what the call leaves
+	ClientFileRestored  = "restored"  // disconnect: the file is as it was before the connect
+	ClientFileRemoved   = "removed"   // disconnect: there was no file before the connect
+	ClientFileMerged    = "merged"    // disconnect: the file changed since; core's settings are out, the rest stays
+)
+
+// ClientConnectionFile is one settings file a connect or disconnect changed, from the home folder (~).
+type ClientConnectionFile struct {
+	Path   string `json:"path"`
+	Change string `json:"change"`
 }
 
 // SetupSignIn is an existing sign-in core saw on the machine (no token is read).

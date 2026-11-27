@@ -69,6 +69,9 @@ type setupManager struct {
 	coreTarget func() (listen string, tlsEnable bool)
 	timeout    time.Duration
 
+	// toolsMu orders connects and disconnects of client tools (setup_connect.go).
+	toolsMu sync.Mutex
+
 	mu        sync.Mutex
 	stopped   bool // stop has run: no scan starts any more
 	firstRun  bool
@@ -345,6 +348,7 @@ func (c *Core) Setup(ctx context.Context) management.Setup {
 	if listen != "" {
 		found.Core = setupCoreInfo(listen)
 	}
+	c.setup.markConnect(found.Clients)
 	regs := c.Registries(ctx)
 	installed := c.cur.Load().pkgs
 	return management.Setup{

@@ -20,6 +20,26 @@ export interface SetupClient {
   /** The client's settings file, from the home folder. */
   config: string;
   state: SetupClientState;
+  /** Core can write this tool's settings itself (connectClient); absent on older cores. */
+  can_connect?: boolean;
+  /** Core connected this tool and keeps its settings as they were, which disconnectClient puts back. */
+  connected_by_pluxy?: boolean;
+}
+
+/** What a connect or disconnect changed in one settings file, from the home folder. */
+export interface ClientConnectionFile {
+  path: string;
+  change: "created" | "changed" | "unchanged" | "restored" | "merged" | "removed";
+}
+
+/** The reply to connectClient and disconnectClient: the tool as core reads it now, and what changed. */
+export interface ClientConnection {
+  client: SetupClient;
+  files: ClientConnectionFile[];
+  /** The key the tool sends after a connect, masked; never its value. */
+  key?: { id: string; masked: string; label?: string };
+  key_made?: boolean;
+  key_removed?: boolean;
 }
 
 /** A sign-in core saw on its machine. Core reads no token from it. */
@@ -142,4 +162,13 @@ export const setupApi = (host: Host) => ({
   /** keyId names a client key from clientKeys(); the placeholder then names it. */
   clientPaste: (id: string, keyId?: string) =>
     host.call<ClientPaste>("GET", `/setup/clients/${one(id)}/paste${keyId ? `?key_id=${one(keyId)}` : ""}`),
+  /**
+   * Core writes the tool's settings on its own machine, with a key made for it (named label), and
+   * keeps the file as it was.
+   */
+  connectClient: (id: string, label?: string) =>
+    host.call<ClientConnection>("POST", `/setup/clients/${one(id)}/connect`, label ? { label } : undefined),
+  /** Core puts back what its connect changed in the tool's settings. */
+  disconnectClient: (id: string) =>
+    host.call<ClientConnection>("POST", `/setup/clients/${one(id)}/disconnect`),
 });

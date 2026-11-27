@@ -5,9 +5,16 @@ Codex, or anything else that speaks the OpenAI, Anthropic or Gemini API. This pa
 put in each client's config. It assumes pluxy is running and has an account
 ([quick start](../README.md#quick-start)).
 
-pluxy never edits a client's files. `pluxy client show <tool>` prints the settings, and you paste
-them. The panel's **Tools** page, and step 2 of its guided setup, show the same text under each tool's
-**Set up**.
+For Claude Code and Codex on the computer pluxy runs on, pluxy can write the settings itself:
+`pluxy client connect claude-code` (or `codex`), or **Connect** on the panel's **Tools** page and
+in step 2 of its guided setup. It makes a client key for the tool, sets the lines below in the
+tool's file and keeps the rest of the file, and keeps a copy of the file as it was;
+`pluxy client disconnect <tool>`, or **Disconnect**, puts it back. pluxy changes no other file of a
+client's, and these two only when asked.
+
+For the other tools, or to set one up by hand, `pluxy client show <tool>` prints the settings, and
+you paste them. The panel's **Tools** page, and step 2 of its guided setup, show the same text under
+each tool's **Set up** (for Claude Code and Codex, **Set up by hand**).
 
 Every block below has two placeholders:
 

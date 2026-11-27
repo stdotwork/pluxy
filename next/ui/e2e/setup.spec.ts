@@ -53,21 +53,20 @@ test("a first run opens Setup and its three steps lead to Finish setup and Home"
   expect(accounts.body.accounts.map((a) => a.extension)).toEqual(["pluxy/claude"]);
   await one.locator(".setup-next").getByRole("button", { name: "Continue", exact: true }).click();
 
-  // Step 2: Claude Code's Set up shows the steps, and Make key puts a new key in its text.
+  // Step 2: Connect sets Claude Code up on pluxy's computer, with a key made for it, and the step
+  // is done.
   const two = page.getByRole("region", { name: "Your coding tool" });
   await expect(steps.nth(1)).toHaveAttribute("data-state", "open");
   await expect(page.getByRole("heading", { level: 2, name: "Your coding tool" })).toBeFocused();
   await expect(two).toContainText("Detected on this computer.");
   const row = two.locator('[data-part="tool-row"]').filter({ hasText: "Claude Code" });
-  await row.getByRole("button", { name: "Set up", exact: true }).click();
-  const text = row.locator("pre");
-  await expect(text).toContainText(`"ANTHROPIC_BASE_URL": "${core.base}"`);
-  await row.getByRole("button", { name: "Make key", exact: true }).click();
-  await expect(row).toContainText("Done. The key is in the text below.");
+  await row.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(row).toContainText("Connected. Start Claude Code again so it reads the new settings.");
   const keys = await core.mgmt<{ keys: { id: string; label?: string }[] }>("GET", "/client-keys");
   expect(keys.body.keys.map((k) => k.label)).toContain("Claude Code");
-  await expect(text).not.toContainText("<client-key>");
-  await two.locator(".setup-next").getByRole("button", { name: "Skip", exact: true }).click();
+  const found = await core.mgmt<{ found: { clients: { id: string; state: string }[] } }>("GET", "/setup");
+  expect(found.body.found.clients.find((c) => c.id === "claude-code")?.state).toBe("configured");
+  await two.locator(".setup-next").getByRole("button", { name: "Continue", exact: true }).click();
 
   // Step 3: one test request through the account passes.
   const three = page.getByRole("region", { name: "Check it works" });

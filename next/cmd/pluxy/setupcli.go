@@ -106,7 +106,42 @@ func setupCommands() []command {
 			},
 			run: runClientShow,
 		},
+		{
+			words:   "client connect",
+			args:    []string{"tool"},
+			routes:  []string{"POST /setup/clients/{id}/connect"},
+			summary: "point a client tool on core's machine at core: core writes its settings with a key made for it, and keeps the file as it was",
+			run:     func(x *invocation) error { return runClientConnect(x, "connect") },
+		},
+		{
+			words:   "client disconnect",
+			args:    []string{"tool"},
+			routes:  []string{"POST /setup/clients/{id}/disconnect"},
+			summary: "put back a client tool's settings as they were before pluxy client connect",
+			run:     func(x *invocation) error { return runClientConnect(x, "disconnect") },
+		},
 	}
+}
+
+// runClientConnect is pluxy client connect and pluxy client disconnect (verb).
+func runClientConnect(x *invocation, verb string) error {
+	tool := x.args[0]
+	var r management.ClientConnection
+	return x.call(http.MethodPost, "/setup/clients/"+url.PathEscape(tool)+"/"+verb, nil, nil, &r, func() {
+		name := x.cell(cmpOr(r.Client.Name, r.Client.ID))
+		for _, f := range r.Files {
+			x.printf("%s: %s\n", x.cell(f.Path), x.cell(f.Change))
+		}
+		if verb == "connect" {
+			x.printf("Connected %s. Start it again so it reads the new settings.\n", name)
+			x.printf("pluxy keeps the file as it was: pluxy client disconnect %s puts it back.\n", x.cell(r.Client.ID))
+			return
+		}
+		x.printf("Disconnected %s.\n", name)
+		if r.KeyRemoved {
+			x.printf("The client key pluxy made for it is removed.\n")
+		}
+	})
 }
 
 func runSetup(x *invocation) error {
