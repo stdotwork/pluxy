@@ -46,9 +46,16 @@ export function seriesOf(extension: string): number {
   return (sum % 6) + 1;
 }
 
-/** The letter a monogram mark carries: the first letter or digit of the provider's name. */
-export function monogram(title: string): string {
-  return (title.match(/[\p{L}\p{N}]/u)?.[0] ?? "?").toUpperCase();
+/** Letters for a mark where the first letter of the name would match another provider's: OpenAI's O. */
+const LETTERS: Record<string, string> = { codex: "O" };
+
+/**
+ * The letter a monogram mark carries: the first letter or digit of the provider's name, but for
+ * a provider whose name starts like another's (Claude and ChatGPT).
+ */
+export function monogram(title: string, extension = ""): string {
+  const own = LETTERS[shortId(extension)];
+  return own ?? (title.match(/[\p{L}\p{N}]/u)?.[0] ?? "?").toUpperCase();
 }
 
 /**

@@ -171,7 +171,7 @@ function ProviderMark(props: { extension: string; title: string }) {
       {shortId(props.extension) === "openai-compatible" ? (
         <Icon name="key" size={14} />
       ) : (
-        monogram(props.title)
+        monogram(props.title, props.extension)
       )}
     </span>
   );
@@ -426,7 +426,7 @@ export function AddAccountPage(
                         <ProviderTile key={group.extension} group={group} onPick={pick(group)} />
                       ))}
                       {more.length > 0 && (
-                        <li>
+                        <li class="provider-more-item">
                           <button
                             type="button"
                             class="provider-more"
@@ -465,7 +465,7 @@ export function AddAccountPage(
                   {!alone && selected === undefined && (
                     <div class="provider-back">
                       <Button
-                        variant="quiet"
+                        variant="ghost"
                         onClick={() => {
                           setProvider(undefined);
                           setBacks((n) => n + 1);
@@ -476,7 +476,7 @@ export function AddAccountPage(
                       </Button>
                     </div>
                   )}
-                  {selected === undefined && <p>{t("choose")}</p>}
+                  {props.embedded && selected === undefined && <p>{t("choose")}</p>}
                   {open.map((group) => {
                     const shown = selected ? group.rows.filter((row) => row.id === selected) : group.rows;
                     if (shown.length === 0) return null;
@@ -498,6 +498,7 @@ export function AddAccountPage(
                           <ProviderMark extension={group.extension} title={title} />
                           <h2>{title}</h2>
                         </div>
+                        {!props.embedded && selected === undefined && <p>{t("choose")}</p>}
                         <ul class="method-list" aria-label={t("methods")}>
                           {shown.map((row) => {
                             const label = row.method.label || row.method.method;

@@ -54,7 +54,7 @@
     padding: 0;
     list-style: none;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
     gap: calc(var(--s) * 3);
   }
 
@@ -112,7 +112,13 @@
     font-size: var(--px-font-size-small);
   }
 
+  .provider-more-item {
+    grid-column: 1 / -1;
+  }
+
   .provider-more {
+    min-height: 48px;
+    padding-block: calc(var(--s) * 2);
     border-style: dashed;
     box-shadow: none;
     background: transparent;
@@ -122,8 +128,8 @@
     flex: none;
     display: inline-grid;
     place-items: center;
-    width: 32px;
-    height: 32px;
+    width: 24px;
+    height: 24px;
     border-radius: var(--r-small);
     color: var(--px-color-text-muted);
     background: var(--px-color-surface-raised);
@@ -257,6 +263,33 @@
     font-size: calc(var(--px-font-size-title) * 1.6);
     font-weight: var(--px-font-weight-strong);
     letter-spacing: 0.12em;
+  }
+
+  /* A sign-in waiting for the person is a pulsing dot and a sentence, not a boxed notice. */
+  .method .login-flow .notice[data-tone="muted"] {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--px-color-text-muted);
+  }
+
+  .method .login-flow .notice[data-tone="muted"]::before {
+    content: "";
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--px-color-info);
+    animation: add-account-pulse calc(var(--px-motion-duration, 120ms) * 12) ease-in-out infinite;
+  }
+
+  @keyframes add-account-pulse {
+    50% {
+      opacity: 0.3;
+    }
   }
 
   .login-more > summary,
