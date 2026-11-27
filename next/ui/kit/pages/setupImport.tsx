@@ -1,20 +1,23 @@
 // The one line above Setup's steps when core found a CLIProxyAPI setup on its computer: a preview of
 // what importing it would do, then the import, each only when the person asks. Nothing is sent
-// with dry_run false unless a preview of the same config is on screen.
+// with dry_run false unless a preview is on screen that came from the same config, the same auth
+// folder and the same scan; Import now sends exactly what that preview sent. A new scan, or any
+// other change to what core found, drops the preview.
 
-import { useState } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 import { type ImportReport, type ImportRow, problem, type Setup, type SetupImport } from "../api";
 import type { Reply } from "../host";
-import { usePrivacy } from "../privacy";
+import { providerName } from "../parts";
+import { type Masker, usePrivacy } from "../privacy";
 import { rich, strings } from "../strings";
 import { Button, Notice, Time, useCopy, useKit } from "../ui";
-import { joinNames, kindTitle } from "./setup.helpers";
+import { joinNames, kindTitle, providerPicks } from "./setup.helpers";
 
 const t = strings("setupImport", {
   found: {
-    one: "Found a CLIProxyAPI setup with {count} account. pluxy can bring it and its settings across; nothing changes until you confirm.",
+    one: "Found a CLIProxyAPI setup with {count} account file. pluxy can bring its accounts and settings across; nothing changes until you confirm.",
     other:
-      "Found a CLIProxyAPI setup with {count} accounts. pluxy can bring them and its settings across; nothing changes until you confirm.",
+      "Found a CLIProxyAPI setup with {count} account files. pluxy can bring its accounts and settings across; nothing changes until you confirm.",
   },
   imported: "Imported a CLIProxyAPI setup {when}.",
   preview: "Preview import",
@@ -28,6 +31,12 @@ const t = strings("setupImport", {
   cancel: "Cancel",
   done: "Imported.",
   needs: "The imported accounts need {names}. They are ticked in step 1.",
+  notOffered: {
+    one: "This pluxy does not offer {names}, so the accounts that need it cannot be used yet.",
+    other: "This pluxy does not offer {names}, so the accounts that need them cannot be used yet.",
+  },
+  openExtensions: "Open Extensions",
+  notRun: "The import did not run: pluxy has no record of it.",
   close: "Close",
   keep: "To keep it: {how}",
   "refused.400":
@@ -90,14 +99,29 @@ export function refusalWords(r: Refusal): string {
   }
 }
 
-/** Where the import stands on this page. */
+/**
+ * What a preview is bound to: the config, the auth folder an import of it names, the number of
+ * account files the scan counted there, and when that scan ran. Any change is another setup.
+ */
+function scanKey(setup: Setup, found: SetupImport): string {
+  return JSON.stringify([found.config, authDir(found) ?? "", found.accounts, setup.scanned_at ?? ""]);
+}
+
+/** Where the import stands on this page, for the scan it started from (key). */
 interface ImportState {
+  key: string;
+  /** What the preview sent, which Import now sends again. */
   config: string;
+  authDir?: string;
   busy?: "preview" | "import";
   /** The preview's report, or once done the import's. */
   report?: ImportReport;
   done?: boolean;
   refusal?: Refusal;
+  /** For an import whose reply was lost: when core's last record of an import was before it. */
+  lastBefore?: string;
+  /** Refresh after a lost reply found no new record: the import did not run. */
+  notRun?: boolean;
 }
 
 function Code(props: { value: string }) {
@@ -114,8 +138,9 @@ function Code(props: { value: string }) {
   );
 }
 
-function ReportList(props: { title: string; rows: ImportRow[] }) {
+function ReportList(props: { title: string; rows: ImportRow[]; mask: Masker }) {
   const p = usePrivacy();
+  const { mask } = props;
   if (props.rows.length === 0) return null;
   return (
     <details class="setup-report-list">
@@ -123,9 +148,10 @@ function ReportList(props: { title: string; rows: ImportRow[] }) {
       <ul class="setup-report-rows">
         {props.rows.map((row) => (
           <li key={`${row.what}/${row.name ?? ""}`}>
-            <span class="mono">{[row.what, row.name].filter(Boolean).join(" ")}</span>
-            {row.why && <span class="muted">{p.text(row.why)}</span>}
-            {row.keep_with && <span class="muted">{t("keep", { how: p.text(row.keep_with) })}</span>}
+            {/* An auth file's name is an account's identifier (core makes the account's ID from it). */}
+            <span class="mono">{[mask(row.what), p.id(row.name)].filter(Boolean).join(" ")}</span>
+            {row.why && <span class="muted">{mask(row.why)}</span>}
+            {row.keep_with && <span class="muted">{t("keep", { how: mask(row.keep_with) })}</span>}
           </li>
         ))}
       </ul>
@@ -133,9 +159,22 @@ function ReportList(props: { title: string; rows: ImportRow[] }) {
   );
 }
 
+/**
+ * The names a report's rows hold, as identities to hide in its text while privacy mode is on: each
+ * file's name, and the name without its extension, which core uses for the account's ID.
+ */
+function reportIdentities(report: ImportReport): string[] {
+  const names = [...report.brought, ...report.changed, ...report.not_brought].flatMap((row) =>
+    row.name ? [row.name, row.name.replace(/\.[A-Za-z0-9]+$/, "")] : [],
+  );
+  return [...new Set(names)];
+}
+
 /** A report's three folded lists. */
 function Report(props: { report: ImportReport; done?: boolean }) {
   const { report } = props;
+  const p = usePrivacy();
+  const mask = p.masker(reportIdentities(report));
   return (
     <div class="setup-report" data-part="setup-report" data-state={props.done ? "done" : "preview"}>
       <p role="status">
@@ -146,60 +185,100 @@ function Report(props: { report: ImportReport; done?: boolean }) {
       <ReportList
         title={t(props.done ? "importedList" : "willImport", { count: report.brought.length })}
         rows={report.brought}
+        mask={mask}
       />
-      <ReportList title={t("setDifferently", { count: report.changed.length })} rows={report.changed} />
-      <ReportList title={t("leftOut", { count: report.not_brought.length })} rows={report.not_brought} />
+      <ReportList
+        title={t("setDifferently", { count: report.changed.length })}
+        rows={report.changed}
+        mask={mask}
+      />
+      <ReportList
+        title={t("leftOut", { count: report.not_brought.length })}
+        rows={report.not_brought}
+        mask={mask}
+      />
     </div>
   );
 }
 
 /**
  * The import line. onImported runs after an import that worked, with its report (the page ticks
- * what it needs and reads again); onRescan asks core to look again and reads setup again.
+ * what it needs and reads again); onRescan asks core to look again and gives the setup read once
+ * that scan is over (nothing when it failed).
  */
 export function ImportLine(props: {
   setup: Setup;
   onImported: (report: ImportReport) => void;
-  onRescan: () => Promise<unknown>;
+  onRescan: () => Promise<Setup | undefined>;
 }) {
   const { api, unauthorized } = useKit();
   const found = props.setup.found.imports[0];
   const [state, setState] = useState<ImportState>();
+  // A call in flight, also while what it started from is not yet the setup on screen.
+  const busy = useRef(false);
+  // Try again or Refresh waits for a new scan.
+  const [rescanning, setRescanning] = useState(false);
   if (!found) return null;
-  const mine = state?.config === found.config ? state : undefined;
+  const mine = state?.key === scanKey(props.setup, found) ? state : undefined;
 
-  const run = async (preview: boolean) => {
-    if (mine?.busy) return;
-    // Import now only ever follows a preview of this same config.
+  // A preview of what setup found (target), or the import of the preview on screen.
+  const run = async (preview: boolean, setup: Setup = props.setup) => {
+    const target = setup.found.imports[0];
+    if (busy.current || !target) return;
+    // Import now only ever follows a preview of this same setup, and sends what it sent.
     if (!preview && !mine?.report) return;
-    const config = found.config;
-    setState({ config, report: preview ? undefined : mine?.report, busy: preview ? "preview" : "import" });
-    const reply: Reply<ImportReport> = await api.importSetup(config, authDir(found), preview);
+    const sent = preview
+      ? { key: scanKey(setup, target), config: target.config, authDir: authDir(target) }
+      : { key: mine?.key ?? "", config: mine?.config ?? "", authDir: mine?.authDir };
+    busy.current = true;
+    setState({ ...sent, report: preview ? undefined : mine?.report, busy: preview ? "preview" : "import" });
+    const reply: Reply<ImportReport> = await api.importSetup(sent.config, sent.authDir, preview);
+    busy.current = false;
     if (reply.status === 401) return unauthorized();
     if (!reply.body || reply.status >= 300) {
       // The preview goes too: what a later try would do is for a new preview to say.
       return setState({
-        config,
+        ...sent,
         refusal: { status: reply.status, message: reply.error?.message ?? problem(reply) ?? "", preview },
+        lastBefore: target.last_import?.at,
       });
     }
-    setState({ config, report: reply.body, done: !preview });
+    setState({ ...sent, report: reply.body, done: !preview });
     if (!preview) props.onImported(reply.body);
   };
+  // Try again: look again, then preview what the new scan found.
   const again = async () => {
-    setState(undefined);
-    await props.onRescan();
-    await run(true);
+    setRescanning(true);
+    const fresh = await props.onRescan();
+    setRescanning(false);
+    if (fresh) await run(true, fresh);
+  };
+  // Refresh after Import now lost its reply: a new record of an import says it ran; none, that it
+  // did not.
+  const refresh = async () => {
+    const lastBefore = mine?.lastBefore;
+    setRescanning(true);
+    const fresh = await props.onRescan();
+    setRescanning(false);
+    // A scan that failed says so itself; the line keeps saying the result is not known.
+    if (!fresh) return;
+    const target = fresh.found.imports[0];
+    if (!target || (target.last_import !== undefined && target.last_import.at !== lastBefore)) {
+      return setState(undefined);
+    }
+    setState({ key: scanKey(fresh, target), config: target.config, authDir: authDir(target), notRun: true });
   };
 
   const last = !mine ? found.last_import : undefined;
   const refusal = mine?.refusal;
-  const needs = mine?.done
-    ? (mine.report?.needs ?? []).map((need) => {
-        const pick = props.setup.picks.find((p) => p.id === need.pick);
-        return pick ? kindTitle(pick) : need.pick;
-      })
-    : [];
+  const offered = new Set(providerPicks(props.setup).map((pick) => pick.id));
+  const needs = mine?.done ? (mine.report?.needs ?? []) : [];
+  const ticked = needs.flatMap((need) => {
+    const pick = props.setup.picks.find((p) => p.id === need.pick && offered.has(p.id));
+    return pick ? [kindTitle(pick)] : [];
+  });
+  // A kind this pluxy does not offer, by its name: never its package ID.
+  const missing = needs.filter((need) => !offered.has(need.pick)).map((need) => providerName(need.pick));
   return (
     <section
       class="setup-import"
@@ -229,12 +308,17 @@ export function ImportLine(props: {
           )}
         </div>
       )}
+      {mine?.notRun && <Notice tone="warn">{t("notRun")}</Notice>}
       {refusal && (
         <div class="setup-import-refusal">
           <Notice tone="danger">{refusalWords(refusal)}</Notice>
           {(refusal.status === 400 || (refusal.status === 0 && !refusal.preview)) && (
             <div class="actions">
-              <Button onClick={refusal.status === 400 ? again : () => props.onRescan()}>
+              <Button
+                busy={rescanning}
+                disabled={rescanning}
+                onClick={refusal.status === 400 ? again : refresh}
+              >
                 {refusal.status === 400 ? t("tryAgain") : t("refresh")}
               </Button>
             </div>
@@ -249,7 +333,13 @@ export function ImportLine(props: {
         </div>
       )}
       {mine?.report && <Report report={mine.report} done={mine.done} />}
-      {mine?.done && needs.length > 0 && <p>{t("needs", { names: joinNames(needs) })}</p>}
+      {ticked.length > 0 && <p>{t("needs", { names: joinNames(ticked) })}</p>}
+      {missing.length > 0 && (
+        <p>
+          {t("notOffered", { count: missing.length, names: joinNames(missing) })}{" "}
+          <a href="#/extensions">{t("openExtensions")}</a>
+        </p>
+      )}
       {mine?.report && !mine.done && (
         <div class="actions">
           <Button

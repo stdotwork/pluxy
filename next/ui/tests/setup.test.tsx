@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { ImportReport } from "../kit/api";
 import { SetupPage } from "../kit/pages/setup";
 import { defaultTestAccount, joinNames, kindGroups, orderedKinds } from "../kit/pages/setup.helpers";
+import { PrivacyContext, privacyMasks } from "../kit/privacy";
 import { all, fakeWindow, restoreDom } from "./fakeDom";
 import {
   account,
@@ -81,7 +82,7 @@ test("the import line is above the steps, and only when core found a CLIProxyAPI
   const m = await w.mount(<SetupPage />);
   const line = withPart(m.root, "setup-import")[0];
   expect(line?.textContent).toContain(
-    "Found a CLIProxyAPI setup with 3 accounts. pluxy can bring them and its settings across; nothing changes until you confirm.",
+    "Found a CLIProxyAPI setup with 3 account files. pluxy can bring its accounts and settings across; nothing changes until you confirm.",
   );
   expect(line?.textContent).toContain("~/.cli-proxy-api/config.yaml");
   const order = descend(m.root);
@@ -113,7 +114,7 @@ test("after the first run every step is folded, with what each came to, and Back
   expect(step(m.root, 3).textContent).toContain("Not tested yet.");
   expect(steps(m.root).map((s) => attribute(s, "data-state"))).toEqual(["done", "done", "todo"]);
   expect(attribute(linkIn(m.root, "Back to Home"), "href")).toBe("#/");
-  expect(hasButton(m.root, "Finish later")).toBe(false);
+  expect(hasButton(m.root, "Leave setup for now")).toBe(false);
   expect(m.text()).not.toContain("Set up pluxy");
 });
 
@@ -121,6 +122,35 @@ test("folded summaries when nothing is done yet", async () => {
   const m = await world({ firstRun: false }).mount(<SetupPage />);
   expect(step(m.root, 1).textContent).toContain("No account yet.");
   expect(step(m.root, 2).textContent).toContain("No tool connected yet.");
+});
+
+test("step 1 counts only accounts that can take requests, and says what the others are", async () => {
+  const off = account("acc_00000001", { label: "Work", disabled: true });
+  const one = await world({ firstRun: false, accounts: [off] }).mount(<SetupPage />);
+  expect(step(one.root, 1).textContent).toContain("1 account, turned off.");
+  expect(step(one.root, 1).textContent).not.toContain("connected");
+  expect(attribute(step(one.root, 1), "data-state")).toBe("todo");
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  // A first run with only that account opens step 1, not step 2.
+  const first = await world({ accounts: [off] }).mount(<SetupPage />);
+  expect(openStep(first.root)).toBe(1);
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  const stopped = account("acc_00000002", { label: "Home", extension: "pluxy/gone" });
+  const mixed = await world({
+    firstRun: false,
+    accounts: [ACC, off, stopped],
+    running: ["pluxy/claude"],
+  }).mount(<SetupPage />);
+  expect(step(mixed.root, 1).textContent).toContain("1 account connected; 2 more cannot take requests.");
+  expect(attribute(step(mixed.root, 1), "data-state")).toBe("done");
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  const none = await world({ firstRun: false, accounts: [off, stopped], running: ["pluxy/claude"] }).mount(
+    <SetupPage />,
+  );
+  expect(step(none.root, 1).textContent).toContain("2 accounts, none can take requests.");
 });
 
 test("a scan ending or an account appearing does not move the open step", async () => {
@@ -160,8 +190,8 @@ test("every step can be skipped: Skip on steps 1 and 2, Finish without testing o
   expect(hasButton(step(m.root, 2), "Skip")).toBe(true);
   await press(buttonIn(step(m.root, 2), "Skip"));
   expect(hasButton(step(m.root, 3), "Finish without testing")).toBe(true);
-  expect(hasButton(m.root, "Finish later")).toBe(true);
-  expect(m.text()).toContain("Setup stays under Settings.");
+  expect(hasButton(m.root, "Leave setup for now")).toBe(true);
+  expect(m.text()).toContain("It won't open by itself again; it stays under Settings.");
 });
 
 test("Continue, not Skip, once a step is done", async () => {
@@ -357,6 +387,23 @@ test("step 2 is the Tools list: Set up shows the steps, and Make key puts a key 
   expect(all(row, "pre")[0]?.textContent).toContain('"key": "sk-secret-1"');
 });
 
+test("a key made in step 2 is gone once the step folds: reopened, the text has no key and Make key is back", async () => {
+  const w = world({ accounts: [ACC] });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(must(withPart(step(m.root, 2), "tool-row")[0]), "Set up"));
+  await press(buttonIn(must(withPart(step(m.root, 2), "tool-row")[0]), "Make key"));
+  expect(m.text()).toContain("sk-secret-1");
+  // Fold step 2 by opening step 1, then open step 2 again.
+  await press(buttonIn(step(m.root, 1), "Open"));
+  expect(m.text()).not.toContain("sk-secret-1");
+  await press(buttonIn(step(m.root, 2), "Open"));
+  const row = must(withPart(step(m.root, 2), "tool-row")[0]);
+  if (hasButton(row, "Set up")) await press(buttonIn(row, "Set up"));
+  expect(m.text()).not.toContain("sk-secret-1");
+  expect(all(row, "pre")[0]?.textContent).toContain('"key": "<client-key>"');
+  expect(hasButton(row, "Make key")).toBe(true);
+});
+
 test("with no account, step 2's notice opens step 1", async () => {
   const m = await world().mount(<SetupPage />);
   await press(buttonIn(step(m.root, 1), "Skip"));
@@ -423,6 +470,7 @@ test("Refresh in step 2 asks pluxy to look again and tells the host", async () =
 test("no developer command and no 'this machine' anywhere on the page", async () => {
   const w = world({
     imports: [IMPORT],
+    reply: (c) => (c.path === "/setup/import" ? { status: 200, body: REPORT } : undefined),
     picks: [{ ...CLAUDE_PICK, installed: true }, ...EIGHT.slice(1)],
     signIns: [
       { provider: "pluxy/claude", from: "~/.claude", label: "Claude Code is signed in on this computer" },
@@ -437,6 +485,10 @@ test("no developer command and no 'this machine' anywhere on the page", async ()
   }
   await press(buttonIn(step(m.root, 2), "Open"));
   await press(buttonIn(must(withPart(m.root, "tool-row")[0]), "Set up"));
+  seen.push(m.text());
+  // The import preview, with its lists: text in a closed <details> is in textContent too.
+  await press(buttonIn(line(m.root), "Preview import"));
+  expect(withPart(m.root, "setup-report")).toHaveLength(1);
   seen.push(m.text());
   for (const text of seen) {
     for (const banned of [
@@ -458,7 +510,7 @@ test("the test sends no model by default, says what passed, and offers Finish se
   const m = await w.mount(<SetupPage />);
   const three = step(m.root, 3);
   expect(three.textContent).toContain(
-    "pluxy sends one short message through Work and waits for the reply. It uses one request.",
+    "This sends one short test message through Work. It counts against that account's use.",
   );
   expect(all(three, "select")).toHaveLength(0);
   await press(buttonIn(three, "Send a test request"));
@@ -521,6 +573,36 @@ test("a refused sign-in says so, with Sign in again, Test again and Finish anywa
   expect(hasButton(three, "Test again")).toBe(true);
   expect(hasButton(three, "Finish anyway")).toBe(true);
   expect(hasButton(three, "Finish setup")).toBe(false);
+});
+
+test("with privacy mode on, a failed test's message hides the account's name", async () => {
+  const w = world({
+    accounts: [account("acc_00000001", { label: "Juniper Lab" })],
+    clients: [CONNECTED],
+    reply: (c) =>
+      c.path.endsWith("/test")
+        ? {
+            status: 200,
+            body: {
+              result: {
+                ok: false,
+                model: "model-a",
+                latency_ms: 80,
+                error: { code: "auth", message: "the key for Juniper Lab was refused." },
+              },
+            },
+          }
+        : undefined,
+  });
+  const m = await w.mount(
+    <PrivacyContext.Provider value={privacyMasks(true)}>
+      <SetupPage />
+    </PrivacyContext.Provider>,
+  );
+  await press(buttonIn(step(m.root, 3), "Send a test request"));
+  const three = step(m.root, 3);
+  expect(three.textContent).toContain("Sign-in refused: the key for");
+  expect(three.textContent).not.toContain("Juniper");
 });
 
 test("a config-file account's refused key leads to See what to do", async () => {
@@ -589,13 +671,17 @@ test("an account gone since the page read them: the accounts are read again and 
   const reads = w.sent("GET", "/accounts").length;
   await press(buttonIn(step(m.root, 3), "Send a test request"));
   expect(w.sent("GET", "/accounts").length).toBeGreaterThan(reads);
-  expect(step(m.root, 3).textContent).toContain("through Home and waits");
+  expect(step(m.root, 3).textContent).toContain("test message through Home.");
 });
 
-test("with two accounts an Account choice shows, and the chosen one is tested", async () => {
-  const w = world({ accounts: [ACC, account("acc_00000002", { label: "Home" })], clients: [CONNECTED] });
+test("with two accounts an Account choice shows, naming each one's kind, and the chosen one is tested", async () => {
+  const w = world({
+    accounts: [ACC, account("acc_00000002", { label: "Home", extension: "pluxy/codex" })],
+    clients: [CONNECTED],
+  });
   const m = await w.mount(<SetupPage />);
   const select = must(all(step(m.root, 3), "select")[0]);
+  expect(all(select, "option").map((o) => o.textContent)).toEqual(["Work (Claude)", "Home (Codex)"]);
   await choose(select, "acc_00000002");
   await press(buttonIn(step(m.root, 3), "Send a test request"));
   expect(w.sent("POST", "/accounts/acc_00000002/test")).toHaveLength(1);
@@ -611,6 +697,9 @@ test("no account that can take a test: Add an account opens step 1, or finish wi
     running: ["pluxy/claude"],
   });
   const m = await w.mount(<SetupPage />);
+  // Neither account can take requests, so step 1 is not done and opens first.
+  expect(openStep(m.root)).toBe(1);
+  await press(buttonIn(step(m.root, 3), "Open"));
   const three = step(m.root, 3);
   expect(three.textContent).toContain("There is no account to test yet.");
   expect(hasButton(three, "Finish without testing")).toBe(true);
@@ -639,7 +728,7 @@ test("every finish button sends POST /setup/done, tells the host, and goes Home"
     Parameters<typeof world>[0],
     (m: Awaited<ReturnType<ReturnType<typeof world>["mount"]>>) => Promise<void>,
   ][] = [
-    ["Finish later", {}, async () => {}],
+    ["Leave setup for now", {}, async () => {}],
     ["Finish without testing", { accounts: [ACC], clients: [CONNECTED] }, async () => {}],
     [
       "Finish setup",
@@ -681,7 +770,7 @@ test("a finish that fails stays, with why", async () => {
         : undefined,
   });
   const m = await w.mount(<SetupPage options={{ onFinish: () => finished++ }} />);
-  await press(buttonIn(m.root, "Finish later"));
+  await press(buttonIn(m.root, "Leave setup for now"));
   expect(m.text()).toContain("Could not finish setup: disk full.");
   expect(finished).toBe(0);
   expect(place.hash).toBe("#/setup");
@@ -693,7 +782,7 @@ test("a 401 from any call signs out", async () => {
       c.path === "/setup/done" ? { status: 401, error: { code: "auth", message: "no" } } : undefined,
   });
   const m = await w.mount(<SetupPage />);
-  await press(buttonIn(m.root, "Finish later"));
+  await press(buttonIn(m.root, "Leave setup for now"));
   expect(w.signedOut.times).toBe(1);
 });
 
@@ -722,7 +811,12 @@ const REPORT: ImportReport = {
     { what: "api-keys" },
   ],
   changed: [
-    { what: "port", why: "listen cannot change while pluxy runs", keep_with: "pluxy serve -listen :8317" },
+    // Core's own words for a listen it cannot change (internal/legacy/config.go).
+    {
+      what: "port",
+      why: "listen cannot change while pluxy runs",
+      keep_with: '"listen": ":8317" in pluxy\'s config file, then restart core',
+    },
   ],
   not_brought: [{ what: "auth file", name: "qwen-a.json", why: "no extension takes it" }],
   needs: [{ pick: "pluxy/claude", why: "2 accounts need it" }],
@@ -764,13 +858,18 @@ test("the preview comes first: nothing is imported until Import now, from that p
     "Left out (1)",
   ]);
   expect(report.textContent).toContain("listen cannot change while pluxy runs");
-  expect(report.textContent).toContain("To keep it: pluxy serve -listen :8317");
+  expect(report.textContent).toContain(
+    'To keep it: "listen": ":8317" in pluxy\'s config file, then restart core',
+  );
   await press(buttonIn(line(m.root), "Cancel"));
   expect(withPart(m.root, "setup-report")).toHaveLength(0);
   expect(imports(w)).toEqual([true]);
   await press(buttonIn(line(m.root), "Preview import"));
   await press(buttonIn(line(m.root), "Import now"));
   expect(imports(w)).toEqual([true, true, false]);
+  // Import now sends exactly what was previewed.
+  const [, preview, done] = w.sent("POST", "/setup/import").map((c) => c.body);
+  expect(done).toEqual({ ...(preview as object), dry_run: false });
   expect(line(m.root).textContent).toContain("Imported.");
   expect(line(m.root).textContent).not.toContain("nothing changes until you confirm");
   expect(line(m.root).textContent).toContain("The imported accounts need Claude. They are ticked in step 1.");
@@ -830,13 +929,113 @@ test("a lost reply to Import now says it is not known whether it ran, and Refres
   expect(hasButton(line(m.root), "Import now")).toBe(false);
   await press(buttonIn(line(m.root), "Refresh"));
   expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
+  // Core has no record of the import: it did not run, and a new preview can start.
+  expect(line(m.root).textContent).not.toContain("not known whether the import ran");
+  expect(line(m.root).textContent).toContain("The import did not run: pluxy has no record of it.");
+  expect(hasButton(line(m.root), "Preview import")).toBe(true);
 });
 
-test("Try again after a 400 looks again, then starts a new preview", async () => {
+test("after a lost reply to Import now, Refresh shows core's record when the import ran", async () => {
+  const w = importing((dry) => {
+    if (dry) return { status: 200, body: REPORT };
+    // Core ran it and kept the record; the reply was lost on the way.
+    w.state.setup.found.imports = [
+      { ...IMPORT, last_import: { at: "2026-11-20T10:30:00Z", brought: 2, changed: 1, not_brought: 1 } },
+    ];
+    return { status: 0 };
+  });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(line(m.root), "Preview import"));
+  await press(buttonIn(line(m.root), "Import now"));
+  await press(buttonIn(line(m.root), "Refresh"));
+  expect(line(m.root).textContent).not.toContain("not known whether the import ran");
+  expect(line(m.root).textContent).toContain("Imported a CLIProxyAPI setup");
+  expect(attribute(line(m.root), "data-state")).toBe("imported");
+});
+
+test("a preview is dropped when the auth folder changes under it: Import now cannot send the old one", async () => {
+  const w = importing();
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(line(m.root), "Preview import"));
+  expect(hasButton(line(m.root), "Import now")).toBe(true);
+  // A new scan finds the same config naming another auth folder.
+  w.state.setup.found.imports = [{ ...IMPORT, auth_dir: "~/elsewhere/auths" }];
+  await press(buttonIn(step(m.root, 2), "Open"));
+  await press(buttonIn(step(m.root, 2), "Refresh"));
+  expect(hasButton(line(m.root), "Import now")).toBe(false);
+  expect(withPart(m.root, "setup-report")).toHaveLength(0);
+  expect(imports(w)).toEqual([true]);
+  // The next preview, and the import from it, name the new folder.
+  await press(buttonIn(line(m.root), "Preview import"));
+  await press(buttonIn(line(m.root), "Import now"));
+  expect(w.sent("POST", "/setup/import").map((c) => (c.body as { auth_dir?: string }).auth_dir)).toEqual([
+    "~/.cli-proxy-api/auths",
+    "~/elsewhere/auths",
+    "~/elsewhere/auths",
+  ]);
+});
+
+test("an import that needs a kind this pluxy does not offer says so by name, with Open Extensions", async () => {
+  const report = {
+    ...REPORT,
+    needs: [
+      { pick: "pluxy/claude", why: "2 accounts need it" },
+      { pick: "pluxy/antigravity", why: "1 account needs it, and pluxy does not ship it" },
+    ],
+  };
+  const w = importing((dry) => ({ status: 200, body: { ...report, dry_run: dry } }));
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(line(m.root), "Preview import"));
+  await press(buttonIn(line(m.root), "Import now"));
+  const l = line(m.root);
+  expect(l.textContent).toContain("The imported accounts need Claude. They are ticked in step 1.");
+  expect(l.textContent).toContain(
+    "This pluxy does not offer Antigravity, so the accounts that need it cannot be used yet.",
+  );
+  expect(attribute(linkIn(l, "Open Extensions"), "href")).toBe("#/extensions");
+  expect(m.text()).not.toContain("pluxy/antigravity");
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  // Only kinds it does not offer: nothing is said to be ticked.
+  const only = importing((dry) => ({
+    status: 200,
+    body: { ...report, needs: [report.needs[1]], dry_run: dry },
+  }));
+  const o = await only.mount(<SetupPage />);
+  await press(buttonIn(line(o.root), "Preview import"));
+  await press(buttonIn(line(o.root), "Import now"));
+  expect(line(o.root).textContent).not.toContain("ticked in step 1");
+  expect(line(o.root).textContent).toContain("This pluxy does not offer Antigravity");
+});
+
+test("with privacy mode on, the import report hides account file names", async () => {
+  const report: ImportReport = {
+    dry_run: true,
+    brought: [{ what: "auth file", name: "claude-alice@example.com.json" }],
+    changed: [],
+    not_brought: [{ what: "auth file", name: "juniper_lab.json", why: "juniper_lab has no type" }],
+    needs: [],
+  };
+  const w = importing(() => ({ status: 200, body: report }));
+  const m = await w.mount(
+    <PrivacyContext.Provider value={privacyMasks(true)}>
+      <SetupPage />
+    </PrivacyContext.Provider>,
+  );
+  await press(buttonIn(line(m.root), "Preview import"));
+  const text = must(withPart(m.root, "setup-report")[0]).textContent;
+  expect(text).toContain("auth file");
+  expect(text).not.toContain("alice");
+  expect(text).not.toContain("juniper");
+});
+
+test("Try again after a 400 looks again, then starts a new preview of what the new scan found", async () => {
   let first = true;
   const w = importing(() => {
     if (!first) return { status: 200, body: REPORT };
     first = false;
+    // The next scan finds the config naming another auth folder.
+    w.state.setup.found.imports = [{ ...IMPORT, auth_dir: "~/fresh/auths" }];
     return { status: 400, error: { code: "invalid_request", message: "no file" } };
   });
   const m = await w.mount(<SetupPage />);
@@ -844,6 +1043,10 @@ test("Try again after a 400 looks again, then starts a new preview", async () =>
   await press(buttonIn(line(m.root), "Try again"));
   expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
   expect(imports(w)).toEqual([true, true]);
+  expect(w.sent("POST", "/setup/import").map((c) => (c.body as { auth_dir?: string }).auth_dir)).toEqual([
+    "~/.cli-proxy-api/auths",
+    "~/fresh/auths",
+  ]);
   expect(withPart(m.root, "setup-report")).toHaveLength(1);
 });
 

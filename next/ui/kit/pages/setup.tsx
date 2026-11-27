@@ -15,6 +15,7 @@ import { strings } from "../strings";
 import { Button, Notice, PageHead, useKit, useLoad } from "../ui";
 import {
   type Choices,
+  canServe,
   connectedTools,
   joinNames,
   onThisMachine,
@@ -50,8 +51,9 @@ const t = strings("setup", {
   noTool: "No tool connected yet.",
   here: "Detected on this computer.",
   network: "Other computers on your network can reach pluxy.",
-  finishLater: "Finish later",
-  staysUnder: "Setup stays under Settings.",
+  scanFailed: "Could not look at this computer: {error}.",
+  finishLater: "Leave setup for now",
+  staysUnder: "It won't open by itself again; it stays under Settings.",
   backHome: "Back to Home",
   finishFailed: "Could not finish setup: {error}.",
 });
@@ -116,6 +118,15 @@ function Step(props: {
   );
 }
 
+/**
+ * Step 2's list of tools. It holds the keys made in it, so a key's value is gone once the step
+ * folds, as it is when the Tools page's key notice closes.
+ */
+function ToolsStep(props: Omit<Parameters<typeof ToolListView>[0], "made">) {
+  const made = useMadeKeys();
+  return <ToolListView {...props} made={made} />;
+}
+
 /** Continue once the step is done, else Skip; both open the next step. */
 function Next(props: { done: boolean; onNext: () => void; children?: ComponentChildren }) {
   return (
@@ -135,7 +146,6 @@ export function SetupPage(props: { options?: SetupOptions }) {
   const { setup: loaded, accounts } = tools;
   const packages = useLoad(api.packages);
   const status = useLoad(api.status);
-  const made = useMadeKeys();
   const setup = loaded.data;
   const accountList = accounts.data?.accounts;
   const running = useMemo(() => runningExtensions(status.data), [status.data]);
@@ -157,9 +167,12 @@ export function SetupPage(props: { options?: SetupOptions }) {
 
   // A sign-in can finish somewhere else (a browser tab, a device code): the accounts are read
   // again when this page is looked at again.
+  // Which accounts can take requests depends on the extensions core runs: those are read again too.
   useEffect(() => {
     const again = () => {
-      if (document.visibilityState === "visible") accounts.reload();
+      if (document.visibilityState !== "visible") return;
+      accounts.reload();
+      status.reload();
     };
     window.addEventListener("focus", again);
     document.addEventListener("visibilitychange", again);
@@ -167,18 +180,19 @@ export function SetupPage(props: { options?: SetupOptions }) {
       window.removeEventListener("focus", again);
       document.removeEventListener("visibilitychange", again);
     };
-  }, [accounts.reload]);
+  }, [accounts.reload, status.reload]);
 
   const tools2 = connectedTools(setup, options?.extraTools);
   const done: Record<StepNo, boolean> = {
-    1: (accountList?.length ?? 0) > 0,
+    1: (accountList ?? []).some((a) => canServe(a, running)),
     2: tools2.length > 0,
     3: outcome?.kind === "passed",
   };
 
   // Which step is open is decided once, when the page has what it needs: on a first run the first
   // step not done, afterwards none. After that only the person moves it.
-  if (!started.current && setup && accountList) {
+  // It waits for the extensions core runs too: an account whose provider is stopped is not done.
+  if (!started.current && setup && accountList && (status.data || status.phase === "failed")) {
     started.current = {
       hadAccounts: accountList.length > 0,
       open: setup.first_run ? (!done[1] ? 1 : !done[2] ? 2 : 3) : undefined,
@@ -282,14 +296,25 @@ export function SetupPage(props: { options?: SetupOptions }) {
       <PageHead title={first ? t("title") : t("titleLater")} />
       <div class="setup stack">
         <p class="setup-intro">{first ? t("introFirst") : t("introLater")}</p>
-        {!setup.scanned_at && <p class="muted setup-scanning">{t("scanning")}</p>}
-        <ImportLine setup={setup} onImported={imported} onRescan={tools.scan} />
+        {!setup.scanned_at && (setup.scanning || tools.scanBusy) && (
+          <p class="muted setup-scanning">{t("scanning")}</p>
+        )}
+        {!setup.scanned_at && !setup.scanning && !tools.scanBusy && tools.scanError && (
+          <div class="setup-scan-failed">
+            <Notice tone="danger">{t("scanFailed", { error: tools.scanError.replace(/\.$/, "") })}</Notice>
+            <div class="actions">
+              <Button onClick={() => void tools.scan()}>{tryAgainWord()}</Button>
+            </div>
+          </div>
+        )}
+        <ImportLine setup={setup} onImported={imported} onRescan={tools.rescan} />
         <ol class="setup-steps" aria-label={t("steps")}>
-          <Step {...stepProps(1)} title={t("step1")} summary={accountsSummary(accountList.length)}>
+          <Step {...stepProps(1)} title={t("step1")} summary={accountsSummary(accountList, running)}>
             <AccountsStep
               setup={setup}
               packages={packages.data?.packages}
               accounts={accountList}
+              running={running}
               hadAccounts={started.current?.hadAccounts ?? false}
               choices={choices}
               results={results}
@@ -315,13 +340,12 @@ export function SetupPage(props: { options?: SetupOptions }) {
           >
             {!remote && <p class="muted">{t("here")}</p>}
             {setup.found.core.reachable_from_network && <p class="muted">{t("network")}</p>}
-            <ToolListView
+            <ToolsStep
               toolAction={options?.toolAction}
               extraTools={options?.extraTools}
               localPages={options?.localPages}
               remote={remote}
               state={tools}
-              made={made}
               onAddAccount={() => go(1)}
             />
             <Next done={done[2]} onNext={() => go(3)}>

@@ -220,6 +220,16 @@ export function canTest(account: Account, running?: ReadonlySet<string>): boolea
 }
 
 /**
+ * An account that can take requests: one that serves, or waits out a limit or a cooldown. Turned
+ * off, needing the person (a sign-in, a closed or unreadable account) or with its provider stopped,
+ * it cannot.
+ */
+export function canServe(account: Account, running?: ReadonlySet<string>): boolean {
+  const group = accountCondition(account, running).group;
+  return group === "serving" || group === "waiting";
+}
+
+/**
  * The account step 3 tests by default: the one added in step 1 on this visit, else the first
  * Serving one, else the first that can take a test. None when no account can.
  */

@@ -10,9 +10,10 @@
 //!   accounts", open; the Claude kind is ticked, saying Claude Code is installed on this computer;
 //!   "Add Claude" adds it (its row says Added, and `GET /packages` through the app's host lists it
 //!   enabled); step 2, opened, has the app's own "Set up" link to `#/claude-code` on Claude Code's
-//!   row; "Finish later" lands on Home and `GET /setup` has `first_run` false.
+//!   row, and pressing it opens the app's Claude Code page; back on `#/setup`, "Leave setup for
+//!   now" lands on Home and `GET /setup` has `first_run` false.
 //! - `second`: the next launch opens on Home, not Setup; Setup, opened, is titled "Setup" with
-//!   every step folded and no "Finish later"; step 1, opened, says Claude is added; the stage
+//!   every step folded and no "Leave setup for now"; step 1, opened, says Claude is added; the stage
 //!   stays on it, then switches GTK to its dark variant and stays again, so the session's last
 //!   screenshot shows it dark.
 //!
@@ -254,9 +255,38 @@ fn first(c: &mut Checks, app: &AppHandle) {
     );
     shot("tool");
 
+    // The link goes to the app's own page for the tool.
+    let followed = until(
+        app,
+        10,
+        &format!("(() => {{ const a = {TOOL_ROW}?.querySelector('a[href=\"#/claude-code\"]'); if (!a) return false; a.click(); return true; }})()"),
+    );
+    let tool_page = followed
+        && until(
+            app,
+            30,
+            "location.hash === '#/claude-code' && document.querySelector('[data-tool=claude-code]') !== null && document.querySelector('[data-part=page-title]')?.textContent === 'Claude Code'",
+        );
+    c.check(
+        tool_page,
+        format!(
+            "pressing \"Set up\" opens the Claude Code page ({})",
+            page(app)
+        ),
+    );
+    let _ = main_eval(app, "(location.hash = '#/setup', true)");
+    c.check(
+        until(
+            app,
+            30,
+            "location.hash === '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Set up pluxy'",
+        ),
+        format!("back on #/setup, Setup is still \"Set up pluxy\" ({})", page(app)),
+    );
+
     if !c.check(
-        press_any(app, "Finish later"),
-        "\"Finish later\" is there, enabled, and pressed",
+        press_any(app, "Leave setup for now"),
+        "\"Leave setup for now\" is there, enabled, and pressed",
     ) {
         return;
     }
@@ -266,7 +296,7 @@ fn first(c: &mut Checks, app: &AppHandle) {
             30,
             "location.hash !== '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Home'",
         ),
-        format!("Finish later lands on Home ({})", page(app)),
+        format!("Leave setup for now lands on Home ({})", page(app)),
     );
     let r = core(app, "GET", "/setup");
     c.check(
@@ -328,11 +358,11 @@ fn second(c: &mut Checks, app: &AppHandle) {
     );
     let later = main_eval(
         app,
-        "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Finish later')",
+        "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Leave setup for now')",
     );
     c.check(
         later == Some(json!(false)),
-        format!("Setup has no \"Finish later\" button ({later:?})"),
+        format!("Setup has no \"Leave setup for now\" button ({later:?})"),
     );
     shot("finished");
     c.check(

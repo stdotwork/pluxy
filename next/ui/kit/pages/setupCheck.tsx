@@ -4,8 +4,8 @@
 import { useEffect, useState } from "preact/hooks";
 import type { Account, AccountModel } from "../api";
 import { Icon } from "../icons";
-import { accountHref, accountName, timeTaken } from "../parts";
-import { usePrivacy } from "../privacy";
+import { accountHref, accountName, providerName, timeTaken } from "../parts";
+import { accountIdentities, usePrivacy } from "../privacy";
 import { failureWord } from "../states";
 import { rich, strings } from "../strings";
 import { Button, Notice, useKit } from "../ui";
@@ -16,8 +16,9 @@ const t = strings("setupCheck", {
   noAccount: "There is no account to test yet.",
   addAccount: "Add an account",
   finishWithout: "Finish without testing",
-  explain: "pluxy sends one short message through {account} and waits for the reply. It uses one request.",
+  explain: "This sends one short test message through {account}. It counts against that account's use.",
   account: "Account",
+  accountOption: "{account} ({provider})",
   chooseModel: "Choose a model",
   model: "Model",
   firstModel: "First model the account offers",
@@ -119,6 +120,8 @@ export function CheckStep(props: {
     );
   }
   const name = p.id(accountName(account));
+  // Provider messages can name the account: they are masked with its identities.
+  const identities = accountIdentities(account);
   const outcome = props.outcome?.account === account.id ? props.outcome : undefined;
   const send = async () => {
     if (sending) return;
@@ -175,7 +178,7 @@ export function CheckStep(props: {
           >
             {usable.map((a) => (
               <option key={a.id} value={a.id}>
-                {p.id(accountName(a))}
+                {t("accountOption", { account: p.id(accountName(a)), provider: providerName(a.extension) })}
               </option>
             ))}
           </select>
@@ -200,7 +203,7 @@ export function CheckStep(props: {
               </select>
             </label>
           ) : models?.error ? (
-            <Notice tone="danger">{p.text(models.error)}</Notice>
+            <Notice tone="danger">{p.text(models.error, identities)}</Notice>
           ) : (
             <p class="muted">{t("modelsLoading")}</p>
           ))}
@@ -217,7 +220,7 @@ export function CheckStep(props: {
       )}
       {outcome?.kind === "failed" && (
         <Notice tone="danger">
-          {outcome.message ? `${outcome.word}: ${p.text(outcome.message)}` : outcome.word}
+          {outcome.message ? `${outcome.word}: ${p.text(outcome.message, identities)}` : outcome.word}
         </Notice>
       )}
       {outcome?.kind === "no-models" && <Notice tone="warn">{t("noModels")}</Notice>}

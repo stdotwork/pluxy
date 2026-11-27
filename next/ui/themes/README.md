@@ -258,7 +258,9 @@ What custom CSS cannot do:
 
 ### Hooks you can rely on
 
-These stay stable within a theme contract version:
+Until pluxy's first release the contract stays at version 0, and these hooks can still change
+under it when a page is rebuilt: the Setup page's hooks were replaced this way. From the first
+release on, they stay stable within a theme contract version:
 
 | Hook | Where |
 | --- | --- |

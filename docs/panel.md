@@ -31,8 +31,9 @@ tools that set those agents up, belong to the desktop app. The app shows the sam
 the same places, and adds its own pages after them. Both show the pages of the extensions that
 run.
 
-Nothing in the panel spends from an account behind a click, except an account's "Send a test
-request", which says under it that it uses one request.
+Nothing in the panel spends from an account behind a click, except "Send a test request" on an
+account's page and in Setup's last step, which each say beside the button that the test uses that
+account.
 
 ## Page names
 

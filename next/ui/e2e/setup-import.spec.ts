@@ -1,6 +1,6 @@
 // The CLIProxyAPI import line above Setup's steps, against a real first-run core whose home folder
 // holds one (panelcore -first-run -cpa): a config.yaml and an auth folder of three made-up
-// accounts, two of them Claude's. Then Finish later, and Setup reopened from Settings.
+// accounts, two of them Claude's. Then Leave setup for now, and Setup reopened from Settings.
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, test } from "@playwright/test";
@@ -48,7 +48,7 @@ test("a found CLIProxyAPI setup is previewed, imported, and the kind its account
   await expect(page.getByRole("heading", { level: 1, name: "Set up pluxy" })).toBeVisible();
 
   const line = page.locator('[data-part="setup-import"]');
-  await expect(line).toContainText("Found a CLIProxyAPI setup with 3 accounts.");
+  await expect(line).toContainText("Found a CLIProxyAPI setup with 3 account files.");
   await expect(line).toContainText("~/.cli-proxy-api/config.yaml");
   // Claude is ticked because Claude Code was found; unticked, only the import can tick it again.
   const kind = page.locator('[data-part="setup-pick"]').filter({ hasText: "Claude" });
@@ -104,13 +104,14 @@ test("a found CLIProxyAPI setup is previewed, imported, and the kind its account
   }
 });
 
-test("Finish later ends the first run; Setup reopened from Settings has every step folded", async ({
+test("Leave setup for now ends the first run; Setup reopened from Settings has every step folded", async ({
   page,
 }) => {
   await openPanel(page, core);
   await signIn(page, core);
   await page.goto(`${core.base}/panel/#/setup`);
-  await page.getByRole("button", { name: "Finish later", exact: true }).click();
+  await expect(page.getByText("It won't open by itself again; it stays under Settings.")).toBeVisible();
+  await page.getByRole("button", { name: "Leave setup for now", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
   expect((await core.mgmt<{ first_run: boolean }>("GET", "/setup")).body.first_run).toBe(false);
   await goTo(page, "Setup");
@@ -119,5 +120,5 @@ test("Finish later ends the first run; Setup reopened from Settings has every st
   for (let i = 0; i < 3; i++) await expect(steps.nth(i)).not.toHaveAttribute("data-state", "open");
   await expect(page.getByText("Review or change your accounts and coding tools.")).toBeVisible();
   await expect(page.getByRole("link", { name: "Back to Home" })).toHaveAttribute("href", "#/");
-  await expect(page.getByRole("button", { name: "Finish later" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Leave setup for now" })).toHaveCount(0);
 });

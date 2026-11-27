@@ -151,23 +151,31 @@ nothing opens by itself. The page stays among the Settings topics after setup, t
 
 The page is three numbered steps, one open at a time: "Your AI accounts" (tick the kinds of
 account, which installs their providers with `POST /setup/apply`, then sign in with Add an
-account's own form, embedded), "Your coding tool" (the Tools page's `ToolList`, unchanged) and
-"Check it works" (one `POST /accounts/{id}/test`, with no model unless the person chooses one).
+account's own form, embedded), "Your coding tool" (the Tools page's list of coding tools,
+`ToolListView`, with the same rows and words) and "Check it works" (one
+`POST /accounts/{id}/test`, with no model unless the person chooses one).
 On a first run the first step not done opens; afterwards every step starts folded. Only the
 person moves the open step: data arriving updates text in place. What core's scan found shows in
 the step that uses it: a suggested kind is ticked with core's reason, a sign-in is a note above
-the form, a tool is its row. `Finish setup`, `Finish anyway`, `Finish without testing` and
-`Finish later` all send `POST /setup/done`, call the host's `onFinish` and go to Home.
+the form, a tool is its row. Step 1 counts as done once an account can take requests (it serves,
+or waits out a limit); its summary says what the others are, such as "1 account, turned off.". A
+key made in step 2 is held by that step, so its value is gone once the step folds.
+`Finish setup`, `Finish anyway`, `Finish without testing` and `Leave setup for now` all send
+`POST /setup/done`, call the host's `onFinish` and go to Home.
 
 When core's scan found a CLIProxyAPI setup, one line above the steps (`kit/pages/setupImport.tsx`)
 says so, with "Preview import". The preview sends `POST /setup/import` as a dry run and shows core's
 report in three folded lists (what it would import, what pluxy sets differently, what it leaves
-out, each with why); "Import now" is only possible from that preview. After the import the page
-reads Setup, the accounts and the packages again and ticks the kinds the report says the accounts
-need. A refusal is shown on the line in plain words; only a core too old for the call (404) and
-one that keeps its settings in `config.yaml` (409) offer "More details", with the command. Once
-core has a record of an import (`last_import`), the line says when, with "Import again". An
-import never changes core's management key.
+out, each with why; privacy mode hides the auth files' names). "Import now" is only possible from
+that preview, and sends the same config and auth folder; a new scan, or any other change to what
+core found, drops the preview. After the import the page reads Setup, the accounts and the
+packages again and ticks the kinds the report says the accounts need that step 1 offers; a kind
+this pluxy does not offer is named, with a link to Extensions. A refusal is shown on the line in
+plain words; only a core too old for the call (404) and one that keeps its settings in
+`config.yaml` (409) offer "More details", with the command. When "Import now" gets no reply,
+"Refresh" looks again: a new record of an import (`last_import`) means it ran, none means it did
+not. Once core has a record of an import, the line says when, with "Import again". An import
+never changes core's management key.
 
 A host adds to the page through `corePages({ setup })` (`SetupOptions` in `kit/pages/setup.tsx`),
 and the panel passes nothing: `toolAction`, `extraTools`, `localPages` and `onRefresh` go to

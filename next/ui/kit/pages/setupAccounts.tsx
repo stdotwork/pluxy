@@ -4,11 +4,14 @@
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import type { Account, Package, Setup, SetupPick } from "../api";
+import { accountCondition } from "../parts";
+import { stateText } from "../states";
 import { strings } from "../strings";
 import { Badge, Button, Notice } from "../ui";
 import { AddAccountPage } from "./addAccount";
 import {
   type Choices,
+  canServe,
   isTicked,
   joinNames,
   kindGroups,
@@ -38,6 +41,12 @@ const t = strings("setupAccounts", {
   none: "This copy of pluxy has no kinds of account to add.",
   signIn: "{label}. Sign in below with the same account.",
   connected: { one: "{count} account connected.", other: "{count} accounts connected." },
+  connectedSome: {
+    one: "{count} account connected; {others} more cannot take requests.",
+    other: "{count} accounts connected; {others} more cannot take requests.",
+  },
+  oneAccount: "1 account, {state}.",
+  noneServe: "{count} accounts, none can take requests.",
   seeThem: "See them on Accounts",
   addAccount: "Add another account",
   noReason: "no reason given",
@@ -61,9 +70,24 @@ export function Toggle(props: { open: boolean; onToggle: () => void; children: C
   );
 }
 
-/** The step's folded summary. */
-export const accountsSummary = (count: number | undefined) =>
-  count ? t("connected", { count }) : t("noAccount");
+/**
+ * The step's folded summary, and the line in it: the accounts that can take requests are
+ * connected; the others are said as they are.
+ */
+export function accountsSummary(accounts: Account[] | undefined, running?: ReadonlySet<string>): string {
+  const list = accounts ?? [];
+  if (list.length === 0) return t("noAccount");
+  const usable = list.filter((a) => canServe(a, running)).length;
+  const others = list.length - usable;
+  if (usable > 0)
+    return others > 0 ? t("connectedSome", { count: usable, others }) : t("connected", { count: usable });
+  const [only] = list;
+  if (only && list.length === 1) {
+    const kind = accountCondition(only, running).kind;
+    return t("oneAccount", { state: stateText(kind === "off" ? "disabled" : kind, "account").toLowerCase() });
+  }
+  return t("noneServe", { count: list.length });
+}
 
 function KindRow(props: {
   pick: SetupPick;
@@ -212,6 +236,8 @@ export function AccountsStep(props: {
   setup: Setup;
   packages?: Package[];
   accounts?: Account[];
+  /** The extensions core runs, for which accounts can take requests. */
+  running?: ReadonlySet<string>;
   /** pluxy had accounts when the page opened: the form waits for Add another account. */
   hadAccounts: boolean;
   choices: Choices;
@@ -275,7 +301,7 @@ export function AccountsStep(props: {
       )}
       {count > 0 && (
         <p class="setup-line">
-          <span>{t("connected", { count })}</span>
+          <span>{accountsSummary(props.accounts, props.running)}</span>
           {formOpen || running.length === 0 ? (
             <a href="#/accounts">{t("seeThem")}</a>
           ) : (
