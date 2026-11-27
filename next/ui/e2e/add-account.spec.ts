@@ -122,8 +122,10 @@ test("an API-key account is added with no ID, named with Save name, and the name
   expect(body).toEqual({ extension: "test/alpha", method: "api_key", input: { api_key: "test-good-key" } });
   expect(body).not.toHaveProperty("id");
 
-  // Added, under the name the provider gave it, ready to be renamed.
-  await expect(page.getByRole("status").filter({ hasText: "Added Test account." })).toBeVisible();
+  // Added, under the name and plan the provider gave it, ready to be renamed.
+  const addedStatus = page.getByRole("status").filter({ hasText: "Added Test account (Alpha, Test plan)" });
+  await expect(addedStatus).toBeVisible();
+  await expect(addedStatus.locator('[data-part="plan-pill"]')).toHaveText("Test plan");
   const name = page.getByLabel("Name", { exact: true });
   await expect(name).toHaveValue("Test account");
   await expect(page.getByRole("button", { name: "Save name" })).toBeDisabled();
@@ -294,7 +296,9 @@ test("a device sign-in shows its code, adds the account, and is not cancelled wh
   await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
   await expect(page.getByText(/^Time left: \d+:\d{2}$/)).toBeVisible();
   await expect(page.getByText("Waiting for sign-in…", { exact: true })).toBeVisible();
-  await expect(page.getByRole("status").filter({ hasText: "Added Test account." })).toBeVisible({
+  await expect(
+    page.getByRole("status").filter({ hasText: "Added Test account (Alpha, Test plan)" }),
+  ).toBeVisible({
     timeout: 15_000,
   });
   const cancels: string[] = [];

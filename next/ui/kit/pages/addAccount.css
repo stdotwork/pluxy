@@ -342,6 +342,10 @@
     font-size: var(--px-font-size-title);
   }
 
+  .added-text .plan-pill {
+    vertical-align: 1px;
+  }
+
   .added-provider {
     display: flex;
     align-items: center;

@@ -1,11 +1,11 @@
-import { useLayoutEffect, useRef, useState } from "preact/hooks";
+import { useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { type Account, type LoginMethod, type LoginMethodsExtension, problem } from "../api";
 import { Icon } from "../icons";
 import { LoginFlow } from "../loginFlow";
-import { accountServer, Phases, providerName, StatePane } from "../parts";
+import { accountServer, Phases, PlanPill, providerName, StatePane, useWindows } from "../parts";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
-import { strings } from "../strings";
+import { rich, strings } from "../strings";
 import { Button, Notice, PageHead, useKit, useLoad, usePoll } from "../ui";
 import { nameProblem } from "./accounts.helpers";
 import { monogram, recommendedWay, seriesOf, shortId, splitKinds } from "./addAccount.helpers";
@@ -37,7 +37,9 @@ const t = strings("addAccount", {
   start: "Start",
   startMethod: "Start: {method}",
   added: "Added {name}.",
+  addedWithPlan: "Added {name} ({provider}, {plan})",
   addedUnnamed: "Added your {account}.",
+  addedUnnamedWithPlan: "Added your {account} ({plan})",
   checking: "Checking it with the service…",
   checkOk: "pluxy checked it with the service, and it works.",
   checkFailed: "pluxy could not check it with the service: {error}",
@@ -208,6 +210,9 @@ function Added(props: { id: string; group: MethodGroup; embedded?: boolean; onAn
   const p = usePrivacy();
   const accounts = useLoad(api.accounts);
   const account: Account | undefined = accounts.data?.accounts.find((a) => a.id === props.id);
+  const one = useMemo(() => (account ? [account] : []), [account]);
+  const windows = useWindows(one).get(props.id);
+  const plan = (windows?.plan ?? account?.quota?.quota.plan)?.trim() || undefined;
   // The Name field edits the real name. With privacy mode on it starts empty, with the masked name as its
   // example, so what is saved is only what the person types, never the mask.
   // An account with no name yet and an address is offered the address as its name; it is saved
@@ -256,6 +261,13 @@ function Added(props: { id: string; group: MethodGroup; embedded?: boolean; onAn
     setSaved(true);
   };
   const provider = displayName(props.group);
+  const heading = label
+    ? plan
+      ? rich(t("addedWithPlan", { name: p.id(label), provider }), { plan: <PlanPill plan={plan} /> })
+      : t("added", { name: p.id(label) })
+    : plan
+      ? rich(t("addedUnnamedWithPlan", { account: props.group.account }), { plan: <PlanPill plan={plan} /> })
+      : t("addedUnnamed", { account: props.group.account });
   return (
     <section class="added card" data-part="account-added">
       <div class="added-head" role="status">
@@ -263,13 +275,13 @@ function Added(props: { id: string; group: MethodGroup; embedded?: boolean; onAn
           <Icon name="check" size={16} />
         </span>
         <div class="added-text">
-          <strong>
-            {label ? t("added", { name: p.id(label) }) : t("addedUnnamed", { account: props.group.account })}
-          </strong>
-          <span class="added-provider">
-            <ProviderMark extension={props.group.extension} title={provider} />
-            <span class="muted">{provider}</span>
-          </span>
+          <strong>{heading}</strong>
+          {!plan && (
+            <span class="added-provider">
+              <ProviderMark extension={props.group.extension} title={provider} />
+              <span class="muted">{provider}</span>
+            </span>
+          )}
         </div>
       </div>
       {check?.state === "ok" && <p data-part="account-check">{t("checkOk")}</p>}

@@ -9,11 +9,13 @@ import { type Account, api, type LoginMethod, type LoginMethodsExtension } from 
 import type { Host, Method, Reply } from "../kit/host";
 import { LoginFlow } from "../kit/loginFlow";
 import { AddAccountPage, groupMethods } from "../kit/pages/addAccount";
+import { forgetWindows } from "../kit/parts/hooks";
 import { PrivacyContext, privacyMasks } from "../kit/privacy";
 import { type Kit, KitContext } from "../kit/ui";
 import { all, type FakeNode, mountIn, restoreDom, settle } from "./fakeDom";
 
 afterEach(() => {
+  forgetWindows();
   restoreDom();
   if (jest.isFakeTimers()) {
     jest.clearAllTimers();
@@ -982,4 +984,50 @@ test("the sentence for an unnamed account in a long-named kind reads as English:
   await submit(must(all(page.root, "form")[0], "form"));
   expect(page.text()).toContain("Added your account for another service.");
   expect(page.text()).not.toContain("Another service with an API key account");
+});
+
+test("the end card names the plan in a plan pill when the account carries one or the quota read returns it", async () => {
+  // Plan already carried on the account from GET /accounts.
+  const carried = world({
+    accounts: [
+      account({
+        label: "studio-max",
+        quota: {
+          quota: { plan: "Max 20x", limits: [] },
+          fetched_at: new Date().toISOString(),
+        },
+      }),
+    ],
+    reply: loginDone,
+  });
+  const first = await carried.mount(<AddAccountPage />);
+  await begin(first.root, "Claude subscription");
+  expect(first.text()).toContain("Added studio-max (Claude, Max 20x)");
+  const pill = must(withAttr(first.root, "data-part", "plan-pill")[0], "plan pill");
+  expect(pill.textContent).toBe("Max 20x");
+  expect(attr(pill, "data-plan-tier")).toBe("top");
+  forgetWindows();
+  restoreDom();
+
+  // Plan returned by GET /accounts/{id}/quota after the sign-in finishes.
+  jest.useFakeTimers();
+  const fetched = world({
+    accounts: [account({ label: "work-pro" })],
+    reply: (c) => {
+      if (c.method === "GET" && c.path === "/accounts/acc_1a2b3c4d/quota") {
+        return ok({ quota: { plan: "Pro", limits: [] }, fetched_at: new Date().toISOString() });
+      }
+      return loginDone(c);
+    },
+  });
+  const second = await fetched.mount(<AddAccountPage />);
+  await begin(second.root, "Claude subscription");
+  await advance(50);
+  expect(fetched.calls.some((c) => c.method === "GET" && c.path === "/accounts/acc_1a2b3c4d/quota")).toBe(
+    true,
+  );
+  expect(second.text()).toContain("Added work-pro (Claude, Pro)");
+  const proPill = must(withAttr(second.root, "data-part", "plan-pill")[0], "plan pill");
+  expect(proPill.textContent).toBe("Pro");
+  expect(attr(proPill, "data-plan-tier")).toBe("mid");
 });
