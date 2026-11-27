@@ -255,7 +255,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             )?;
             // The old addresses go to the pages that replaced them.
             for (from, to) in [("#/easy-mode", "#/setup"), ("#/clients", "#/tools")] {
-                main.eval(&format!("location.hash = '{from}'"))
+                main.eval(format!("location.hash = '{from}'"))
                     .map_err(|e| e.to_string())?;
                 until(
                     main,
