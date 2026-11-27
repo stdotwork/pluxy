@@ -48,11 +48,11 @@ Run from this folder (`next/app-tools/`):
 
 ```bash
 cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
-cargo build --release --locked -p <crate>       # one tool, a small stripped program; <crate> is a name above
+cargo build --release --locked -p <crate>       # one tool, a small stripped program; <crate> is the crate name in the table above (for `pluxy/wsl`, `wsl`)
 cargo build --locked -p pluxy-transactions --example fixture-writer   # the native test's fixture
 ```
 
-`wsl` builds as `pluxy-wsl` (`bin/pluxy-wsl.exe` on Windows). `make tools` in `next/` runs the
+The `wsl` crate builds the program `pluxy-wsl` (`bin/pluxy-wsl.exe` on Windows). `make tools` in `next/` runs the
 same checks, and `cargo build --release` uses the workspace profile (size-optimised, stripped,
 `panic = "abort"`).
 
@@ -62,16 +62,17 @@ same checks, and `cargo build --release` uses the workspace profile (size-optimi
   app's native test. No job runs the `linux/arm64` programs.
 - **Windows and macOS:** `next-app-tools-platforms.yml` runs clippy and the unit tests of the whole
   workspace on `windows-latest` and `macos-latest`. `next-app-platforms.yml` runs the app's native
-  test shards there (`platform`, `package`, `tools`, `open`, `update`), which start the `execution`
-  program and test tools. `next-app-tools-pack.yml` builds and packs every tool on each platform's
-  own runner. The desktop app itself supports Linux only for now (`../app/README.md`, "Platforms"),
+  test shards there (`platform`, `package`, `tools`, `open`, `update`); the `tools` and `open` shards
+  build and start the `execution` program and test tools. `next-app-tools-pack.yml` builds every
+  tool but `usage-fixture` on a runner of each platform (`linux/amd64`, `linux/arm64`, `darwin/amd64`,
+  `darwin/arm64`, `windows/amd64`) and packs the archives. The desktop app itself supports Linux only for now (`../app/README.md`, "Platforms"),
   so the tools run there in test builds.
 - **WSL:** `wsl` is a Windows tool; on any other system every operation answers `unsupported`. The
   WSL jobs of `next-app-tools-platforms.yml` run it, `lib/program`, `lib/transactions`, `claude-code`
   and the app's program host and spawn service against real WSL 2 and WSL 1 distributions. Only
   `claude-code` declares `"environments": ["wsl"]`.
 - **Where a client keeps its files** is per tool below. On Windows the tools read `LOCALAPPDATA`
-  where a client keeps files there; the app passes it, with `HOME`.
+  where a client keeps files there; the app passes `LOCALAPPDATA` and `APPDATA` with `HOME`.
 - The usage parsers and the other tools read from the `HOME` the app gives them.
 
 The docs of `docs/ci.md` list the workflows in full.
@@ -86,7 +87,7 @@ The docs of `docs/ci.md` list the workflows in full.
 | --- | --- |
 | `create_private_dir`, `create_new_private`, `make_private`, `make_private_open`, `is_private` | Private files and folders belong to this user alone. Linux and macOS: owned by the effective user, mode 0600 (files) or 0700 (folders). Windows: owned by this user, the token's default owner or SYSTEM; the access list must exist, be protected, and allow only this user or SYSTEM; deny entries are ignored. `make_private` works through a handle to the file itself (not a link), refuses anything but a file or folder, and never takes over another owner's file. A folder whose inherited entries deny OWNER RIGHTS the right to change an access list makes `create_*` fail with `PermissionDenied` on Windows. |
 | `access_list`, `set_access_list`, `rename_open`, `create_private_in` (Windows) | Read and set an access list as SDDL text through a handle (a NULL list is refused); rename a file through its own handle into a folder handle, with POSIX semantics where the file system has them; create a private file relative to a folder handle. |
-| `others_may_write`, `others_may_change` (Windows) | Whether an account other than this user, SYSTEM and Administrators (TrustedInstaller too, for `others_may_change`) may change a path. `Change::Any` looks for any change, `Change::Entries` only for removing or renaming what a folder holds, or the folder, or changing its list or owner. `execution` uses them for its terminal's program and the folders above it. |
+| `others_may_write`, `others_may_change` (Windows) | Whether an account other than this user, SYSTEM and Administrators (TrustedInstaller too, for `others_may_change`) may change a path. `Change::Any` looks for any change, `Change::Entries` only for removing or renaming what a folder holds, or the folder, or changing its list or owner. `execution` uses `others_may_change` for its terminal's program and the folders above it, and `others_may_write` for an open launch's folders. |
 | `windows_name_problem` | Whether Windows would read a path's name as another file (a stream such as `a.json:x`, a trailing dot or blank, a device name such as `NUL` or `COM1.json`). A string check, the same on every platform. |
 | `executable` | Whether a path (a link followed) is a program someone may start by its path: Linux and macOS, a regular file with an execute bit; Windows, a regular file named `….exe` or `….com` that starts with `MZ`. |
 | `open_regular` | Opens a file for reading only when it is a regular file, checked on the open handle, without following a link (`O_NOFOLLOW` and `O_NONBLOCK` on Linux and macOS, so a FIFO is refused; on Windows the link itself is opened and refused). |
@@ -298,11 +299,11 @@ newer copy is read.
   again). The total is the entry's `totalTokens`, else input + output + cache read + cache write.
 - The model is the message's `responseModel`, else its `model`; another entry's `model`; none is the
   empty name.
-- The hour is the entry's `timestamp` (ISO), else the message's timestamp (milliseconds); an entry
+- The hour is the entry's `timestamp` (ISO), else the message's timestamp (an RFC 3339 string, a `YYYY-MM-DD` date, or a number of seconds or milliseconds); an entry
   with neither is skipped. Every entry whose usage holds a count is one sample.
 - An entry with an `id` and a `timestamp` is a schema 2 event whose key is a hash of both, counted
   once by the hub whichever files hold it (a forked or branched session copies its parent's entries).
-  An entry without either is a plain row.
+  An entry missing either is a plain row.
 
 Only counters, a model name, a time and the hashed key leave the parser.
 
@@ -323,7 +324,7 @@ Operations every setup tool has:
 | `clear` | `write` | The pins | The library's outcome: the values `apply` wrote go, edits made since stay |
 | `restore` | `write` | The pins | The library's outcome: the original bytes back, files that did not exist removed |
 | `status` | `read` | none | The library's status |
-| `recipe` | `read` | tool-specific | How the launcher starts the client: `{"client", "kind": "terminal" or "direct", "program", "args"}` (direct: also `cwd`) |
+| `recipe` | `read` | tool-specific | How the launcher starts the client: `{"client", "kind": "terminal" or "direct", "program", "args"}` (direct: `cwd` too, for some) |
 | `backup-list`, `backup-diff` | `read` | the library's | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
 | `backup-create`, `backup-restore`, `backup-delete` | `write` | the library's | The library's answers; each is confirmed |
 
@@ -370,7 +371,7 @@ with `<role>_1m`, `startup_model`, `subagent_model` (empty: removed), `max_conte
 - at the top level: `model` (the startup model; removed when empty), `autoCompactWindow` and
   `autoCompactEnabled`.
 
-`CLAUDE_CODE_EFFORT_LEVEL` and per-model `modelSettings` are left alone. Refused: not strict JSON (a
+Refused: not strict JSON (a
 comment, a trailing comma), not an object, an `env` that is not an object of strings, or a `$schema`
 other than `https://json.schemastore.org/claude-code-settings.json`.
 
@@ -389,7 +390,7 @@ Extra operations and inputs:
 | `preview` | Two selections. `settings`: `state`, `base_url`, `key_set`, `provider` (the current `model_provider`), `model`, `profile`, `catalog`, `remote_compaction`, `agents`, `approval_model`, and each catalog model's editable settings (`system_prompt_chars`, never the prompt). |
 | `import` (`read`) | Input `models`: the core's served models (`slug`, `upstream`, `display_name`, `non_codex`). Returns the editable settings of the entries they would get and `missing` (models pluxy has no Codex template for). Writes nothing. |
 | `apply` | Two pins, `base_url`, `key`, `model` (one of the catalog's), `approval_model` (empty: Codex default), `remote_compaction`, `agents` (`enabled`, `max_threads`, `model`, `effort`, `interrupt`), `models` (1 to 64: `slug`, for a new entry `upstream` and `non_codex`, `display_name`, `description`, `context_window`, `max_context_window`, `effective_context_window_percent`, `auto_compact_token_limit`, `reasoning`, `default_reasoning`, `input_modalities`, `visible`, `tool_search`, optional `system_prompt`). |
-| `recipe` | `target`: `cli` (default; `codex` in a terminal, no arguments), `app` (direct launch of `program`, a full path; Codex has no Linux app, so refused without one) or `service` (`codex app-server daemon restart`, a direct launch in `HOME`). |
+| `recipe` | `target`: `cli` (default; `codex` in a terminal, no arguments), `app` (direct launch of `program`, a full path starting with `/`; Codex has no Linux app, so refused without one) or `service` (`codex app-server daemon restart`, a direct launch in `HOME`). |
 
 `apply` writes in `config.toml`, edited in place with `toml_edit` (comments and formatting stay):
 
@@ -447,8 +448,10 @@ checked against a real macOS or Windows install.
   `inferenceCredentialKind` `static`, `modelDiscoveryEnabled` and `bootstrapEnabled` `false`,
   `disableDeploymentModeChooser` `true` and `inferenceModels`; it removes `selfHostedUrl`. Each row
   becomes `{"name": <alias, else model>, "labelOverride": <model, when an alias differs>,
-  "anthropicFamilyTier", "isFamilyDefault", "supports1m", "prefer1m"}`; the first row is the default
-  model and the tier comes from the name.
+  "anthropicFamilyTier", "isFamilyDefault", "supports1m", "prefer1m"}`. The two tier keys appear
+  only when the name is `claude-<family>`, starts with `claude-<family>-` or holds `-<family>-`, and
+  `isFamilyDefault` is true for the first row of each tier; the two 1M keys appear only when the
+  row's 1M switch is on.
 - `_meta.json`: `appliedId` names pluxy's profile, `entries` gains `{"id", "name": "pluxy"}`, and
   `hybridPointer` is removed; the person's other configurations stay.
 
@@ -461,15 +464,15 @@ the page can add the alias through the management API.
 Clear's merge has two rules of Claude Desktop's own: it seals the key with the device keystore at its
 next launch, which is not the person's edit, so Clear still removes the key; and pluxy's entry leaves
 `_meta.json` unless the original had it. A profile with `selfHostedUrl` set does not read back as
-configured. Every operation but `restore` refuses, before writing, a file Claude Desktop would not
-take: not strict JSON, not an object, a profile whose `inferenceModels` is not a list, or an index
+configured. `apply` and `clear` refuse, before writing, a file Claude Desktop would not
+take (`preview` reports it `refused`): not strict JSON, not an object, a profile whose `inferenceModels` is not a list, or an index
 whose `entries` is not a list of configurations or whose `appliedId` is not a string. A missing
 folder refuses the whole operation before any file is written.
 
 ### `opencode`
 
-Page: OpenCode. Set `opencode`, one file: OpenCode's global config in `~/.config/opencode/` on every
-system (`%USERPROFILE%\.config\opencode` on Windows). The default file is the one OpenCode itself
+Page: OpenCode. Set `opencode`, one file: OpenCode's global config in `~/.config/opencode/` in the app's
+`HOME` on every system. The default file is the one OpenCode itself
 writes: `opencode.jsonc` if it exists, else `opencode.json` if it exists, else a new
 `opencode.jsonc`. Project configs and `OPENCODE_CONFIG_CONTENT` still win over the global file.
 
@@ -527,7 +530,7 @@ With neither YAML name in the folder, a legacy `models.json` or `settings.json` 
 files: Oh My Pi moves it into a new YAML file at its next start.
 
 Refused: not UTF-8, not YAML (a repeated key too), more than one document, a top level that is not
-a mapping, a tag, a key that is not text, a number that is not finite, `providers`,
+a mapping, a tag or other value the settings do not use, a key that is neither text, an integer nor a boolean, a number that is not finite, `providers`,
 `providers.pluxy` or its `discovery` not a mapping, `modelRoles` not a mapping, or
 `modelRoles.default` neither text nor a list of text.
 
@@ -591,7 +594,7 @@ timestamp), or when they hold `${` or spaces. A `custom_providers` entry or a `p
 left alone. `_config_version` is not checked.
 
 Refused: not UTF-8, not YAML (a repeated key too), more than one document, a top level that is not a
-mapping, a tag, `providers` or `providers.pluxy` not a mapping, `model` not a mapping or text,
+mapping, a tag or other value the settings do not use, a key that is neither text, an integer nor a boolean, `providers` or `providers.pluxy` not a mapping, `model` not a mapping or text,
 `model.provider` or `model.default` not text.
 
 ### `pi-setup`
@@ -600,14 +603,14 @@ Page: Pi. Set `pi`, three files in this order, all in Pi's agent folder `~/.pi/a
 `cliproxyapi.json`, `settings.json` and `cliproxyapi-models.json`. The folder must exist (Pi makes it
 on first run). Pi reaches pluxy through the CLIProxyAPI provider plugin, which reads
 `cliproxyapi.json` (`baseUrl`, `apiKey`, optional `providerId`, `providerName`, `fast`, `pause`;
-`CLIPROXYAPI_*` variables in Pi's environment win), registers the provider `cliproxyapi`, lists the
-core's Codex catalog (`/v1/models?client_version=pi`), sends requests to
-`/backend-api/codex/responses` and caches the list in `cliproxyapi-models.json`.
+`CLIPROXYAPI_*` variables in Pi's environment win over every key but `pause`), registers the provider `cliproxyapi`, lists the
+core's Codex catalog (`/v1/models?client_version=pi`), sends requests to the
+core's `/backend-api/` Codex routes and caches the list in `cliproxyapi-models.json`.
 
 | Operation | Notes |
 | --- | --- |
 | `preview` | `targets`: the three selections in one folder, or `folder`: an agent folder (a link inside it is refused, so linked files are selected as `targets`). `pi`: `state` (`not-configured`: the plugin is not listed), `base_url`, `key_set`, `provider`, `default_provider`, `model`, `registered` (settings.json lists pluxy's plugin), `legacy` (it lists an older npm copy), `adapter`: `installed`, `version`, `bundled`, `update`, `foreign` (a folder of that name pluxy did not install), `pin` (the pin of pluxy's copy, from its marker `.pluxy-adapter.json`; null when pluxy's copy is not there). |
-| `apply` | Three pins, `base_url`, `key`, `model` (one model ID; the key may not hold spaces). Also `adapter`: `installed` or `kept`. |
+| `apply` | Three pins, `base_url`, `key`, `model` (one model ID; the key may not hold spaces). Output also holds `adapter`: `installed` or `kept`. |
 | `update` (`write`) | Three pins, `plugin`: the preview's `adapter.pin`. Returns `{"outcome": "updated", "version"}`. |
 | `uninstall` (`write`) | Three pins, `plugin`: the preview's `adapter.pin` (null when no copy was found). Returns the library's outcome and `adapter_removed`. |
 | `clear`, `restore` | Three pins; also return `adapter_removed`. |
@@ -617,7 +620,7 @@ core's Codex catalog (`/v1/models?client_version=pi`), sends requests to
 CLIProxyAPI provider plugin (`pi-setup/adapter/`, MIT, its `LICENSE` kept) in its signed program and
 writes it into the agent folder as a local Pi package, `pluxy-cliproxyapi-provider/`, with a marker
 `.pluxy-adapter.json` (this package and the copy's version). The copy keeps a patched module in its
-own `.cache` folder (mode 0700; on Windows the folder's list) instead of the shared temporary folder.
+own `.cache` folder (mode 0700) instead of the shared temporary folder.
 The plugin declares Pi `>=0.82.0`; the tool cannot run `pi --version`, so it does not check.
 
 - **Update** replaces pluxy's copy with the one the tool carries; the page offers it when the
@@ -660,7 +663,7 @@ package sources (a string, or an object with a string `source`), `defaultProvide
 
 `pluxy/execution` prepares the launches of the desktop app: an agent in a terminal, a program run
 directly, or a file opened in the person's own app. The Launcher page, the tray's Start… menu, the
-tool pages' Start section and `codex-sessions` (to open a session's file) use it. It never starts a
+tool pages' Start section and `codex-sessions` (to open a session's file) use it. As a tool it never starts a
 process itself and never holds a secret's value: the host confirms each launch natively, spawns
 exactly what was confirmed when the program asks, and resolves secrets from its vault at the spawn
 (`../app/app-host/README.md`, "Launches and managed runtimes").
@@ -668,7 +671,7 @@ exactly what was confirmed when the program asks, and resolves secrets from its 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
 | `terminals` | `read` | `search_path`: the launch environment's PATH entries | `terminals`: Automatic first, then each terminal found, with label and path |
-| `prepare` | `read` | `kind` (`terminal`, `direct` or `open`). `terminal`, `direct`: `program` (a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path`. `open`: `file`, `within` (the folder it must be inside), optionally `search_path` | A launch's `executable`, `argv`, `cwd`; for a terminal the `program` it runs; for an open launch the `file` and `within` folder, resolved |
+| `prepare` | `read` | `kind` (`terminal`, `direct` or `open`). `terminal`, `direct`: `program`, `cwd` and `search_path` are required (`program` is a name looked up on `search_path`, or a full path), `override` (a full path used instead), `args`, `cwd`, `terminal` (default Automatic), `search_path`. `open`: `file`, `within` (the folder it must be inside); a `native-test` build also takes `search_path` | A launch's `executable`, `argv`, `cwd`; for a terminal the `program` it runs; for an open launch the `file` and `within` folder, resolved |
 | `launch` | `launch` | What `prepare` gave, with `lifetime` (`detached`, the default, or `managed`), `environment`, `stdin` and the secret field `key` (a reference only) | The host's answer to its spawn request: `lifetime`, and a managed runtime's `runtime` and `pid` |
 | `runtime` | `read` | `op` (`status`, `list`), `runtime` | The host's answer |
 | `control` | `write` | `op` (`stop`, `restart`), `runtime` | The host's answer |
@@ -746,13 +749,13 @@ runs that mode instead of serving operations. `lifetime` and the host's checks a
   ownership. `open` held back for 20 seconds fails as blocked; no window within 60 seconds, as expired;
   a hand-over over 1 MiB is refused before Terminal opens. A direct launch may name an application
   bundle (`….app`) in `/Applications`, `~/Applications` or `/System/Applications`, with no arguments
-  (`/usr/bin/open -a <bundle>`). An open launch runs `/usr/bin/open <file>`; the types are Windows' and
-  Linux's, the file must carry none of `com.apple.FinderInfo`, `com.apple.ResourceFork` and
+  (`/usr/bin/open -a <bundle>`). An open launch runs `/usr/bin/open <file>`; the types are the extensions
+  `.txt`, `.json`, `.jsonl`, `.ndjson`, `.md` and `.log`, the file must carry none of `com.apple.FinderInfo`, `com.apple.ResourceFork` and
   `com.apple.LaunchServices.OpenWith`, and LaunchServices must have an app for it.
 - On both, an app launch carries nothing but the app (no environment, standard input, secret or
   managed lifetime), and a terminal launch takes no standard input; `execution` refuses either before
   the host is asked. In a `native-test` build the `console` window does not wait for Enter and the
-  shell after the program writes its working folder to `pluxy-after-exit` there and exits.
+  `cmd` and `powershell` shells write their working folder to `pluxy-after-exit` there and exit.
 
 ## `codex-sessions`
 
@@ -783,7 +786,7 @@ editor. Its one write outside its data folder is a file the person saves from `e
   asked every time and offers no *Remember*. Without `pluxy/execution` enabled, `open` fails with the
   host's `extension_unavailable`. A `native-test` build also sends `search_path` with the folder named
   in `opener-folder` in the data folder.
-- No error names the rollout's path or holds a byte of it. The page renders every session's text as
+- `export` and `open` errors name no path and hold no byte of the rollout; a `detail` read error can name the rollout's path. The page renders every session's text as
   text, never as HTML.
 
 What it reads:
@@ -803,7 +806,7 @@ What it reads:
 - Sessions with the same ID (without a `local:` prefix) are one: the newer wins and the other fills its
   empty fields; the list is newest first, then by ID. `detail` reads the rollout (the database's
   `rollout_path` when inside the Codex home's session folders, else the file named for it there): its
-  `response_item` records become messages (user and assistant text, reasoning or
+  `response_item` records become messages (text of any role, reasoning or
   `[Encrypted reasoning block]`, tool calls as `name(arguments)` and their outputs); the model is the
   database's, else the last `turn_context`'s.
 - Every string from a database or a rollout is capped (titles, folders, providers, models, paths at
@@ -840,9 +843,9 @@ same file (the newer copy is read). Each file is read line by line when it chang
   by since the last event in the file, never below zero (a counter that falls starts again from the
   lower value); an event with only `info.last_token_usage` or `payload.usage` counts as it is;
 - input is net of cached input; the total is the event's `total_tokens`, else input + output +
-  cached input; reasoning is part of output;
-- every event is one sample, also one that adds nothing; an event with `info` null is none;
-- an event's hour is its line's `timestamp`; a line with no readable time is skipped; a date with no
+  cache write + cache read; reasoning is part of output;
+- every event is one sample, also one that adds nothing; an event with `info` null counts only when it has `payload.usage`;
+- an event's hour is its line's `timestamp` (or another of the usual time keys: `time`, `created_at`, `createdAt`, `date`, also inside `message`, `payload` or `data`); a line with no readable time is skipped; a date with no
   time is that day's start in UTC.
 
 **`usage-claude`.** A transcript's file ID is its path below the root with the first folder (Claude
@@ -880,7 +883,7 @@ hashed folder is the project's. Each file is read line by line when it changes:
   (`<fork event>_<seq>`); a copy takes its original's key. Forks from before `session_message` count
   again.
 - The hub's output is output + reasoning; the total is input + output + reasoning + cache read + cache
-  write. A message's time is its `time.created`. Title and other side requests recorded only as
+  write. A message's time is its `time.created` (else the row's creation time). Title and other side requests recorded only as
   session totals are not counted.
 - The database is opened by `lib/sqlite-ro`.
 
@@ -896,7 +899,7 @@ It runs only Windows' own `wsl.exe`, from System32 as `GetSystemDirectoryW` repo
 empty standard input, an environment of `SystemRoot`, `WINDIR` and `WSL_UTF8=1` only, output capped,
 and a deadline after which it is ended through its handle (10 seconds to list, 60 for a run inside a
 distribution). A call's cancel ends it too. WSL 1 sometimes refuses a launch with `0xd0000225`; such
-a run is tried again up to three times, two seconds apart, within the deadline. Inside a distribution
+a run is tried again, two seconds apart, up to three attempts in all, within the deadline. Inside a distribution
 it runs one fixed `sh -c` script per operation, with no login shell and no rc file; names reach a
 script only as `wsl.exe`'s `-d` and `-u` values or as the script's arguments.
 

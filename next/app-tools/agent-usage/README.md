@@ -46,15 +46,14 @@ A sync, for each parser registered now:
 
 A file stays as it was, with its old rows, and counts as failed (the parser's reason is the source's
 error), when the parser cannot read it, when a row's hour is before 2000-01-01 or more than a day
-after the hub's time, or when it has more than 100,000 rows (distinct hours and models) before its
+after the hub's time, or when it has more than 100,000 rows and keyed events before its
 last part; the rest of that file's parts are dropped and the job goes on. A file's parts that have
 arrived when its job ends early (cancelled, failed, the parser disabled) are dropped, and the next
 sync reads the file again.
 
-A sync always ends: a job the hub hears nothing from for 60 seconds (the host waits at most 10 for a
-delivery and delivers a job's end once, best-effort) is cancelled and counted as ended, and its
+A sync always ends: a job the hub hears nothing from for 60 seconds is cancelled and counted as ended, and its
 unfinished files count as failed; a source whose file list cannot be stored fails too. A file no
-longer listed is marked gone and its rows stay. A sync lives in the hub's memory: if the hub stops
+longer listed is marked gone (unless the listing was cut short) and its rows stay. A sync lives in the hub's memory: if the hub stops
 during one, the next sync starts over and reads only the files not yet stored.
 
 A parser that is disabled or removed is not scheduled; its rows stay and it shows as archived
@@ -85,7 +84,7 @@ minutes off.
 | `by_source`, `by_model` | `{"keys", "values"}`: the six keys with the most tokens, then `__other__` for the rest, and each bucket's totals for them |
 | `models` | Each model with tokens, most first; past the first 200, the rest as one `__other__` |
 | `sources` | Every source: `id`, `label`, `status`, and its `total` and `active_days` in the range, whatever the source filter |
-| `calendar` | `{"start", "totals"}`: each day's total, from the Monday on or before a year ago (or the first stored day's Monday, if earlier) to today |
+| `calendar` | `{"start", "totals"}`: each day's total, from the Monday on or before 364 days ago (or the first stored day's Monday, if earlier) to today |
 | `hours` | Seven rows (Monday first) of 24 hours' totals over the last 30 days |
 | `sync` | As `sync` gives it |
 
@@ -148,7 +147,7 @@ Rules:
   8 deep below a root, without following links; a parser that reads a file whole refuses one larger
   than 16 MiB, and one that reads lines skips a line over 16 MiB.
 - A row's `hour` is from 2000-01-01 to a day after the hub's time, and a file has at most 100,000
-  rows (distinct hours and models); otherwise the file fails and the job goes on.
+  rows and keyed events together; otherwise the file fails and the job goes on.
 - The host names a batch's source; a parser cannot. A batch the hub refuses (a file the job does not
   read, a part out of order, a row's field out of bounds) fails the job.
 
