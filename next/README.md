@@ -703,8 +703,8 @@ IDs are made with). Make a folder with a config file before the first start (wit
 empty `/config`, core writes a first config that listens on the container's own `127.0.0.1`:
 unreachable from outside, and the health check fails); `listen` must be `0.0.0.0:8400`, since the container's own `127.0.0.1`
 is not reachable from outside it, and the image's health check asks port 8400. Inside a container,
-requests through a published port come from Docker's network address, not from `127.0.0.1`, so
-the management API refuses them unless `management_allow_remote` is `true` (it still needs the
+requests through a published port come from Docker's network address, not from `127.0.0.1` or
+the container's own address, so the management API refuses them unless `management_allow_remote` is `true` (it still needs the
 management key). Publish the port on `127.0.0.1` only, as below, unless you want other machines
 to reach it:
 
@@ -2606,14 +2606,22 @@ Beside the account calls [above](#accounts-added-by-login), management serves th
 needs `Authorization: Bearer <management_key>`.
 
 The management API answers only this machine: a call from a loopback address (`127.0.0.1`,
-`::1`). Any other client gets a 403 with the code `remote_disabled`, before its key is looked at
-(so its keys do not count for the lockout below),
+`::1`), or one that comes from the very address it arrived at. That second kind is a program on
+this machine calling core at a network address core listens on (with `"listen":
+"192.168.1.20:8317"`, the `pluxy` command on that machine calls `192.168.1.20`, and the call
+leaves from that same address); only this machine can open a connection from its own address.
+A call whose source this machine's own network translation rewrites to the address it arrives at
+(a Docker bridge source on the host, for example) counts as this machine too; only a source that
+arrives unchanged at another address does not. Any other client gets a 403 with the code
+`remote_disabled`, before its key is looked at (so its keys do not count for the lockout below),
 unless `management_allow_remote` is `true`, as today's `management.allow-remote`. The client is
-the address [`trusted_proxies`](#run-it) gives. A call that names another client in
+the address [`trusted_proxies`](#run-it) gives; a client a trusted proxy names counts as this
+machine only when it is a loopback address, since the connection shows only where the proxy is. A call that names another client in
 `X-Forwarded-For`, `X-Real-IP` or `Forwarded` does not count as this machine unless core took the
 client from that header (a trusted proxy's `X-Forwarded-For` or `X-Real-IP`; core does not read
-`Forwarded`), so a tunnel or proxy on this machine that forwards calls from elsewhere does not
-open the management API; today's core counts those calls as local. The client API and the panel's
+`Forwarded`), so a tunnel or proxy on this machine that sets one of those headers keeps its callers remote. One
+that sets none counts as this machine, as one on loopback already does; today's core counts those
+calls as local. The client API and the panel's
 page are not gated; the panel's calls are.
 
 ```json
