@@ -723,7 +723,6 @@
   /* ---- key row menu ------------------------------------------------------------------------- */
 
   .tool-key-actions {
-    position: relative;
     display: flex;
     flex: none;
     align-items: center;
@@ -742,11 +741,13 @@
     color: var(--px-color-text);
   }
 
+  .tool-key-menu-wrap {
+    flex: 1 1 100%;
+    display: flex;
+    justify-content: flex-end;
+  }
+
   .tool-key-menu {
-    position: absolute;
-    top: calc(100% + var(--s));
-    inset-inline-end: 0;
-    z-index: 20;
     min-width: 9.5rem;
     display: grid;
     padding: var(--s);

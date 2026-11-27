@@ -211,6 +211,37 @@ test("the address uses ConnectionCard with Copy and says who can reach it", asyn
   );
 });
 
+test("opening a key menu does not cover the next key row or the last-key note", async ({ page }) => {
+  const only = keys(page).locator('[data-part="tool-key"]');
+  await expect(only).toHaveCount(1);
+  await openKeyMenu(only);
+  const onlyMenu = only.getByRole("menu");
+  const note = only.locator(".tool-key-note");
+  const del = only.getByRole("menuitem", { name: "Delete", exact: true });
+  await expect(del).toBeDisabled();
+  const noteId = await note.getAttribute("id");
+  expect(noteId).toBeTruthy();
+  await expect(del).toHaveAttribute("aria-describedby", noteId as string);
+  const onlyMenuBox = await onlyMenu.boundingBox();
+  const noteBox = await note.boundingBox();
+  expect(onlyMenuBox && noteBox).toBeTruthy();
+  expect((onlyMenuBox?.y ?? 0) + (onlyMenuBox?.height ?? 0)).toBeLessThanOrEqual((noteBox?.y ?? 0) + 1);
+  await page.keyboard.press("Escape");
+
+  // With two keys, opening the first key's menu never paints over the second key row.
+  await keys(page).getByRole("button", { name: "New key", exact: true }).click();
+  await keys(page).getByLabel("Name", { exact: true }).fill("Second key");
+  await keys(page).getByRole("button", { name: "Make key", exact: true }).click();
+  await expect(keys(page).locator('[data-part="tool-key"]')).toHaveCount(2);
+  const first = keys(page).locator('[data-part="tool-key"]').nth(0);
+  const second = keys(page).locator('[data-part="tool-key"]').nth(1);
+  await openKeyMenu(first);
+  const firstMenuBox = await first.getByRole("menu").boundingBox();
+  const secondBox = await second.boundingBox();
+  expect(firstMenuBox && secondBox).toBeTruthy();
+  expect((firstMenuBox?.y ?? 0) + (firstMenuBox?.height ?? 0)).toBeLessThanOrEqual((secondBox?.y ?? 0) + 1);
+});
+
 test("Refresh scans again", async ({ page }) => {
   const scan = page.waitForResponse(
     (r) => r.request().method() === "POST" && r.url().endsWith("/setup/scan"),

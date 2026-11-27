@@ -893,17 +893,20 @@ function KeyRow(props: {
   const [renameError, setRenameError] = useState<string>();
   const [deleteError, setDeleteError] = useState<string>();
   const [lastKey, setLastKey] = useState(false);
-  const menuWrap = useRef<HTMLDivElement>(null);
   const menuList = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const cancelDeleteRef = useRef<HTMLButtonElement>(null);
   const questionId = useId();
   const menuId = useId();
+  const lastKeyId = useId();
+
+  const insideMenu = (target: Node | null) =>
+    Boolean(triggerRef.current?.contains(target) || menuList.current?.contains(target));
 
   useLayoutEffect(() => {
     if (!menuOpen) return;
     const onPointerDown = (e: Event) => {
-      if (menuWrap.current && !menuWrap.current.contains(e.target as Node | null)) setMenuOpen(false);
+      if (!insideMenu(e.target as Node | null)) setMenuOpen(false);
     };
     const onKeyDown = (e: Event) => {
       if ((e as KeyboardEvent).key === "Escape") {
@@ -990,7 +993,7 @@ function KeyRow(props: {
         {name.named && <span class="mono muted tool-key-masked">{key.masked}</span>}
       </span>
       <span class="tool-key-used muted num">{week}</span>
-      <div class="tool-key-actions" ref={menuWrap}>
+      <div class="tool-key-actions">
         {!renaming && !confirming && (
           <button
             ref={triggerRef}
@@ -1014,7 +1017,9 @@ function KeyRow(props: {
             <EllipsisIcon />
           </button>
         )}
-        {menuOpen && (
+      </div>
+      {menuOpen && (
+        <div class="tool-key-menu-wrap">
           <div
             ref={menuList}
             id={menuId}
@@ -1044,6 +1049,7 @@ function KeyRow(props: {
               class="tool-key-menu-item"
               data-tone="danger"
               disabled={props.only}
+              aria-describedby={props.only || lastKey ? lastKeyId : undefined}
               onClick={() => {
                 setMenuOpen(false);
                 setRenaming(false);
@@ -1053,8 +1059,8 @@ function KeyRow(props: {
               {t("delete")}
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
       {confirming && (
         <div class="tool-key-confirm confirm">
           <span class="confirm-question" id={questionId}>
@@ -1102,7 +1108,11 @@ function KeyRow(props: {
           </Button>
         </form>
       )}
-      {(props.only || lastKey) && <p class="tool-key-note muted">{t("lastKey")}</p>}
+      {(props.only || lastKey) && (
+        <p id={lastKeyId} class="tool-key-note muted">
+          {t("lastKey")}
+        </p>
+      )}
       {renameError && <Notice tone="danger">{renameError}</Notice>}
       {deleteError && <Notice tone="danger">{deleteError}</Notice>}
     </li>

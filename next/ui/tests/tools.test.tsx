@@ -716,8 +716,12 @@ test("with one key Delete is disabled and says to add another first", async () =
   const m = await w.mount(<ToolsPage />);
   const only = keyRows(m.root)[0] as FakeNode;
   await openKeyMenu(only);
-  expect(buttonIn(only, "Delete").disabled).toBe(true);
+  const del = buttonIn(only, "Delete");
+  expect(del.disabled).toBe(true);
   expect(only.textContent).toContain("Add another key before deleting this one.");
+  const note = descend(only).find((n) => n.textContent === "Add another key before deleting this one.");
+  expect(note && attribute(note, "id")).toBeTruthy();
+  expect(attribute(del, "aria-describedby")).toBe(note && attribute(note, "id"));
 });
 
 test("a refused delete of the last key (another tab) shows the same line, and 404 reads the list again", async () => {
