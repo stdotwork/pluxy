@@ -81,7 +81,7 @@
   }
 
   .first-choice[data-picked] .first-choice-icon {
-    color: var(--px-color-accent-text);
+    color: var(--px-color-message-action);
     border-color: color-mix(in srgb, var(--px-color-message-action) 35%, var(--px-color-border));
   }
 
