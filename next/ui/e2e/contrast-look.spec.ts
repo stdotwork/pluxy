@@ -133,7 +133,9 @@ for (const theme of THEMES) {
       })()`);
       const list = results as { tier: string; stop: string; ratio: number }[];
       expect(list.length).toBeGreaterThanOrEqual(2);
-      const low = list.filter((r) => r.ratio < AA).map((r) => `${r.tier} on ${r.stop}: ${r.ratio.toFixed(2)}:1`);
+      const low = list
+        .filter((r) => r.ratio < AA)
+        .map((r) => `${r.tier} on ${r.stop}: ${r.ratio.toFixed(2)}:1`);
       expect(low).toEqual([]);
     });
 

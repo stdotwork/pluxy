@@ -61,7 +61,6 @@ export const TOKENS = {
     light: "color-mix(in srgb, var(--px-color-text) 8%, var(--px-color-surface))",
   },
   "color.meter-fill": { light: "var(--px-color-success)" },
-  "color.meter-high": { light: "var(--px-color-meter-fill)" },
   "color.meter-mid": { light: "var(--px-color-warning)" },
   "color.meter-low": { light: "var(--px-color-error)" },
   "color.meter-unknown": {
@@ -165,7 +164,10 @@ export const TOKENS = {
     light: "0 0 0 1px rgb(0 0 0 / 0.04), 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.1)",
     dark: "0 0 0 1px rgb(255 255 255 / 0.04), 0 12px 32px -16px rgb(0 0 0 / 0.7)",
   },
-  "shadow.overlay": { light: "0 16px 40px -18px rgb(0 0 0 / 0.55)", dark: "0 16px 40px -18px rgb(0 0 0 / 0.8)" },
+  "shadow.overlay": {
+    light: "0 16px 40px -18px rgb(0 0 0 / 0.55)",
+    dark: "0 16px 40px -18px rgb(0 0 0 / 0.8)",
+  },
   "shadow.dialog": { light: "0 24px 64px -24px rgb(0 0 0 / 0.65)" },
   "motion.duration": { light: "120ms" },
   "motion.duration-menu": { light: "160ms" },
@@ -341,7 +343,8 @@ export function tokenValueProblem(name: string, value: unknown): string | undefi
   }
   if (PERCENT_TOKENS.has(name)) {
     const n = Number(value);
-    if (value.trim() === "" || !Number.isFinite(n) || n < 0 || n > 100) return "must be a number from 0 to 100";
+    if (value.trim() === "" || !Number.isFinite(n) || n < 0 || n > 100)
+      return "must be a number from 0 to 100";
   }
   return undefined;
 }

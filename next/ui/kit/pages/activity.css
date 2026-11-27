@@ -137,9 +137,9 @@
 
   /* The labels set colour as well as fill, so the contrast test reads the colour drawn. */
   .usage-chart .chart-label {
-    color: var(--px-color-text-muted);
+    color: var(--px-color-secondary-label);
     fill: currentColor;
-    font-size: 11px;
+    font-size: var(--px-font-size-label);
   }
 
   .usage-chart .chart-hit {
@@ -161,7 +161,7 @@
   }
 
   .usage-chart [data-outcome="success"] {
-    fill: var(--px-color-text);
+    fill: var(--px-color-chart-success);
   }
 
   .usage-chart [data-outcome="failure"] {
@@ -196,11 +196,11 @@
     width: calc(var(--s) * 2.5);
     height: calc(var(--s) * 2.5);
     margin-inline-end: calc(var(--s) * 1.5);
-    border-radius: 2px;
+    border-radius: var(--r-chip);
   }
 
   .usage-chart .chart-swatch[data-outcome="success"] {
-    background: var(--px-color-text);
+    background: var(--px-color-chart-success);
   }
 
   .usage-chart .chart-swatch[data-outcome="failure"] {
@@ -265,7 +265,7 @@
   .usage-bar {
     display: flex;
     height: calc(var(--s) * 2);
-    border-radius: 2px;
+    border-radius: var(--r-chip);
     background: var(--px-color-surface-raised);
     overflow: hidden;
   }
@@ -276,7 +276,7 @@
   }
 
   .usage-bar [data-outcome="success"] {
-    background: var(--px-color-text);
+    background: var(--px-color-chart-success);
   }
 
   .usage-bar [data-outcome="failure"] {

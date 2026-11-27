@@ -287,7 +287,6 @@ describe("resolving", () => {
     // A full gauge is the success colour; a theme without meter tokens gets its own meanings.
     const plain = resolve(ok(base).theme, DEFAULT_CHOICES, env).tokens;
     expect(plain["color.meter-fill"]).toBe("var(--px-color-success)");
-    expect(plain["color.meter-high"]).toBe("var(--px-color-meter-fill)");
     expect(plain["color.meter-mid"]).toBe("var(--px-color-warning)");
     expect(plain["color.meter-low"]).toBe("var(--px-color-error)");
   });
@@ -370,7 +369,9 @@ describe("resolving", () => {
     expect(plain["color.message-action-foreground"]).toBe("var(--px-color-accent-text)");
     expect(plain["color.secondary-label"]).toBe("var(--px-color-text-muted)");
     // A notice is tinted from its state's solid colour.
-    expect(plain["color.danger-surface"]).toBe("color-mix(in srgb, var(--px-color-error) 8%, var(--px-color-bg))");
+    expect(plain["color.danger-surface"]).toBe(
+      "color-mix(in srgb, var(--px-color-error) 8%, var(--px-color-bg))",
+    );
     const set = resolve(ok({ ...base, tokens: { "color.nav": "#102030" } }).theme, DEFAULT_CHOICES, env);
     expect(set.tokens["color.nav"]).toBe("#102030");
     expect(tokensCss(set.tokens)).toContain("--px-color-nav:#102030;");

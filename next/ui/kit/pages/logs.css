@@ -24,7 +24,7 @@
     min-width: 0;
     padding: calc(var(--s) * 3);
     border: var(--px-shape-border) solid var(--px-color-border);
-    border-radius: var(--px-shape-radius);
+    border-radius: var(--r-card);
     color: var(--px-color-code-text);
     background: var(--px-color-code-bg);
     margin: 0;

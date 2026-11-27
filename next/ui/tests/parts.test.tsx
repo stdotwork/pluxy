@@ -7,6 +7,7 @@ import { act } from "preact/test-utils";
 import { renderToString } from "preact-render-to-string";
 import type { Account, QuotaLimit, SetupClient, UsageEvent } from "../kit/api";
 import type { Reply } from "../kit/host";
+import { Meter, meterTone } from "../kit/meter";
 import {
   AccountRow,
   accountCondition,
@@ -26,7 +27,6 @@ import {
   useWindows,
   type Windows,
 } from "../kit/parts";
-import { Meter, meterTone } from "../kit/meter";
 import { PrivacyContext, privacyMasks } from "../kit/privacy";
 import { failureWord, stateText } from "../kit/states";
 import { ConfirmButton, type Kit, KitContext, type Loaded, Switch } from "../kit/ui";
@@ -416,7 +416,9 @@ test("the gauge shows what is left: ok from 60%, warn under 60%, danger under 20
   expect(plain(half)).toBe("wk58% left");
   expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 40 }])).toContain('data-tone="ok"');
   expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 80 }])).toContain('data-tone="warn"');
-  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 81 }])).toContain('data-tone="danger"');
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 81 }])).toContain(
+    'data-tone="danger"',
+  );
   const out = limitsOf([{ id: "five", window_seconds: 18000, used_percent: 100 }]);
   expect(out).toContain('data-tone="danger"');
   expect(plain(out)).toContain("Used up");

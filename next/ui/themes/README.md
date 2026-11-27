@@ -122,8 +122,7 @@ colour role take that role's name (`color.chrome`, `color.message-action`); the
 | `color.update-surface` | Its notice's background | `var(--px-color-info-surface)` |
 | `color.focus` | Keyboard focus ring | `var(--px-color-accent)` |
 | `color.meter-track` | The empty part of a limit's gauge | `color-mix(in srgb, var(--px-color-text) 8%, var(--px-color-surface))` |
-| `color.meter-fill` | What is left of a limit, on its gauge | `var(--px-color-success)` |
-| `color.meter-high` | A gauge with `meter.mid-below` percent left or more | `var(--px-color-meter-fill)` |
+| `color.meter-fill` | What is left of a limit, on its gauge, with `meter.mid-below` percent left or more | `var(--px-color-success)` |
 | `color.meter-mid` | A gauge under `meter.mid-below` percent left | `var(--px-color-warning)` |
 | `color.meter-low` | A gauge under `meter.low-below` percent left, or used up | `var(--px-color-error)` |
 | `color.meter-unknown` | The hatching of a gauge whose limit was not read | `color-mix(in srgb, var(--px-color-text) 22%, var(--px-color-surface))` |
@@ -370,7 +369,7 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="button"` | A button; `data-variant` is `primary` (a view's main action, filled), `quiet` (the ordinary button, outlined), `ghost` (no border until hovered) or `danger` (outlined, in the danger colour) |
 | `data-part="badge"` | A state badge; `data-tone` is `ok`, `warn`, `danger`, `muted`, `info` or `update` |
 | `data-part="field"` | A labelled form control |
-| `data-part="meter"` | A limit's gauge of what is left, beside "{n}% left": full is plenty. `data-mode` is `left`; `data-tone` is `ok`, `warn` (under `meter.mid-below` percent left) or `danger` (under `meter.low-below` percent left, or used up), and `none` on a gauge whose limit was not read, which is hatched. Its child is the fill, in `color.meter-high`, `color.meter-mid` or `color.meter-low`. |
+| `data-part="meter"` | A limit's gauge of what is left, beside "{n}% left": full is plenty. `data-mode` is `left`; `data-tone` is `ok`, `warn` (under `meter.mid-below` percent left) or `danger` (under `meter.low-below` percent left, or used up), and `none` on a gauge whose limit was not read, which is hatched. Its child is the fill, in `color.meter-fill`, `color.meter-mid` or `color.meter-low`. |
 | `data-part="tabs"` | A group of tabs |
 | `data-part="tab"` | One tab |
 | `data-part="tab-panel"` | The panel shown by the selected tab |
