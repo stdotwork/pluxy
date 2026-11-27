@@ -76,6 +76,10 @@ export const TOKENS = {
   "color.chart-4": { light: "var(--px-color-text)" },
   "color.chart-5": { light: "#14b8a6", dark: "#2dd4bf" },
   "color.chart-6": { light: "#a855f7", dark: "#b875f8" },
+  "color.provider-claude": { light: "#d97757", dark: "#e08a6d" },
+  "color.provider-codex": { light: "#5b5ff5", dark: "#8b93ff" },
+  "color.provider-gemini": { light: "#3186ff", dark: "#5b9dff" },
+  "color.provider-kimi": { light: "#1783ff", dark: "#4ea1ff" },
   "color.plan-top": {
     light:
       "linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 20%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 40%, var(--px-color-surface)))",
@@ -282,6 +286,10 @@ export const PARTS = [
   "state-pane",
   "plan-pill",
   "limits",
+  "provider-mark",
+  "pool-card",
+  "connection-card",
+  "needs-band",
   "activity",
   "activity-filters",
   "usage-chart",

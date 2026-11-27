@@ -1,53 +1,65 @@
-// Home: whether the person's coding tools can be served, every account with how much of its
-// limits is left, the address for tools, the last seven days and the latest requests. On a new
-// install it shows the one next step instead. Its page ID stays `status`: that is its address and
-// the theme hook `data-page`.
+// Home: whether the person's coding tools can be served. The verdict first, naming the problem;
+// the accounts that need the person in a band with their fixes; one pool per provider; every
+// other account by provider; and beside them how to point a tool at pluxy, the last seven days and
+// the latest requests. On a new install it shows the way to add the first account instead. Its
+// page ID stays `status`: that is its address and the theme hook `data-page`.
 
 import type { ComponentChildren } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { type Account, problem, runningExtensions, type Status } from "../api";
+import { type Account, type ClientKey, problem, runningExtensions, type Status } from "../api";
 import type { Setup } from "../api/setup";
 import type { UsageSummary } from "../api/usage";
 import type { UsageEvent } from "../api/usageEvents";
 import type { Reply } from "../host";
+import { Icon } from "../icons";
 import type { Outcome } from "../parts";
 import {
   AccountRow,
-  GROUPS,
+  byProvider,
+  ConnectionCard,
   groupWord,
   Placeholder,
+  PoolCard,
+  ProviderMark,
+  poolOf,
+  providerName,
   RequestRow,
   StaleNotice,
   StatePane,
   tryAgainWord,
   useNaming,
+  useShownAfter,
   useWindows,
 } from "../parts";
 import { expireWindows } from "../parts/hooks";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
-import { Button, Notice, PageHead, useCopy, useKit, usePoll } from "../ui";
+import { relativeTime } from "../time";
+import { BUSY_SHOWS_AFTER_MS, Button, Notice, PageHead, useKit, usePoll } from "../ui";
 import {
   countsLine,
   groupAccounts,
   hotspotOf,
   localDays,
   noAccountsTitle,
+  providerGroups,
   type Read,
-  servingOrder,
   staleOf,
+  successPercent,
   toolLine,
   usageQuery,
   verdictOf,
   weekTotals,
 } from "./home.helpers";
 import { Days } from "./homeDays";
+import { MAIN_KINDS } from "./setup.helpers";
 
 const t = strings("home", {
   title: "Home",
   tip: "Whether your tools can be served",
   refresh: "Refresh",
+  updated: "Updated {when}",
   checking: "Checking pluxy…",
   unreachable: "Cannot reach pluxy.",
   unreachableHelp: "Check that pluxy is running, then try again.",
@@ -58,14 +70,18 @@ const t = strings("home", {
   guidedSetup: "Guided setup",
   nextTool: "Next: connect a coding tool.",
   found: "Found: {tools}.",
-  address: "Address for tools",
-  copy: "Copy",
-  copied: "Copied",
-  notCopied: "Not copied",
   more: "And {count} more",
+  moreKinds: "More",
   seeAll: "See all",
+  accounts: "Accounts",
+  allAccounts: "All accounts",
+  pools: "Pools",
+  groupCount: { one: "1 account · {serving} serving", other: "{count} accounts · {serving} serving" },
   lastWeek: "Last 7 days",
   usage: "Usage",
+  requestsKpi: { one: "request", other: "requests" },
+  wentThrough: "went through",
+  tokens: "tokens",
   seeThem: "See them",
   latest: "Latest requests",
   allRequests: "All requests",
@@ -80,12 +96,13 @@ const t = strings("home", {
   openConfig: "Open Config",
   weekFailed: "Could not read the last 7 days.",
   latestFailed: "Could not read the latest requests.",
+  states: "Accounts by condition",
 });
 
 /** How often the page reads again while it is shown. */
 export const HOME_POLL_MS = 60_000;
-/** The most serving accounts Home lists; the rest are on Accounts. */
-export const SERVING_SHOWN = 12;
+/** The most accounts Home lists under one provider; the rest are on Accounts. */
+export const PROVIDER_SHOWN = 6;
 /** The latest requests Home lists. */
 export const LATEST_SHOWN = 10;
 
@@ -163,19 +180,48 @@ function useRound() {
   return { round, run, again };
 }
 
-/** The address for tools and a button that copies it exactly. */
-function AddressCopy(props: { address: string }) {
-  const copy = useCopy(props.address);
+/**
+ * What the connection card and the line about coding tools need, read once when the page opens
+ * and never polled: the coding tools core found (GET /setup) and the client keys. A read that
+ * fails leaves its part out.
+ */
+function useOnce() {
+  const { api } = useKit();
+  const [setup, setSetup] = useState<Setup>();
+  const [keys, setKeys] = useState<ClientKey[]>();
+  useEffect(() => {
+    let live = true;
+    api.setup().then((r) => {
+      if (live && problem(r) === undefined) setSetup(r.body);
+    });
+    api.clientKeys().then((r) => {
+      if (live && problem(r) === undefined) setKeys(r.body?.keys);
+    });
+    return () => {
+      live = false;
+    };
+  }, [api]);
+  return { setup, keys };
+}
+
+/** A clock that moves every interval, for "Updated 2m ago". */
+function useNow(every = 15_000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), every);
+    return () => clearInterval(timer);
+  }, [every]);
+  return now;
+}
+
+/** When the page last read pluxy, as the location bar says it. */
+function Freshness(props: { at?: number }) {
+  const now = useNow();
+  if (props.at === undefined) return null;
   return (
-    <div class="home-address">
-      <span class="home-address-label">{t("address")}</span>
-      <code class="mono" title={props.address}>
-        {props.address}
-      </code>
-      <Button onClick={copy.copy}>
-        {copy.state === "copied" ? t("copied") : copy.state === "failed" ? t("notCopied") : t("copy")}
-      </Button>
-    </div>
+    <span class="home-fresh" title={new Date(props.at).toLocaleString()}>
+      {t("updated", { when: relativeTime(new Date(props.at), Math.max(now, props.at)) })}
+    </span>
   );
 }
 
@@ -189,16 +235,22 @@ function SideFailed(props: { text: string; error?: string; onRetry: () => unknow
   );
 }
 
+/** A card of the side column: its heading, a link to the page with more, and what it holds. */
 function Section(props: {
   title: string;
   link?: { label: string; href: string };
   children: ComponentChildren;
 }) {
   return (
-    <section class="home-section" aria-label={props.title}>
+    <section class="home-section card" aria-label={props.title}>
       <header class="home-section-head">
         <h2>{props.title}</h2>
-        {props.link && <a href={props.link.href}>{props.link.label}</a>}
+        {props.link && (
+          <a href={props.link.href}>
+            {props.link.label}
+            <Icon name="chevron" size={12} />
+          </a>
+        )}
       </header>
       {props.children}
     </section>
@@ -213,10 +265,76 @@ function Waiting() {
   );
 }
 
+/** The page in its final shape with nothing in it yet, shown a moment after a load starts. */
+function Skeleton() {
+  const shown = useShownAfter(BUSY_SHOWS_AFTER_MS);
+  if (!shown) return null;
+  return (
+    <div class="home-skeleton" aria-hidden="true">
+      <div class="home-skeleton-main">
+        <div class="home-pools">
+          {[0, 1, 2].map((i) => (
+            <i key={i} class="skeleton-card" />
+          ))}
+        </div>
+        <i class="skeleton-list" />
+      </div>
+      <div class="home-skeleton-side">
+        <i class="skeleton-card" />
+        <i class="skeleton-card" />
+      </div>
+    </div>
+  );
+}
+
+/** The thin bar beside the verdict: how many serve, wait, need the person and are turned off. */
+function StateBar(props: { counts: { needs: number; waiting: number; serving: number; off: number } }) {
+  const c = props.counts;
+  const parts = (["serving", "waiting", "needs", "off"] as const).filter((g) => c[g] > 0);
+  return (
+    <div class="home-state-bar" aria-hidden="true">
+      {parts.map((g) => (
+        <span key={g} data-group={g} style={{ flexGrow: c[g] }} />
+      ))}
+    </div>
+  );
+}
+
+/** Day one: the four kinds of account and More, each leading to Add an account. */
+function KindTiles() {
+  return (
+    <ul class="home-kinds">
+      {MAIN_KINDS.map((k) => (
+        <li key={k.id}>
+          <a class="home-kind" href="#/add-account">
+            <ProviderMark extension={k.id} />
+            <span>{k.title}</span>
+          </a>
+        </li>
+      ))}
+      <li>
+        <a class="home-kind" data-more="" href="#/add-account">
+          <span class="home-kind-more" aria-hidden="true">
+            <Icon name="plus" />
+          </span>
+          <span>{t("moreKinds")}</span>
+        </a>
+      </li>
+    </ul>
+  );
+}
+
+/** A compact number for a figure tile: 8,412; 21.4M. */
+const compact = (n: number) =>
+  n >= 100_000
+    ? n.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 })
+    : n.toLocaleString();
+
 export function HomePage() {
   const { api, host } = useKit();
   const p = usePrivacy();
   const { round, run, again } = useRound();
+  const { setup, keys } = useOnce();
   const [refreshed, setRefreshed] = useState(0);
   const { accounts, status, week, latest } = round;
   const list = accounts.data;
@@ -241,27 +359,30 @@ export function HomePage() {
     if (problem(r) === undefined) await again();
     return r;
   };
+  const turnOn = (id: string) => fixed(api.setDisabled(id, false));
+  const clearCooldown = (id: string) => fixed(api.resetCooldown(id));
 
-  // One read of the coding tools when there is nothing else to say about the requests, never polled.
-  const record = week.data;
-  const quiet = list?.length === 0 || (record?.enabled === true && record.total_requests === 0);
-  const [setup, setSetup] = useState<Setup>();
-  const asked = useRef(false);
-  useEffect(() => {
-    if (!quiet || asked.current) return;
-    asked.current = true;
-    api.setup().then((r) => {
-      if (problem(r) === undefined) setSetup(r.body);
-    });
-  }, [quiet, api]);
-
-  const head = <PageHead title={t("title")} actions={<Button onClick={refresh}>{t("refresh")}</Button>} />;
+  const head = (
+    <PageHead
+      title={t("title")}
+      actions={
+        <>
+          <Freshness at={accounts.at} />
+          <Button onClick={refresh}>
+            <Icon name="refresh" size={14} />
+            {t("refresh")}
+          </Button>
+        </>
+      }
+    />
+  );
 
   if (accounts.phase === "loading") {
     return (
       <>
         {head}
-        <StatePane kind="loading" title={t("checking")} />
+        <StatePane kind="loading" title={t("checking")} rows={0} />
+        <Skeleton />
       </>
     );
   }
@@ -282,22 +403,34 @@ export function HomePage() {
     );
   }
 
+  const record = week.data;
   const tools = setup?.found.clients.filter((c) => c.installed && c.state !== "unchecked") ?? [];
+  const connection = <ConnectionCard address={host.address} keys={keys} clients={setup?.found.clients} />;
   if (!list || list.length === 0 || !grouped) {
     return (
       <>
         {head}
-        <StatePane
-          kind="empty"
-          title={noAccountsTitle()}
-          primary={{ label: t("addAccount"), href: "#/add-account" }}
-          secondary={{ label: t("guidedSetup"), href: "#/setup" }}
-        >
-          {t("noAccountsHelp")}
-        </StatePane>
-        <p class="home-next">
-          {tools.length > 0 ? t("found", { tools: tools.map((c) => c.name).join(", ") }) : t("nextTool")}
-        </p>
+        <div class="home-body" data-empty="">
+          <div class="home-cols">
+            <div class="home-main">
+              <StatePane
+                kind="empty"
+                title={noAccountsTitle()}
+                primary={{ label: t("addAccount"), href: "#/add-account" }}
+                secondary={{ label: t("guidedSetup"), href: "#/setup" }}
+              >
+                {t("noAccountsHelp")}
+              </StatePane>
+              <KindTiles />
+              <p class="home-next">
+                {tools.length > 0
+                  ? t("found", { tools: tools.map((c) => c.name).join(", ") })
+                  : t("nextTool")}
+              </p>
+            </div>
+            <aside class="home-side">{connection}</aside>
+          </div>
+        </div>
       </>
     );
   }
@@ -311,48 +444,88 @@ export function HomePage() {
   const refusedConfig =
     config && config.desired.revision !== config.active.revision ? config.desired : undefined;
   const ids = list.flatMap(accountIdentities);
-  const serving = servingOrder(grouped.groups.serving, windows);
   const events = latest.data ?? [];
+  const quiet = record?.enabled === true && record.total_requests === 0;
   const line = quiet && setup ? toolLine(setup.found.clients) : undefined;
+  const pools = byProvider(list)
+    .map((g) => poolOf(g.extension, g.accounts, windows, running, now.getTime()))
+    .filter((pool) => pool.total > 0);
+  const listed = providerGroups(grouped, windows, running, now.getTime());
 
-  const rows = (group: (typeof GROUPS)[number]) => {
-    const all = group === "serving" ? serving : grouped.groups[group];
-    if (all.length === 0) return null;
-    const shown = group === "serving" ? all.slice(0, SERVING_SHOWN) : all;
-    return (
-      <section class="home-group" key={group} aria-label={groupWord(group)}>
-        <h2 class="home-group-head">
-          {groupWord(group)} <span class="home-group-count">{all.length}</span>
-        </h2>
-        {shown.map((a) => (
+  const band =
+    grouped.groups.needs.length > 0 ? (
+      <section class="home-band" data-part="needs-band" aria-label={groupWord("needs")}>
+        {grouped.groups.needs.map((a, i) => (
           <AccountRow
             key={a.id}
             account={a}
-            windows={windows.get(a.id)}
             running={running}
-            onTurnOn={(id) => fixed(api.setDisabled(id, false))}
-            onClearCooldown={(id) => fixed(api.resetCooldown(id))}
+            quietFix={i > 0}
+            onTurnOn={turnOn}
+            onClearCooldown={clearCooldown}
           />
         ))}
-        {shown.length < all.length && (
-          <p class="home-more">
-            {t("more", { count: all.length - shown.length })} <a href="#/accounts">{t("seeAll")}</a>
-          </p>
-        )}
       </section>
-    );
-  };
+    ) : null;
+
+  const accountsCard =
+    listed.length > 0 ? (
+      <section class="home-accounts card" aria-labelledby="home-accounts-title">
+        <header class="home-section-head">
+          <h2 id="home-accounts-title">
+            {t("accounts")}{" "}
+            <span class="home-group-count num">{listed.reduce((n, g) => n + g.accounts.length, 0)}</span>
+          </h2>
+          <a href="#/accounts">
+            {t("allAccounts")}
+            <Icon name="chevron" size={12} />
+          </a>
+        </header>
+        {listed.map((g) => {
+          const shown = g.accounts.slice(0, PROVIDER_SHOWN);
+          const name = providerName(g.extension || undefined);
+          return (
+            <section class="home-group" key={g.extension} aria-label={name}>
+              <h3 class="home-group-head">
+                <ProviderMark extension={g.extension || undefined} size="small" />
+                <span class="home-group-name">{name}</span>
+                <span class="home-group-count">
+                  {t("groupCount", { count: g.accounts.length, serving: g.serving })}
+                </span>
+              </h3>
+              {shown.map((a) => (
+                <AccountRow
+                  key={a.id}
+                  account={a}
+                  windows={windows.get(a.id)}
+                  running={running}
+                  grouped
+                  onTurnOn={turnOn}
+                  onClearCooldown={clearCooldown}
+                />
+              ))}
+              {shown.length < g.accounts.length && (
+                <p class="home-more">
+                  {t("more", { count: g.accounts.length - shown.length })}{" "}
+                  <a href="#/accounts">{t("seeAll")}</a>
+                </p>
+              )}
+            </section>
+          );
+        })}
+      </section>
+    ) : null;
 
   let side: ComponentChildren;
   if (record?.enabled === false) {
     side = (
-      <p class="home-side-note">
+      <p class="home-side-note card">
         {t("recordOff")} <a href="#/config/logging">{t("recordOn")}</a>
       </p>
     );
   } else if (record && totals?.total === 0) {
     side = (
-      <div class="home-side-note">
+      <div class="home-side-note card">
         <p>{t("noRequests")}</p>
         {line && (
           <p>
@@ -363,11 +536,28 @@ export function HomePage() {
       </div>
     );
   } else {
+    const tokens = record?.tokens?.total_tokens;
     side = (
       <>
         <Section title={t("lastWeek")} link={{ label: t("usage"), href: "#/activity/usage" }}>
           {days && totals ? (
             <>
+              <dl class="home-kpis">
+                <div>
+                  <dt>{t("requestsKpi", { count: totals.total })}</dt>
+                  <dd class="num">{compact(totals.total)}</dd>
+                </div>
+                <div>
+                  <dt>{t("wentThrough")}</dt>
+                  <dd class="num">{successPercent(totals.succeeded, totals.total) ?? "—"}</dd>
+                </div>
+                {tokens !== undefined && tokens > 0 && (
+                  <div>
+                    <dt>{t("tokens")}</dt>
+                    <dd class="num">{compact(tokens)}</dd>
+                  </div>
+                )}
+              </dl>
               <Days days={days} now={now} />
               {hotspot && (
                 <p class="home-hotspot">
@@ -393,7 +583,7 @@ export function HomePage() {
                 ))}
               </div>
             ) : (
-              <p class="home-side-note">{t("noneToList")}</p>
+              <p class="home-side-empty">{t("noneToList")}</p>
             )
           ) : latest.phase === "failed" ? (
             <SideFailed text={t("latestFailed")} error={latest.error} onRetry={run} />
@@ -408,38 +598,53 @@ export function HomePage() {
   return (
     <>
       {head}
-      <header class="home-strip" data-verdict={verdict.kind}>
-        <div class="home-verdict">
-          <h2 class="home-headline">{verdict.headline}</h2>
-          {verdict.note && <p class="home-note">{verdict.note}</p>}
-          <p class="home-counts">
-            {countsLine(grouped.counts, record?.enabled && totals ? totals : undefined)}
-          </p>
-        </div>
-        {host.address && <AddressCopy address={host.address} />}
-      </header>
-      {stale ? (
-        <StaleNotice at={stale.at} error={stale.error} onRetry={run} />
-      ) : (
-        refusedConfig &&
-        config && (
-          <Notice tone="warn">
-            {t("refused", {
-              error: p.text(refusedConfig.error, ids) ?? t("noReason"),
-              time: new Date(config.active.at).toLocaleTimeString(undefined, {
-                hour: "2-digit",
-                minute: "2-digit",
-                hourCycle: "h23",
-              }),
-            })}{" "}
-            <a href="#/config">{t("openConfig")}</a>
-          </Notice>
-        )
-      )}
-      <div class="home-body">
+      <div class="home-body" data-stale={stale ? "" : undefined}>
         <div class="home-cols">
-          <div class="home-accounts">{GROUPS.map(rows)}</div>
-          <aside class="home-side">{side}</aside>
+          <div class="home-main">
+            <header class="home-strip" data-verdict={verdict.kind}>
+              <div class="home-verdict">
+                <h2 class="home-headline">{verdict.headline}</h2>
+                {verdict.note && <p class="home-note">{verdict.note}</p>}
+                <p class="home-counts">
+                  {countsLine(grouped.counts, record?.enabled && totals ? totals : undefined)}
+                </p>
+              </div>
+              <StateBar counts={grouped.counts} />
+            </header>
+            {stale ? (
+              <StaleNotice at={stale.at} error={stale.error} onRetry={run} />
+            ) : (
+              refusedConfig &&
+              config && (
+                <Notice tone="warn">
+                  {t("refused", {
+                    error: p.text(refusedConfig.error, ids) ?? t("noReason"),
+                    time: new Date(config.active.at).toLocaleTimeString(undefined, {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      hourCycle: "h23",
+                    }),
+                  })}{" "}
+                  <a href="#/config">{t("openConfig")}</a>
+                </Notice>
+              )
+            )}
+            <div class="home-fade">
+              {band}
+              {pools.length > 0 && (
+                <section class="home-pools" aria-label={t("pools")}>
+                  {pools.map((pool) => (
+                    <PoolCard key={pool.extension} pool={pool} />
+                  ))}
+                </section>
+              )}
+              {accountsCard}
+            </div>
+          </div>
+          <aside class="home-side">
+            {connection}
+            <div class="home-fade">{side}</div>
+          </aside>
         </div>
       </div>
     </>

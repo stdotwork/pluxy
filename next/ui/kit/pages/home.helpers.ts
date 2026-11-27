@@ -65,13 +65,17 @@ export interface Grouped {
   counts: Counts;
   /** The earliest end among the waiting accounts that have one (ms since 1970). */
   firstBack?: number;
+  /** Each account's place in core's list, by ID. */
+  order: Map<string, number>;
 }
 
 /** Sorts accounts into the kit's four groups by their condition (parts/account.ts). */
 export function groupAccounts(list: Account[], running?: ReadonlySet<string>, now = Date.now()): Grouped {
   const groups: Record<Group, Account[]> = { needs: [], waiting: [], serving: [], off: [] };
   let firstBack: number | undefined;
-  for (const a of list) {
+  const order = new Map<string, number>();
+  for (const [i, a] of list.entries()) {
+    order.set(a.id, i);
     const c = accountCondition(a, running, now);
     groups[c.group].push(a);
     if (c.group === "waiting" && c.until !== undefined && c.until > now)
@@ -84,7 +88,7 @@ export function groupAccounts(list: Account[], running?: ReadonlySet<string>, no
     off: groups.off.length,
     total: list.length,
   };
-  return { groups, counts, firstBack };
+  return { groups, counts, firstBack, order };
 }
 
 /**
@@ -97,6 +101,55 @@ export function leastLeft(w?: Windows): number | undefined {
     .map(leftPercent)
     .filter((n): n is number => n !== undefined);
   return left.length > 0 ? Math.min(...left) : undefined;
+}
+
+/** One provider's accounts in Home's list, in the order the list shows them. */
+export interface ProviderGroup {
+  /** The extension ID; "" for accounts with no provider. */
+  extension: string;
+  accounts: Account[];
+  serving: number;
+}
+
+/**
+ * Home's list under the pools: every account that does not need the person (those are in the band
+ * above), grouped by provider in the order core lists each provider's first account. In a group:
+ * the waiting ones first, soonest back first; then the serving ones, least left first; then those
+ * turned off.
+ */
+export function providerGroups(
+  grouped: Grouped,
+  windows: ReadonlyMap<string, Windows>,
+  running?: ReadonlySet<string>,
+  now = Date.now(),
+): ProviderGroup[] {
+  const waiting = [...grouped.groups.waiting].sort((x, y) => {
+    const ux = accountCondition(x, running, now).until ?? Number.POSITIVE_INFINITY;
+    const uy = accountCondition(y, running, now).until ?? Number.POSITIVE_INFINITY;
+    return ux - uy;
+  });
+  const ordered = [...waiting, ...servingOrder(grouped.groups.serving, windows), ...grouped.groups.off];
+  const out = new Map<string, ProviderGroup>();
+  for (const a of ordered) {
+    const key = a.extension ?? "";
+    const g = out.get(key) ?? { extension: key, accounts: [], serving: 0 };
+    g.accounts.push(a);
+    if (grouped.groups.serving.includes(a)) g.serving++;
+    out.set(key, g);
+  }
+  // Providers in core's order of their first account.
+  const first = new Map<string, number>();
+  const all = [
+    ...grouped.groups.needs,
+    ...grouped.groups.waiting,
+    ...grouped.groups.serving,
+    ...grouped.groups.off,
+  ];
+  for (const a of all) {
+    const key = a.extension ?? "";
+    if (!first.has(key)) first.set(key, grouped.order.get(a.id) ?? 0);
+  }
+  return [...out.values()].sort((x, y) => (first.get(x.extension) ?? 0) - (first.get(y.extension) ?? 0));
 }
 
 /** The serving accounts with the least left first; those whose limits are not known come last, in core's order. */

@@ -1,69 +1,17 @@
-/* Home (pages/home.tsx): the verdict strip, the accounts by group beside the last seven days and
-   the latest requests. Hairlines only, `--px-*` tokens only. */
+/* Home (pages/home.tsx): the verdict and its bar, the band of accounts that need the person, the
+   pools, the accounts by provider, and the side column of cards. `--px-*` tokens only. */
 @layer kit {
-  /* Home keeps its page tight at the top and the foot, so a person's accounts fit in a window of
-     1100 by 760 pixels. */
   html[data-page="status"] .content {
-    padding-block: calc(var(--s) * 3) calc(var(--s) * 2);
+    padding-block: calc(var(--s) * 5) calc(var(--s) * 6);
   }
 
-  .home-strip {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: calc(var(--s) * 3) calc(var(--s) * 6);
-    padding-bottom: calc(var(--s) * 3);
-    margin-bottom: calc(var(--s) * 3);
-    border-bottom: var(--px-shape-border) solid var(--px-color-border);
-  }
-
-  .home-verdict {
-    display: grid;
-    gap: var(--s);
-    min-width: 0;
-    flex: 1 1 20em;
-  }
-
-  .home-headline {
-    margin: 0;
-    font-size: var(--px-font-size-title);
-    font-weight: var(--px-font-weight-strong);
-  }
-
-  .home-note,
-  .home-counts {
-    margin: 0;
-  }
-
-  .home-counts {
+  .home-fresh {
     color: var(--px-color-text-muted);
     font-size: var(--px-font-size-small);
-  }
-
-  .home-counts:empty {
-    display: none;
-  }
-
-  .home-address {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: calc(var(--s) * 2);
-    min-width: 0;
-  }
-
-  .home-address-label {
-    color: var(--px-color-text-muted);
-    font-size: var(--px-font-size-small);
-  }
-
-  .home-address code {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
   }
+
+  /* ---- the columns -------------------------------------------------------------------------- */
 
   .home-body {
     container-type: inline-size;
@@ -72,80 +20,278 @@
   .home-cols {
     display: grid;
     grid-template-columns: minmax(0, 1fr) var(--px-size-detail);
-    gap: calc(var(--s) * 8);
+    gap: calc(var(--s) * 5);
     align-items: start;
   }
 
   /* A narrow window, or a theme that keeps the page narrow: one column, the accounts first. The
      width is in the page's own em, so a theme with larger type changes over sooner. */
-  @container (max-width: 56em) {
+  @container (max-width: 62em) {
     .home-cols {
       grid-template-columns: minmax(0, 1fr);
-      gap: calc(var(--s) * 6);
     }
   }
 
-  .home-accounts,
-  .home-side {
+  .home-main,
+  .home-side,
+  .home-fade {
     display: grid;
-    gap: calc(var(--s) * 2);
+    gap: calc(var(--s) * 4);
     min-width: 0;
     align-content: start;
   }
 
+  /* Over data from an earlier read, when a refresh failed: dimmed under the notice that says so. */
+  .home-body[data-stale] .home-fade {
+    opacity: 0.7;
+  }
+
+  /* ---- the verdict -------------------------------------------------------------------------- */
+
+  .home-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: calc(var(--s) * 3) calc(var(--s) * 6);
+  }
+
+  .home-verdict {
+    display: grid;
+    gap: var(--s);
+    min-width: 0;
+    flex: 1 1 22em;
+  }
+
+  .home-headline {
+    margin: 0;
+    font-size: 20px;
+    font-weight: var(--px-font-weight-strong);
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+  }
+
+  .home-note,
+  .home-counts {
+    margin: 0;
+  }
+
+  .home-note {
+    max-width: 44em;
+  }
+
+  .home-counts {
+    color: var(--px-color-text-muted);
+  }
+
+  .home-counts:empty {
+    display: none;
+  }
+
+  .home-strip[data-verdict="needs-you"] .home-headline,
+  .home-strip[data-verdict="nothing-serving"] .home-headline,
+  .home-strip[data-verdict="safe-mode"] .home-headline {
+    color: var(--px-color-danger);
+  }
+
+  /* The thin bar of conditions beside the verdict; the counts line says it in words. */
+  .home-state-bar {
+    display: flex;
+    gap: 2px;
+    flex: 0 1 15em;
+    height: 6px;
+    margin-top: calc(var(--s) * 2.5);
+  }
+
+  .home-state-bar span {
+    min-width: 6px;
+    border-radius: 999px;
+  }
+
+  .home-state-bar [data-group="serving"] {
+    background: var(--px-color-success);
+  }
+
+  .home-state-bar [data-group="waiting"] {
+    background: var(--px-color-warning);
+  }
+
+  .home-state-bar [data-group="needs"] {
+    background: var(--px-color-error);
+  }
+
+  .home-state-bar [data-group="off"] {
+    background: var(--px-color-meter-unknown);
+  }
+
+  /* ---- the band ----------------------------------------------------------------------------- */
+
+  .home-band {
+    display: grid;
+    overflow: hidden;
+    border: var(--px-shape-border) solid color-mix(in srgb, var(--px-color-error) 35%, var(--px-color-border));
+    border-radius: var(--r-card);
+    background: var(--px-color-danger-surface);
+  }
+
+  .home-band .account-row {
+    border-bottom-color: color-mix(in srgb, var(--px-color-error) 20%, transparent);
+  }
+
+  .home-band .account-row:last-child {
+    border-bottom: 0;
+  }
+
+  .home-band .account-row:hover {
+    background: color-mix(in srgb, var(--px-color-error) 5%, transparent);
+  }
+
+  .home-band .account-grid {
+    padding-inline: calc(var(--s) * 3.5);
+    min-height: calc(var(--px-size-row-tall) + var(--s) * 4);
+  }
+
+  .home-band .account-reason {
+    color: var(--px-color-text);
+  }
+
+  /* ---- the pools ---------------------------------------------------------------------------- */
+
+  .home-pools {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(12.5em, 1fr));
+    gap: calc(var(--s) * 3);
+  }
+
+  /* ---- the accounts by provider ------------------------------------------------------------- */
+
+  .home-accounts.card {
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .home-accounts > .home-section-head {
+    padding: calc(var(--s) * 3) calc(var(--s) * 3.5);
+  }
+
   .home-group-head {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: calc(var(--s) * 2);
     margin: 0;
-    padding: calc(var(--s) * 1) calc(var(--s) * 2) calc(var(--s) * 0.5);
+    padding: calc(var(--s) * 1.5) calc(var(--s) * 3.5);
+    border-block: var(--px-shape-border) solid var(--px-color-border);
+    background: var(--px-color-surface-raised);
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    font-weight: normal;
+  }
+
+  .home-group-name {
+    color: var(--px-color-text);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .home-group-count {
+    color: var(--px-color-text-muted);
+    font-weight: normal;
+  }
+
+  .home-accounts .account-grid {
+    padding-inline: calc(var(--s) * 3.5);
+  }
+
+  .home-accounts .home-group:last-child .account-row:last-child {
+    border-bottom: 0;
+  }
+
+  .home-more {
+    margin: 0;
+    padding: calc(var(--s) * 2) calc(var(--s) * 3.5);
     border-bottom: var(--px-shape-border) solid var(--px-color-border);
     color: var(--px-color-text-muted);
     font-size: var(--px-font-size-small);
   }
 
-  .home-group-count {
-    font-weight: normal;
+  /* ---- the side column ---------------------------------------------------------------------- */
+
+  .home-section,
+  .home-side .card {
+    gap: calc(var(--s) * 3);
   }
 
-  .home-more {
+  .home-section-head,
+  .side-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 3);
+    min-width: 0;
+  }
+
+  .home-section-head h2,
+  .side-card-head h2 {
     margin: 0;
-    padding: calc(var(--s) * 2);
+    font-size: var(--px-font-size-title);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .home-section-head a,
+  .side-card-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    min-height: 24px;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    text-decoration: none;
+  }
+
+  .home-section-head a:hover,
+  .side-card-link:hover {
+    color: var(--px-color-text);
+  }
+
+  .home-kpis {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2) calc(var(--s) * 8);
+    margin: 0;
+  }
+
+  .home-kpis div {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 2px;
+  }
+
+  .home-kpis dd {
+    margin: 0;
+    font-size: 20px;
+    font-weight: var(--px-font-weight-strong);
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+  }
+
+  .home-kpis dt {
     color: var(--px-color-text-muted);
     font-size: var(--px-font-size-small);
   }
 
-  .home-section {
-    display: grid;
-    gap: calc(var(--s) * 2);
-    min-width: 0;
-  }
-
-  .home-section-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: calc(var(--s) * 3);
-  }
-
-  .home-section-head h2 {
-    font-size: var(--px-font-size-title);
-  }
-
-  .home-section-head a {
+  .home-hotspot {
+    margin: 0;
+    padding: calc(var(--s) * 2) calc(var(--s) * 3);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface-raised);
     font-size: var(--px-font-size-small);
   }
 
-  .home-hotspot,
   .home-side-note,
   .home-side-note p,
+  .home-side-empty,
   .home-next {
     margin: 0;
-    font-size: var(--px-font-size-small);
-  }
-
-  .home-side-note,
-  .home-next {
     color: var(--px-color-text-muted);
   }
 
@@ -164,10 +310,28 @@
     font-size: var(--px-font-size-small);
   }
 
-  /* Under the new-install pane, in line with its text. */
-  .home-next {
-    margin-block-start: calc(var(--s) * 3);
-    padding-inline: calc(var(--s) * 2);
+  .home-latest {
+    margin-inline: calc(var(--px-size-card-padding) * -1);
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .home-latest .request-row:last-child {
+    border-bottom: 0;
+  }
+
+  .home-latest .request-row[data-compact] {
+    padding-inline: var(--px-size-card-padding);
+  }
+
+  /* ---- a new install ------------------------------------------------------------------------ */
+
+  .home-body[data-empty] .state-pane {
+    padding-inline: 0;
+    padding-top: calc(var(--s) * 2);
+  }
+
+  .home-body[data-empty] .state-pane-title {
+    font-size: 20px;
   }
 
   /* The new-install pane's main buttons are as high as a page's main action. */
@@ -175,8 +339,92 @@
     min-height: var(--px-size-control-main);
   }
 
-  .home-latest {
-    border-top: var(--px-shape-border) solid var(--px-color-border);
+  .home-kinds {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(10em, 1fr));
+    gap: calc(var(--s) * 3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .home-kind {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: calc(var(--s) * 3);
+    height: 100%;
+    padding: calc(var(--s) * 3.5);
+    border: var(--px-shape-border) solid var(--px-color-card-border);
+    border-radius: var(--r-card);
+    background: var(--px-color-card);
+    box-shadow: var(--px-shadow-raised);
+    color: var(--px-color-text);
+    font-weight: var(--px-font-weight-medium);
+    text-decoration: none;
+    transition:
+      border-color var(--t),
+      background var(--t);
+  }
+
+  .home-kind:hover {
+    border-color: var(--px-color-input-border);
+    background: var(--px-color-surface-raised);
+  }
+
+  .home-kind[data-more] {
+    border-style: dashed;
+    box-shadow: none;
+    color: var(--px-color-text-muted);
+  }
+
+  .home-kind-more {
+    display: inline-grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--r-small);
+    background: var(--px-color-surface-raised);
+  }
+
+  .home-next {
+    font-size: var(--px-font-size-small);
+  }
+
+  /* ---- loading ------------------------------------------------------------------------------ */
+
+  .home-skeleton {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--px-size-detail);
+    gap: calc(var(--s) * 5);
+  }
+
+  .home-skeleton-main,
+  .home-skeleton-side {
+    display: grid;
+    gap: calc(var(--s) * 4);
+    align-content: start;
+  }
+
+  .home-skeleton i {
+    display: block;
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-card);
+    background: var(--px-color-surface-raised);
+  }
+
+  .home-skeleton .skeleton-card {
+    height: calc(var(--s) * 32);
+  }
+
+  .home-skeleton .skeleton-list {
+    height: calc(var(--s) * 70);
+  }
+
+  @container (max-width: 62em) {
+    .home-skeleton {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 
   /* ---- the last seven days ------------------------------------------------------------------ */
@@ -206,8 +454,7 @@
     display: grid;
     grid-template-columns: repeat(7, minmax(0, 1fr));
     gap: calc(var(--s) * 2);
-    height: calc(var(--s) * 20);
-    border-top: var(--px-shape-border) dashed var(--px-color-border);
+    height: calc(var(--s) * 18);
     border-bottom: var(--px-shape-border) solid var(--px-color-border);
   }
 
@@ -217,11 +464,12 @@
     justify-content: flex-end;
     align-items: center;
     height: 100%;
-    border-radius: var(--r-small);
+    border-radius: var(--r-small) var(--r-small) 0 0;
   }
 
-  .day:hover {
-    background: color-mix(in srgb, var(--px-color-surface-raised) 70%, transparent);
+  .day:hover,
+  .day:focus-visible {
+    background: color-mix(in srgb, var(--px-color-surface-raised) 80%, transparent);
   }
 
   .day-bar {
@@ -230,6 +478,8 @@
     gap: 1px;
     width: 72%;
     max-width: calc(var(--s) * 10);
+    overflow: hidden;
+    border-radius: var(--r-chip) var(--r-chip) 0 0;
   }
 
   .day-failed,
@@ -261,13 +511,14 @@
     grid-template-columns: repeat(7, minmax(0, 1fr));
     gap: calc(var(--s) * 2);
     color: var(--px-color-secondary-label);
-    font-size: var(--px-font-size-small);
+    font-size: var(--px-font-size-label);
     text-align: center;
   }
 
   .days-readout {
     min-height: 1.4em;
     margin: 0;
+    color: var(--px-color-text-muted);
     font-size: var(--px-font-size-small);
     font-variant-numeric: tabular-nums;
   }
