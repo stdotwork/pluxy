@@ -506,6 +506,9 @@ describe("the page", () => {
     expect(all(card, "code")[0]?.textContent).toBe("http://127.0.0.1:8317");
     expect(card.textContent).toContain("Key · Claude Code");
     expect(card.textContent).toContain("sk-pluxy-****3f9a");
+    const keysLink = all(card, "a").find((a) => a.textContent === "Keys");
+    expect(keysLink && attr(keysLink, "href")).toBe("#/tools");
+    expect(keysLink && all(keysLink, "svg")).toHaveLength(1);
     // Set up, and installed but not set up; a tool not installed or unchecked has no chip.
     const chips = parts(card, "tool-chip", "class");
     expect(chips.map((c) => [c.textContent, attr(c, "data-state"), attr(c, "href")])).toEqual([
