@@ -57,7 +57,7 @@ function inComment(content: string, at: number): boolean {
  * an account listed under `extension` or `extensions` (`accounts[].id`), in a JSON or a YAML
  * file. Undefined when the file does not hold that ID in exactly one place that is not a comment:
  * an account of a provider key section (`claude-api-key`, `api-keys.codex`, ...) has no `id`, its
- * ID is made from the entry's name and place (see the README's provider key sections), and the
+ * ID is made from the entry's name and place (see docs/config.md, "Provider key sections"), and the
  * file does not say it.
  */
 export function findAccount(content: string, id: string): { start: number; end: number } | undefined {
