@@ -3,15 +3,17 @@
 //! a first run: the session's core has nothing installed and no accounts, its bundled registry
 //! offers `pluxy/claude` as a pick, and a stand-in `claude` that prints `2.4.1 (Claude Code)`
 //! comes first on the PATH core inherits from the app. A curated device registry offers
-//! `pluxy/claude-code`, the Claude Code page's package, so the app offers its "Set up" link.
+//! `pluxy/claude-code`, the Claude Code page's package, so the app offers to install it.
 //! The bundled test packages are not installed (`native_test.rs`).
 //!
 //! - `first`: the window opens on Setup by itself (`#/setup`, "Set up pluxy") with step 1, "Your AI
 //!   accounts", open; the Claude kind is ticked, saying Claude Code is installed on this computer;
 //!   "Add Claude" adds it (its row says Added, and `GET /packages` through the app's host lists it
-//!   enabled); step 2, opened, has the app's own "Set up" link to `#/claude-code` on Claude Code's
-//!   row, and pressing it opens the app's Claude Code page; back on `#/setup`, "Leave setup for
-//!   now" lands on Home and `GET /setup` has `first_run` false.
+//!   enabled); step 2, opened, has the app's one button on Claude Code's row: Install add-on, then
+//!   Turn on add-on (answered in the native confirmation), then a "Set up" link to `#/claude-code`;
+//!   pressing it opens the app's Claude Code page with "Setting up pluxy." and "Back to setup"
+//!   above it, which goes back to `#/setup`; a later visit to the page by its address has no way
+//!   back; "Leave setup for now" lands on Home and `GET /setup` has `first_run` false.
 //! - `second`: the next launch opens on Home, not Setup; Setup, opened, is titled "Setup" with
 //!   every step folded and no "Leave setup for now"; step 1, opened, says Claude is added; the stage
 //!   stays on it, then switches GTK to its dark variant and stays again, so the session's last
@@ -242,20 +244,58 @@ fn first(c: &mut Checks, app: &AppHandle) {
     ) {
         return;
     }
-    // The Set up link comes once the device's catalog and the registries' offers have loaded.
-    let want = json!({ "links": [["Set up", "#/claude-code"]], "buttons": [] });
-    let row = within(20, || {
-        let r = tool_row(app);
-        (r == want).then_some(r)
-    })
-    .unwrap_or_else(|| tool_row(app));
+    // The add-on is offered by the curated registry and not installed: the row's one button
+    // installs it (asking nothing), turns it on (the native confirmation), and only then offers
+    // the page. The buttons come once the device's catalog and the registries' offers have loaded.
+    let wait_row = |buttons: Value, links: Value, secs: u64| {
+        let want = json!({ "links": links, "buttons": buttons });
+        let row = within(secs, || {
+            let r = tool_row(app);
+            (r == want).then_some(r)
+        })
+        .unwrap_or_else(|| tool_row(app));
+        (row == want, row)
+    };
+    let (ok, row) = wait_row(json!(["Install add-on"]), json!([]), 20);
     c.check(
-        row == want,
-        format!("Claude Code's row in step 2 has the app's \"Set up\" link to #/claude-code and no other control ({row})"),
+        ok,
+        format!("Claude Code's row in step 2 offers Install add-on and nothing else ({row})"),
     );
     shot("tool");
+    let press_row = |label: &str| {
+        until(
+            app,
+            10,
+            &format!("(() => {{ const b = [...({TOOL_ROW}?.querySelectorAll('button') ?? [])].find((b) => b.textContent.trim() === {label}); if (!b || b.disabled) return false; b.click(); return true; }})()", label = json!(label)),
+        )
+    };
+    c.check(press_row("Install add-on"), "Install add-on is pressed");
+    let (ok, row) = wait_row(json!(["Turn on add-on"]), json!([]), 60);
+    c.check(
+        ok,
+        format!("once installed, Claude Code's row offers Turn on add-on ({row})"),
+    );
+    c.check(press_row("Turn on add-on"), "Turn on add-on is pressed");
+    let confirmed = super::vault::dialog_with(
+        app,
+        &["pluxy/claude-code", "full access to your user account"],
+    )
+    .and_then(|_| {
+        std::thread::sleep(Duration::from_millis(1300));
+        super::admission::press("alt+o")
+    });
+    c.check(
+        confirmed.is_ok(),
+        format!("the confirmation names pluxy/claude-code and is answered ({confirmed:?})"),
+    );
+    let (ok, row) = wait_row(json!([]), json!([["Set up", "#/claude-code"]]), 30);
+    c.check(
+        ok,
+        format!("once turned on, Claude Code's row has the app's \"Set up\" link to #/claude-code and no other control ({row})"),
+    );
+    shot("tool-on");
 
-    // The link goes to the app's own page for the tool.
+    // The link goes to the app's own page for the tool, with the way back to setup above it.
     let followed = until(
         app,
         10,
@@ -274,7 +314,19 @@ fn first(c: &mut Checks, app: &AppHandle) {
             page(app)
         ),
     );
-    let _ = main_eval(app, "(location.hash = '#/setup', true)");
+    c.check(
+        until(
+            app,
+            10,
+            "(() => { const s = document.querySelector('[data-part=setup-return]'); const a = s?.querySelector('a'); return s?.textContent.startsWith('Setting up pluxy.') === true && a?.textContent === 'Back to setup' && a.getAttribute('href') === '#/setup'; })()",
+        ),
+        "the page opened from step 2 says \"Setting up pluxy.\" with a \"Back to setup\" link to #/setup",
+    );
+    shot("back");
+    let _ = main_eval(
+        app,
+        "(document.querySelector('[data-part=setup-return] a')?.click(), true)",
+    );
     c.check(
         until(
             app,
@@ -282,6 +334,25 @@ fn first(c: &mut Checks, app: &AppHandle) {
             "location.hash === '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Set up pluxy'",
         ),
         format!("back on #/setup, Setup is still \"Set up pluxy\" ({})", page(app)),
+    );
+    // The way back is forgotten once the page is left: the page opened by its address has none.
+    let _ = main_eval(app, "(location.hash = '#/claude-code', true)");
+    c.check(
+        until(
+            app,
+            30,
+            "location.hash === '#/claude-code' && document.querySelector('[data-tool=claude-code]') !== null && document.querySelector('[data-part=setup-return]') === null",
+        ),
+        format!("the Claude Code page opened by its address has no way back to setup ({})", page(app)),
+    );
+    let _ = main_eval(app, "(location.hash = '#/setup', true)");
+    c.check(
+        until(
+            app,
+            30,
+            "location.hash === '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Set up pluxy'",
+        ),
+        format!("Setup opens again ({})", page(app)),
     );
 
     if !c.check(

@@ -456,6 +456,19 @@ test("the host's tool button and its own tools are used in step 2", async () => 
   expect(hasButton(two, "Set up")).toBe(false);
 });
 
+test("the host's notes are shown in step 2", async () => {
+  const m = await world({ accounts: [ACC] }).mount(
+    <SetupPage
+      options={{ notes: () => ({ above: <p>Above the list.</p>, below: <p>Under the list.</p> }) }}
+    />,
+  );
+  await press(buttonIn(step(m.root, 1), "Open"));
+  await press(buttonIn(step(m.root, 2), "Open"));
+  const two = step(m.root, 2);
+  expect(two.textContent).toContain("Above the list.");
+  expect(two.textContent).toContain("Under the list.");
+});
+
 test("Refresh in step 2 asks pluxy to look again and tells the host", async () => {
   let refreshed = 0;
   const w = world({ accounts: [ACC] });
