@@ -285,6 +285,27 @@ test("turning file logging on shows why it failed under the button, and can be p
   expect(patches).toBe(2);
 });
 
+test("with Log every request on, Failed requests says why its list is empty and how to open a log", async () => {
+  const words =
+    "Log every request is on, so failed requests are not listed here. Open a request's log by its trace ID.";
+  const settings = (requestLog: boolean): Reply<unknown> => ({
+    status: 200,
+    body: { observability: { logs: { "request-log": requestLog } } },
+  });
+  const on = world((c) => (c.path === "/settings" ? settings(true) : undefined));
+  const a = await on.mount();
+  await openFailed(a);
+  expect(a.text()).toContain(words);
+  await a.unmount();
+  unmounts.pop();
+  restoreDom();
+  const off = world((c) => (c.path === "/settings" ? settings(false) : undefined));
+  const b = await off.mount();
+  await openFailed(b);
+  expect(b.text()).toContain("pluxy keeps the full log of its latest failed requests.");
+  expect(b.text()).not.toContain(words);
+});
+
 test("every link to the logging settings is #/config/logging", async () => {
   // The off pane.
   const off = world((c) => (c.path.startsWith("/logs") ? OFF : undefined));

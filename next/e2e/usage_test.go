@@ -52,6 +52,7 @@ type usageEvent struct {
 	Provider      string         `json:"provider"`
 	Account       string         `json:"account"`
 	Attempts      int            `json:"attempts"`
+	Why           string         `json:"why"`
 	Tried         []usageTried   `json:"tried"`
 	LeftOut       []usageLeftOut `json:"left_out"`
 	KeyID         string         `json:"key_id"`

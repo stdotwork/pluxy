@@ -46,6 +46,9 @@ export function FailedRequests(props: { save: (name: string, content: string) =>
   const { api, unauthorized } = useKit();
   const privacy = usePrivacy();
   const files = useLoad(api.errorLogs);
+  // With every request logged, pluxy names no log as a failed one, so the list stays empty.
+  const settings = useLoad(api.coreSettings);
+  const everyRequest = settings.data?.observability.logs["request-log"] === true;
   const [field, setField] = useState(props.open?.trace ?? "");
   const [refused, setRefused] = useState(false);
   const [view, setView] = useState<View>();
@@ -106,6 +109,7 @@ export function FailedRequests(props: { save: (name: string, content: string) =>
     <>
       <div class="logs-failed-head">
         <p class="muted">{t("intro")}</p>
+        {everyRequest && <p class="muted">{t("everyRequest")}</p>}
         <form
           class="logs-trace-form"
           onSubmit={(e) => {

@@ -118,10 +118,17 @@ test("a row opens to why it went where it did, and its trace links to its log", 
     "href",
     `#/logs/${trace.failed}`,
   );
+  // The account first in the order says so, and links to the order.
+  const named = row(page, trace.named ?? "");
+  await named.getByRole("button", { expanded: false }).click();
+  await expect(named).toContainText("usage-second comes first in its provider's account order.");
+  await expect(named.getByRole("link", { name: "Order & fallback" })).toHaveAttribute("href", "#/routing");
   // One row is open at a time.
   const ok = row(page, trace.ok ?? "");
   await ok.getByRole("button", { expanded: false }).click();
   await expect(failed.getByRole("button", { expanded: true })).toHaveCount(0);
+  // A request that succeeded says why its account answered: it was the only one then.
+  await expect(ok).toContainText("usage-account is the only account that serves fake-model.");
   // A request that succeeded has a log only while core logs every request.
   await expect(ok.getByRole("link", { name: trace.ok })).toHaveCount(0);
   await expect(ok.getByText(trace.ok ?? "", { exact: true })).toBeVisible();
@@ -184,6 +191,9 @@ test("a request that fell back says how many accounts failed, and its row what e
   await expect(request).toContainText("after 1 other");
   await request.getByRole("button", { expanded: false }).click();
   await expect(request).toContainText("tries-second succeeded after 1 other account failed.");
+  await expect(request).toContainText(
+    "tries-second is a backup in its provider's account order: no account above it could take the request then.",
+  );
   const attempts = request.locator(".request-attempts li");
   await expect(attempts).toHaveCount(2);
   await expect(attempts.nth(0)).toContainText("tries-first");

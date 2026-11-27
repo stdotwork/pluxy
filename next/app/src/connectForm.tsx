@@ -71,11 +71,12 @@ export function ConnectForm(props: {
         ca_file: kind.mode === "remote" && file ? file : undefined,
       });
       if (result.status === "signed_in") props.onChange(result.connection);
-      else if (result.status === "wrong_key") setProblem(plainReason("core refused this key"));
+      else if (result.status === "wrong_key")
+        setProblem(plainReason("This management key was not accepted."));
       else if (result.status === "error")
         setProblem(
           plainError(result.connection.error, file) ??
-            plainReason("core could not be reached or its reply could not be read"),
+            plainReason("Could not reach pluxy, or could not read its reply."),
         );
     } catch (e) {
       setProblem(plainError(String(e), file));
