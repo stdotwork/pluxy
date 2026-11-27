@@ -16,8 +16,13 @@
     --r-dialog: calc(var(--px-shape-radius) * 2);
     /* What lies under content outside a card: nothing over the page (cards set their fill). */
     --under-card: transparent;
-    /* Digits of one width everywhere, so numbers in table cells, counters and meter labels line
-       up and do not shift as they change. */
+  }
+
+  /* Digits of one width where numbers line up or change in place: numeric table columns, the
+     page's title, limits and their gauges' labels, times and code (pages add their own counters).
+     Not on all text: Inter's tabular figures also widen its spaces, hyphens and punctuation. */
+  :is(time, code, kbd, .num, .mono, .limits),
+  [data-part="page-title"] {
     font-variant-numeric: tabular-nums;
   }
 
@@ -904,7 +909,9 @@
     /* Centred on the label's first line. */
     margin-block-start: calc((var(--px-font-size) * var(--px-font-line-height) - 16px) / 2);
     border-radius: 999px;
-    background: var(--px-color-input-border);
+    /* Off: a grey that stands out from the page (an input's border is too faint for a control's
+       only shape). */
+    background: color-mix(in srgb, var(--px-color-text-muted) 60%, var(--px-color-bg));
     position: relative;
     transition: background var(--t);
   }
