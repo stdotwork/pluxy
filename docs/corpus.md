@@ -37,10 +37,9 @@ the difference. The runner keeps the list honest in two ways: an exception that 
 difference fails its case, and the test changes each value of pluxy's reply in turn and fails if
 the case still passes, so an exception cannot hide a difference it was not written for.
 
-The bar covers what pluxy keeps. A CLIProxyAPI setting or panel feature that pluxy leaves out is
-listed with its reason: settings in
-[What each setting does here](../next/README.md#what-each-setting-does-here), and panel features in
-[What each page leaves out, and why](../next/ui/README.md#what-each-page-leaves-out-and-why).
+The bar covers what pluxy keeps. A CLIProxyAPI setting that pluxy leaves out is listed with its
+reason in [What each setting does here](../next/README.md#what-each-setting-does-here); for the
+panel, see [panel.md](panel.md).
 
 ## The recorded replies
 

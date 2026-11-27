@@ -107,8 +107,8 @@ All of this is built.
   accounts, survive a restart.
 - **Fallback is built by the user.** A person can make fallback chains: up to 8 steps, each a model
   on a provider. With no chain, a request stays on one provider and keeps its model, so by default
-  it falls back only to another account of the same provider and model. pluxy refuses no chain a
-  person builds; it only never makes one for them.
+  it falls back only to another account of the same provider and model. A chain may name any model
+  and provider; pluxy only never makes a chain for a person.
 - **Sessions stay on one account.** Session affinity is on by default: the requests of one session
   (named by the client's session header or its prompt cache key) go to the same account while it
   can serve, so the upstream's prompt cache keeps working. How accounts are picked otherwise is a
@@ -123,9 +123,10 @@ All of this is built.
   credentials of its own accounts.
 - **Config changes are all or nothing.** A reload reads, checks and prepares the new config, then
   switches to it in one step; requests already running keep the config they started with, and a
-  reload that fails leaves the running config in place. The one exception: a package that the
-  reload newly enables and that fails to start is shown as failed while the rest of the reload
-  goes ahead. Management shows both the newest config core has seen and the one serving.
+  reload that fails leaves the running config in place. The one exception: an enabled package
+  that was not running before and fails to start is shown as failed while the rest of the reload
+  goes ahead. Installing or enabling a package through management fails as a whole when the
+  package does not start. Management shows both the newest config core has seen and the one serving.
 - **Streams are bounded.** Core reads the extension's next event only once the client has taken the
   last one, so a slow client slows the extension down rather than filling memory. A call ends in
   exactly one `finish` or `error`, and a stream that just stops is an error, never a success.
