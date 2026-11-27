@@ -872,6 +872,19 @@ test("the address uses ConnectionCard with Copy, reachability and the link to Sy
   expect(system && attribute(system, "href")).toBe("#/system");
 });
 
+test("with no address known yet, the card says so without pointing back to Tools, and keeps the System link", async () => {
+  const w = world({
+    setup: () => ({ status: 404, error: { code: "not_found", message: "no such call" } }),
+  });
+  w.host.address = undefined;
+  const m = await w.mount(<ToolsPage />);
+  const section = descend(m.root).find((n) => attribute(n, "aria-label") === "Address for tools") as FakeNode;
+  expect(section.textContent).toContain("pluxy's address is not known yet.");
+  expect(section.textContent).not.toContain("Tools shows");
+  const system = all(section, "a").find((a) => a.textContent === "Addresses for other programs");
+  expect(system && attribute(system, "href")).toBe("#/system");
+});
+
 test("every tool row renders a mark beside its name, and the key row menu toggles cleanly", async () => {
   const w = world({
     clients: [CLAUDE, CODEX, GONE, client("pi", "Pi"), client("hermes", "Hermes Agent")],

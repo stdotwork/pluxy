@@ -95,6 +95,10 @@ const t = strings("tools", {
   copyFailed: "Could not copy. Select the text and copy it yourself.",
 
   address: "Address for tools",
+  connectTitle: "Point a tool at pluxy",
+  noAddress: "pluxy's address is not known yet.",
+  key: "Key",
+  keyFor: "Key · {name}",
   thisComputer: "Only programs on this computer can reach it.",
   network: "Other computers on your network can reach it too.",
   otherPrograms: "Another program can use pluxy too: System lists the exact address each kind needs.",
@@ -778,12 +782,35 @@ export function ToolList(props: ToolListProps) {
 
 function ConnectionSection(props: { state: ToolsState; keys?: ClientKey[]; remote: boolean }) {
   const { host } = useKit();
+  const p = usePrivacy();
+  const titleId = useId();
   const found = props.state.setup.data;
   const address = toolsAddress(host.address, found);
   const network = found?.found.core.reachable_from_network;
+  const firstKey = props.keys?.[0];
   return (
     <section class="tools-connection" aria-label={t("address")}>
-      <ConnectionCard address={address} keys={props.keys} />
+      {address ? (
+        <ConnectionCard address={address} keys={props.keys} />
+      ) : (
+        <section class="connection-card card" data-part="connection-card" aria-labelledby={titleId}>
+          <header class="side-card-head">
+            <h2 id={titleId}>{t("connectTitle")}</h2>
+          </header>
+          <p class="connection-note">{t("noAddress")}</p>
+          {firstKey && (
+            <div class="connection-field">
+              <div class="connection-label">
+                <span>{firstKey.label ? t("keyFor", { name: p.id(firstKey.label) }) : t("key")}</span>
+              </div>
+              <div class="connection-value">
+                <Icon name="key" size={14} />
+                <code class="mono">{firstKey.masked}</code>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
       <div class="tools-connection-foot">
         {!props.remote && network !== undefined && (
           <p class="tools-reach">
