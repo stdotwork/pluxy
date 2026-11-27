@@ -89,8 +89,11 @@ pub(crate) fn request_as(
         content.set_spacing(12);
         let label = gtk::Label::new(Some(&summary));
         label.set_xalign(0.0);
-        label.set_line_wrap(true);
-        label.set_max_width_chars(60);
+        if trust {
+            // The network question's lines are long: wrapped, so the window stays narrow.
+            label.set_line_wrap(true);
+            label.set_max_width_chars(60);
+        }
         content.add(&label);
         let entry = gtk::Entry::new();
         entry.set_visibility(false);
