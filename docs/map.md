@@ -91,7 +91,8 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 - **Tests**: `go test -count=1 -run TestParserVersion ./format` and
   `go test -count=1 -run TestInlineImage ./format/internal/media`.
 - **Fakes and helpers**: `next/format/formattest/formattest.go` (`CorpusRequests`, `LiteralRequests`).
-- **Handbook**: `docs/design.md` ("Inside core") and `next/README.md` ("Layout").
+- **Handbook**: `docs/design.md` ("Inside core"), `docs/translation.md` (what each provider carries,
+  changes or drops) and `next/README.md` ("Layout").
 
 ### Config key
 - **Entry**: parse and validate in `next/internal/server/config.go` (`Config`, `ParseConfig`),

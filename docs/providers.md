@@ -8,7 +8,9 @@ key with a provider. A provider can have many accounts; [routing](routing.md) sp
 them.
 
 This page lists every provider pluxy ships, how to sign in to each, and each provider's options. The
-first part is a short how-to. The rest is reference.
+first part is a short how-to. The rest is reference. What each provider does with a request from a
+client that speaks another API format (which features carry over, change or are dropped) is in
+[Translation](translation.md).
 
 ## Add an account
 

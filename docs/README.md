@@ -27,7 +27,7 @@ from the accounts you already have. These pages say how to set it up, use it and
   and what reloads without a restart.
 - [Command line](cli.md): every `pluxy` command and flag.
 - [Management API](management-api.md): the HTTP API the panel, the app and the `pluxy` command use.
-- `translation.md`: how requests and replies are translated between the client APIs and upstreams.
+- [Translation](translation.md): how requests and replies are translated between the client APIs and upstreams.
 - [UI terms](terms.md): the words the panel and the app use for quota, limits, accounts and usage.
 
 ## Extend pluxy

@@ -160,6 +160,7 @@ the same record. `./pluxy help` lists every command.
 | Move from CLIProxyAPI | [docs/moving-from-cpa.md](docs/moving-from-cpa.md) |
 | Fix a problem or find out why a request failed | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Look up a config setting | [docs/config.md](docs/config.md) |
+| Know what carries over when a client and a provider speak different APIs | [docs/translation.md](docs/translation.md) |
 | Look up a `pluxy` command | [docs/cli.md](docs/cli.md) |
 | Call the management API | [docs/management-api.md](docs/management-api.md) |
 | Use the desktop app | [next/app/README.md](next/app/README.md) |

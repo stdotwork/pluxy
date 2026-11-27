@@ -165,7 +165,7 @@ need it.
 | `extensions` | object | none | Settings and accounts of installed packages, by package ID (`publisher/name`). See [Extensions](#extensions). |
 | `packages` | object | none | Where installed packages are kept and the registries they are installed from. See [packages](#packages). |
 | `routing` | object | none | How requests pick accounts and how they are retried. See [routing](#routing). |
-| `drop_policy` | string | `report` | What happens when translating a request to the upstream's format would drop part of it: `report` sends the request and logs what was dropped; `reject` refuses it with a 400 that names what could not be carried. |
+| `drop_policy` | string | `report` | What happens when translating a request to the upstream's format would drop part of it: `report` sends the request and logs what was dropped; `reject` refuses it with a 400 that names what could not be carried. [Translation](translation.md) lists what each provider drops. |
 | `token_count_estimate` | bool | `true` | What a token count gets when no account for the model can count: `true` answers with core's own estimate, `false` answers with an error. Which accounts count, and what the estimate counts, is in [Token counts](routing.md#token-counts). |
 | `extension_pages` | object | none | Where extension pages are served. See [extension_pages](#extension_pages). |
 | `cors` | object | none | Which web pages may call the client API from a browser. See [cors](#cors). |
