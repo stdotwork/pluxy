@@ -440,7 +440,8 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="usage-numbers"` | The table behind the Usage chart, shown on request |
 | `data-part="usage-breakdown"` | The Usage tab's breakdown table by provider, model, account or key |
 | `data-part="tool-steps"` | The numbered steps under a coding tool's row on the Tools page: make a key, put the text in the settings file, start the tool again |
-| `data-part="tool-key"` | One key on the Tools page: its name, its use this week, Rename and Delete |
+| `data-part="tool-key"` | One key on the Tools page: its name, its masked value, its use this week and its row menu |
+| `data-part="key-menu"` | The row menu on a key on the Tools page: Rename and Delete |
 
 Some parts also carry the `data-slot` name that [T3 Code](https://github.com/pingdotgg/t3code)
 gives the same part, and the root's `dark` class is the one T3 Code uses. They exist so that the

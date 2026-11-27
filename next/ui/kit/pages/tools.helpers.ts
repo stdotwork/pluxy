@@ -2,7 +2,7 @@
 // a browser.
 
 import type { ClientKey, Setup, SetupClient, UsageGroup } from "../api";
-import { keyName } from "../parts";
+import { keyName, seriesOf } from "../parts";
 
 /**
  * The tools core has text to paste for: GET /setup/clients/{id}/paste answers 404 for any other
@@ -19,6 +19,31 @@ export const hasPasteText = (client: Pick<SetupClient, "id">) => PASTE_TOOLS.has
 const TOOL_NAMES: Readonly<Record<string, string>> = { codex: "Codex" };
 
 export const toolName = (client: Pick<SetupClient, "id" | "name">) => TOOL_NAMES[client.id] ?? client.name;
+
+/** How a coding tool's mark is drawn beside its name on Tools and on its own page. */
+export type ToolMarkKind =
+  | { kind: "provider"; extension: string }
+  | { kind: "opencode" }
+  | { kind: "pi" }
+  | { kind: "monogram"; letter: string; series: number };
+
+const TOOL_PROVIDERS: Readonly<Record<string, string>> = {
+  "claude-code": "pluxy/claude",
+  "claude-desktop": "pluxy/claude",
+  codex: "pluxy/codex",
+  "grok-build": "pluxy/xai",
+};
+
+/** The mark for a coding tool: its provider's mark when it belongs to one, else a tool glyph or initial. */
+export function toolMarkKind(id: string, name?: string): ToolMarkKind {
+  if (Object.hasOwn(TOOL_PROVIDERS, id)) {
+    return { kind: "provider", extension: TOOL_PROVIDERS[id] as string };
+  }
+  if (id === "opencode") return { kind: "opencode" };
+  if (id === "pi" || id === "omp") return { kind: "pi" };
+  const letter = (name ?? id).trim().charAt(0).toUpperCase() || "?";
+  return { kind: "monogram", letter, series: seriesOf(id || letter) };
+}
 
 /** The tools the app sets up that core's scan may not list, by ID (RULINGS §1.4). */
 export const APP_TOOL_IDS = ["claude-desktop", "grok-build", "hermes"] as const;
