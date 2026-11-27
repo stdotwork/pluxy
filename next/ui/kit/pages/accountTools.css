@@ -4,6 +4,9 @@
   .account-tools {
     overflow-wrap: normal;
   }
+  .account-tools > section {
+    gap: calc(var(--s) * 2.5);
+  }
   .account-tools h3 {
     margin: 0;
     font-size: var(--px-font-size);
