@@ -684,4 +684,50 @@
       min-height: 0;
     }
   }
+
+  /* ---- a tool's row: the add-on step -------------------------------------------------------- */
+
+  /* A row with a line to say (waiting for the confirmation window, or why a step failed) lets its
+     button and that line join the row's grid, so the line runs under the whole row. */
+  .tool-action:has(.addon-note) {
+    display: contents;
+  }
+
+  .tool-action:has(.addon-note) > .addon-action {
+    grid-column: 4;
+    justify-self: end;
+  }
+
+  .addon-note {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: var(--px-font-size-small);
+    overflow-wrap: anywhere;
+  }
+
+  .addon-note[data-tone="danger"] {
+    color: var(--px-color-danger);
+  }
+
+  .addon-checking {
+    font-size: var(--px-font-size-small);
+    white-space: nowrap;
+  }
+
+  @container (max-width: 54em) {
+    .tool-action:has(.addon-note) > .addon-action {
+      grid-row: 1 / span 2;
+      grid-column: 2;
+    }
+
+    /* After the path, which the narrow row puts under the state. */
+    .addon-note {
+      order: 1;
+    }
+  }
+
+  /* The strip above a tool's page opened from setup. */
+  [data-part="setup-return"] {
+    margin-bottom: calc(var(--s) * 3);
+  }
 }

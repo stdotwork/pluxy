@@ -1,8 +1,15 @@
-// Beginner Mode's package list (easyMode.tsx), apart from the page so its unit tests need no
-// webview: which of the packages a client or the launcher needs this device has, in which state,
-// and which a registry offers.
+// The add-ons the tool rows need, apart from the pages so unit tests need no webview: which of the
+// packages a tool or the launcher needs this device has, in which state, and which a registry
+// offers.
 
+import type { PageDef } from "../../ui/kit/shell";
 import type { DeviceCatalog, DevicePackage, DeviceRegistry } from "./device";
+
+/** A coding tool's setup page in the window, and the add-on it drives. */
+export type AgentPage = PageDef & { package: string };
+
+/** The launcher every tool page's Start runs through. */
+export const LAUNCHER = "pluxy/execution";
 
 export type State = "offered" | "installed" | "enabled";
 

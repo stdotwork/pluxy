@@ -5,9 +5,9 @@
 //   as panelcore -first-run's does; bin/ goes first on the app's PATH, which its core inherits,
 //   so core's setup scan finds it;
 // - a curated registry offering pluxy/claude-code, the Claude Code page's package, signed by a key
-//   made here, with the test trust profile naming it: so the app's Setup page offers "Set up" for
-//   Claude Code (agentPages.ts setupClientPage). The checks never install it, so its program is
-//   a placeholder.
+//   made here, with the test trust profile naming it: so the app's Setup page offers to install it
+//   for Claude Code's row (agentPages.ts rowAction), and the check installs and turns it on. It
+//   is a valid native package whose program is a placeholder, which no check starts.
 
 import { generateKeyPairSync, type KeyObject } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -38,7 +38,21 @@ export function buildFirstRunFixtures(root: string, home: string): FirstRun {
     id: CLAUDE_CODE,
     version: "0.1.0",
     tier: "native",
-    app: { programs: { [platform()]: "bin/tool" } },
+    app: {
+      version: 0,
+      tier: "native",
+      host_versions: [0],
+      programs: { [platform()]: "bin/tool" },
+      operations: [
+        {
+          id: "inspect",
+          description: "Report the fixture's state",
+          input_schema: { type: "object" },
+          output_schema: { type: "object" },
+        },
+      ],
+      state: { version: 0, readable_versions: [0] },
+    },
   };
   const file = pack(root, p, placeholder);
   const f: Fixture = { file, id: p.id, version: p.version, tier: "native" };

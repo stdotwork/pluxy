@@ -39,6 +39,13 @@ export interface UsageEvent {
   error_code?: string;
   /** The step of the model's fallback chain the last attempt was for, from 1; absent for a model with no chain. */
   chain_step?: number;
+  /**
+   * Why routing chose the last attempt's account over the others that serve the model:
+   * `pinned`, `session`, `only`, `first`, `only-free`, `backup`, or the routing strategy's name
+   * (`round-robin`, `weighted`, `fill-first`, `least-active`, `soonest-reset`). Absent when the
+   * request reached no account, and in a record from before pluxy kept it.
+   */
+  why?: string;
   /** How many times pluxy sent the request upstream, counting the one that ended it; absent from an older record. */
   attempts?: number;
   /**

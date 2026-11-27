@@ -73,6 +73,23 @@ const shown = (html: string) =>
 const attr = (html: string, name: string) => new RegExp(`${name}="([^"]*)"`).exec(html)?.[1];
 const plain = (html: string) => html.replace(/<[^>]+>/g, "").replaceAll("&amp;", "&");
 
+// ---- AccountRow: the address an API-key account sends its requests to ---------------------------
+
+test("AccountRow shows an API-key account's address under its provider, and nothing for one with none", () => {
+  const keyed = account({
+    extension: "pluxy/openai-compatible",
+    settings: { base_url: "http://127.0.0.1:18500/v1", api_key: "pluxy-redacted-1" },
+  });
+  const html = row(keyed);
+  expect(plain(html)).toContain("OpenAI Compatible");
+  expect(plain(html)).toContain("127.0.0.1:18500");
+  // The path and the scheme stay out of a row, and the key is never in it.
+  expect(plain(html)).not.toContain("/v1");
+  expect(html).not.toContain("pluxy-redacted");
+  expect(plain(row(account()))).not.toContain("127.0.0.1");
+  expect(plain(row(account({ settings: { base_url: "not an address" } })))).not.toContain("not an address");
+});
+
 // ---- AccountRow: conditions, groups and fixes --------------------------------------------------
 
 const later = iso(NOW + 2 * HOUR);
