@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -479,5 +480,84 @@ func TestConnectRefusesLinks(t *testing.T) {
 	rec := manageCall(t, h, http.MethodPost, "/setup/clients/opencode/connect", "")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("connect opencode = %d %s, want 404: core does not write its settings", rec.Code, rec.Body)
+	}
+}
+
+// ownAddr is an address of one of this machine's interfaces other than loopback, for the address
+// a browser on another machine reaches core by; the test skips without one.
+func ownAddr(t *testing.T) string {
+	t.Helper()
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() && !n.IP.IsLinkLocalUnicast() {
+			return n.IP.String()
+		}
+	}
+	t.Skip("this machine has no address but loopback")
+	return ""
+}
+
+// A tool's address matches core's when it reaches that core: for a core on every interface, any
+// loopback host or address of this machine, such as the one the panel was reached by; for a core
+// on one address, that address alone.
+func TestAtCore(t *testing.T) {
+	own := ownAddr(t)
+	every4, every6, one := coreAddress("0.0.0.0:8317", false), coreAddress("[::]:8317", false), coreAddress("10.0.0.2:8317", false)
+	for _, c := range []struct {
+		address, core string
+		want          bool
+	}{
+		{"http://127.0.0.1:8317", every4, true},
+		{"http://localhost:8317", every4, true},
+		{"http://[::1]:8317", every6, true},
+		{"http://" + net.JoinHostPort(own, "8317"), every4, true},
+		{"http://" + net.JoinHostPort(own, "8317"), every6, true},
+		{"http://" + net.JoinHostPort(own, "8317"), coreAddress(":8317", false), true},
+		{"http://198.51.100.9:8317", every4, false}, // not this machine
+		{"http://127.0.0.1:8318", every4, false},
+		{"https://127.0.0.1:8317", every4, false},
+		{"http://127.0.0.1:8317/", every4, false},
+		{"http://127.0.0.1", every4, false},
+		{"http://10.0.0.2:8317", one, true},
+		{"http://127.0.0.1:8317", one, false}, // core is not on loopback
+		{"http://localhost:8317", coreAddress("127.0.0.1:8317", false), false},
+		{"https://127.0.0.1:8317", coreAddress("127.0.0.1:8317", true), true},
+		{"http://anything", "", true},
+	} {
+		if got := atCore(c.address, c.core); got != c.want {
+			t.Errorf("atCore(%q, %q) = %v, want %v", c.address, c.core, got, c.want)
+		}
+	}
+	if !atCoreV1("http://127.0.0.1:8317/v1", every4) || atCoreV1("http://127.0.0.1:8317", every4) {
+		t.Error("atCoreV1 does not want /v1 after core's address")
+	}
+}
+
+// With listen 0.0.0.0, settings that name the address the panel was reached by read as connected,
+// as do the ones Connect writes (core's loopback address).
+func TestConnectedAtEveryInterface(t *testing.T) {
+	own := ownAddr(t)
+	core := coreAddress("0.0.0.0:8317", false)
+	reached := "http://" + net.JoinHostPort(own, "8317")
+	for tool, inspect := range map[string]func(string, string) (string, string){"claude-code": inspectClaudeCode, "codex": inspectCodex} {
+		snip, _ := ClientSnippetFor(tool, reached, connectKey)
+		rel := strings.TrimPrefix(snip.Files[0].Path, "~/")
+		home := t.TempDir()
+		p := filepath.Join(home, filepath.FromSlash(rel))
+		_ = os.MkdirAll(filepath.Dir(p), 0o700)
+		_ = os.WriteFile(p, []byte(snip.Files[0].Content), 0o600)
+		if _, state := inspect(home, core); state != stateConfigured {
+			t.Errorf("%s at %s reads %q against %s", tool, reached, state, core)
+		}
+	}
+
+	home := connectHome(t)
+	h, _ := startManagementCore(t, `{"listen":"0.0.0.0:8317","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
+	code, reply, body := connectCall(t, h, "connect", "claude-code")
+	if code != http.StatusOK || reply.Client.State != stateConfigured {
+		t.Fatalf("connect with listen 0.0.0.0 = %d %s", code, body)
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json")); !strings.Contains(string(b), `"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317"`) {
+		t.Errorf("connect with listen 0.0.0.0 wrote:\n%s", b)
 	}
 }

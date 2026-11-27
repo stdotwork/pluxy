@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,15 +18,16 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/stdotwork/pluxy/next/internal/server"
 	"github.com/stdotwork/pluxy/next/management"
 )
 
 // The client tools' config files, read the way the desktop app's writers for them read them
 // (next/app-tools/<tool>/src): a file a writer would refuse to change is refused, and a file
 // it takes is configured when it points the tool at this core, not configured when it holds
-// none of what the writer adds, and needs an update otherwise. coreURL is core's address as a
-// program on this machine reaches it (server.LocalURL), compared as text as the writers do;
-// empty when core's address is not known, which, as in the writers, any address matches.
+// none of what the writer adds, and needs an update otherwise. coreURL is core's address
+// (coreAddress), which a tool's address matches as atCore says; empty when core's address is not
+// known, which, as in the writers, any address matches.
 
 const (
 	stateNotConfigured = management.ClientStateNotConfigured
@@ -136,10 +140,61 @@ func inspectClaudeCode(home, coreURL string) (string, string) {
 	case str("ANTHROPIC_AUTH_TOKEN") != "" &&
 		str("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY") == "1" &&
 		str("CLAUDE_CODE_AUTO_MODE_SERVER") == "0" &&
-		(coreURL == "" || base == coreURL):
+		atCore(base, coreURL):
 		return display, stateConfigured
 	}
 	return display, stateNeedsUpdate
+}
+
+// atCore reports whether address, the address of core a tool's settings name, reaches the core
+// at coreURL (coreAddress): the same scheme, port and path (none: a final / is another address),
+// and the same host; for a core listening on every interface, any loopback host or address of
+// this machine too, such as the address a browser on another machine reached the panel by. An
+// empty coreURL matches any address.
+func atCore(address, coreURL string) bool {
+	if coreURL == "" || address == coreURL {
+		return true
+	}
+	a, errA := url.Parse(address)
+	c, errC := url.Parse(coreURL)
+	if errA != nil || errC != nil || a.Scheme != c.Scheme || a.Port() == "" || a.Port() != c.Port() ||
+		a.Path != c.Path || a.Opaque != "" || a.User != nil || a.RawQuery != "" || a.Fragment != "" {
+		return false
+	}
+	host := a.Hostname()
+	if strings.EqualFold(host, c.Hostname()) {
+		return true
+	}
+	if ip, err := netip.ParseAddr(c.Hostname()); err != nil || !ip.IsUnspecified() {
+		return false
+	}
+	if server.IsLoopbackHost(host) {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && machineHasAddr(ip.Unmap())
+}
+
+// atCoreV1 is atCore for an address with /v1 after core's.
+func atCoreV1(address, coreURL string) bool {
+	base, ok := strings.CutSuffix(address, "/v1")
+	return ok && atCore(base, coreURL) || coreURL == ""
+}
+
+// machineHasAddr reports whether ip is an address of one of this machine's interfaces.
+var machineHasAddr = func(ip netip.Addr) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok {
+			if own, ok := netip.AddrFromSlice(n.IP); ok && own.Unmap() == ip {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // codexBaseURL is the Codex provider's base URL for the core at address: the address with /v1
@@ -171,8 +226,7 @@ func inspectCodex(home, coreURL string) (string, string) {
 		return display, stateRefused
 	case !parsed.hasBaseURL:
 		return display, stateNotConfigured
-	case parsed.bearerToken != "" && parsed.modelProvider == "pluxy" &&
-		(coreURL == "" || parsed.baseURL == codexBaseURL(coreURL)):
+	case parsed.bearerToken != "" && parsed.modelProvider == "pluxy" && atCoreV1(parsed.baseURL, coreURL):
 		return display, stateConfigured
 	}
 	return display, stateNeedsUpdate
@@ -453,7 +507,7 @@ func inspectOpenCode(home, coreURL string) (string, string) {
 	baseURL, hasURL := options["baseURL"].(string)
 	_, listed := models[ours]
 	if apiKey != "" && p["npm"] == "@ai-sdk/openai-compatible" && ours != "" && listed && hasURL &&
-		(coreURL == "" || baseURL == strings.TrimRight(coreURL, "/")+"/v1") {
+		atCoreV1(baseURL, coreURL) {
 		return display, stateConfigured
 	}
 	return display, stateNeedsUpdate
@@ -662,7 +716,7 @@ func inspectPi(home, coreURL string) (string, string) {
 	providerID = cmp.Or(strings.TrimSpace(providerID), "cliproxyapi")
 	defProvider, _ := st["defaultProvider"].(string)
 	defModel, _ := st["defaultModel"].(string)
-	if piAdapterReady(agent) && hasURL && (coreURL == "" || piBaseURL(fileURL) == piBaseURL(coreURL)) &&
+	if piAdapterReady(agent) && hasURL && atCore(piBaseURL(fileURL), coreURL) &&
 		apiKey != "" && defProvider == providerID && defModel != "" {
 		return display, stateConfigured
 	}
@@ -801,7 +855,7 @@ func inspectOMP(home, coreURL string) (string, string) {
 	apiKey, _ := p["apiKey"].(string)
 	api, _ := p["api"].(string)
 	discType, _ := discovery["type"].(string)
-	baseOK := hasBase && (coreURL == "" && base != "" || coreURL != "" && base == ompBaseURL(coreURL))
+	baseOK := hasBase && (coreURL == "" && base != "" || coreURL != "" && atCoreV1(base, coreURL))
 	if baseOK && apiKey != "" && (api == "openai-responses" || api == "openai-completions") &&
 		discType == "openai-models-list" && model != "" {
 		return display, stateConfigured

@@ -609,14 +609,22 @@ func isReachableFromNetwork(listen string) bool {
 	return !server.IsLoopbackHost(strings.TrimSpace(host))
 }
 
-// coreAddress is the address a program on this machine reaches core at, as the client tools'
-// config files name it (server.LocalURL); empty when core's address is not known.
+// coreAddress is core's address as the client tools' checks take it (atCore): its scheme and its
+// listen address, an unspecified host (every interface: 0.0.0.0, :: or none) kept as one, so any
+// address of this machine matches it; empty when core's address is not known.
 func coreAddress(listen string, tlsEnable bool) string {
-	u, err := server.LocalURL(listen, tlsEnable)
+	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
 		return ""
 	}
-	return u
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	scheme := "http"
+	if tlsEnable {
+		scheme = "https"
+	}
+	return scheme + "://" + net.JoinHostPort(host, port)
 }
 
 // refreshCoreState reads each client tool's config again against the core listening on listen.
