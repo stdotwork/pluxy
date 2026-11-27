@@ -14,8 +14,12 @@ export const configText = strings("config", {
   logging: "Logging",
   keys: "Keys",
   proxy: "Outbound proxy",
-  proxyAbout:
-    "Send pluxy's requests to providers through this proxy. Leave empty to connect directly. A saved password stays unless you type a new one.",
+  proxyAbout: "Send pluxy's requests to providers through this proxy. Leave empty to connect directly.",
+  proxySaved:
+    "Saved with a password. It stays while the address stays as it is; a new address needs its own user name and password.",
+  proxyNeedsLogin:
+    "The saved password belongs to the old address. Type the new address with its user name and password, such as socks5://user:pass@host:1080. For a proxy with no password, empty the field and save first.",
+  noAnswerRow: "pluxy did not answer, so this may or may not be saved. Press Enter to send it again.",
   proxyPlaceholder: "socks5://user:pass@host:1080",
   routing: "Account order, retries and cooldowns",
   routingAbout: "These are set in Order & fallback.",

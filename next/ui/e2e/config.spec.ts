@@ -221,7 +221,7 @@ test("the old tabs' addresses open the Settings tab at their section", async ({ 
   await expect(page).toHaveURL(/#\/config$/);
 });
 
-test("the outbound proxy saves on Enter, keeps its password unless a new one is typed, and clears", async ({
+test("the outbound proxy saves on Enter, keeps its password while its address stays, refuses a new address without one, and clears", async ({
   page,
 }) => {
   await core.mgmt("PATCH", "/settings", { observability: { logs: { "error-logs-max-files": 10 } } });
@@ -235,10 +235,12 @@ test("the outbound proxy saves on Enter, keeps its password unless a new one is 
   await expect(proxy).toHaveValue("");
   await expect(proxy).toHaveAttribute("placeholder", "socks5://user:pass@host:1080");
 
-  // A URL with a user name and password: core holds it and shows it with `redacted` in their place.
+  // A URL with a user name and password: core holds it and shows it with `redacted` in their place;
+  // the field shows the address alone and says a password is saved.
   await proxy.fill("socks5://alice:s3cretpass@127.0.0.1:1080/");
   await proxy.press("Enter");
-  await expect(proxy).toHaveValue("socks5://redacted@127.0.0.1:1080");
+  await expect(proxy).toHaveValue("socks5://127.0.0.1:1080");
+  await expect(row(page, "Outbound proxy")).toContainText("Saved with a password.");
   expect(sent).toEqual([{ "proxy-url": "socks5://alice:s3cretpass@127.0.0.1:1080/" }]);
   const held = await storedProxy();
   expect(held).toMatch(/^pluxy-redacted-/);
@@ -273,11 +275,43 @@ test("the outbound proxy saves on Enter, keeps its password unless a new one is 
   expect(await storedProxy()).toBe(held);
   await tab(page, "Settings").click();
 
+  // Only the host changed: core would keep no password for the new address, so it is not sent,
+  // and the field keeps what was typed.
+  const sentBefore = sent.length;
+  await proxy.fill("socks5://127.0.0.2:1080");
+  await proxy.press("Enter");
+  await expect(row(page, "Outbound proxy").getByRole("alert")).toContainText(
+    "The saved password belongs to the old address.",
+  );
+  await expect(proxy).toHaveValue("socks5://127.0.0.2:1080");
+  await proxy.fill("socks5://redacted@127.0.0.2:1080");
+  await proxy.press("Enter");
+  expect(sent.length).toBe(sentBefore);
+  expect(await storedProxy()).toBe(held);
+  expect((await settings())["proxy-url"]).toBe("socks5://redacted@127.0.0.1:1080");
+  // Back to the saved address: nothing to send, the password is still there.
+  await proxy.fill("socks5://127.0.0.1:1080");
+  await proxy.blur();
+  expect(sent.length).toBe(sentBefore);
+
   // A URL core refuses goes back, with core's reason under the row.
   await proxy.fill("ftp://proxy.example:21");
   await proxy.press("Enter");
   await expect(row(page, "Outbound proxy").getByRole("alert")).toContainText("proxy");
-  await expect(proxy).toHaveValue("socks5://redacted@127.0.0.1:1080");
+  await expect(proxy).toHaveValue("socks5://127.0.0.1:1080");
+  expect(await storedProxy()).toBe(held);
+
+  // A save whose reply is lost keeps what was typed, and says it may or may not be saved.
+  await page.route("**/v0/management/settings", (route) =>
+    route.request().method() === "PATCH" ? route.abort("failed") : route.continue(),
+  );
+  await proxy.fill("socks5://dave:pw2pw2pw2@127.0.0.3:1080");
+  await proxy.press("Enter");
+  await expect(row(page, "Outbound proxy").getByRole("alert")).toContainText(
+    "pluxy did not answer, so this may or may not be saved.",
+  );
+  await expect(proxy).toHaveValue("socks5://dave:pw2pw2pw2@127.0.0.3:1080");
+  await page.unroute("**/v0/management/settings");
   expect(await storedProxy()).toBe(held);
 
   // Emptied, the proxy goes.
@@ -437,6 +471,50 @@ test.describe("Replace key", () => {
     const notice = page.locator('[data-part="key-notice"]');
     await expect(notice).toBeVisible();
     expect((await notice.locator('[data-part="key-value"]').textContent()) === core.key).toBe(true);
+  });
+
+  test("a reply that comes after leaving Config is shown on coming back", async ({ page }) => {
+    await openPanel(page, core);
+    await signIn(page, core);
+    await goToId(page, "config");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let sentToCore!: () => void;
+    const routed = new Promise<void>((resolve) => {
+      sentToCore = resolve;
+    });
+    let answered!: () => void;
+    const fulfilled = new Promise<void>((resolve) => {
+      answered = resolve;
+    });
+    // Held before core sees it, so the old key keeps working on the page opened meanwhile.
+    await page.route("**/management-key/rotate", async (route) => {
+      sentToCore();
+      await gate;
+      const response = await route.fetch();
+      core.key = (await response.json()).value;
+      await route.fulfill({ response });
+      answered();
+    });
+    const reply = page.waitForResponse("**/management-key/rotate");
+    await page.getByRole("button", { name: "Replace key", exact: true }).click();
+    await page.getByRole("button", { name: "Yes, replace key", exact: true }).click();
+    await routed;
+    await goToId(page, "status");
+    await expect(pageTitle(page)).toHaveText("Home");
+    release();
+    await fulfilled;
+    await reply;
+    await goToId(page, "config");
+    const notice = page.locator('[data-part="key-notice"]');
+    await expect(notice).toBeVisible();
+    expect((await notice.locator('[data-part="key-value"]').textContent()) === core.key).toBe(true);
+    // Seen once, it goes when Config is left again.
+    await goToId(page, "status");
+    await goToId(page, "config");
+    await expect(page.locator('[data-part="key-value"]')).toHaveCount(0);
   });
 
   test("a lost reply says how to find the key, and Replace key stays off", async ({ page }) => {

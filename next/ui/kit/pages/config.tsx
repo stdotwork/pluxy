@@ -13,7 +13,7 @@ import { Tabs } from "../tabs";
 import { Button, Notice, PageHead, useKit } from "../ui";
 import { ConfigDialog } from "./configDialog";
 import { useReplaceKey } from "./configKeys";
-import { ConfigSettings } from "./configSettings";
+import { type ChangeSetting, ConfigSettings } from "./configSettings";
 import { ConfigSource } from "./configSource";
 import {
   type ConfigSection,
@@ -23,6 +23,7 @@ import {
   parseConfigAddress,
 } from "./configSource.helpers";
 import { fileError, configText as t } from "./configStrings";
+import { nest, settingAt } from "./routing.rules";
 
 /** core's settings as read: loading, read (at is when), or failed (over what was read before, if anything). */
 type SettingsLoad =
@@ -36,6 +37,16 @@ type FileLoad =
   | { phase: "ready"; doc: ConfigDocument }
   | { phase: "broken"; error: string }
   | { phase: "failed"; error: string };
+
+/** settings with the setting at key (a dotted path) set to value; the rest is shared, not copied. */
+function withSetting(settings: CoreSettings, key: string, value: unknown): CoreSettings {
+  const [first, ...rest] = key.split(".");
+  const at = settings as unknown as Record<string, unknown>;
+  const inner = rest.length
+    ? withSetting((at[first as string] ?? {}) as CoreSettings, rest.join("."), value)
+    : value;
+  return { ...at, [first as string]: inner } as unknown as CoreSettings;
+}
 
 export function ConfigPage() {
   const { api, unauthorized } = useKit();
@@ -66,11 +77,16 @@ export function ConfigPage() {
     [],
   );
 
+  // Every read and save of the settings in the order sent. A reply to a read sent before a save
+  // would put the saved row back to what it was, so it is not taken.
+  const sent = useRef({ requests: 0, lastSave: 0 });
   const loadSettings = async () => {
     setSettings((s) => (s.phase === "failed" && !s.data ? { phase: "loading" } : s));
+    const n = ++sent.current.requests;
     const r = await api.coreSettings();
     if (!live.current) return;
     if (r.status === 401) return unauthorized();
+    if (sent.current.lastSave > n) return;
     const why = problem(r);
     if (why === undefined && r.body) return setSettings({ phase: "ready", data: r.body, at: Date.now() });
     setSettings((s) => ({
@@ -80,19 +96,22 @@ export function ConfigPage() {
       at: s.phase === "loading" ? undefined : s.at,
     }));
   };
-  /** Reads the file again. keepEdits: not while the editor has edits (the file tab keeps them). */
+  /**
+   * Reads the file again. keepEdits: the editor's edits stay; while it has some, only a file that
+   * no longer parses changes the tab (the text stays in the page, the editor hidden).
+   */
   const loadFile = async (keepEdits = false) => {
-    if (keepEdits && dirtyRef.current) return;
     if (!keepEdits) setFile({ phase: "loading" });
     const r = await api.config();
     if (!live.current) return;
     if (r.status === 401) return unauthorized();
-    if (keepEdits && dirtyRef.current) return;
-    if (r.status >= 200 && r.status < 300 && r.body) {
+    if (r.status === 422 || r.error?.code === "invalid_config") {
+      setFile({ phase: "broken", error: fileError(r.error?.message ?? "") });
+    } else if (keepEdits && dirtyRef.current) {
+      return;
+    } else if (r.status >= 200 && r.status < 300 && r.body) {
       setFile({ phase: "ready", doc: r.body });
       setText(r.body.content);
-    } else if (r.status === 422 || r.error?.code === "invalid_config") {
-      setFile({ phase: "broken", error: fileError(r.error?.message ?? "") });
     } else {
       setFile({ phase: "failed", error: problem(r) ?? "" });
     }
@@ -105,6 +124,31 @@ export function ConfigPage() {
     setNotInUse(desired.revision !== active.revision && desired.error ? desired.error : undefined);
   };
   const loadAll = () => Promise.all([loadSettings(), loadFile(), loadStatus()]);
+  /**
+   * After a write core refused with 422: the file may no longer parse. Reads it and the status
+   * again, keeping the editor's text, so a broken file puts the page in its broken state.
+   */
+  const refused = () => {
+    void loadFile(true);
+    void loadStatus();
+  };
+  /** Saves one setting. Only that setting is taken from the reply, so replies coming back in another order than sent cannot put another row back. */
+  const change: ChangeSetting = async (key, value) => {
+    sent.current.lastSave = ++sent.current.requests;
+    const reply = await api.changeCoreSettings(nest(key, value));
+    if (!live.current) return reply;
+    if (reply.status >= 200 && reply.status < 300 && reply.body) {
+      const held = settingAt(reply.body, key);
+      setSettings((s) =>
+        s.phase === "loading" || !s.data
+          ? s
+          : { phase: "ready", data: withSetting(s.data, key, held), at: Date.now() },
+      );
+      void loadFile(true);
+      void loadStatus();
+    } else if (reply.status === 422) refused();
+    return reply;
+  };
   useEffect(() => {
     void loadAll();
   }, []);
@@ -116,7 +160,11 @@ export function ConfigPage() {
     document.getElementById?.(scrollTo.section)?.scrollIntoView?.({ block: "start" });
   }, [scrollTo, tab, settingsShown]);
 
-  const keys = useReplaceKey(() => void loadFile(true));
+  const keys = useReplaceKey({ replaced: () => void loadFile(true), refused });
+  // Leaving Config: a new key that was shown goes; one whose reply comes later waits for the next visit.
+  const left = useRef(keys.left);
+  left.current = keys.left;
+  useEffect(() => () => left.current(), []);
 
   const switchRef = useRef<(tab: ConfigTab, account?: string, section?: ConfigSection) => boolean>(
     () => false,
@@ -231,11 +279,7 @@ export function ConfigPage() {
                 format={doc?.format}
                 disabled={disabled}
                 keys={keys}
-                saved={(data) => {
-                  setSettings({ phase: "ready", data, at: Date.now() });
-                  void loadFile(true);
-                  void loadStatus();
-                }}
+                change={change}
               />
             </>
           )
@@ -260,6 +304,7 @@ export function ConfigPage() {
               void loadFile();
               void loadStatus();
             }}
+            refused={refused}
             saved={(current) => {
               setFile({ phase: "ready", doc: current });
               setText(current.content);

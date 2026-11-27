@@ -8,7 +8,7 @@ import { lineDiff } from "../diff";
 import { usePrivacy } from "../privacy";
 import { Button, Notice, useKit } from "../ui";
 import { ConfigDialog } from "./configDialog";
-import { findAccount } from "./configSource.helpers";
+import { findAccount, hideSecrets } from "./configSource.helpers";
 import { configText as t } from "./configStrings";
 
 export interface ConfigSourceProps {
@@ -21,6 +21,8 @@ export interface ConfigSourceProps {
   setText: (text: string) => void;
   saved: (doc: ConfigDocument) => void;
   reload: () => void;
+  /** A save core refused with 422: the page reads the file again, as it may no longer parse. */
+  refused: () => void;
 }
 
 /** Selects the text from start to end and scrolls the editor so that it is in view, centred. */
@@ -37,6 +39,23 @@ function showRange(editor: HTMLTextAreaElement, start: number, end: number) {
     ctx.font = style.font;
     editor.scrollLeft = column * ctx.measureText("0").width - editor.clientWidth / 2;
   }
+}
+
+/**
+ * The review's lines. An added line shows a key, password or other secret typed into the file
+ * hidden, so the review never shows it a second time, also not while sharing the screen; the line
+ * still shows as changed. The removed and unchanged lines come from the file as core showed it,
+ * with its secrets already placeholders.
+ */
+function reviewLines(before: string, after: string, format: ConfigDocument["format"]) {
+  const hidden = hideSecrets(after, format);
+  let at = 0;
+  return lineDiff(before, after).map((line) => {
+    if (line.change === "remove") return line;
+    const text = line.change === "add" ? (hidden[at] ?? line.text) : line.text;
+    at++;
+    return { ...line, text };
+  });
 }
 
 /** What a check or a save that core refused says: a mistake in the file, or why it failed. */
@@ -128,6 +147,7 @@ export function ConfigSource(props: ConfigSourceProps) {
     if (why !== undefined) {
       // The edits stay in the editor: nothing is lost.
       setError(reply.status === 409 ? t("conflict") : refusal(reply.status, reply.error?.message ?? ""));
+      if (reply.status === 422) props.refused();
     } else if (reply.body) {
       props.saved(reply.body);
       setMessage(t("saved"));
@@ -238,7 +258,7 @@ export function ConfigSource(props: ConfigSourceProps) {
             <span data-change="add">+ {t("added")}</span>
           </div>
           <pre data-part="diff" class="config-diff" ref={diff}>
-            {lineDiff(props.base.content, props.text).map((line, i) => (
+            {reviewLines(props.base.content, props.text, props.base.format).map((line, i) => (
               <span
                 key={i}
                 data-part="diff-line"

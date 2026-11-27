@@ -1434,7 +1434,7 @@ impl Connection {
         Ok(RotationTarget {
             revision: self.revision,
             summary: format!(
-                "Rotate the management key of {base}. Core replaces it with a new random key at once, and the old key stops working for this app and for every other program that uses it. {kept} The app shows the new key once in a window of its own."
+                "Replace the management key for {base}. Core replaces it with a new random key at once, and the old key stops working for this app and for every other program that uses it. {kept} The app shows the new key once in a window of its own."
             ),
         })
     }
@@ -1449,7 +1449,7 @@ impl Connection {
             return Err(Reply::failed(
                 409,
                 "conflict",
-                "The connection changed. Rotate again.",
+                "The connection changed. Press Replace key again.",
             ));
         }
         let reply = self

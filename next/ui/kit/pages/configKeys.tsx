@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import { problem } from "../api";
+import type { Host } from "../host";
 import { SettingRow } from "../parts";
 import { usePrivacy } from "../privacy";
 import { rich, strings } from "../strings";
@@ -39,39 +40,95 @@ export type Replaced =
   | { kind: "noAnswer" }
   | { kind: "failed"; error: string };
 
+/** What the page does when Replace key comes to something: core has a new key, or refused with 422. */
+interface ReplaceEvents {
+  replaced: () => void;
+  refused: () => void;
+}
+
 /**
- * Replace key, owned by the page, so a reply that comes after leaving the Settings tab is still
- * shown on coming back. onReplaced runs once core has a new key (the settings file changed).
+ * Replace key's state for one host, kept outside the page: a reply that comes after the person
+ * left Config (the only showing of a new key, in the panel) waits there for their next visit.
  */
-export function useReplaceKey(onReplaced: () => void) {
-  const { api, unauthorized } = useKit();
-  const [outcome, setOutcome] = useState<Replaced>();
-  const next = useRef(0);
+interface KeyStore {
+  pending: boolean;
+  outcome?: Replaced;
+  next: number;
+  /** The open page's, while one is open. */
+  events?: ReplaceEvents;
+  listeners: Set<() => void>;
+}
+const stores = new WeakMap<Host, KeyStore>();
+function keyStore(host: Host): KeyStore {
+  let store = stores.get(host);
+  if (!store) {
+    store = { pending: false, next: 0, listeners: new Set() };
+    stores.set(host, store);
+  }
+  return store;
+}
+
+/**
+ * Replace key. Its state outlives the page, so a reply that comes after leaving the Settings tab,
+ * or Config itself, is still shown on coming back. events.replaced runs once core has a new key
+ * (the settings file changed), events.refused when core refused with 422 (the file may not parse).
+ */
+export function useReplaceKey(events: ReplaceEvents) {
+  const { host, api, unauthorized } = useKit();
+  const store = keyStore(host);
+  store.events = events;
+  const mine = useRef(events);
+  mine.current = events;
+  const [, redraw] = useState(0);
+  useEffect(() => {
+    const listener = () => redraw((n) => n + 1);
+    store.listeners.add(listener);
+    return () => {
+      store.listeners.delete(listener);
+      if (store.events === mine.current) store.events = undefined;
+    };
+  }, [store]);
+  const update = (change: (s: KeyStore) => Partial<KeyStore>) => {
+    Object.assign(store, change(store));
+    for (const listener of store.listeners) listener();
+  };
+  const settle = (outcome: Replaced | undefined) => update(() => ({ pending: false, outcome }));
   const replace = async () => {
-    setOutcome(undefined);
+    update(() => ({ pending: true, outcome: undefined }));
     const reply = await api.rotateManagementKey();
-    if (reply.status === 401) return unauthorized();
-    if (reply.status === 0) return setOutcome({ kind: "noAnswer" });
+    if (reply.status === 401) {
+      settle(undefined);
+      return unauthorized();
+    }
+    if (reply.status === 0) return settle({ kind: "noAnswer" });
     const why = problem(reply);
-    if (why !== undefined) return setOutcome({ kind: "failed", error: why });
+    if (why !== undefined) {
+      settle({ kind: "failed", error: why });
+      if (reply.status === 422) store.events?.refused();
+      return;
+    }
     // The app's native confirmation answers 204 with nothing when the person cancels it.
-    if (!reply.body) return;
+    if (!reply.body) return settle(undefined);
     const value = reply.body.value;
-    setOutcome(
+    settle(
       value
-        ? { kind: "key", id: ++next.current, value, seen: false }
+        ? { kind: "key", id: ++store.next, value, seen: false }
         : { kind: "apart", warning: reply.error?.message },
     );
-    onReplaced();
+    store.events?.replaced();
   };
   return {
-    outcome,
+    outcome: store.outcome,
+    /** A replacement is on its way. */
+    pending: store.pending,
     replace,
     /** The key notice was shown. */
-    seen: () => setOutcome((o) => (o?.kind === "key" ? { ...o, seen: true } : o)),
-    close: () => setOutcome(undefined),
-    /** Leaving the tab: a key that was shown goes; one not shown yet waits for the next visit. */
-    left: () => setOutcome((o) => (o?.kind === "key" && o.seen ? undefined : o)),
+    seen: () =>
+      update((s) => ({ outcome: s.outcome?.kind === "key" ? { ...s.outcome, seen: true } : s.outcome })),
+    close: () => update(() => ({ outcome: undefined })),
+    /** Leaving the tab or the page: a key that was shown goes; one not shown yet waits for the next visit. */
+    left: () =>
+      update((s) => ({ outcome: s.outcome?.kind === "key" && s.outcome.seen ? undefined : s.outcome })),
   };
 }
 export type ReplaceKey = ReturnType<typeof useReplaceKey>;
@@ -121,8 +178,11 @@ export function ManagementKey(props: { state: ReplaceKey; configKey?: string; di
   const { host } = useKit();
   const p = usePrivacy();
   const can = host.features.has("rotateManagementKey");
+  // The app asks in its own native confirmation: asking on the page too would ask twice.
+  const asks = !host.features.has("confirmsKeyReplacement");
   const o = props.state.outcome;
   const why = props.disabled ?? (can ? undefined : t("unavailable", { command: ROTATE_KEY }));
+  const off = !!why || props.state.pending || o?.kind === "noAnswer" || o?.kind === "key";
   // What came of it shows under the row, which may be at the bottom of the window: bring it into view.
   const said = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -136,14 +196,20 @@ export function ManagementKey(props: { state: ReplaceKey; configKey?: string; di
         configKey={props.configKey}
         disabled={why}
       >
-        <ConfirmButton
-          variant="quiet"
-          confirmLabel={t("confirmReplace")}
-          disabled={!!why || o?.kind === "noAnswer" || o?.kind === "key"}
-          onConfirm={props.state.replace}
-        >
-          {t("replace")}
-        </ConfirmButton>
+        {asks ? (
+          <ConfirmButton
+            variant="quiet"
+            confirmLabel={t("confirmReplace")}
+            disabled={off}
+            onConfirm={props.state.replace}
+          >
+            {t("replace")}
+          </ConfirmButton>
+        ) : (
+          <Button variant="quiet" disabled={off} onClick={props.state.replace}>
+            {t("replace")}
+          </Button>
+        )}
       </SettingRow>
       {o?.kind === "key" && (
         <KeyNotice

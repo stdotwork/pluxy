@@ -39,13 +39,14 @@ fn labels(app: &AppHandle, title: &str) -> Result<String, String> {
     Ok(ui::texts(app, title)?.join("\n"))
 }
 
-/// The confirmation's Cancel and Confirm keys.
+/// The confirmation's Cancel and Replace key keys. Replace key's access key works only on a button
+/// labelled Replace key, so pressing it also checks the button's words.
 fn cancel_key() -> Key {
     access(crate::confirmation::text::CANCEL)
 }
 
 fn confirm_key() -> Key {
-    access(crate::confirmation::text::CONFIRM)
+    access(crate::confirmation::text::REPLACE_KEY)
 }
 
 /// The connected core, reached directly with a given key, and its config file.
@@ -138,7 +139,7 @@ fn answer(app: &AppHandle, target: &str, says: &str, key: Key) -> Result<(), Str
     ui::wait_shown(app, CONFIRM)?;
     let text = labels(app, CONFIRM)?;
     require(
-        text.contains(&format!("Rotate the management key of {target}")),
+        text.contains(&format!("Replace the management key for {target}")),
         "the native confirmation did not name the rotation and its core",
     )?;
     require(
@@ -331,16 +332,13 @@ fn window_ready(app: &AppHandle) -> Result<Webview, String> {
     Ok(main)
 }
 
-/// Opens the Config page at its Keys section, presses Replace key and answers its question.
+/// Opens the Config page at its Keys section and presses Replace key. The page asks nothing of its
+/// own: the native confirmation, which `answer` waits for, is the one question.
 fn press_rotate(main: &Webview) -> Result<(), String> {
     main.eval("location.hash = '#/config/connectivity'")
         .map_err(|_| "could not open Config")?;
     wait_for("the Replace key button", || {
         eval(main, "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Replace key' && !b.disabled); if (b) b.click(); return !!b; })()")
-            .filter(|v| v == true)
-    })?;
-    wait_for("the Yes, replace key button", || {
-        eval(main, "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Yes, replace key' && !b.disabled); if (b) b.click(); return !!b; })()")
             .filter(|v| v == true)
     })
     .map(|_| ())
