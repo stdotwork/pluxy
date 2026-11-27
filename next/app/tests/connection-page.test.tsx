@@ -108,56 +108,79 @@ const never = () => new Promise<never>(() => {});
 
 // ---- first launch ------------------------------------------------------------------------------------------
 
-test("the first launch screen is two buttons and nothing else, and no control is there to type in", async () => {
+/** The first launch's two answers: their radio inputs, and the words of the row each is in. */
+const answers = (m: Awaited<ReturnType<typeof mount>>) =>
+  all(m.root, "input")
+    .filter((i) => m.attr(i, "type") === "radio")
+    .map((input) => ({ input, words: input.parentNode?.textContent ?? "" }));
+
+/** Picks the answer whose row starts with title, as a click on it does. */
+async function pickAnswer(m: Awaited<ReturnType<typeof mount>>, title: string) {
+  const answer = answers(m).find((a) => a.words.startsWith(title));
+  if (!answer) throw new Error(`no answer ${title}`);
+  answer.input.checked = true;
+  await m.fire(answer.input, "change");
+}
+
+test("the first launch screen is one question, two answers with the recommended one picked, and one Continue; nothing to type", async () => {
   const m = await mount(<FirstLaunch connection={view()} onChange={noop} />);
-  expect(m.labels().length).toBe(2);
-  expect(m.labels()[0]).toContain("On this computer");
-  expect(m.labels()[1]).toContain("Connect to a pluxy that is already running");
-  for (const tag of ["input", "select", "textarea", "details", "summary", "form", "a"])
+  const two = answers(m);
+  expect(two.map((a) => a.words)).toEqual([
+    "On this computerRecommendedpluxy runs here while this app is open. Nothing to type.",
+    "On another computerConnect to a pluxy that already runs: on a server, or on its own on this computer.",
+  ]);
+  expect(two.map((a) => a.input.checked)).toEqual([true, false]);
+  expect(m.labels()).toEqual(["Continue"]);
+  expect((m.button("Continue") as FakeNode).disabled).toBe(false);
+  expect(all(m.root, "input").every((i) => m.attr(i, "type") === "radio")).toBe(true);
+  for (const tag of ["select", "textarea", "details", "summary", "a"])
     expect(all(m.root, tag).length).toBe(0);
   expect(m.text()).toContain("Where should pluxy run?");
   expect(m.text()).toContain(
     "pluxy connects your coding tools to your AI accounts. It needs to run somewhere first.",
   );
   expect(m.text()).toContain("Most people pick this.");
+  expect(m.text()).toContain("You can change this later in Settings, under Where pluxy runs.");
   expect(m.text()).not.toContain("The app could not read its saved settings");
 });
 
-test("a damaged settings file shows as one quiet line above the two choices", async () => {
+test("a damaged settings file shows as one quiet line above the two answers", async () => {
   const m = await mount(
     <FirstLaunch connection={view({ error: "expected value at line 1" })} onChange={noop} />,
   );
   expect(m.text()).toContain("The app could not read its saved settings, so it is starting fresh.");
   expect(m.text()).not.toContain("expected value at line 1");
-  expect(m.labels().length).toBe(2);
+  expect(answers(m)).toHaveLength(2);
 });
 
-test("On this computer asks for nothing else, shows the starting line until pluxy answers, and hands over the reply", async () => {
+test("On this computer asks for nothing else: Continue shows the starting card until pluxy answers, and hands over the reply", async () => {
   let answer: (v: Connection) => void = noop;
   const reply = view({ mode: "managed", target: "http://127.0.0.1:41000", signed_in: true });
   const changed: Connection[] = [];
   const m = await mount(<FirstLaunch connection={view()} onChange={(c) => changed.push(c)} />, {
     connection_set: () => new Promise<Connection>((resolve) => (answer = resolve)),
   });
-  await m.click("On this computer");
+  await m.submit();
   expect(m.commands("connection_set")).toEqual([{ change: { mode: "managed" } }]);
   expect(m.text()).toContain("Starting pluxy on this computer…");
   expect(m.text()).toContain("This takes a few seconds the first time.");
-  // Nothing can be pressed while it starts.
+  // Nothing can be pressed or picked while it starts.
   expect(m.labels()).toEqual([]);
+  expect(answers(m)).toEqual([]);
   expect(changed).toEqual([]);
   await act(async () => answer(reply));
   await settle();
   expect(changed).toEqual([reply]);
 });
 
-test("a start the native side refuses goes back to the two choices with the reason in plain words", async () => {
+test("a start the native side refuses goes back to the two answers with the reason in plain words", async () => {
   const m = await mount(<FirstLaunch connection={view()} onChange={noop} />, {
     connection_set: () => Promise.reject("the app is quitting"),
   });
-  await m.click("On this computer");
+  await m.submit();
   expect(m.text()).toContain("The app is quitting.");
-  expect(m.labels().length).toBe(2);
+  expect(answers(m)).toHaveLength(2);
+  expect(m.labels()).toEqual(["Continue"]);
 });
 
 // ---- the address of a pluxy that already runs --------------------------------------------------------------
@@ -188,11 +211,11 @@ test("the address decides the mode the native side holds it to, and anything it 
 async function connectStep(handlers: Handlers = {}) {
   const changed: Connection[] = [];
   const m = await mount(<FirstLaunch connection={view()} onChange={(c) => changed.push(c)} />, handlers);
-  await m.click("Connect to a pluxy that is already running");
+  await pickAnswer(m, "On another computer");
   return { m, changed };
 }
 
-test("Connect shows the form under its title, with the hint following what is typed, and Back returns", async () => {
+test("On another computer grows the address under it, with the hint following what is typed; On this computer folds it again", async () => {
   const { m } = await connectStep();
   expect(m.text()).toContain("Such as https://pluxy.example, or http://127.0.0.1:8317 on this computer.");
   expect((m.button("Continue") as FakeNode).disabled).toBe(true);
@@ -208,9 +231,10 @@ test("Connect shows the form under its title, with the hint following what is ty
   await m.input("Address", "http://pluxy.example");
   expect(m.text()).toContain("Another computer needs an https:// address");
   expect((m.button("Continue") as FakeNode).disabled).toBe(true);
-  await m.click("Back");
-  expect(m.text()).toContain("Where should pluxy run?");
-  expect(m.labels().length).toBe(2);
+  await pickAnswer(m, "On this computer");
+  expect(all(m.root, "input").filter((i) => m.attr(i, "type") === "text")).toEqual([]);
+  expect(m.text()).not.toContain("Next, a small window asks for its management key.");
+  expect((m.button("Continue") as FakeNode).disabled).toBe(false);
 });
 
 test("an address the native side would refuse is refused before any call is made", async () => {
@@ -233,7 +257,7 @@ test("Continue sends only the mode, the address and the certificate file; no key
     { change: { mode: "remote", url: "https://pluxy.example", ca_file: "/etc/pluxy/ca.pem" } },
   ]);
   expect(all(m.root, "input").some((i) => m.attr(i, "type") === "password")).toBe(false);
-  expect(all(m.root, "input").map((i) => m.attr(i, "type"))).toEqual(["text", "text"]);
+  expect(all(m.root, "input").map((i) => m.attr(i, "type"))).toEqual(["radio", "radio", "text", "text"]);
   await m.input("Address", "http://127.0.0.1:8317");
   await m.submit();
   expect(m.commands("key_entry")[1]).toEqual({
@@ -264,7 +288,11 @@ test("a refused key or an unreachable address says why above the buttons and kee
   result = { status: "cancelled", connection: view() };
   await m.submit();
   expect(m.text()).not.toContain("could not be read");
-  expect(all(m.root, "input").map((i) => i.value)).toEqual(["https://pluxy.example", "/etc/pluxy/ca.pem"]);
+  expect(
+    all(m.root, "input")
+      .filter((i) => m.attr(i, "type") === "text")
+      .map((i) => i.value),
+  ).toEqual(["https://pluxy.example", "/etc/pluxy/ca.pem"]);
   expect(changed).toEqual([]);
 });
 

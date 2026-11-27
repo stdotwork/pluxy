@@ -6,18 +6,20 @@
 //! `pluxy/claude-code`, the Claude Code page's package, so the app offers to install it.
 //! The bundled test packages are not installed (`native_test.rs`).
 //!
-//! - `first`: the window opens on Setup by itself (`#/setup`, "Set up pluxy") with step 1, "Your AI
-//!   accounts", open; the Claude kind is ticked, saying Claude Code is installed on this computer;
-//!   "Add Claude" adds it (its row says Added, and `GET /packages` through the app's host lists it
-//!   enabled); step 2, opened, has the app's one button on Claude Code's row: Install add-on, then
-//!   Turn on add-on (answered in the native confirmation), then a "Set up" link to `#/claude-code`;
-//!   pressing it opens the app's Claude Code page with "Setting up pluxy." and "Back to setup"
-//!   above it, which goes back to `#/setup`; a later visit to the page by its address has no way
-//!   back; "Leave setup for now" lands on Home and `GET /setup` has `first_run` false.
-//! - `second`: the next launch opens on Home, not Setup; Setup, opened, is titled "Setup" with
-//!   every step folded and no "Leave setup for now"; step 1, opened, says pluxy can connect to Claude; the stage
-//!   stays on it, then switches GTK to its dark variant and stays again, so the session's last
-//!   screenshot shows it dark.
+//! - `first`: the window opens on Setup by itself (`#/setup`, "Set up pluxy") in the focused window,
+//!   with no navigation, and step 1, "Your AI accounts", on screen; the Claude kind is ticked,
+//!   saying Claude Code is installed on this computer; "Add Claude" adds it (its row says Added, and
+//!   `GET /packages` through the app's host lists it enabled); step 2, opened from the row of
+//!   steps, has the app's one button on Claude Code's row: Install add-on, then Turn on add-on
+//!   (answered in the native confirmation), then a "Set up" link to `#/claude-code`; pressing it
+//!   opens the app's Claude Code page, in the frame, with "Setting up pluxy." and "Back to setup"
+//!   above it, which goes back to `#/setup` in the focused window; a later visit to the page by its
+//!   address has no way back; "Finish later" lands on Home, in the frame, with the "Finish setting
+//!   up pluxy" card, and `GET /setup` has `first_run` false.
+//! - `second`: the next launch opens on Home, not Setup, and Home still has the card; Setup, opened,
+//!   is titled "Setup", in the frame, with every step folded and no "Finish later"; step 1,
+//!   opened, says pluxy can connect to Claude; the stage stays on it, then switches GTK to its dark
+//!   variant and stays again, so the session's last screenshot shows it dark.
 //!
 //! Every check prints `native-test: setup_check {"ok":...,"what":...}`; after holding a screen for
 //! a screenshot it prints `native-test: setup_shot {"name":...}`; a stage ends with
@@ -134,6 +136,21 @@ fn press(app: &AppHandle, step: &str, label: &str) -> bool {
     )
 }
 
+/// Opens the step whose title starts with step from the row of steps above a first run's card.
+fn go_step(app: &AppHandle, step: &str) -> bool {
+    until(
+        app,
+        10,
+        &format!(
+            "(() => {{ const b = [...document.querySelectorAll('[data-part=setup-stepper] button')].find((b) => b.textContent.startsWith({step})); if (!b) return false; b.click(); return true; }})()",
+            step = json!(step),
+        ),
+    )
+}
+
+/// Setup in the focused window on a first run: "Set up pluxy", and no navigation.
+const FOCUSED: &str = "location.hash === '#/setup' && document.querySelector('[data-part=setup-focus] [data-part=page-title]')?.textContent === 'Set up pluxy' && document.querySelector('[data-part=nav]') === null";
+
 /// Presses the page's button whose text is label, wherever it is.
 fn press_any(app: &AppHandle, label: &str) -> bool {
     until(
@@ -157,19 +174,15 @@ fn shell(c: &mut Checks, app: &AppHandle) -> bool {
     )
 }
 
+/// Home's card after Finish later, with its way back to Setup.
+const LATER_CARD: &str = "(() => { const card = document.querySelector('[data-part=setup-later]'); return card?.textContent.includes('Finish setting up pluxy') === true && card.querySelector('a[href=\"#/setup\"]')?.textContent === 'Continue setup'; })()";
+
 fn first(c: &mut Checks, app: &AppHandle) {
-    if !shell(c, app) {
-        return;
-    }
-    let opened = until(
-        app,
-        30,
-        "location.hash === '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Set up pluxy'",
-    );
+    let opened = until(app, 60, FOCUSED);
     c.check(
         opened,
         format!(
-            "the window opens on Setup by itself: #/setup, \"Set up pluxy\" ({})",
+            "the window opens on Setup by itself in the focused window: #/setup, \"Set up pluxy\", no navigation ({})",
             page(app)
         ),
     );
@@ -239,8 +252,9 @@ fn first(c: &mut Checks, app: &AppHandle) {
     shot("added");
 
     if !c.check(
-        press(app, "Your coding tool", "Open"),
-        "step 2's Open is there and pressed",
+        go_step(app, "Your coding tool")
+            && until(app, 10, &format!("({OPEN_STEP}) === 'Your coding tool'")),
+        "step 2, opened from the row of steps, is on screen",
     ) {
         return;
     }
@@ -315,6 +329,10 @@ fn first(c: &mut Checks, app: &AppHandle) {
         ),
     );
     c.check(
+        main_eval(app, "document.querySelector('[data-part=nav]') !== null") == Some(json!(true)),
+        "the Claude Code page is in the frame, with the navigation",
+    );
+    c.check(
         until(
             app,
             10,
@@ -328,12 +346,11 @@ fn first(c: &mut Checks, app: &AppHandle) {
         "(document.querySelector('[data-part=setup-return] a')?.click(), true)",
     );
     c.check(
-        until(
-            app,
-            30,
-            "location.hash === '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Set up pluxy'",
+        until(app, 30, FOCUSED),
+        format!(
+            "back on #/setup, Setup is still \"Set up pluxy\" in the focused window ({})",
+            page(app)
         ),
-        format!("back on #/setup, Setup is still \"Set up pluxy\" ({})", page(app)),
     );
     // The way back is forgotten once the page is left: the page opened by its address has none.
     let _ = main_eval(app, "(location.hash = '#/claude-code', true)");
@@ -347,17 +364,13 @@ fn first(c: &mut Checks, app: &AppHandle) {
     );
     let _ = main_eval(app, "(location.hash = '#/setup', true)");
     c.check(
-        until(
-            app,
-            30,
-            "location.hash === '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Set up pluxy'",
-        ),
-        format!("Setup opens again ({})", page(app)),
+        until(app, 30, FOCUSED),
+        format!("Setup opens again in the focused window ({})", page(app)),
     );
 
     if !c.check(
-        press_any(app, "Leave setup for now"),
-        "\"Leave setup for now\" is there, enabled, and pressed",
+        press_any(app, "Finish later"),
+        "\"Finish later\" is there, enabled, and pressed",
     ) {
         return;
     }
@@ -365,10 +378,15 @@ fn first(c: &mut Checks, app: &AppHandle) {
         until(
             app,
             30,
-            "location.hash !== '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Home'",
+            "location.hash !== '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Home' && document.querySelector('[data-part=nav]') !== null",
         ),
-        format!("Leave setup for now lands on Home ({})", page(app)),
+        format!("Finish later lands on Home, in the frame ({})", page(app)),
     );
+    c.check(
+        until(app, 15, LATER_CARD),
+        "Home has the \"Finish setting up pluxy\" card, with Continue setup",
+    );
+    shot("later");
     let r = core(app, "GET", "/setup");
     c.check(
         r["status"] == 200 && r["body"]["first_run"] == false,
@@ -406,6 +424,10 @@ fn second(c: &mut Checks, app: &AppHandle) {
         dashboard && stayed,
         format!("the next launch opens on Home, not Setup ({})", page(app)),
     );
+    c.check(
+        until(app, 15, LATER_CARD),
+        "the next launch's Home still has the \"Finish setting up pluxy\" card",
+    );
 
     let _ = main_eval(app, "(location.hash = '#/setup', true)");
     c.check(
@@ -429,11 +451,11 @@ fn second(c: &mut Checks, app: &AppHandle) {
     );
     let later = main_eval(
         app,
-        "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Leave setup for now')",
+        "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Finish later') || document.querySelector('[data-part=nav]') === null",
     );
     c.check(
         later == Some(json!(false)),
-        format!("Setup has no \"Leave setup for now\" button ({later:?})"),
+        format!("Setup is in the frame and has no \"Finish later\" button ({later:?})"),
     );
     shot("finished");
     c.check(

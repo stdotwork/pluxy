@@ -1326,13 +1326,14 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
         }
     }
     if let Some(main) = app.get_webview(MAIN) {
-        // Where the app runs no managed core (Windows and macOS for now), the window shows the
-        // first-launch question while no place is chosen, and the not-running pane until a core
-        // answers: all there is to see there.
+        // The shell, or on a core's first run Setup in the focused window, which has no
+        // navigation. Where the app runs no managed core (Windows and macOS for now), the window
+        // shows the first-launch question while no place is chosen, and the not-running pane
+        // until a core answers: all there is to see there.
         let ready = if cfg!(target_os = "linux") {
-            "document.querySelector('[data-part=nav]') !== null"
+            "document.querySelector('[data-part=nav]') !== null || document.querySelector('[data-part=setup-focus]') !== null"
         } else {
-            "document.querySelector('[data-part=nav]') !== null || document.querySelector('[data-part=state-pane]') !== null || document.querySelector('[data-part=first-launch]') !== null"
+            "document.querySelector('[data-part=nav]') !== null || document.querySelector('[data-part=setup-focus]') !== null || document.querySelector('[data-part=state-pane]') !== null || document.querySelector('[data-part=first-launch]') !== null"
         };
         wait_for("startup window shell", || {
             eval(&main, ready).filter(|v| v == true)

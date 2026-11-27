@@ -22,7 +22,7 @@ what happened to each feature of the old desktop app.
 
 ## How the app reaches core
 
-The first thing a new person sees is one question, **Where should pluxy run?**, with two answers: **On this computer** (the `managed` mode below; one click, nothing to type) and **Connect to a pluxy that is already running** (the address is typed, and the address decides between the `local` and `remote` modes below; the native key window then asks for its management key). The **Where pluxy runs** page (Settings, This device) shows the same two choices again later. The app keeps the choice in `connection.json` in
+The first thing a new person sees is one card on the window's ground, with no frame: one question, **Where should pluxy run?**, two answers stacked, and one Continue. **On this computer** (the `managed` mode below; picked to start with, nothing to type) shows a progress card while the app starts its pluxy. **On another computer** grows an address field when picked (the address decides between the `local` and `remote` modes below, so a pluxy that runs on its own on this computer is reached this way too); the native key window then asks for its management key. The **Where pluxy runs** page (Settings, This device) shows the same two choices again later. The app keeps the choice in `connection.json` in
 its config folder (on Linux `~/.config/dev.pluxy.desktop/`), readable only by your user. On
 Windows it is in the local application data folder instead (`%LOCALAPPDATA%\dev.pluxy.desktop\`),
 and so is the app's own core's folder (`core/`), since both can hold a management key: the config
@@ -32,8 +32,8 @@ server and to the person's other computers.
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
 | On this computer (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start has the core write that config (`pluxy init -port 0`): a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
-| Connect to a pluxy that is already running, on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address (`http://` is accepted only here) and management key. | Leaves it running. The app never starts or stops it. |
-| Connect to a pluxy that is already running, on another computer (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
+| On another computer, given an address on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address (`http://` is accepted only here) and management key. | Leaves it running. The app never starts or stops it. |
+| On another computer (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
 Addresses are origins only (scheme, host and port). A key you give is checked against that core
 (`GET /v0/management/status`) before the app switches to it. It is kept in `connection.json` only
@@ -1466,8 +1466,11 @@ On a first run of a core (a new "On this computer" core is one), the window open
 page ([`../ui`](../ui/README.md), `#/setup`) in place of Home when the window's address
 names no page, as the web panel does: three steps, the person's AI accounts, their coding tool,
 and one test request. It opens once the app is connected and signed in, so the first launch screen
-still comes first. After it is finished the page stays among the Settings topics, every step
-folded.
+still comes first. On a first run it is the same focused window as the first launch, with no
+frame: one step at a time under a row of the three, Back and Continue (Skip while a step is not
+done), and Finish later, which leaves a card on Home until setup is finished or the card hidden.
+After the first run the page stays among the Settings topics, in the frame, as a checklist with
+every step folded.
 
 The app adds to step 2, and to the Tools page (`#/tools`), which shows the same rows, through the
 kit's `SetupOptions` and `ToolsOptions` (`src/toolHooks.ts` gives both the same tools, links and
@@ -1680,14 +1683,17 @@ walks [Setup](../management/README.md#setup) on the app's first start, on the bu
 registry that offers `pluxy/claude` as a pick (`native/core-steps.ts` `firstRunSource`), and a
 stand-in `claude` printing `2.4.1 (Claude Code)` first on the PATH it inherits from the app; a
 curated registry offers the Claude Code page's package (`native/first-run.ts`). The window opens
-on Setup by itself (`#/setup`, "Set up pluxy") with step 1 open; the Claude kind is ticked,
+on Setup by itself (`#/setup`, "Set up pluxy") in the focused window, with no navigation, and step
+1 on screen; the Claude kind is ticked,
 saying Claude Code is installed on this computer; "Add Claude" adds it, step 1 then says
 "pluxy can now connect to Claude.", and `GET /packages` through the app's host lists it; step 2's Claude Code row
-has the app's "Set up" link to `#/claude-code`, and pressing it opens the app's Claude Code page;
-back on `#/setup`, "Leave setup for now" lands on Home and `GET /setup` has `first_run` false. The next launch opens on Home; Setup, opened, is titled "Setup" with
-every step folded and no "Leave setup for now", and step 1 says pluxy can connect to Claude. The session keeps a
-screenshot of each screen it holds (the kind found, after Add, step 2, finished) and ends on that
-page in GTK's dark variant.
+has the app's "Set up" link to `#/claude-code`, and pressing it opens the app's Claude Code page
+in the frame; back on `#/setup` in the focused window, "Finish later" lands on Home with the
+"Finish setting up pluxy" card, and `GET /setup` has `first_run` false. The next launch opens on
+Home, which still has the card; Setup, opened, is titled "Setup", in the frame, with every step
+folded and no "Finish later", and step 1 says pluxy can connect to Claude. The session keeps a
+screenshot of each screen it holds (the kind found, after Add, step 2, Home after Finish later,
+finished) and ends on that page in GTK's dark variant.
 
 Then, in a session of its own (`native/instances-session.ts`), with the core program adopted in
 each profile, it launches the app again and again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the

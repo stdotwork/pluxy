@@ -235,9 +235,10 @@
 // The Setup checks (setup.ts, native_setup.rs) run in one more session, on the build with
 // artifact-test-trust, a first run with nothing installed: a core whose bundled registry offers
 // pluxy/claude as a pick (core-steps.ts firstRunSource) and a stand-in claude on its PATH
-// (first-run.ts). The window opens on Setup by itself with the Claude kind ticked, Add Claude adds
-// it, step 2 offers Set up for Claude Code and Finish later ends the first run; the next launch
-// opens on Home, and Setup then has every step folded, light and dark.
+// (first-run.ts). The window opens on Setup by itself, in the focused window, with the Claude kind
+// ticked, Add Claude adds it, step 2 offers Set up for Claude Code and Finish later ends the first
+// run with a card on Home; the next launch opens on Home with that card, and Setup then has every
+// step folded, light and dark.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
