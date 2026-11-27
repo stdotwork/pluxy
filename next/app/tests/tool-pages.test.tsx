@@ -419,11 +419,11 @@ describe("the head, by state", () => {
     expect(ch.reads.length).toBe(2);
   });
 
-  test("an add-on error shows only its message without the protocol code, or a plain sentence when empty", async () => {
+  test("an add-on error shows the message Rust sends without a protocol code, and a cancel stops quietly", async () => {
     const claude = channel();
     const claudePage = await mount(() => <ClaudeCodePage />, claude.invoke);
     claude.reads[0]?.fail(
-      "invalid_request: /home/me/.claude does not exist yet: run Claude Code once (it makes the folder), then read the settings again",
+      "/home/me/.claude does not exist yet: run Claude Code once (it makes the folder), then read the settings again",
     );
     await settle();
     expect(claudePage.text()).toContain(
@@ -433,7 +433,7 @@ describe("the head, by state", () => {
 
     const pi = channel();
     const piPage = await mount(() => <PiPage />, pi.invoke);
-    pi.reads[0]?.fail("not_found: ");
+    pi.reads[0]?.fail("What the add-on looked for could not be found.");
     await settle();
     expect(piPage.text()).toContain(
       "Could not read Pi's settings. What the add-on looked for could not be found.",
@@ -441,7 +441,7 @@ describe("the head, by state", () => {
     expect(piPage.text()).not.toMatch(/not_found/i);
 
     const { page } = await opened(TOOLS[0] as Tool, "not-configured", {
-      ops: { apply: () => new Error("permission: settings.json is read-only") },
+      ops: { apply: () => new Error("settings.json is read-only") },
     });
     await page.click("Connect Claude Code");
     expect(page.text()).toContain("settings.json is read-only");

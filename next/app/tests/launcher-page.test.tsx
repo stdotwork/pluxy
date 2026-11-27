@@ -167,9 +167,9 @@ test("the notification switch saves the moment it changes", async () => {
   expect(m.commands("launcher_settings")).toEqual([{ notice: false }]);
 });
 
-test("a launcher error drops any leading protocol code", async () => {
+test("a launcher error shows the plain message from Rust without native jargon", async () => {
   const m = await page({
-    launcher_launch: () => Promise.reject("invalid_request: the working directory does not exist"),
+    launcher_launch: () => Promise.reject("the working directory does not exist"),
   });
   await m.input("Program", "claude");
   await m.input("Folder", "/missing/project");
