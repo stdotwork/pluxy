@@ -1,6 +1,7 @@
-//! The core that comes with the app (README "The app's own core"): a tagged core's signed release,
-//! checked when the app is packaged and pinned file by file by a manifest compiled into the app's
-//! program (`bundled_manifest.rs`). A build without one (a dev build) has no bundled core.
+//! The core that comes with the app (`docs/app-design.md`, "The app's own core"): a tagged
+//! core's signed release, checked when the app is packaged and pinned file by file by a manifest
+//! compiled into the app's program (`bundled_manifest.rs`). A build without one (a dev build) has
+//! no bundled core.
 //!
 //! When the app is packaged, `prepare` takes the release of the version the app names from a core
 //! source's index, checks it against its signed descriptor with the publisher key, as installing

@@ -1,7 +1,7 @@
 //! The app's own update, through the stock Tauri updater plugin: only for a copy of the app this
 //! user keeps, only with updater trust, and only to a newer version the release feed
-//! (`release.rs`) offers with a signed artifact for this system. README.md ("Application update")
-//! has the rules.
+//! (`release.rs`) offers with a signed artifact for this system. `docs/app-design.md`
+//! ("Application update") has the rules.
 //!
 //! Before any updater plugin call the updater gate (`trust::updater_gate`) passes; the plugin is
 //! registered at all only when it passed at startup (`lib.rs`). Before any download the

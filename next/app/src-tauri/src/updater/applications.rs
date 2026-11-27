@@ -1,7 +1,8 @@
-//! macOS: the rule that admits a bundle in the stock `/Applications` (README.md, "Application
-//! update"). That folder is root's, its group `admin` may write it (`drwxrwxr-x root admin`), so
-//! the bundle's folder fails the rule every other folder must pass (this user's, writable by no
-//! one else). It is admitted instead when all of these hold, read through the folder's open
+//! macOS: the rule that admits a bundle in the stock `/Applications` (`docs/app-design.md`,
+//! "Application update"). That folder is root's, its group `admin` may write it
+//! (`drwxrwxr-x root admin`), so the bundle's folder fails the rule every other folder must pass
+//! (this user's, writable by no one else). It is admitted instead when all of these hold, read
+//! through the folder's open
 //! descriptor (opened without following a link) and decided by `judge`, which the tests run with
 //! the values given:
 //!
@@ -24,7 +25,7 @@
 //! one else can write to, and its own access list may give no one but this user and root more than
 //! reading (`judge_bundle`).
 //!
-//! Why that is safe, in short (README.md has each step): the folder's other writers are this Mac's
+//! Why that is safe, in short: the folder's other writers are this Mac's
 //! administrators, and any of them can already rename the user's bundle aside and put one of
 //! their own at its name, which the user's next start runs. The updater adds nothing to that: it
 //! unpacks and checks in the user's private data folder, makes one change in `/Applications` (the

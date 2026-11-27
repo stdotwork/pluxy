@@ -1,5 +1,5 @@
 //! Access: the broker that lets a web package on this device read files and folders the person
-//! chose for it (`../README.md`, "Access"). This module holds the approved signers and the
+//! chose for it (`docs/app-design.md`, "Access"). This module holds the approved signers and the
 //! grants, checks each read against them, and does the reads. The window's commands, the native
 //! file chooser and confirmation, and the page channel are in `lib.rs`; nothing here talks to a
 //! webview or GTK.

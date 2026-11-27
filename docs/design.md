@@ -8,9 +8,8 @@ design and why they were made. The contracts themselves are in the READMEs it li
 
 Parity with the old core and the old desktop app means the same features and a similar UI and
 workflow, so that someone who knows the old ones finds things in the same places. It does not mean
-copying the old code's bugs. Each intended difference is written down: for the app in
-[`next/app/PARITY.md`](../next/app/PARITY.md), and for core's behaviour as `intended` exceptions in
-the corpus.
+copying the old code's bugs. Each intended difference in core's behaviour is written down as an
+`intended` exception in the corpus.
 
 ## A small core with extensions
 

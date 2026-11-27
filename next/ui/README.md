@@ -339,8 +339,8 @@ feature, it keeps the old label, unless the label named something this core does
 
 **Usage**
 
-- Prices and price sync: core records tokens, not prices. The desktop app dropped cost views too
-  ([its keep/drop record](../app/PARITY.md#usage-and-sessions)).
+- Prices and price sync: core records tokens, not prices. The desktop app's Agent usage page counts
+  tokens, not costs, too ([docs/app.md](../../docs/app.md#agent-usage-and-codex-sessions)).
 - The storage cap and repair of the old app's database: core keeps its recent record in memory,
   limited by `usage.max_events` and `usage.max_age_ms`, and daily files on disk (`usage.keep_days`).
 

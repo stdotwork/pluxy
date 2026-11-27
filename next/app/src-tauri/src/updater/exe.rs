@@ -18,9 +18,9 @@
 //! holds open (a virus scanner, or a person's own `pluxy.exe` with a file open in `bundled\`) is
 //! waited out for `BUSY_FOR`; if it is still held, the parts already moved are put back. Between
 //! the program's two renames (two metadata operations of this process) the folder holds no
-//! program under its name: a power loss there leaves the aside copy and the kept set, and the
-//! README says how to put them back. A crash before that is undone at the next start of the
-//! earlier version (`set::recover`).
+//! program under its name: a power loss there leaves the aside copy and the kept set, and
+//! `docs/app-design.md` ("Putting a kept copy back by hand") says how to put them back. A crash
+//! before that is undone at the next start of the earlier version (`set::recover`).
 //!
 //! What is left aside is removed once the version that replaced it holds the profile, when the
 //! earlier version has ended (`cleanup`): the staging folder and each aside part are recorded with

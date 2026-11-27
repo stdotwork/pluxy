@@ -1,5 +1,6 @@
 //! The release feed: which app and core versions a feed offers on each channel, the last good
-//! copy of it, and the feed's address. The feed's format is in `../README.md` ("Release feed").
+//! copy of it, and the feed's address. The feed's format is in `docs/app-design.md` ("Release
+//! feed format").
 //!
 //! The window gets only what this module derives from a feed: versions, dates and whether a
 //! release has notes. Release notes are rendered for their own webview (`notes.rs`); a notes

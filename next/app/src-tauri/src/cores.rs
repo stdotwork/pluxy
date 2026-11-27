@@ -3,11 +3,12 @@
 //! that the app never changes after installing it, and a selection of which one runs.
 //!
 //! A release comes from the core source the person set: an index file listing releases and, for
-//! each, its signed artifacts (see the README's "The app's own core"). An artifact is a gzip tar
-//! file of the core's folder (`pluxy`, on Windows `pluxy.exe`, and anything beside it, such as
-//! `bundled/`), described by a descriptor signed with a trusted publisher key; `artifact.rs`
-//! checks the signature, size and SHA-256 before anything is unpacked. Each installed file's
-//! digest is kept and checked again before the core starts. Nothing in this module needs Tauri.
+//! each, its signed artifacts (see `docs/app-design.md`, "The app's own core"). An artifact is a
+//! gzip tar file of the core's folder (`pluxy`, on Windows `pluxy.exe`, and anything beside it,
+//! such as `bundled/`), described by a descriptor signed with a trusted publisher key;
+//! `artifact.rs` checks the signature, size and SHA-256 before anything is unpacked. Each
+//! installed file's digest is kept and checked again before the core starts. Nothing in this
+//! module needs Tauri.
 //!
 //! Installing and starting a version open each folder and file without following a link
 //! (`Dir`). The folder unpacked into (a staging folder) and a version's folder are opened by
