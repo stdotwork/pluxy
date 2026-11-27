@@ -383,9 +383,8 @@ func startCoreDir(t *testing.T, env []string, dir, bin string, argv ...string) (
 		t.Logf("core: %.4096s", line)
 		logs.add(line)
 		if rest, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
-			url, _, _ := strings.Cut(rest, " ")
 			select {
-			case addr <- url:
+			case addr <- rest:
 			default:
 			}
 		}

@@ -1023,9 +1023,8 @@ func startCoreProcess(coreBin, cfgPath string, extraEnv []string) (*coreProcess,
 			logLines = append(logLines, line)
 			logMu.Unlock()
 			if rest, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
-				addr, _, _ := strings.Cut(rest, " ")
 				select {
-				case addrCh <- addr:
+				case addrCh <- rest:
 				default:
 				}
 			}

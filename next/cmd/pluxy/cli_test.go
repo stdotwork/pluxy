@@ -1447,9 +1447,9 @@ func TestOtherComputerLine(t *testing.T) {
 	}
 }
 
-// Core's listening line keeps the address as the config wrote it and explains an unspecified host
-// in plain words, while leaving a specific address unchanged. The open line uses 127.0.0.1 for
-// any unspecified host (including IPv6 ::) and keeps a specific address.
+// Core's listening line prints only the URL (preserving the host family from the config when
+// unspecified, so older apps parsing everything after the prefix keep working), puts the plain
+// words on a line of their own only for an unspecified host, and uses 127.0.0.1 in the open line.
 func TestListeningAndOpenLines(t *testing.T) {
 	t.Run("listening line", func(t *testing.T) {
 		for _, c := range []struct {
@@ -1460,19 +1460,19 @@ func TestListeningAndOpenLines(t *testing.T) {
 			want       string
 		}{
 			{"unspecified IPv4 bound as IPv6 dual-stack", "http", "0.0.0.0:18417", "[::]:18417",
-				"listening on http://0.0.0.0:18417 (every address of this computer)"},
+				"listening on http://0.0.0.0:18417"},
 			{"unspecified IPv4 with port 0", "http", "0.0.0.0:0", "[::]:41234",
-				"listening on http://0.0.0.0:41234 (every address of this computer)"},
+				"listening on http://0.0.0.0:41234"},
 			{"empty host", "http", ":18417", "[::]:18417",
-				"listening on http://0.0.0.0:18417 (every address of this computer)"},
+				"listening on http://0.0.0.0:18417"},
 			{"unspecified IPv6", "http", "[::]:18417", "[::]:18417",
-				"listening on http://[::]:18417 (every address of this computer)"},
+				"listening on http://[::]:18417"},
 			{"unspecified IPv4 over https", "https", "0.0.0.0:8443", "[::]:8443",
-				"listening on https://0.0.0.0:8443 (every address of this computer)"},
+				"listening on https://0.0.0.0:8443"},
 			{"inherited unspecified IPv4 socket", "http", "", "0.0.0.0:18417",
-				"listening on http://0.0.0.0:18417 (every address of this computer)"},
+				"listening on http://0.0.0.0:18417"},
 			{"inherited unspecified IPv6 socket", "http", "", "[::]:18417",
-				"listening on http://[::]:18417 (every address of this computer)"},
+				"listening on http://[::]:18417"},
 			{"specific loopback IPv4", "http", "127.0.0.1:8317", "127.0.0.1:8317",
 				"listening on http://127.0.0.1:8317"},
 			{"specific loopback IPv6", "http", "[::1]:8317", "[::1]:8317",
@@ -1486,6 +1486,31 @@ func TestListeningAndOpenLines(t *testing.T) {
 		}
 	})
 
+	t.Run("every-address plain line", func(t *testing.T) {
+		for _, c := range []struct {
+			name   string
+			scheme string
+			bound  string
+			want   string
+		}{
+			{"unspecified IPv4", "http", "0.0.0.0:18417",
+				"that is every address of this computer; on this computer open http://127.0.0.1:18417"},
+			{"unspecified IPv6", "http", "[::]:18417",
+				"that is every address of this computer; on this computer open http://127.0.0.1:18417"},
+			{"empty host", "http", ":18417",
+				"that is every address of this computer; on this computer open http://127.0.0.1:18417"},
+			{"unspecified over https", "https", "[::]:8443",
+				"that is every address of this computer; on this computer open https://127.0.0.1:8443"},
+			{"specific loopback IPv4", "http", "127.0.0.1:8317", ""},
+			{"specific loopback IPv6", "http", "[::1]:8317", ""},
+			{"specific LAN address", "http", "10.0.0.2:18417", ""},
+		} {
+			if got := everyAddressLine(c.scheme, c.bound); got != c.want {
+				t.Errorf("%s: everyAddressLine(%q, %q) =\n%q, want\n%q", c.name, c.scheme, c.bound, got, c.want)
+			}
+		}
+	})
+
 	t.Run("extension pages line", func(t *testing.T) {
 		for _, c := range []struct {
 			name       string
@@ -1494,9 +1519,9 @@ func TestListeningAndOpenLines(t *testing.T) {
 			want       string
 		}{
 			{"unspecified IPv4", "0.0.0.0:0", "[::]:41235",
-				"extension pages on http://0.0.0.0:41235 (every address of this computer)"},
+				"extension pages on http://0.0.0.0:41235"},
 			{"unspecified IPv6", "[::]:0", "[::]:41235",
-				"extension pages on http://[::]:41235 (every address of this computer)"},
+				"extension pages on http://[::]:41235"},
 			{"specific loopback", "127.0.0.1:0", "127.0.0.1:41235",
 				"extension pages on http://127.0.0.1:41235"},
 		} {

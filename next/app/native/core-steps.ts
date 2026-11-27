@@ -414,7 +414,7 @@ export async function startSentinel(dir: string, from: string): Promise<Sentinel
     proc.once("exit", (code) => reject(new Error(`the sentinel core exited with ${code}`)));
     if (proc.stderr)
       createInterface({ input: proc.stderr }).on("line", (line) => {
-        const m = /^pluxy: listening on (\S+)(?: |$)/.exec(line);
+        const m = /^pluxy: listening on (\S+)$/.exec(line);
         if (m?.[1]) resolve(m[1]);
       });
   });

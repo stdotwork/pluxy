@@ -426,13 +426,6 @@ pub fn management_key(path: &Path) -> Result<String, String> {
     }
 }
 
-/// Extracts the URL from core's `pluxy: listening on <url> ...` stderr line.
-fn parse_listening_line(line: &str) -> Option<&str> {
-    line.strip_prefix("pluxy: listening on ")?
-        .split_whitespace()
-        .next()
-}
-
 /// The core program to run: the one the person chose, or `pluxy` beside the app's own program.
 /// The app never looks it up on PATH, which could hold some other core.
 pub fn core_program(chosen: Option<&str>) -> Result<PathBuf, String> {
@@ -604,7 +597,7 @@ impl ManagedCore {
             for line in BufReader::new(stderr).lines() {
                 let Ok(line) = line else { break };
                 eprintln!("core: {line}");
-                if let Some(addr) = parse_listening_line(&line) {
+                if let Some(addr) = line.strip_prefix("pluxy: listening on ") {
                     if let Some(tx) = tx.take() {
                         let _ = tx.send(addr.to_string());
                     }
@@ -1660,27 +1653,5 @@ mod tests {
         core.stop();
         assert!(core.exited().is_some());
         fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn listening_line_accepts_plain_words_after_url() {
-        assert_eq!(
-            parse_listening_line("pluxy: listening on http://127.0.0.1:8317"),
-            Some("http://127.0.0.1:8317")
-        );
-        assert_eq!(
-            parse_listening_line(
-                "pluxy: listening on http://0.0.0.0:18417 (every address of this computer)"
-            ),
-            Some("http://0.0.0.0:18417")
-        );
-        assert_eq!(
-            parse_listening_line(
-                "pluxy: listening on http://[::]:18417 (every address of this computer)"
-            ),
-            Some("http://[::]:18417")
-        );
-        assert_eq!(parse_listening_line("pluxy: listening on "), None);
-        assert_eq!(parse_listening_line("pluxy: other line"), None);
     }
 }
