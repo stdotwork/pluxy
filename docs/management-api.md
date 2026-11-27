@@ -12,8 +12,8 @@ The Go types of every request and reply, and a Go client, are in
 
 | | |
 | --- | --- |
-| Address | The `listen` address of the config, with the path prefix `/v0/management`, for example `http://127.0.0.1:8317/v0/management/status`. With `tls.enable` on, use `https`. |
-| Key | `Authorization: Bearer <management_key>`, where `management_key` is the config's own key. `pluxy key management --show-key` prints it. |
+| Address | The `listen` address of the config (`server.host` and `server.port` in a `config.yaml`), with the path prefix `/v0/management`, for example `http://127.0.0.1:8317/v0/management/status`. With `tls.enable` on, use `https`. |
+| Key | `Authorization: Bearer <management_key>`, where `management_key` is the config's own key (`management.secret-key` in a `config.yaml`). `pluxy key management --show-key` prints it. |
 | Other machines | A call from another machine is refused with 403 `remote_disabled` before its key is read, unless the config sets `management_allow_remote` to `true`. |
 
 ```bash
@@ -22,15 +22,16 @@ curl -H "Authorization: Bearer $MANAGEMENT_KEY" http://127.0.0.1:8317/v0/managem
 
 A core always has a management key. A core started with no config file writes one, and so does
 `pluxy init` without starting core: it listens on `127.0.0.1` and has one client key and one
-management key. A config with no management key is refused at start, with a message that says how to
+management key. (When pluxy's home has no config and the desktop app keeps a pluxy of its own, a
+first start writes nothing and says so.) A config with no management key is refused at start, with a message that says how to
 add one; the API is never silently off.
 
 **Where a call comes from.** A call counts as from this machine when it arrives from a loopback
-address (`127.0.0.1`, `::1`) and names no other client. The client address is the connection's, or,
+address (`127.0.0.1`, `::1`) and carries none of the headers `X-Forwarded-For`, `X-Real-IP` and
+`Forwarded` (unless core took the client from one of them, as below). The client address is the connection's, or,
 when the connection is from a proxy listed in `trusted_proxies`, the client that proxy names in
-`X-Forwarded-For` or `X-Real-IP`. A call that names another client in `X-Forwarded-For`, `X-Real-IP`
-or `Forwarded`, where core did not take the client from that header (core never reads `Forwarded`),
-does not count as from this machine. So a proxy on this machine that forwards calls from elsewhere
+`X-Forwarded-For` or `X-Real-IP`. A call that has any of those headers, where core did not take the client from that header (core
+never reads `Forwarded`), does not count as from this machine, whatever address the header names. So a proxy on this machine that forwards calls from elsewhere
 does not open the API to them.
 
 **Wrong keys.** Five wrong keys in a row from one other-machine client block that client for 30
@@ -47,7 +48,7 @@ The management key's rotation calls are under [Management key](#management-key).
 
 - **Bodies.** JSON in and JSON out, UTF-8. A body is read up to 1 MiB (4 MiB for
   `POST /accounts/import`, 256 KiB for a stored theme); a larger one is 413 `invalid_request`.
-  A call that takes no body ignores one. Times are RFC 3339 UTC. Durations are whole milliseconds in
+  A call that takes no body ignores one. Times are RFC 3339, in UTC except `desired.at` and `active.at` in `GET /status`, which carry the server's own offset. Durations are whole milliseconds in
   fields ending `_ms`.
 - **Unknown fields.** These calls refuse a field they do not know, and anything after the one JSON
   object, with 400 `invalid_request`: `POST /models/refresh`, `POST /config/validate`, `PUT /config`,
@@ -56,8 +57,9 @@ The management key's rotation calls are under [Management key](#management-key).
   `PATCH /accounts/{id}`. The other calls that read a JSON body ignore the fields they do not know.
   `PUT /themes/{publisher}/{name}` stores any valid JSON object.
 - **Errors.** Every failure is `{"error": {"code": "...", "message": "..."}}` with the HTTP status that
-  fits. `code` is stable; `message` is for a person. An error about an upstream account may add
-  `status`, `provider_code`, `retryable` and `retry_after_ms`.
+  fits. `code` is stable; `message` is for a person. The error of an account's models, quota or test
+  call may add `status`, `provider_code`, `retryable`, `retry_after_ms` and a few more members of the
+  extension's error.
 
   | Status | Codes | Meaning |
   | --- | --- | --- |
@@ -70,14 +72,14 @@ The management key's rotation calls are under [Management key](#management-key).
   | 409 | `conflict` | The thing changed since it was read, or the change would leave core unusable (the last client key) |
   | 413 | `invalid_request` | The body is larger than core reads |
   | 413 | `log_too_large` | A log file is larger than 2 MiB and `format=json` was asked for |
-  | 422 | `invalid_config` | An extension's settings do not pass the checks its manifest declares |
+  | 422 | `invalid_config` | An extension's settings do not pass the checks its manifest declares, or `GET /config` found the config file does not parse |
   | 422 | `invalid_request` | An account test names no model, and the account lists none |
   | 422 | `refused` | Core checked the change and will not apply it; `message` says why; nothing was changed |
   | 422 | `unsupported` | The extension that would answer does not take that account call |
   | 500 | `internal` | Core could not finish the call, because of its own error rather than the request's |
   | 502 | `fetch_failed` | A package registry or archive could not be fetched |
-  | 502 | `account_closed`, `auth`, `cancelled`, `extension_crashed`, `extension_protocol`, `extension_timeout`, `extension_unavailable`, `internal`, `invalid_request`, `not_found`, `permission`, `quota`, `rate_limit`, `unavailable`, `unsupported`, `upstream` | An account, login or import call ended on an extension's or a provider's error, with that error's code; the body may add `status`, `provider_code`, `retryable`, `retry_after_ms` |
-  | 503 | `extension_unavailable` | The extension that would answer an account's models, quota or test call is not running |
+  | 502 | `account_closed`, `auth`, `cancelled`, `extension_crashed`, `extension_protocol`, `extension_timeout`, `extension_unavailable`, `internal`, `invalid_request`, `not_found`, `permission`, `quota`, `rate_limit`, `unavailable`, `unsupported`, `upstream` | An account call ended on an extension's or a provider's error, with that error's code; `POST /vertex/import` turns an `auth`, `invalid_request` or `internal` error into its own 400 or 500 instead |
+  | 503 | `extension_unavailable` | The extension that would answer an account's models or quota call, or an account test that must list models first, is not running |
   | 504 | `unavailable` | The service account login in `POST /vertex/import` did not finish in time |
 
 - **Secrets.** No reply holds a credential, a client key or the management key, except the reply
@@ -99,7 +101,7 @@ JSON object named in its row; `204` means an empty reply.
 | `GET /status` | Core's live state: `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision`, `hash` and `at`; `extensions`, one entry per running generation with `id`, `version`, `generation`, `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `crashes_in_a_row`, `last_error` and `active_requests`; `safe_mode`; `first_run`; `version`, `commit` and `built` (the build, as `pluxy -version` prints it); and `management_api` |
 | `POST /reload` | Reloads the config file now. 200 with the status when the new revision is active; 422 with the status when it was refused (`desired.error` says why), and the active revision stays |
 | `GET /ui` | The pages of the running extensions and where they are served; see [extension pages](../next/ui/extension-pages/README.md#how-core-serves-pages) |
-| `GET /extensions/{id}/config` | An extension's settings: the schema its manifest declares and their values. 404 `not_found` when the extension declares none |
+| `GET /extensions/{id}/config` | An extension's settings: the schema its manifest declares and their values. 404 `not_found` when the extension declares none or is not running |
 | `PATCH /extensions/{id}/config` | `{"values": {...}}`: changes those settings and replies as `GET` does. 422 `invalid_config` when a value fails the schema |
 
 ## Changing the config
@@ -155,13 +157,13 @@ A placeholder is accepted only while the file still holds that secret and core h
 | --- | --- | --- |
 | `routing.strategy` | `routing.strategy` | `round-robin`, `fill-first`, `weighted-round-robin` (`weighted` in the JSON config), `least-active`, `soonest-reset` |
 | `routing.session-affinity` | `routing.session_affinity.enabled` | `true` or `false` |
-| `routing.session-affinity-ttl` | `routing.session_affinity.ttl_ms` | A duration such as `1h` or `30m` |
+| `routing.session-affinity-ttl` | `routing.session_affinity.ttl_ms` | A duration above zero such as `1h` or `30m`. In a JSON config a `PATCH` of it is refused while session affinity is off |
 | `routing.force-model-prefix` | `routing.force_model_prefix` | `true`: an account with a `prefix` serves its models only under the prefix |
 | `routing.retry.max-retry-credentials` | `routing.max_accounts` | Accounts one request may try in a round; 0 is no limit |
 | `routing.retry.max-retry-interval` | `routing.max_wait_ms` | Seconds one request may wait for a blocked account |
-| `routing.retry.request-retry` | `routing.request_retry` | Rounds a request may run after its first; `null` leaves rounds to core's own rules |
+| `routing.retry.request-retry` | `routing.request_retry` | Rounds a request may run after its first, 0 to 1000. `GET` shows `null` while the config leaves rounds to core's own rules; a `PATCH` cannot set it back to `null` |
 | `routing.cooldown.disable-cooling` | `routing.disable_cooling` | `true`: failures leave no cooldown |
-| `routing.cooldown.transient-error-cooldown-seconds` | `routing.transient_error_cooldown_ms` | Seconds a failing upstream cools down: 0 for core's own backoff, -1 for none |
+| `routing.cooldown.transient-error-cooldown-seconds` | `routing.transient_error_cooldown_ms` | Seconds a failing upstream cools down: 0 for core's own backoff, -1 for none, up to 2592000 |
 | `routing.cooldown.quota-response-mode` | `routing.quota_response_mode` | `retryable` (default) or `usage-limit` |
 | `routing.timeouts` | `routing.timeouts` | Default upstream timeouts of every account in milliseconds: `header_ms`, `idle_ms`, `total_ms`. `0` turns a limit off, a field left out stays, `null` removes them |
 | `routing.ignition` | `routing.ignition` | Window ignition's settings, replaced whole; `null` removes them, which turns ignition off. Absent from `GET` when the config sets none |
@@ -206,9 +208,10 @@ keyed by the key's `id`; usage events record the label a key had at request time
 Setup is what a new install shows first. Core looks at the machine it runs on, says what it found, and
 proposes what to install. Nothing is installed until asked.
 
-`first_run` is true only while there is no `state/setup.json` and core has no installed packages and
-no accounts; once `setup.json` exists, its `first_run` is kept. Core scans on its own only at a first
-run's start with no kept scan; otherwise only on `POST /setup/scan`.
+`first_run` starts true on a core with no `state/setup.json` that has no installed packages, no
+accounts and no credential files. Core keeps it in `state/setup.json`, and it stays true until
+`POST /setup/done`. Core scans on its own only at a first run's start with no kept scan; otherwise only
+on `POST /setup/scan`.
 
 | Call | What it does |
 | --- | --- |
@@ -241,7 +244,7 @@ run's start with no kept scan; otherwise only on `POST /setup/scan`.
 `clients` lists eight coding tools: `claude-code`, `codex`, `opencode`, `pi`, `omp`, `claude-desktop`,
 `grok-build` and `hermes`. A client's `state` is `not-configured`, `configured` (it points at this
 core), `needs-update`, `refused` (a file the desktop app's writer for that tool would refuse to
-change; no pick is suggested for it) or `unchecked`. `claude-desktop`, `grok-build` and `hermes` are
+change; the pick that would write that tool's config is not suggested) or `unchecked`. `claude-desktop`, `grok-build` and `hermes` are
 always `unchecked`: core does not read their settings, so it cannot say whether they point at this
 core, and it has no paste text for them. `sign_ins` only says a sign-in exists; core reads no token
 from it.
@@ -278,8 +281,8 @@ nothing was found gets the same list with nothing suggested.
 | `note` | What the files need besides themselves; left out when empty |
 
 `{tool}` is the tool's ID (`claude-code`, `codex`, `opencode`, `pi`, `omp`) or another name for it
-(`oh-my-pi`, `codex-cli`, or a setup package's ID such as `pluxy/pi-setup`, with the `/` written
-`%2F`). The optional query parameter `key_id` names a client key from `GET /client-keys`. 404
+(`claude`, `oh-my-pi`, `codex-cli`, or a setup package's ID such as `pluxy/pi-setup`, with the `/`
+written `%2F`), in any letter case. A caller on another machine whose `Host` header core cannot use gets 400 `invalid_request`. The optional query parameter `key_id` names a client key from `GET /client-keys`. 404
 `not_found` for a tool core has no text for, and for a `key_id` core does not hold.
 
 ### Import
@@ -293,7 +296,7 @@ CLIProxyAPI setup on core's machine and replies with the import report below.
 - The config's settings, client keys, API-key accounts, aliases and chains go into core's config
   file in one change, and the auth folder's accounts into its credential store. `listen` stays as it
   is, since it cannot change while core runs, and so does the management key, which is not brought
-  (plain or a bcrypt hash): core keeps its own. An account or chain core already has, by ID or name,
+  (plain or a bcrypt hash): core keeps its own. A `management.allow-remote: true` is brought as `management_allow_remote`. An account or chain core already has, by ID or name,
   stays as it is.
 - 400 `invalid_request` for a path that is not absolute or a file that cannot be read; 422 `refused`
   for a file core refuses (the message has the file's secrets taken out) or a credential store inside
@@ -328,8 +331,8 @@ too, is installed by `POST /packages` or a setup pick.
 
 | Call | What it does |
 | --- | --- |
-| `GET /packages` | `{"packages": [...]}`: the installed packages with `id`, `version`, `registry`, `url`, `sha256`, `enabled`, `installed_at` and `state` (see below) |
-| `GET /registries` | `{"registries": [...]}`: each registry's `name`, `url` and what it offers, `packages`, or `error` when it could not be read. A package has `id`, `title`, `summary`, `kind` (`provider`, `client`) and `tier` (`pick`, `verified`, `unverified`) when its registry says them, and `releases` (`version`, `protocol`, `platforms`). Core enforces nothing by tier |
+| `GET /packages` | `{"packages": [...]}`: the installed packages with `id`, `version`, `registry`, `url`, `sha256`, `enabled`, `installed_at`, `fingerprint` and `state` (see below), and `error` when `state` is `failed` |
+| `GET /registries` | `{"registries": [...]}`: each registry's `name`, `url` and what it offers, `packages`, or `error` when it could not be read. A package has `id`, `title`, `summary`, `kind` (`provider`, `client`) when its registry says them, `tier` (`pick`, `verified`, `unverified`; `unverified` when the registry does not say) and `releases` (`version`, `protocol`, `platforms`). Core enforces nothing by tier |
 | `POST /packages` | Installs a package; see below |
 | `POST /packages/{id}/enable` | Starts the package and routes to its accounts. 200 with `{"package": {...}}`; 404 when it is not installed; 422 `refused` when it did not start (it stays disabled) |
 | `POST /packages/{id}/disable` | Stops routing to it; requests already running on it finish, up to its drain timeout. Its files stay. 200 with the package |
@@ -353,9 +356,11 @@ Only `id` is required. Without `version`, core takes the first release listed th
 - Installing the same version again changes nothing when its files are intact; with `enable` it
   enables a disabled package. When the registry now pins another archive for an installed version, the
   call is refused (422 `refused`); remove the package first.
-- 200 with `{"package": {...}}`. 404 `not_found` when no registry has the package; 422 `refused` when
-  the archive or its manifest fails a check (nothing is installed); 502 `fetch_failed` when the
-  registry or archive could not be fetched.
+- 200 with `{"package": {...}}`. 404 `not_found` when no registry has the package, or the version or
+  registry named is unknown; 409 `conflict` when that version is still in use by a removed copy that is
+  finishing its requests; 422 `refused` for an invalid `id` or `version`, a package with no release
+  for this platform, or an archive or manifest that fails a check (nothing is installed); 502
+  `fetch_failed` when the registry or archive could not be fetched.
 
 Package changes go through the same steps as a config change: core reads the config file, prepares
 everything with the package change applied, and switches in one step, so a config file that does not
@@ -373,13 +378,13 @@ An account is one way into a provider: a sign-in or an API key. See [`docs/provi
 | `POST /accounts/{id}/login` | `{"method", "input"}`: signs in again to an account added by a login, followed as a new sign-in is. 409 `conflict` for an account set in the config |
 | `PATCH /accounts/{id}` | Changes an account; see below |
 | `DELETE /accounts/{id}` | Removes an account added by a login: 204. 409 `conflict` for an account set in the config |
-| `POST /accounts/{id}/refresh` | Renews the account's credential now. 200 with `{"account": {...}}` |
+| `POST /accounts/{id}/refresh` | Renews the account's credential now. 200 with `{"account": {...}}`. 409 `conflict` when the credential cannot be renewed (an API key) or the account is disabled; 404 for a broken account |
 | `POST /accounts/{id}/cooldown/reset` | Forgets the cooldowns routing holds against the account; a ban stays. Replies `{"account": {...}, "cleared": n}` |
 | `POST /accounts/{id}/test` | Sends the account one small request, straight to its extension, leaving routing and cooldowns as they are. Optional `{"model": "..."}`; without one core takes the first model the account serves (422 `invalid_request` when it lists none). Replies `{"result": {"ok", "model", "served_model", "latency_ms", "reply", "finish_reason", "usage", "error"}}`; `ok` is false, with `error`, when the upstream refused |
 | `GET /accounts/{id}/quota` | The account's plan and usage windows as its provider reports them: `{"fetched_at", "quota"}` |
 | `GET /accounts/{id}/models` | `{"models": [...], "from"}`: the models the account serves, each with `names` (what clients ask for it by after the account's exclusions, aliases and prefix) and `excluded`. `from` is `account` (read from the provider), `extension` (the extension's built-in list), or left out when the config lists them |
 | `POST /accounts/import` | Adds the accounts of one CLIProxyAPI credential file: `{"name": "<file>.json", "content": "<its text>"}`. Core reads no file of its own machine for it. Replies `{"imported": [{"id", "extension", "ignored"}], "skipped": [...]}`. 400 when nothing could be added, 409 when every account was one core already has |
-| `POST /vertex/import` | Adds a Google service account key as a Vertex account: multipart form data with the key in the field `file` and an optional `location` (a form field or a query parameter, default `us-central1`). Replies `{"status": "ok", "account", "project_id", "email", "location"}` |
+| `POST /vertex/import` | Adds a Google service account key as a Vertex account: multipart form data with the key in the field `file` and an optional `location` (a form field or a query parameter; a new account gets `us-central1` without one). Importing a key whose account `vertex-<project>` exists keeps that account's location, and a different `location` is 409 `conflict`, as is an ID that a config account or a non-Vertex account holds. Replies `{"status": "ok", "account", "project_id", "email", "location"}` |
 
 Calls that name an account by `{id}` take its ID. Accounts set in the config are changed only in the
 config: the calls above that would change one answer 409 `conflict`, except that `PATCH` with only
@@ -435,8 +440,9 @@ An account's `proxy_url` sent back as `GET /accounts` shows it keeps its passwor
 | `broken` | Its credential file cannot be read; `why` names the file | When the file is fixed or replaced and core restarts, or the account is removed |
 
 `source` is `provider` when `until` is the provider's own word, `backoff` when core chose it, and
-`unverified` when the provider named a time core does not believe (more than 8 days away, or more than
-an hour past the usage window's own length when the provider named it); such a block is held 30
+`unverified` when the provider named a time core does not believe (more than 8 days away, or when the
+provider named the usage window's length, more than an hour past it, whichever bound is longer; a window
+length over 31 days raises nothing); such a block is held 30
 minutes and checked within 15. When several blocks hold the account, an `exhausted` one decides, then
 the one that ends last. `next_check` is when core next reads the account's usage from its provider;
 absent when no check is due.
@@ -468,7 +474,7 @@ A sign-in is a login in progress, started by `POST /accounts` or `POST /accounts
 | Call | What it does |
 | --- | --- |
 | `GET /models` | `{"models": [...]}`: the models `GET /v1/models` lists, in the same order. Each has `id` (the name clients use), what the account, the catalogue and the extension say about it (`owned_by`, `display_name`, `context_length`, `max_output_tokens`, `capabilities`, `from`), `upstream` (its name upstream), `extension` and `accounts` (the IDs of the accounts a request for the name uses, in the order routing takes them: with a fallback chain, each step's in step order). A name whose accounts all wait for a sign-in or are turned off is left out. Under the `weighted` strategy an account of `weight` 0 is in no entry |
-| `POST /models/refresh` | Asks the providers for their model lists again now. An optional body `{"account": "<id>"}` refreshes one account (404 for an unknown one). Replies `{"models": [...], "accounts": [{"account", "models", "kept", "error"}]}`. A read that fails, times out, comes back empty or falls back to the extension's built-in list keeps the last good list |
+| `POST /models/refresh` | Asks the providers for their model lists again now. An optional body `{"account": "<id>"}` refreshes one account (404 for an unknown one). Replies `{"models": [...], "accounts": [{"account", "models", "kept", "error"}]}`. A read that fails, times out or comes back empty keeps the last good list, and one that falls back to the extension's built-in list keeps a list read from the provider |
 
 Core also refreshes every known list by itself: about every 30 minutes, plus up to 3 minutes of
 random delay so accounts do not all refresh together, and each read has 15 seconds.
@@ -495,8 +501,8 @@ filters as query parameters: `since` (an RFC 3339 time, or a duration back from 
 
 | Call | What it does |
 | --- | --- |
-| `GET /usage` | `{"enabled", ...}`: totals (`total_requests`, `success_count`, `failure_count`, `success_rate`, `average_latency_ms`, `tokens`), breakdowns (`models`, `providers`, `accounts`, `keys`) and a time series (`series`, with `bucket_seconds`). `by=model\|account\|key\|provider` also copies one breakdown into `breakdown` and names it in `by`. `bucket` (a duration from `1s` to `24h`) and `buckets` (1 to 1440) set the series' size. Without them the buckets are 1 hour for a range up to 2 days and 24 hours beyond; with no range at all, 60 steps of 1 minute |
-| `GET /usage/events` | `{"enabled", "events", "next", "more", "lost"}`: the recorded requests. `after=<seq>` reads oldest first from after that event, `before=<seq>` newest first from before it (not both), and `limit` is 1 to 1000 (default 100). `lost` is true when older requests are no longer available |
+| `GET /usage` | `{"enabled", ...}`: totals (`total_requests`, `success_count`, `failure_count`, `success_rate`, `average_latency_ms`, `tokens`), breakdowns (`models`, `providers`, `accounts`, `keys`) and a time series (`series`, with `bucket_seconds`), and `oldest`, `evicted`, `dropped` and `write_errors`, which describe the usage record itself. `by=model\|account\|key\|provider` also copies one breakdown into `breakdown` and names it in `by`. `bucket` (a duration from `1s` to `24h`) and `buckets` (1 to 1440) set the series' size. Without them the buckets are 1 hour for a range up to 2 days and 24 hours beyond; with no range at all, 60 steps of 1 minute |
+| `GET /usage/events` | `{"enabled", "events", "next", "more", "lost"}`: the recorded requests. `after=<seq>` reads oldest first from after that event, `before=<seq>` newest first from before it (not both), and `limit` is 1 to 1000 (default 100). `lost` is true when events newer than `after` were pushed out before the read (always false with `before`) |
 
 Usage reaches back across all usage files kept on disk (`usage.keep_days`, default 90). Closed UTC
 days are read from hourly `usage/summary/YYYY-MM-DD.json` files, which stay when the `.jsonl` files
@@ -516,8 +522,9 @@ client error's `pluxy.left_out` names them). They are recorded whatever `routing
 
 ## Logs
 
-The log calls answer 400 `invalid_request` while logging to file is off
-(`observability.logs.logging-to-file`).
+`GET /logs` and `DELETE /logs` answer 400 `invalid_request` while logging to file is off
+(`observability.logs.logging-to-file`); the error and request log calls read the logs folder either
+way.
 
 | Call | What it does |
 | --- | --- |
@@ -552,8 +559,8 @@ the UI, not by core.
 
 These are not management calls, but the names are the ones `GET /route` and `GET /usage/events` use.
 
-- Every reply to a client request has the trace ID (`X-CPA-TRACE-ID`), and when an account served it
-  `X-Pluxy-Account` (its public ID), `X-Pluxy-Provider`, `X-Pluxy-Model` (the name sent upstream) and
+- Every reply to a client request that passed the client key check has the trace ID (`X-CPA-TRACE-ID`), and when an account served it
+  `X-Pluxy-Account` (its public ID), `X-Pluxy-Provider`, `X-Pluxy-Model` (the name sent upstream, left out for an endpoint that takes no model) and
   `X-Pluxy-Attempts`. An error from an account's refusal carries them too, for the last account tried.
 - A request that ends in an error before a reply starts gets its usual error, with one more member,
   `pluxy`, in the error object of each client format:
@@ -574,5 +581,5 @@ it before reaching. The member holds codes and times, never an upstream's words.
 - When no account that serves the model can take the request for more than 5 minutes, or none can until
   a person acts, the error says `X-Should-Retry: false` and has no `Retry-After`, so a client stops
   instead of retrying; a shorter wait keeps `Retry-After`.
-- `routing.explain: false` leaves out the headers and `pluxy`, for a core whose client keys are given to
+- `routing.explain: false` leaves out the `X-Pluxy-*` headers and `pluxy` (the trace ID header stays), for a core whose client keys are given to
   people who should not see account IDs.
