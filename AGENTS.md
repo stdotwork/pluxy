@@ -13,7 +13,7 @@ panel for it. All three are in `next/`, and all new work goes there.
 | `next/app-tools/` | Native programs the desktop app runs on demand, and the libraries they share: a cargo workspace of its own |
 | `next/ui/` | The UI kit, and the web panel, its browser build, which core embeds |
 | `next/extensions/` | Provider extensions: separate programs, one per kind of upstream, that core starts |
-| `next/corpus/` | The differential test corpus: the new core against the old core's recorded replies |
+| `next/corpus/` | The differential test corpus: pluxy's replies against replies recorded from CLIProxyAPI |
 | `next/protocol/` | The extension protocol between core and extensions |
 
 `next/README.md` describes the rest of `next/`.
@@ -31,8 +31,9 @@ for common changes before searching the tree.
 command or flag, a `PLUXY_` variable, a relative link, a repo path or a quick-start command that
 does not exist, or when shipped code reads a `PLUXY_` variable no doc names. Change the doc, or the
 code if the doc is right; the test's allowlists may only shrink.
-Confirmed plans, decisions and major tradeoffs are written up in `docs/`: the new core's design
-in `docs/design.md`, and how the corpus holds it to the old core in `docs/corpus.md`.
+Confirmed plans, decisions and major tradeoffs are written up in `docs/`: why pluxy is built the
+way it is in `docs/design.md`, the confirmed plans not built yet in `docs/plans.md`, and what the
+corpus compares pluxy with in `docs/corpus.md`.
 
 ## Build and test
 
@@ -93,9 +94,9 @@ The native test builds the ones it packs.
 cd app-tools && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
 ```
 
-`corpus/` is the differential test corpus (see `next/corpus/README.md`). It compares the new core
-with the old core's replies recorded in the case files. The old core is no longer in this
-repository and the corpus cannot run or re-record it: the recorded replies are the reference.
+`corpus/` is the differential test corpus (see `next/corpus/README.md`). It compares pluxy's
+replies with CLIProxyAPI's, recorded in the case files. CLIProxyAPI is not in this repository and
+the corpus cannot run or re-record it: the recorded replies are the reference.
 
 ## CI
 
@@ -127,7 +128,8 @@ Namespace limits and fork guards).
   workflows, for example `fix(next): ...` or `ci: ...`. Repo-wide docs use `docs: ...`. Work on
   `next/app/` uses `next`.
 - Open PRs ready for review, not as drafts. The owner reviews and merges.
-- Licensing: the upstream MIT notices of the removed old core, old web panel and old desktop app,
-  and of the Pi adapter in `next/app-tools/pi-setup/adapter/`, with the files `next/` keeps or
-  adapts from them, are in `THIRD_PARTY_NOTICES.md`. The root license is not decided yet; do not
+- Licensing: the upstream MIT notices of CLIProxyAPI, its Management Center and EasyCLIProxyAPI,
+  whose copies this repository once held, and of the Pi adapter in
+  `next/app-tools/pi-setup/adapter/`, with the files `next/` keeps or adapts from them, are in
+  `THIRD_PARTY_NOTICES.md`. The root license is not decided yet; do not
   add one.
