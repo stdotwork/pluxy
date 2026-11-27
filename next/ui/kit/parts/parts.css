@@ -266,6 +266,15 @@
      up without being a table. */
   .account-row {
     --row-ground: var(--px-color-surface);
+    /* The width of one limit's columns, and of the two side by side, from the type and spacing
+       tokens, so the plan and the limits sit in the same place on every row. */
+    --lim-name: calc(var(--px-font-size-small) * 2.25);
+    --lim-bar: calc(var(--s) * 11);
+    --lim-left: calc(var(--px-font-size-small) * 5.5);
+    --lim-reset: calc(var(--px-font-size-small) * 4.25);
+    --lim-gap: calc(var(--s) * 2);
+    --lim: calc(var(--lim-name) + var(--lim-bar) + var(--lim-left) + var(--lim-reset) + var(--lim-gap) * 3);
+    --limits: calc(var(--lim) * 2 + var(--s) * 5);
     container-type: inline-size;
     border-bottom: var(--px-shape-border) solid var(--px-color-border);
     cursor: pointer;
@@ -283,7 +292,7 @@
 
   .account-grid {
     display: grid;
-    grid-template-columns: auto minmax(10em, 1fr) 6.5em auto auto;
+    grid-template-columns: auto minmax(10em, 1fr) 6.5em minmax(0, var(--limits)) auto;
     align-items: center;
     column-gap: calc(var(--s) * 3);
     min-height: var(--px-size-row-tall);
@@ -291,7 +300,7 @@
   }
 
   .account-row[data-wide] .account-grid {
-    grid-template-columns: auto minmax(10em, 1fr) 6.5em auto minmax(5em, auto) minmax(8em, auto);
+    grid-template-columns: auto minmax(10em, 1fr) 6.5em minmax(0, var(--limits)) 7em 9.5em;
   }
 
   .account-mark {
@@ -432,6 +441,15 @@
     display: none;
   }
 
+  /* A row with no limits (it needs the person, or is turned off) gives their room to its reason. */
+  .account-row:not(:has(.limits)) .account-who {
+    grid-column: 2 / 5;
+  }
+
+  .account-row:not(:has(.limits)) .account-plan {
+    display: none;
+  }
+
   .account-week {
     justify-self: end;
     color: var(--px-color-text-muted);
@@ -447,8 +465,8 @@
 
   .account-row .limit {
     display: inline-grid;
-    grid-template-columns: 2.25em calc(var(--s) * 11) 5.25em 4.25em;
-    gap: calc(var(--s) * 2);
+    grid-template-columns: var(--lim-name) var(--lim-bar) var(--lim-left) var(--lim-reset);
+    gap: var(--lim-gap);
   }
 
   .account-row .limit-left {
@@ -483,6 +501,10 @@
       row-gap: var(--s);
     }
 
+    .account-row:not(:has(.limits)) .account-who {
+      grid-column: 2;
+    }
+
     .account-plan:empty {
       display: none;
     }
@@ -500,6 +522,30 @@
     .account-reason {
       white-space: normal;
       overflow-wrap: anywhere;
+    }
+  }
+
+  /* A row with limits and a fix (a model cooling down) needs more room than the others: under it,
+     its limits go on their own line, and the fix keeps its place at the end. */
+  @container (max-width: 66em) {
+    .account-row:has(.account-fix > .fix) .account-grid {
+      grid-template-columns: auto minmax(0, 1fr) auto auto;
+      row-gap: var(--s);
+    }
+
+    .account-row:has(.account-fix > .fix) .account-side:has(> .limits) {
+      grid-row: 2;
+      grid-column: 2 / -1;
+      justify-self: start;
+    }
+
+    .account-row[data-wide]:has(.account-fix > .fix) .account-grid {
+      grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+    }
+
+    .account-row:has(.account-fix > .fix) .account-fix {
+      grid-row: 1;
+      grid-column: -2;
     }
   }
 
@@ -539,7 +585,7 @@
 
   .request-row[data-compact] {
     container-type: normal;
-    grid-template-columns: 5.5ch minmax(0, 1.35fr) minmax(0, 1fr) auto;
+    grid-template-columns: 5.5ch minmax(0, 2fr) minmax(0, 1fr) auto;
     min-height: var(--px-size-row);
   }
 
@@ -1005,6 +1051,8 @@
   }
 
   .pool-name {
+    flex: none;
+    max-width: 100%;
     margin: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1013,8 +1061,13 @@
     font-weight: var(--px-font-weight-strong);
   }
 
+  /* The limit's name gives way to the provider's: it shortens first. */
   .pool-window {
+    flex: 0 1 auto;
+    min-width: 0;
     margin-inline-start: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: var(--px-color-text-muted);
     font-size: var(--px-font-size-small);
     white-space: nowrap;
@@ -1153,6 +1206,11 @@
 
   .connection-label a {
     color: var(--px-color-text-muted);
+    text-decoration: none;
+  }
+
+  .connection-label a:hover {
+    color: var(--px-color-text);
   }
 
   .connection-note {

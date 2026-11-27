@@ -15,6 +15,8 @@ import { Icon } from "../icons";
 import type { Outcome } from "../parts";
 import {
   AccountRow,
+  accountCondition,
+  accountFix,
   byProvider,
   ConnectionCard,
   groupWord,
@@ -452,6 +454,10 @@ export function HomePage() {
     .filter((pool) => pool.total > 0);
   const listed = providerGroups(grouped, windows, running, now.getTime());
 
+  // The view's one filled button: the first fix in the band that repairs something.
+  const firstRepair = grouped.groups.needs.findIndex(
+    (a) => accountFix(a, accountCondition(a, running, now.getTime()))?.variant === "primary",
+  );
   const band =
     grouped.groups.needs.length > 0 ? (
       <section class="home-band" data-part="needs-band" aria-label={groupWord("needs")}>
@@ -460,7 +466,7 @@ export function HomePage() {
             key={a.id}
             account={a}
             running={running}
-            quietFix={i > 0}
+            quietFix={i !== firstRepair}
             onTurnOn={turnOn}
             onClearCooldown={clearCooldown}
           />

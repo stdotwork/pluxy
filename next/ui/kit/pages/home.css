@@ -151,8 +151,10 @@
     min-height: calc(var(--px-size-row-tall) + var(--s) * 4);
   }
 
+  /* In the band the reason is the point: it wraps rather than end in an ellipsis. */
   .home-band .account-reason {
     color: var(--px-color-text);
+    white-space: normal;
   }
 
   /* ---- the pools ---------------------------------------------------------------------------- */
