@@ -363,18 +363,19 @@ export function keyName(
 
 // ---- plan -------------------------------------------------------------------------------------
 
-/** How much a plan weighs on a row: top (the largest plans), mid, or free. */
-export type PlanTier = "top" | "mid" | "free";
+/** How much a plan weighs on a row: top (the largest plans), high (the next), mid, or free. */
+export type PlanTier = "top" | "high" | "mid" | "free";
 
 /**
- * The tier of a plan word: Max (5x and 20x) and Ultra are the largest plans the providers sell;
- * Free is free; any other plan, known or not, is mid. One table: themes colour the tiers by
- * data-plan-tier.
+ * The tier of a plan word: Max 20x and Ultra are the largest plans the providers sell, and an API
+ * key's pay-as-you-go plan sits with them; Max 5x and plain Max are the next; Free is free; any
+ * other plan, known or not, is mid. One table: themes colour the tiers by data-plan-tier.
  */
 export function planTier(plan: string): PlanTier {
   const p = plan.trim().toLowerCase();
   if (/^free\b/.test(p)) return "free";
-  if (/^(max|ultra)\b/.test(p)) return "top";
+  if (/^(max\s*20x|ultra|api)\b/.test(p)) return "top";
+  if (/^max\b/.test(p)) return "high";
   return "mid";
 }
 
