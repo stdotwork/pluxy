@@ -2,14 +2,17 @@
 // by the theme's layout options. A host build passes the pages it offers and what the status
 // block says; the shell knows nothing else about them.
 
-import type { VNode } from "preact";
+import { Fragment, type VNode } from "preact";
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api } from "./api";
+import { CommandMenu, canRefresh } from "./command";
+import { isApple, openKeys, opensMenu } from "./commands";
 import { DESTINATIONS, destinationHome, type PageDef, place } from "./destinations";
 import { ExtensionPage, type ExtensionPageProps } from "./extensions/page";
 import { destinationLabel, Frame, type FrameLink, type FrameStatus } from "./frame";
 import type { Host, Reply } from "./host";
 import { Icon } from "./icons";
+import { expireWindows } from "./parts/hooks";
 import { PrivacyContext, type PrivacyState, privacyMasks, usePrivacyOn } from "./privacy";
 import { rich, strings } from "./strings";
 import type { ThemeState } from "./theme/state";
@@ -340,6 +343,33 @@ export function Shell(props: {
     setAnnounced(title);
   }, [page, signedIn, title]);
 
+  // The command menu (command.tsx): Command K, or Control K off Apple computers, opens it from
+  // anywhere in the signed-in window, except over a dialog that waits for an answer.
+  const [menu, setMenu] = useState<"keyboard" | "pointer">();
+  useEffect(() => {
+    if (!signedIn) return setMenu(undefined);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || !opensMenu(e)) return;
+      if (document.querySelector('dialog[open], [data-part="dialog"], [data-part="command"]')) return;
+      e.preventDefault();
+      setMenu("keyboard");
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [signedIn]);
+
+  // The menu's Refresh shows the page again from what core holds now. A page with changes not
+  // saved asks first, as it does when the address changes.
+  const [shownAgain, setShownAgain] = useState(0);
+  const refreshPage = useCallback(() => {
+    const again = () => {
+      expireWindows();
+      setShownAgain((n) => n + 1);
+    };
+    for (const guard of leaveGuards) if (guard(again)) return;
+    again();
+  }, []);
+
   const placed = useMemo(() => place(pages, page), [pages, page]);
   const destinations = useMemo(
     () =>
@@ -396,10 +426,21 @@ export function Shell(props: {
           page={page}
           rootRef={rootRef}
           announced={announced}
+          search={{ open: setMenu, keys: openKeys(), shortcut: isApple() ? "Meta+K" : "Control+K" }}
           headerEnd={<NamesHiddenButton privacy={privacy} />}
         >
-          {active?.render()}
+          <Fragment key={shownAgain}>{active?.render()}</Fragment>
         </Frame>
+        {menu && (
+          <CommandMenu
+            by={menu}
+            pages={pages}
+            page={page}
+            address={host.address}
+            onRefresh={canRefresh(page) ? refreshPage : undefined}
+            onClose={() => setMenu(undefined)}
+          />
+        )}
       </PrivacyContext.Provider>
     </KitContext.Provider>
   );

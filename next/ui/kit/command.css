@@ -1,0 +1,330 @@
+/* The command menu (command.tsx) and the navigation's Search field that opens it (frame.tsx). It
+   reads only theme tokens. Only a menu opened by the pointer fades in, over motion.duration-menu;
+   one opened by the keyboard is there at once. */
+@layer kit {
+  /* The Search field in the navigation, under the product name. */
+
+  .nav-search {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    min-height: var(--px-size-control);
+    margin: calc(var(--s) * 1) calc(var(--s) * 2);
+    padding: 0 calc(var(--s) * 2);
+    border: var(--px-shape-border) solid var(--px-color-nav-border);
+    border-radius: var(--px-shape-radius);
+    background: none;
+    color: var(--px-color-nav-muted);
+    font: inherit;
+    font-size: var(--px-font-size-small);
+    text-align: start;
+    cursor: pointer;
+    transition:
+      background var(--t),
+      color var(--t);
+  }
+
+  .nav-search:hover {
+    background: var(--px-color-nav-hover);
+    color: var(--px-color-nav-text);
+  }
+
+  .nav-search:active {
+    background: var(--px-color-nav-active);
+  }
+
+  .nav-search .nav-label {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .nav-search-keys,
+  .command kbd {
+    font: inherit;
+    font-size: var(--px-font-size-label);
+    line-height: 1;
+    color: var(--px-color-secondary-label);
+    white-space: nowrap;
+  }
+
+  .nav-search-keys {
+    flex: none;
+    padding: calc(var(--s) * 0.5) calc(var(--s) * 1.5);
+    border: var(--px-shape-border) solid var(--px-color-nav-border);
+    border-radius: var(--r-chip);
+  }
+
+  /* The rail and the bar show the icon alone: the label is for assistive technology. */
+  .shell:is([data-frame="rail"], [data-frame="bar"], [data-frame="top"]) .nav-search {
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+  }
+
+  .shell[data-frame="rail"] .nav-search {
+    width: calc(var(--s) * 6 + 16px);
+    margin-inline: auto;
+  }
+
+  .shell:is([data-frame="bar"], [data-frame="top"]) .nav-search {
+    width: calc(var(--s) * 6 + 16px);
+    margin: 0 calc(var(--s) * 1);
+  }
+
+  .shell:is([data-frame="rail"], [data-frame="bar"], [data-frame="top"]) .nav-search .nav-label,
+  .shell:is([data-frame="rail"], [data-frame="bar"], [data-frame="top"]) .nav-search-keys {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    border: 0;
+    padding: 0;
+  }
+
+  /* The menu. */
+
+  .command-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: min(14vh, 120px) calc(var(--s) * 4) calc(var(--s) * 4);
+    background: color-mix(in srgb, var(--px-color-bg) 55%, transparent);
+    backdrop-filter: blur(2px);
+  }
+
+  .command {
+    width: min(640px, 100%);
+    max-height: min(520px, 100%);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-dialog);
+    background: var(--px-color-overlay);
+    color: var(--px-color-text);
+    box-shadow: var(--px-shadow-dialog);
+  }
+
+  .command[data-by="pointer"] {
+    animation: command-in var(--px-motion-duration-menu, 160ms) var(--px-motion-easing, ease-out);
+  }
+
+  .command-backdrop:has(.command[data-by="pointer"]) {
+    animation: command-fade var(--px-motion-duration-menu, 160ms) var(--px-motion-easing, ease-out);
+  }
+
+  @keyframes command-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.985);
+    }
+  }
+
+  @keyframes command-fade {
+    from {
+      opacity: 0;
+    }
+  }
+
+  .command-field {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 3);
+    min-height: calc(var(--px-size-header) + var(--s) * 1);
+    padding-inline: calc(var(--s) * 4);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    color: var(--px-color-text-muted);
+  }
+
+  /* Focus is always in the field while the menu is open: the line under it says so. */
+  .command-field:focus-within {
+    border-bottom-color: var(--px-color-focus);
+  }
+
+  .command-field input {
+    flex: 1;
+    min-width: 0;
+    min-height: var(--px-size-control-main);
+    padding: 0;
+    border: 0;
+    outline: none;
+    background: none;
+    color: var(--px-color-text);
+    font: inherit;
+  }
+
+  .command-field input::placeholder {
+    color: var(--px-color-placeholder);
+  }
+
+  .command kbd {
+    padding: calc(var(--s) * 0.5) calc(var(--s) * 1.5);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-chip);
+  }
+
+  .command-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: calc(var(--s) * 2);
+  }
+
+  .command-group + .command-group {
+    margin-top: calc(var(--s) * 2);
+  }
+
+  .command-heading {
+    padding: calc(var(--s) * 1) calc(var(--s) * 2);
+    color: var(--px-color-secondary-label);
+    font-size: var(--px-font-size-label);
+    font-weight: var(--px-font-weight-medium);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .command-item {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2.5);
+    min-height: var(--px-size-row);
+    padding: 0 calc(var(--s) * 2);
+    border-radius: var(--px-shape-radius);
+    cursor: pointer;
+    color: var(--px-color-text);
+  }
+
+  .command-item > .icon {
+    color: var(--px-color-text-muted);
+  }
+
+  .command-item[aria-selected="true"] {
+    background: var(--px-color-selected);
+    color: var(--px-color-selected-text);
+  }
+
+  .command-item[aria-selected="true"] > .icon {
+    color: var(--px-color-selected-text);
+  }
+
+  .command-label {
+    flex: 0 1 auto;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .command-hint {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .command-item[data-kind="action"] .command-hint {
+    font-family: var(--px-font-mono);
+    font-size: var(--px-font-size-label);
+  }
+
+  .command-shortcut,
+  .command-done {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 1);
+    margin-inline-start: auto;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .command-done {
+    color: var(--px-color-ok);
+  }
+
+  .command-more,
+  .command-note {
+    padding: calc(var(--s) * 1) calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .command-empty {
+    display: grid;
+    gap: calc(var(--s) * 1);
+    padding: calc(var(--s) * 8) calc(var(--s) * 4);
+    text-align: center;
+    color: var(--px-color-text-muted);
+  }
+
+  .command-empty b {
+    color: var(--px-color-text);
+    font-weight: var(--px-font-weight-medium);
+    overflow-wrap: anywhere;
+  }
+
+  /* Accounts still loading: two rows in the shape the accounts take, once the wait is noticed. */
+  .command-skeleton {
+    display: grid;
+    gap: calc(var(--s) * 1);
+    padding: calc(var(--s) * 1) calc(var(--s) * 2);
+  }
+
+  .command-skeleton i {
+    height: calc(var(--px-size-row) - var(--s) * 2);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-meter-track);
+  }
+
+  .command-skeleton i:nth-child(2) {
+    width: 70%;
+  }
+
+  .command-error {
+    flex: none;
+    padding: calc(var(--s) * 2) calc(var(--s) * 4);
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+    background: var(--px-color-danger-surface);
+    color: var(--px-color-danger);
+    font-size: var(--px-font-size-small);
+  }
+
+  .command-foot {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 4);
+    padding: calc(var(--s) * 2) calc(var(--s) * 4);
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .command-foot kbd + kbd {
+    margin-inline-start: calc(var(--s) * 1);
+  }
+
+  .command-foot-end {
+    margin-inline-start: auto;
+  }
+
+  @media (max-width: 559.98px) {
+    .command-backdrop {
+      padding-top: calc(var(--s) * 4);
+    }
+
+    .command-foot {
+      display: none;
+    }
+  }
+}
