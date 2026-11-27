@@ -83,7 +83,7 @@
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: calc(var(--s) * 2.5) calc(var(--s) * 4);
+    gap: calc(var(--s) * 2) calc(var(--s) * 3);
     min-width: 0;
   }
 
@@ -150,16 +150,20 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
+    justify-content: flex-end;
     gap: calc(var(--s) * 2);
     margin-inline-start: auto;
-    max-width: 100%;
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .accounts-find {
     position: relative;
     display: inline-flex;
     align-items: center;
-    width: min(16rem, 100%);
+    flex: 1 1 11rem;
+    min-width: 9rem;
+    max-width: 15rem;
   }
 
   .accounts-find .icon {
@@ -418,8 +422,8 @@
 
   .accounts-page[data-view="cards"] .accounts-pick {
     position: absolute;
-    top: calc(var(--s) * 3);
-    inset-inline-end: calc(var(--s) * 3);
+    top: calc(var(--s) * 3.5);
+    inset-inline-end: calc(var(--s) * 3.5);
     z-index: 2;
     padding: 0;
     border-bottom: 0;
@@ -477,6 +481,19 @@
 
   .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .account-sub {
     flex-wrap: wrap;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .account-sub:has(.account-reason) {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .accounts-page[data-view="cards"]
+    .accounts-item
+    .account-row[data-wide]
+    .account-sub:has(.account-reason)
+    .account-word::after {
+    content: none;
   }
 
   .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .account-reason {
@@ -580,43 +597,60 @@
 
   /* Loading skeleton */
 
+  .accounts-loading .state-pane {
+    padding-block: calc(var(--s) * 2) calc(var(--s) * 3);
+    padding-inline: 0;
+  }
+
   .accounts-skeleton {
     display: grid;
     gap: calc(var(--s) * 4);
   }
 
-  .accounts-skeleton i {
+  .accounts-skeleton .accounts-skeleton-bar {
     display: block;
-    border-radius: var(--r-card);
-    background: var(--px-color-surface-raised);
-  }
-
-  .accounts-skeleton-bar {
     height: var(--px-size-control);
     width: min(28rem, 100%);
     border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface-raised);
   }
 
   .accounts-skeleton-group {
     border: var(--px-shape-border) solid var(--px-color-border);
     border-radius: var(--r-card);
+    background: var(--px-color-card);
     overflow: hidden;
   }
 
-  .accounts-skeleton-head {
+  .accounts-skeleton .accounts-skeleton-head {
+    display: block;
     height: calc(var(--s) * 7);
-    border-radius: 0;
+    background: var(--px-color-surface-raised);
     border-bottom: var(--px-shape-border) solid var(--px-color-border);
   }
 
-  .accounts-skeleton-row {
-    height: calc(var(--px-size-row-tall) + var(--s) * 2);
-    border-radius: 0;
-    background: var(--px-color-surface);
+  .accounts-skeleton .accounts-skeleton-row {
+    display: flex;
+    align-items: center;
+    height: calc(var(--px-size-row-tall) + var(--s) * 3);
+    padding-inline: calc(var(--s) * 3.5);
+    background: var(--px-color-card);
     border-bottom: var(--px-shape-border) solid var(--px-color-border);
   }
 
-  .accounts-skeleton-row:last-child {
+  .accounts-skeleton .accounts-skeleton-row::before {
+    content: "";
+    width: 34%;
+    height: calc(var(--s) * 2.5);
+    border-radius: var(--r-chip);
+    background: var(--px-color-surface-raised);
+  }
+
+  .accounts-skeleton .accounts-skeleton-row:nth-child(even)::before {
+    width: 48%;
+  }
+
+  .accounts-skeleton .accounts-skeleton-row:last-child {
     border-bottom: 0;
   }
 
@@ -626,9 +660,12 @@
     gap: calc(var(--s) * 3);
   }
 
-  .accounts-skeleton-card {
+  .accounts-skeleton .accounts-skeleton-card {
+    display: block;
     height: calc(var(--s) * 38);
     border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-card);
+    background: var(--px-color-surface-raised);
   }
 
   /* ---- One account's page ------------------------------------------------------------------- */

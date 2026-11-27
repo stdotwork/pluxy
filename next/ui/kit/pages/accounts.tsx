@@ -461,13 +461,21 @@ export function AccountsPage() {
       return next;
     });
 
-  const head = <PageHead title={t("title")} actions={<AddButton quiet={firstRepairId !== undefined} />} />;
+  const headQuiet =
+    firstRepairId !== undefined ||
+    accounts.phase === "loading" ||
+    !list ||
+    (accounts.phase === "failed" && list.length === 0) ||
+    list.length === 0;
+  const head = <PageHead title={t("title")} actions={<AddButton quiet={headQuiet} />} />;
   if (accounts.phase === "loading") {
     return (
       <>
         {head}
-        <StatePane kind="loading" title={t("loading")} rows={0} />
-        <AccountsSkeleton view={view} />
+        <div class="accounts-loading">
+          <StatePane kind="loading" title={t("loading")} rows={0} />
+          <AccountsSkeleton view={view} />
+        </div>
       </>
     );
   }
