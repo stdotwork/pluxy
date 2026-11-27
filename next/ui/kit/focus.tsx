@@ -51,10 +51,12 @@ export function Focus(props: {
       </header>
       <div class="focus-stage" data-width={props.width ?? "narrow"}>
         {props.above}
-        <div class="focus-card" data-part="focus-card">
-          {props.children}
+        <div class="focus-unit">
+          <div class="focus-card" data-part="focus-card">
+            {props.children}
+          </div>
+          {props.below && <div class="focus-below">{props.below}</div>}
         </div>
-        {props.below && <div class="focus-below">{props.below}</div>}
       </div>
     </main>
   );

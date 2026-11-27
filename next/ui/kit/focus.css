@@ -80,10 +80,31 @@
     min-width: 0;
   }
 
-  /* One question sits in the middle of the window; a step with a list starts near the top. */
+  /* One question sits in the middle of the window (the bottom padding matches the bar above, and
+     the lines under the card hang below it); a step with a list starts near the top. */
   .focus-stage[data-width="narrow"] {
     justify-content: center;
-    padding-bottom: calc(var(--px-size-header) + var(--s) * 12);
+    padding-bottom: calc(var(--px-size-header) + var(--s) * 6);
+  }
+
+  .focus-unit {
+    display: grid;
+    justify-items: center;
+    gap: calc(var(--s) * 4);
+    width: 100%;
+    min-width: 0;
+  }
+
+  .focus-stage[data-width="narrow"] > .focus-unit {
+    position: relative;
+  }
+
+  .focus-stage[data-width="narrow"] .focus-below {
+    position: absolute;
+    top: calc(100% + var(--s) * 4);
+    left: 0;
+    right: 0;
+    margin-inline: auto;
   }
 
   .focus-card {
@@ -99,7 +120,7 @@
     box-shadow: var(--px-shadow-raised);
   }
 
-  .focus-stage[data-width="wide"] > .focus-card,
+  .focus-stage[data-width="wide"] .focus-card,
   .focus-stage[data-width="wide"] > .focus-above {
     width: min(100%, 760px);
   }

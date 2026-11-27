@@ -12,7 +12,8 @@ test.use({ trace: "off", screenshot: "off", video: "off" });
 
 test.beforeEach(async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await openPanel(page, core);
+  // The address names the Tools page, so this first run opens it rather than Setup.
+  await openPanel(page, core, "/panel/#/tools");
   await signIn(page, core);
   await goTo(page, "Tools");
 });

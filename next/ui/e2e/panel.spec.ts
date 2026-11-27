@@ -537,13 +537,14 @@ test("the sign-in page fills the window, says how to open the panel without cust
   page,
 }) => {
   await open(page);
-  // The card is in the middle of the window at its own width, not in the navigation's column.
-  const card = page.locator('[data-part="card"]');
+  // The card is in the middle of the window at its own width, not in the navigation's column; the
+  // way to open the panel without custom CSS is under it.
+  const card = page.locator('[data-part="focus-card"]');
   const box = await card.boundingBox();
   if (!box) throw new Error("no sign-in card");
   expect(box.width).toBeGreaterThan(300);
   expect(Math.abs(box.x + box.width / 2 - 640)).toBeLessThan(2);
-  await expect(card).toContainText("add ?safe to the URL to disable it.");
+  await expect(page.locator('main[data-part="main"]')).toContainText("add ?safe to the URL to disable it.");
 
   // Sign out is a row of General, in the panel: it asks first, and Cancel leaves the person in.
   await signIn(page, core);
