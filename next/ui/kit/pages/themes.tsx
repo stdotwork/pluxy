@@ -240,7 +240,9 @@ function ThemePicker(props: Acts) {
               <span class="theme-name">{l.name}</span>
               {l.offered && <PaletteDots theme={l.offered.theme} />}
             </span>
-            <small class="theme-about">{l.offered?.theme.description ?? l.id}</small>
+            <small class="theme-about" title={l.offered?.theme.description}>
+              {l.offered?.theme.description ?? l.id}
+            </small>
             {l.offered && <small class="theme-modes">{modes(l.offered.theme.appearance)}</small>}
             <span class="theme-check" aria-hidden="true">
               <Icon name="check" size={12} />
