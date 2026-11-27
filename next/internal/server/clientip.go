@@ -159,11 +159,13 @@ func ClientIP(r *http.Request) netip.Addr { return clientFor(r).addr }
 // FromThisMachine reports whether r came from this machine and was not forwarded from
 // elsewhere. A request comes from this machine when it came from a loopback address, or from
 // the very address its connection arrived at (core listening on a network address of this
-// machine, called by a program here at that address). Another address of this machine does not
-// count: only the address the call arrived at shows the caller is here. A request that names
+// machine, called by a program here at that address). A source that this machine's own network
+// translation rewrites to the address the call arrived at (a Docker bridge source on the host)
+// counts too; a source that arrives unchanged at another address does not. A request that names
 // another client in X-Forwarded-For, X-Real-IP or Forwarded, where core did not take the client
-// from that header, does not count, so a proxy on this machine cannot make remote clients look
-// local.
+// from that header, does not count, so a proxy on this machine that sets one of those headers
+// keeps its callers remote. A forwarder here that sets none counts as this machine, as one on
+// loopback already does.
 func FromThisMachine(r *http.Request) bool {
 	c := clientFor(r)
 	return (c.addr.IsLoopback() || c.ownAddress) && !c.forwarded
