@@ -2,7 +2,7 @@
 // can serve a model, and the rules by which accounts share requests. Moves and rules save at once;
 // a fallback is saved from its editor.
 
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { type Account, problem, runningExtensions } from "../api";
 import type { Reply } from "../host";
 import { Icon } from "../icons";
@@ -20,7 +20,7 @@ import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import { relativeTime } from "../time";
-import { BUSY_SHOWS_AFTER_MS, Button, Notice, PageHead, useKit, useLoad } from "../ui";
+import { BUSY_SHOWS_AFTER_MS, Button, type Loaded, Notice, PageHead, useKit } from "../ui";
 import { Fallbacks } from "./routingFallbacks";
 import { AccountOrder } from "./routingOrder";
 import { Rules } from "./routingRules";
@@ -60,9 +60,10 @@ function useNow(every = 15_000) {
 function Freshness(props: { at?: number }) {
   const now = useNow();
   if (props.at === undefined) return null;
+  const current = Math.max(now, Date.now(), props.at);
   return (
     <span class="routing-fresh" title={new Date(props.at).toLocaleString()}>
-      {t("updated", { when: relativeTime(new Date(props.at), Math.max(now, props.at)) })}
+      {t("updated", { when: relativeTime(new Date(props.at), current) })}
     </span>
   );
 }
@@ -84,20 +85,61 @@ function RoutingSkeleton() {
   );
 }
 
+type TimedState<T> = { loading: boolean; at?: number } & (
+  | { phase: "loading"; data?: undefined; error?: undefined }
+  | { phase: "ready"; data?: T; error?: undefined }
+  | { phase: "failed"; data?: T; error: string }
+);
+
+type TimedLoad<T> = Loaded<T> & { at?: number };
+
+/** Loads one management API reply, keeping its last good data and when that reply arrived. */
+function useTimedLoad<T>(load: () => Promise<Reply<T>>): TimedLoad<T> {
+  const { unauthorized } = useKit();
+  const [state, setState] = useState<TimedState<T>>({ phase: "loading", loading: true });
+  const [n, setN] = useState(0);
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  useEffect(() => {
+    let live = true;
+    setState((s) => ({ ...s, loading: true }));
+    loadRef.current().then(
+      (r) => {
+        if (!live) return;
+        if (r.status === 401) return unauthorized();
+        const error = problem(r);
+        setState((s) =>
+          error === undefined
+            ? { phase: "ready", data: r.body, loading: false, at: Date.now() }
+            : { phase: "failed", data: s.data, error, loading: false, at: s.at },
+        );
+      },
+      (err) => {
+        if (!live) return;
+        const error = err instanceof Error ? err.message : String(err);
+        setState((s) => ({ phase: "failed", data: s.data, error, loading: false, at: s.at }));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [n, unauthorized]);
+  return { ...state, reload: useCallback(() => setN((x) => x + 1), []) };
+}
+
 export function RoutingPage() {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
-  const accounts = useLoad(api.accounts);
-  const settings = useLoad(api.coreSettings);
-  const chains = useLoad(api.chains);
-  const models = useLoad(api.servedModels);
-  const config = useLoad(api.config);
-  const status = useLoad(api.status);
+  const accounts = useTimedLoad(api.accounts);
+  const settings = useTimedLoad(api.coreSettings);
+  const chains = useTimedLoad(api.chains);
+  const models = useTimedLoad(api.servedModels);
+  const config = useTimedLoad(api.config);
+  const status = useTimedLoad(api.status);
   const [error, setError] = useState<string>();
   const [yaml, setYaml] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [refreshed, setRefreshed] = useState(0);
-  const [lastAt, setLastAt] = useState<number>();
   // What core said about moves not yet read back, so a row sits where it was put at once.
   // Each belongs to the read it was made over: a newer read has it in, so it is not used again.
   const [placed, setPlaced] = useState<{
@@ -111,11 +153,14 @@ export function RoutingPage() {
   const read = useRef(accounts.data);
   read.current = accounts.data;
 
-  useEffect(() => {
-    if (accounts.phase === "ready" || settings.phase === "ready" || chains.phase === "ready") {
-      setLastAt(Date.now());
-    }
-  }, [accounts.phase, accounts.data, settings.phase, settings.data, chains.phase, chains.data]);
+  const allLoads = [accounts, settings, chains, models, config, status];
+  const primaryTimes = [accounts, settings, chains]
+    .map((l) => l.at)
+    .filter((at): at is number => at !== undefined);
+  const allTimes = allLoads.map((l) => l.at).filter((at): at is number => at !== undefined);
+  // The oldest read currently shown: a failed refresh leaves that read's time behind so the
+  // header never claims "Updated just now" over stale data.
+  const lastAt = primaryTimes.length > 0 ? Math.min(...allTimes) : undefined;
 
   const list = useMemo(
     () =>

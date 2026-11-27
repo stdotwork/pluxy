@@ -490,6 +490,82 @@ test("a failed refresh over loaded data keeps the page under the stale notice", 
   expect(live.text()).toContain("a1");
 });
 
+test("a failed refresh keeps the previous freshness stamp instead of saying Updated just now", async () => {
+  const realNow = Date.now;
+  let clock = Date.UTC(2026, 10, 27, 22, 27, 0);
+  Date.now = () => clock;
+  try {
+    let failAccounts = false;
+    let failAll = false;
+    const base: Record<string, Answer> = {
+      "GET /accounts": ok({ accounts: [account("a1"), account("a2")] }),
+      "GET /settings": ok(settings()),
+      "GET /chains": ok({ chains: [] }),
+      "GET /models": ok({ models: [] }),
+      "GET /config": ok({ format: "json", hash: "x", content: "{}" }),
+      "GET /status": ok({ extensions: [{ id: "pluxy/claude" }] }),
+    };
+    const host = {
+      call: async (method: Method, path: string): Promise<Reply<unknown>> => {
+        if (method === "GET" && failAll) return hiccup;
+        if (method === "GET" && path === "/accounts" && failAccounts) return hiccup;
+        const ans = base[`${method} ${path}`];
+        return ans && ans !== "pending" ? ans : ok({});
+      },
+      signedIn: () => true,
+      prefs: { get: () => null, set: () => {} },
+      features: new Set(),
+    } as unknown as Host;
+    const kit = {
+      host,
+      api: api(host),
+      themes: { resolved: { layout: { tabs: "top" } }, subscribe: () => () => {} },
+      unauthorized: () => {},
+      extensionsChanged: () => {},
+    } as unknown as Kit;
+    const live = await mountIn(
+      <KitContext.Provider value={kit}>
+        <RoutingPage />
+      </KitContext.Provider>,
+    );
+    const fresh = () => all(live.root, "span").find((n) => attr(n, "class") === "routing-fresh");
+    expect(fresh()?.textContent).toBe("Updated just now");
+    const initialTitle = fresh() ? attr(fresh() as FakeNode, "title") : undefined;
+
+    // 5 minutes later, GET /accounts fails while settings and chains succeed.
+    clock += 5 * 60_000;
+    failAccounts = true;
+    await act(async () => {
+      button(live.root, "Refresh").dispatchEvent(new Event("click"));
+    });
+    await settle();
+    expect(fresh()?.textContent).not.toBe("Updated just now");
+    expect(fresh()?.textContent).toBe("Updated 5m ago");
+    expect(fresh() && attr(fresh() as FakeNode, "title")).toBe(initialTitle);
+
+    // Another 2 minutes later, every read fails: the stamp still stays at the initial read.
+    clock += 2 * 60_000;
+    failAll = true;
+    await act(async () => {
+      button(live.root, "Refresh").dispatchEvent(new Event("click"));
+    });
+    await settle();
+    expect(fresh()?.textContent).toBe("Updated 7m ago");
+    expect(fresh() && attr(fresh() as FakeNode, "title")).toBe(initialTitle);
+
+    // When a refresh succeeds for every read, the stamp moves forward.
+    failAccounts = false;
+    failAll = false;
+    await act(async () => {
+      button(live.root, "Refresh").dispatchEvent(new Event("click"));
+    });
+    await settle();
+    expect(fresh()?.textContent).toBe("Updated just now");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test("saving a rule shows a Saved tick beside it", async () => {
   const page = await mount();
   const box = toggle(page.root, "Keep a conversation on one account");
