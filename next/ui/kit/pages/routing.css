@@ -26,13 +26,17 @@
     gap: calc(var(--s) * 4);
   }
 
-  /* Over data from an earlier read, when a refresh failed: dim the stale section under its notice. */
+  /* Over data from an earlier read, when a refresh failed: words keep their normal colours so
+     muted, amber and red text never drop under 4.5:1; only bars and marks fade. */
   .routing-page .stale-notice {
     margin-top: calc(var(--s) * 2);
   }
 
-  .routing-page .stale-notice + * {
-    opacity: 0.7;
+  .routing-page
+    .stale-notice
+    + *
+    :is(.meter, .account-mark, .order-provider-head > .provider-mark, .fallback-chip > .provider-mark) {
+    opacity: 0.6;
   }
 
   .routing-layout {

@@ -4,6 +4,7 @@ import { expect, type Page, test } from "@playwright/test";
 import type { Account } from "../kit/api/accounts";
 import type { Chain } from "../kit/api/chains";
 import type { CoreSettings } from "../kit/api/settings";
+import { measureContrast } from "./contrast";
 import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
@@ -392,6 +393,110 @@ test("a number rule checks itself and saves on Enter", async ({ page }) => {
   await perRound.press("Enter");
   await expect.poll(async () => (await settings()).routing.retry["max-retry-credentials"]).toBe(2);
 });
+
+for (const appearance of ["light", "dark"] as const) {
+  test(`under a stale notice, words keep 4.5:1 contrast while only bars and marks fade (${appearance})`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ colorScheme: appearance });
+    let failAccounts = false;
+    const reset = Math.floor(Date.now() / 1000) + 7200;
+    const quota = {
+      plan: "Test plan",
+      // 50% left (amber under both 60/20 and 70/30) and 10% left (red under both).
+      limits: [
+        { id: "5h", window_seconds: 5 * 3600, used_percent: 50, resets_at: reset },
+        { id: "wk", window_seconds: 7 * 86400, used_percent: 90, resets_at: reset + 86400 },
+      ],
+    };
+    await page.route("**/v0/management/accounts/stale-warn/quota", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ quota }),
+      }),
+    );
+    await page.route("**/v0/management/accounts", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      if (failAccounts) {
+        return route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "internal", message: "refresh failed" } }),
+        });
+      }
+      const now = new Date().toISOString();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          accounts: [
+            {
+              id: "stale-warn",
+              label: "stale-warn",
+              source: "login",
+              state: "active",
+              priority: 10,
+              refreshable: false,
+              extension: "test/alpha",
+              quota: { fetched_at: now, quota },
+            },
+            {
+              id: "stale-ok",
+              label: "stale-ok",
+              source: "login",
+              state: "active",
+              priority: 0,
+              refreshable: false,
+              extension: "test/alpha",
+            },
+          ],
+        }),
+      });
+    });
+    await open(page);
+    await expect(page.getByText("50% left")).toBeVisible();
+    await expect(page.getByText("10% left")).toBeVisible();
+    failAccounts = true;
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(page.getByText(/Could not refresh\./)).toBeVisible();
+    await expect(page.getByText("50% left")).toBeVisible();
+    await expect(page.getByText("10% left")).toBeVisible();
+
+    const textParts = page.locator(
+      [
+        ".order-intro",
+        ".order-provider-count",
+        ".order-tier-priority",
+        ".order-row .account-word",
+        ".order-row .limit-left",
+      ].join(", "),
+    );
+    const measured = await measureContrast(textParts);
+    const texts = await textParts.allTextContents();
+    expect(measured.length).toBeGreaterThanOrEqual(6);
+    const low = measured
+      .map((m, i) => ({ text: texts[i]?.trim().slice(0, 30), ...m }))
+      .filter((m) => m.ratio < 4.5)
+      .map((m) => `"${m.text}": ${m.ratio.toFixed(2)}:1 (${m.fg} on ${m.bg})`);
+    expect(low).toEqual([]);
+
+    const opacities = await page.evaluate(() => ({
+      order: getComputedStyle(document.querySelector(".order") as Element).opacity,
+      meter: getComputedStyle(document.querySelector(".order .meter") as Element).opacity,
+      accountMark: getComputedStyle(document.querySelector(".order .account-mark") as Element).opacity,
+      providerMark: getComputedStyle(
+        document.querySelector(".order-provider-head > .provider-mark") as Element,
+      ).opacity,
+    }));
+    expect(opacities).toEqual({
+      order: "1",
+      meter: "0.6",
+      accountMark: "0.6",
+      providerMark: "0.6",
+    });
+  });
+}
 
 for (const size of [
   { width: 640, height: 480 },
