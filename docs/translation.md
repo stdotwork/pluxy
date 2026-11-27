@@ -2100,16 +2100,22 @@ device headers.
 | What | Chat | Responses | Messages |
 | --- | --- | --- | --- |
 | `model` | Kimi's name for the model (below) | same | same |
-| `temperature` | kept only at `1.0`, or `0.6` when the body's `thinking.type` is `disabled`; any other value is removed with no report | kept only at `1.0` | unchanged |
+| `temperature` | when the body's `thinking.type` is `disabled` (after the effort step below, so effort `none` counts), only `0.6` is kept; otherwise only `1.0` is kept. Any other value is removed with no report | only `1.0` is kept (only `0.6` when the client's own body has `thinking.type` `disabled`); any other value is removed with no report | unchanged |
 | Tool schemas | `tools[].function.parameters`: local `$ref` inlined from `$defs` or `definitions` (recursion stops after 16 levels), those two keys removed, `type: object` added when there is no `type` | the same on `tools[].parameters` | unchanged |
 | Usage | `stream_options.include_usage: true` on every streamed request | none | none |
 | Reasoning effort | `reasoning_effort` becomes `thinking` (below) | none | none |
 | Assistant turns | empty assistant messages dropped; every assistant message with `tool_calls` and no `reasoning_content` gets one (below) | none | none |
-| Tool outputs | none | `stream` set to the client's value; the `function_call_output` items of a batch of consecutive `function_call` items are moved directly after the calls, and the items that sat between them move after the outputs; a batch with a missing output keeps its order | none |
+| Stream | none | `stream` set to the client's value (a request that is not streamed gets `"stream": false`) | none |
+| Tool outputs | none | the `function_call_output` items of a batch of consecutive `function_call` items are moved directly after the calls, and the items that sat between them move after the outputs; a batch with a missing output keeps its order | none |
 | System prompt | none | none | Claude Code's billing block (a `system` text block that starts with `x-anthropic-billing-header:`) is removed, since Kimi would read it as prompt text; `system` is removed if nothing is left |
 | Thinking | none | none | kept signed thinking is put back (see Thinking replay) |
 
-**Model names.** A name is matched without case. `kimi-k2.8`, `k2.8`, `kimi-k2.8-code`, `k2.8-code`,
+A Gemini client's rebuilt Chat body gets every change in the Chat column, including the `temperature`
+rule. Removing a `temperature` is never reported, for a Chat, Responses or Gemini client.
+
+**Model names.** Spaces around the name are removed. The alias names in this paragraph are matched
+without case, but the `[1m]` suffix and the `kimi-` prefix are removed only when written in lower case,
+so `Kimi-K3` is sent as `Kimi-K3`. `kimi-k2.8`, `k2.8`, `kimi-k2.8-code`, `k2.8-code`,
 `kimi-k2.8-preview`, `k2.8-preview`, `kimi-k2.7-code`, `k2.7-code`, `kimi-for-coding` and `for-coding`
 become `kimi-for-coding`; `kimi-k2.7-code-highspeed`, `k2.7-code-highspeed`,
 `kimi-for-coding-highspeed` and `for-coding-highspeed` become `kimi-for-coding-highspeed`. A `[1m]`
@@ -2121,24 +2127,32 @@ A thinking suffix on the model name, such as `(high)`, is taken off the name by 
 Gemini client the effort (from the suffix, `reasoning_effort`, or Gemini's `thinkingConfig`) is sent as
 Kimi's `thinking` field and `reasoning_effort` is removed: `none` gives `{"type":"disabled"}`; anything
 else gives `{"type":"enabled","effort":...}` where `minimal` and `low` send `low`, `xhigh` and `max`
-send `max`, and every other value (`medium`, `high`, `auto`) sends `high`. A body with no effort keeps
-whatever `thinking` it has. The model `kimi-k2` takes no thinking settings: its `reasoning_effort` stays
-as written. For a Responses or Messages client the suffix only leaves the model name; the body's own
+send `max`, and every other value (`medium`, `high`, `auto`) sends `high`. A Chat client's
+`reasoning_effort` is read as written: only the exact word `none` disables thinking, and any other word
+(`off`, `disabled`, `None`) gives `enabled` with effort `high`. A body with no effort keeps whatever
+`thinking` it has. The model `kimi-k2` takes no thinking settings: its `reasoning_effort` stays as
+written. Whether the model is `kimi-k2` is decided on its name after the rules in Model names, so
+`kimi-k2`, `k2` and `kimi-k2[1m]` all count; the match is case-sensitive, so `Kimi-K2` gets thinking
+settings. For a Responses or Messages client the suffix only leaves the model name; the body's own
 reasoning settings go as written.
 
-For a Chat body, an assistant message with `tool_calls` and no `reasoning_content` gets one: the most
-recent `reasoning_content` earlier in the conversation, else the message's own text, else
-`[reasoning unavailable]`.
+For a Chat body, and for a Gemini client's rebuilt Chat body, an assistant message with `tool_calls` and
+no `reasoning_content` gets one: the most recent `reasoning_content` earlier in the conversation that
+the client sent itself (a value filled in by this rule is not reused), else the message's own text,
+else `[reasoning unavailable]`. A Gemini client's thought parts are dropped by the rebuild, so there
+its value is the message's own text, else `[reasoning unavailable]`.
 
 **Thinking replay (Messages clients).** Kimi's Messages API wants an assistant tool-use turn back with
 its signed thinking, and some Messages clients resend earlier turns without it. The extension keeps
 each Messages reply that has a signed `thinking` block and a `tool_use` block with an ID. When a later
-request resends an assistant turn that has a `tool_use` block, no thinking block and otherwise exactly
-the content that was kept (compared without thinking blocks), the kept content replaces that turn.
+request resends an assistant turn that has a `tool_use` block, no `thinking` or `redacted_thinking`
+block and otherwise exactly the content that was kept (compared without thinking blocks), the kept
+content replaces that turn.
 At most one turn is restored per request: the newest assistant turn that has a kept match.
 - A kept turn belongs to one client key (the request's `caller`), one conversation (the
   `X-Claude-Code-Session-Id` header, else the session in `metadata.user_id`, written either as
-  `..._session_<id>` or as a JSON object with `session_id`) and one model family (`k3` and `k3-256k`
+  `..._session_<id>`, where the ID is lower-case hexadecimal digits and `-`, or as a JSON object with
+  `session_id`) and one model family (`k3` and `k3-256k`
   are one family, `k3.1-pro` and `k3.1-pro-highspeed` another). A request with no client key or no
   session is sent as written.
 - A kept turn expires an hour after its last use. At most 10,240 turns and 256 MiB (keys included) are
@@ -2154,20 +2168,24 @@ At most one turn is restored per request: the newest assistant turn that has a k
 The Chat encoder shared with the OpenAI-compatible extension builds the body.
 - Carried: system instruction, messages, function declarations as function tools, `toolConfig`
   (`AUTO`, `NONE`, `ANY` as `auto`, `none`, `required`; one allowed name as a forced function; several
-  names or `VALIDATED` as `allowed_tools`), `temperature`, `topP`, `maxOutputTokens` as `max_tokens`,
+  names or `VALIDATED` as `allowed_tools`), `temperature` (then removed with no report unless it passes
+  the `temperature` rule above), `topP`, `maxOutputTokens` as `max_tokens`,
   `stopSequences`, `responseMimeType` and schema as `response_format`, thinking settings as an
   effort, inline and URL images as `image_url` parts, inline audio as `input_audio`, other inline files
   as `file` parts.
 - Function call `thoughtSignature` goes on the tool call as `extra_content.google.thought_signature`.
 - Tool names Chat does not take (characters outside `a-zA-Z0-9_-`, or over 64 bytes) are sanitized:
-  each other character becomes `_`, the name is cut to 64 bytes, and a name that collides gets a
-  10-digit hash suffix. The reply's tool calls go back to the client under its own name. A body sent
+  each other character becomes `_`, the name is cut to 64 bytes, and a name that would collide gets `_`
+  and 10 hexadecimal characters from a hash of the original name, after the name is cut to 53 bytes. The reply's tool calls go back to the client under its own name. A body sent
   as written keeps its names.
 - Reported as dropped: `serviceTier`; `candidateCount` above 1; the `googleSearch`, `codeExecution` and
   any other native tool; a `thought` part, executable code and other Gemini-only parts of the history;
   a function response's error flag; a file given by `fileData` URI that is not an image; an inline
-  image or file Chat cannot take; every request field kept beside the model (such as `topK`,
-  `presencePenalty`, `seed`, `safetySettings`) and `thinkingConfig` fields besides the level.
+  image or file Chat cannot take; `safetySettings` and any other top-level request field the encoder
+  has no place for, each under its own name; and whatever is left in `generationConfig` (`topK`,
+  `presencePenalty`, `seed`, `includeThoughts`, a thinking budget) as the single path
+  `generationConfig`. A `thinkingLevel` is not reported; a thinking budget is turned into an effort, and
+  the budget itself is still reported.
 - A tool result's images and files go in a user message after the tool messages (reported as
   approximated).
 - A user turn left with nothing to send after drops is refused with a 400 error, whatever the drop
@@ -2179,8 +2197,9 @@ The Chat encoder shared with the OpenAI-compatible extension builds the body.
 `{base_url}/v1/messages/count_tokens?beta=true`, for every account. A Messages client's own count body
 goes with Kimi's model name, no billing block and its Messages headers. A Gemini request is rebuilt as
 Messages with the fields a count takes. The `anthropic-beta` header gets `token-counting-2024-11-01`
-added. Kimi's count comes back as it is; an error from Kimi reaches the client and core does not
-estimate in its place. Under `drop_policy: "reject"` a count is refused when generating the same
+added. A Messages client gets Kimi's count body as it is; for a Gemini client core builds Gemini's reply
+from the number. An error from Kimi reaches the client and core does not estimate in its place, except
+when an earlier account tried for the same request answered that it cannot count. Under `drop_policy: "reject"` a count is refused when generating the same
 request would be, which for a Gemini client means whatever the Chat rebuild drops.
 
 ### Errors
@@ -2194,7 +2213,7 @@ whole copies and pieces of the account's secrets from the message and raw body.
 | 401 | `auth`, account (retry another account) |
 | 403 | `permission`, account |
 | 404 | `not_found`, model; retryable only when the message names the model |
-| 429 | `rate_limit`, only the model is held back (the account, for a call with no model); `quota` instead when the provider code or message holds "quota"; `Retry-After` is read |
+| 429 | `rate_limit`, only the model is held back (the account, for a call with no model); `quota` instead when the provider code holds lower-case `quota` or the message holds "quota" in any case; `Retry-After` is read |
 | 503, 529 | `unavailable`, endpoint; `Retry-After` is read |
 | other 5xx | `upstream`, endpoint |
 | 3xx | `upstream`, 502: a redirect to another host is not followed |
@@ -2229,7 +2248,7 @@ core keeps.
 
 ### Changes to every body
 
-- `stream` is always `true`. A client that asked for one reply gets the stream gathered by core.
+- `stream` is always `true`: the extension always streams, whether or not the client did.
 - `generate`, `prompt_cache_retention`, `safety_identifier`, `stream_options` and `client_metadata`
   are removed.
 - `store` is `false` unless the body sets it.
@@ -2257,7 +2276,7 @@ The Responses encoder shared with the Codex extension builds the body.
   effort as `reasoning.effort` as the client named it.
 - Tool choice: `auto`, `none`, `required`, a forced function, or an allowed list as
   `allowed_tools`.
-- Reported as dropped: service tier and verbosity (also a tier Responses does not list); `stop`; a
+- Reported as dropped: service tier and verbosity (always, whatever the value); `stop`; a
   candidate count above 1; web search and code execution tools; tools of other types (the Chat and
   Messages hosted tools); an `is_error` flag on a tool result; reasoning from another provider (a
   Messages thinking block whose signature is a Responses encrypted reasoning goes back as that
@@ -2283,8 +2302,8 @@ the account's secrets.
 | Meta answers | Error |
 | --- | --- |
 | 401, 403 | `auth` or `permission`, account |
-| 404 | `not_found`, model; the model is held back until `resets_at`, else five minutes; retryable only when the message names the model |
-| 429 | `rate_limit`, model; `Retry-After` and `resets_at` set the wait (`resets_at` wins); `quota` for the whole account when the message holds "subscription quota" or "quota exhausted", or the code is `rate_limit_exceeded` or holds "quota" and `resets_at` is set |
+| 404 | `not_found`, model; the model is held back until `resets_at` when that time is in the future, else five minutes; retryable only when the message names the model |
+| 429 | `rate_limit`, model; the wait comes from `Retry-After`, and from `resets_at` instead when that time is in the future; `quota` for the whole account instead, when either (1) the message, in any case, contains "subscription quota" or "quota exhausted", or (2) the code, in any case, is `rate_limit_exceeded` or contains "quota", and `error.resets_at` is greater than 0 (even a time already past). The code is `error.code`, else the top-level `code`; `error.type` is not used |
 | 503, 529 | `unavailable`, endpoint |
 | other 5xx | `upstream`, endpoint |
 | 3xx | `upstream`, 502 |
@@ -2298,9 +2317,9 @@ An `error` event or a `response.failed` event in the stream is classified by the
 - Compaction, embeddings and the Images API: no endpoint handler; core skips the account for those
   calls.
 - Tool schema and tool name rewriting.
-- The Codex defaults (empty instructions, a list input, a medium effort, `tool_choice`,
-  `parallel_tool_calls`, `strict: false`), `apply_patch` rewriting for Codex Desktop, and dropping
-  encrypted reasoning Meta did not issue: bodies go as the client wrote them.
+- Meta does not add `instructions`, a reasoning effort, `tool_choice`, `parallel_tool_calls` or
+  `strict` that the client did not send. It does not rewrite `apply_patch` tools or calls. It does not
+  remove encrypted reasoning from the input, whoever issued it.
 - Upstream rate-limit headers are not forwarded.
 
 ## Devin
@@ -2309,8 +2328,9 @@ The Devin extension (`pluxy/devin`, folder `extensions/devin`) serves the models
 through Devin's API server, as Devin's CLI talks to it. For sign-in and account options see
 [providers.md](providers.md#devin).
 
-Setting that changes the request: `device_seed` makes the device fingerprint each request carries the
-same every time; without it the fingerprint is random per request.
+Account settings: `base_url` changes where requests go (below). `device_seed` is the only one that
+changes what a request carries: it makes the device fingerprint the same every time; without it the
+fingerprint is random per request.
 
 ### Where a request goes
 
@@ -2334,7 +2354,8 @@ tools and the model ID.
   first unless the text already has `[Image `).
 - Tool results: text only. An image or other part and the `is_error` flag are reported as dropped. A
   result the client gave as blocks keeps its text blocks, joined by a line break.
-- Completion settings: max tokens (the request's value when it is below 64000, else 64000) and
+- Completion settings: max tokens (the request's value when it is above 0 and below 64000, else 64000;
+  a larger value is lowered to 64000 with no report) and
   `temperature` (1 when the request has none). Other settings are Devin's fixed values.
 - Function tools with name, description and JSON Schema as written.
 - Reasoning replay: a replayed reasoning item is sent as thinking text and, when the client kept it, its
@@ -2358,8 +2379,14 @@ Refused under `drop_policy: "reject"`:
 - a tool result's non-text parts and its error flag;
 - items with no place: a Gemini thought part, executable code, and a function call's `thoughtSignature`.
 
-Service tier and verbosity are neither sent nor reported. A request `max_tokens` above 64000 is lowered
-to 64000 with no report.
+Service tier and verbosity are neither sent nor reported, with one caveat: the format parser reads only
+some values into them (a string `service_tier` or `verbosity` from a Chat client; a string
+`service_tier` or `text.verbosity` from a Responses client; from a Messages client `speed: "fast"`, else
+`service_tier` `auto` or `standard_only`; from a Gemini client `serviceTier` `standard`, `flex`,
+`priority` or `unspecified`). Any other value stays among the request's kept fields and is reported
+dropped like any of them, under its own name.
+
+A request `max_tokens` of 64000 or more, or of 0 or less, is sent as 64000, with no report.
 
 ### Refused
 
@@ -2386,7 +2413,9 @@ an empty name is `swe-2`). The extension adds the effort:
 - The default is `high` for SWE-2 models and for Gemini, Grok, GLM, DeepSeek, Kimi and Nemotron
   models that have `high`; `low` for a GPT-5 model that has `none` and `low`; otherwise `medium`,
   `high` or `low` in that order, else the model's first effort.
-- A model not in the table is sent as named, with `-<effort>` when the request has an effort.
+- A model not in the table is sent as named, with `-<effort>` when the request has an effort. A word
+  such as `high-fast` is not an effort, so it is added as it is (`-high-fast`) to such a model, and
+  for a model in the table gives the model's default.
 - Variants: SWE-1.7 is sent bare unless the effort is `medium` (`swe-1-7-medium`); SWE-1.6 is bare
   unless the effort is `fast` (`swe-1-6-fast`); GLM-5.2 is bare but for `none` and `max`
   (`glm-5-2-max`, `glm-5-2-max-1m` for the long-context model); Claude Opus 4.6 and Sonnet 4.6 are
@@ -2401,14 +2430,17 @@ The reply's frames become events as they arrive:
 - Each tool call is found by its ID, so a call can continue after another one started. A call starts
   once its name is known; a call that never gets a name ends the reply with an `upstream` error. A
   piece with no ID continues the last call, or starts one with a made-up ID.
-- Arguments Devin could not make JSON (`invalid_json_str`) are passed on as text.
+- Protobuf field 4 of a tool-call piece holds the arguments Devin could not parse as JSON. They are
+  passed on as text, as the call's arguments, when the call has no ordinary arguments (field 3).
 - A character split across frames is passed on whole.
 - The finish reason is `length` for Devin's stop reasons 1 and 3, `content_filter` for 11, `tool_calls`
   when there are calls, else `stop`.
 - Usage: input tokens include cache reads and writes; the cache read and write counts are reported too.
   A reply with no usage message has none. Usage comes only from Devin's usage message.
-- A frame Devin's format does not allow is skipped. A reply that ends without its end frame is an
-  `upstream` error.
+- A data frame whose message cannot be read is skipped. A frame with invalid flags, a frame over 16 MiB,
+  or a compressed frame that does not decompress or inflates past 64 MiB ends the reply with an
+  `upstream` error, as does a reply that ends without its end frame. An end frame that is not JSON with
+  an error is a clean end.
 - The signature reaches clients as follows: a Responses client gets it as `encrypted_content`, a Messages
   client as the thinking block's `signature` and a streamed Gemini reply as a thought part's
   `thoughtSignature` (an unstreamed Gemini reply drops it and reports the loss). A Chat client gets
@@ -2433,10 +2465,13 @@ An error in Devin's end frame is classified by its Connect code; an HTTP error r
 
 Status to error: 401 `auth` and 403 `permission` (account, retry another account); 404 `not_found`
 (model); 429 `rate_limit`, which holds back only that model, except `quota` for the account when the
-message holds "quota", "exhausted" and "daily" or "weekly" (a monthly or unnamed quota holds back
-only the model; the wait comes from `Retry-After` only, no reset time is read); 503 `unavailable`; other
-5xx `upstream`; 3xx 502 (not followed); other statuses `invalid_request`. An error after Devin sent any
-data frame is not retry-safe.
+cleaned message, in lower case, contains "quota" and "exhausted" and either "daily" or "weekly" (parts
+of words count; "monthly ACU quota exhausted" and "model quota exhausted" stay `rate_limit` on the
+model; the wait comes from `Retry-After` only, no reset time is read, and an end-frame error has no
+`Retry-After`; an empty or unreadable body gives the message `Devin answered 429 Too Many Requests`,
+which never matches); 503 `unavailable`; other 5xx `upstream`; 3xx 502 (not followed); 499 `cancelled`
+(request); other statuses `invalid_request`. An error after Devin sent any data frame is not
+retry-safe.
 
 **Error text.** A refusal with an HTTP error status takes its message from a Connect error body's
 `message`; an end-frame error takes the frame's. The message and, when it is not one of Connect's
@@ -2467,7 +2502,8 @@ piece rule can also replace a word that shares 4 characters (8 for a long token)
 - Rewriting tool descriptions, and encoding tool call IDs: both are sent as given.
 - A session's turn count: every request starts a new session.
 - Devin's names for older models (`claude-haiku-4-5`, `gpt-4-1`, Sonnet 4.5, Claude 4.5 Opus), and the
-  `-fast` variants built from a `<effort>-fast` request: a name is sent as given.
+  `-fast` variants built from a `<effort>-fast` request: these names are not renamed. A name that is not
+  in the table is sent as named, with `-<effort>` added when the request has an effort.
 - Images in tool results (reported dropped); signature types other than `sealed`.
 - Namespace and custom (freeform) tools such as `apply_patch` (reported dropped), and checks or
   recovery of a malformed `apply_patch` call.
