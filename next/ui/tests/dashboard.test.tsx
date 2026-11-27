@@ -23,7 +23,7 @@ import {
 import type { Windows } from "../kit/parts/hooks";
 import { forgetWindows } from "../kit/parts/hooks";
 import { type Kit, KitContext } from "../kit/ui";
-import { all, button, mountIn, restoreDom, settle } from "./fakeDom";
+import { all, button, type FakeNode, mountIn, restoreDom, settle } from "./fakeDom";
 
 const counts = (c: Partial<Counts>): Counts => {
   const n = { needs: 0, waiting: 0, serving: 0, off: 0, ...c };
@@ -337,7 +337,10 @@ const usageBody = (requests: number) => ({
 });
 
 /** One reply for each of the page's four reads in a round; the next round's replace them. */
-async function mount(rounds: Record<"accounts" | "status" | "usage" | "events", Reply<unknown>>[]) {
+async function mount(
+  rounds: Record<"accounts" | "status" | "usage" | "events", Reply<unknown>>[],
+  once: { keys?: unknown[]; clients?: unknown[] } = {},
+) {
   let round = -1;
   const reads: string[] = [];
   const host = {
@@ -350,7 +353,8 @@ async function mount(rounds: Record<"accounts" | "status" | "usage" | "events", 
       if (method === "GET" && path.startsWith("/usage/events")) return now?.events ?? hiccup;
       if (method === "GET" && path.startsWith("/usage")) return now?.usage ?? hiccup;
       if (path.endsWith("/quota")) return { status: 422 };
-      return ok({ found: { clients: [] } });
+      if (path === "/client-keys") return once.keys ? ok({ keys: once.keys }) : hiccup;
+      return ok({ found: { clients: once.clients ?? [] } });
     },
     signedIn: () => true,
     prefs: { get: () => null, set: () => {} },
@@ -391,6 +395,13 @@ const good = {
   events: ok({ events: [], next: 0, more: false, lost: false }),
 };
 const count = (text: string, part: string) => text.split(part).length - 1;
+const attr = (n: FakeNode, name: string) => n.attributes.find((a) => a.name === name)?.value;
+/** The elements under root whose data-part (or, with by "class", one of whose classes) is name. */
+function parts(root: FakeNode, name: string, by: "data-part" | "class" = "data-part"): FakeNode[] {
+  const own =
+    by === "class" ? (attr(root, "class") ?? "").split(" ").includes(name) : attr(root, by) === name;
+  return [...(own ? [root] : []), ...root.childNodes.flatMap((c) => parts(c, name, by))];
+}
 
 describe("the page", () => {
   test("says it is checking before the first reply, and counts nothing", async () => {
@@ -439,14 +450,25 @@ describe("the page", () => {
     expect(page.text()).toContain("Everything is serving.");
   });
 
-  test("with no accounts it says what to do next and shows no address, groups or chart", async () => {
+  test("with no accounts it says what to do next, the kinds of account and how to point a tool, and no groups or chart", async () => {
     const page = await mount([{ ...good, accounts: list() }]);
     const text = page.text();
     expect(text).toContain("pluxy has no accounts yet.");
     expect(text).toContain("Add an account");
     expect(text).toContain("Guided setup");
     expect(text).toContain("Next: connect a coding tool.");
-    expect(text).not.toContain("Address for tools");
+    // The four kinds and More, each leading to Add an account.
+    const kinds = parts(page.root, "home-kind", "class");
+    expect(kinds.map((k) => all(k, "span").at(-1)?.textContent)).toEqual([
+      "Claude",
+      "ChatGPT (Codex)",
+      "Gemini",
+      "Another service with an API key",
+      "More",
+    ]);
+    expect(kinds.every((k) => attr(k, "href") === "#/add-account")).toBe(true);
+    expect(text).toContain("Point a tool at pluxy");
+    expect(parts(page.root, "pool-card")).toHaveLength(0);
     expect(text).not.toContain("Last 7 days");
     expect(text).not.toContain("Serving");
   });
@@ -456,9 +478,85 @@ describe("the page", () => {
     const text = page.text();
     expect(text).toContain("Everything is serving.");
     expect(text).toContain("2 serving · 5 requests in 7 days, 100% succeeded");
-    expect(text).toContain("Address for tools");
-    expect(text).toContain("http://127.0.0.1:8317");
+    expect(text).toContain("Point a tool at pluxy");
+    expect(text).toContain("Base URL");
+    expect(text).toContain("http://127.0.0.1:8317/v1");
     expect(text).toContain("Serving");
+  });
+
+  test("the connection card gives the base URL of the API a tool speaks, a key's masked value and the tools set up", async () => {
+    const page = await mount([good], {
+      keys: [{ id: "k1", masked: "sk-pluxy-****3f9a", label: "Claude Code" }],
+      clients: [
+        { id: "claude-code", name: "Claude Code", installed: true, config: "", state: "configured" },
+        { id: "opencode", name: "OpenCode", installed: true, config: "", state: "not-configured" },
+        { id: "pi", name: "Pi", installed: false, config: "", state: "not-configured" },
+        { id: "hermes", name: "Hermes", installed: true, config: "", state: "unchecked" },
+      ],
+    });
+    const card = parts(page.root, "connection-card")[0];
+    if (!card) throw new Error("no connection card");
+    expect(all(card, "code")[0]?.textContent).toBe("http://127.0.0.1:8317/v1");
+    // OpenAI, Claude, Gemini, in that order.
+    const claude = all(card, "input")[1];
+    await act(async () => {
+      claude?.dispatchEvent(new Event("change"));
+    });
+    await settle();
+    expect(all(card, "code")[0]?.textContent).toBe("http://127.0.0.1:8317");
+    expect(card.textContent).toContain("Key · Claude Code");
+    expect(card.textContent).toContain("sk-pluxy-****3f9a");
+    // Set up, and installed but not set up; a tool not installed or unchecked has no chip.
+    const chips = parts(card, "tool-chip", "class");
+    expect(chips.map((c) => [c.textContent, attr(c, "data-state"), attr(c, "href")])).toEqual([
+      ["Claude Code", "configured", "#/tools"],
+      ["OpenCode", "not-configured", "#/tools"],
+    ]);
+  });
+
+  test("accounts that need the person are in the band with one filled fix; the rest are by provider, each with a pool", async () => {
+    const accounts = ok({
+      accounts: [
+        {
+          id: "c-out",
+          extension: "pluxy/claude",
+          source: "login",
+          state: "reauth_required",
+          refreshable: true,
+        },
+        { id: "c-ok", extension: "pluxy/claude", source: "login", state: "active", refreshable: true },
+        {
+          id: "x-out",
+          extension: "pluxy/codex",
+          source: "login",
+          state: "reauth_required",
+          refreshable: true,
+        },
+        { id: "x-ok", extension: "pluxy/codex", source: "login", state: "active", refreshable: true },
+        { id: "x-off", extension: "pluxy/codex", source: "login", state: "active", disabled: true },
+      ],
+    });
+    const running = { ...statusBody, extensions: [{ id: "pluxy/claude" }, { id: "pluxy/codex" }] };
+    const page = await mount([{ ...good, accounts, status: ok(running) }]);
+    const band = parts(page.root, "needs-band")[0];
+    if (!band) throw new Error("no band");
+    expect(attr(band, "aria-label")).toBe("Needs you");
+    const fixes = parts(band, "button").map((b) => [b.textContent, attr(b, "data-variant")]);
+    expect(fixes).toEqual([
+      ["Sign in again", "primary"],
+      ["Sign in again", "quiet"],
+    ]);
+    const groups = parts(page.root, "home-group", "class");
+    expect(groups.map((g) => attr(g, "aria-label"))).toEqual(["Claude", "Codex"]);
+    const ids = (g: FakeNode) => parts(g, "account-name", "class").map((a) => a.textContent);
+    expect(groups.map(ids)).toEqual([["c-ok"], ["x-ok", "x-off"]]);
+    const pools = parts(page.root, "pool-card");
+    expect(pools.map((p) => attr(p, "data-provider"))).toEqual(["claude", "codex"]);
+    // Turned off is not counted in a pool; the band's accounts are, as unable to serve.
+    expect(pools.map((p) => p.textContent?.match(/\d of \d serving/)?.[0])).toEqual([
+      "1 of 2 serving",
+      "1 of 2 serving",
+    ]);
   });
 
   test("when two of three requests failed the headline does not say everything is serving", async () => {

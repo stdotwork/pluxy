@@ -94,12 +94,16 @@ export function GroupMark(props: { c: Condition; unchecked?: boolean; dot?: bool
   );
 }
 
-/** The plan word, by ink weight: data-plan-tier is top, mid or free. */
-export function PlanPill(props: { plan: string }) {
+/**
+ * The plan word as a pill in one of four finishes by its tier at its provider (planTier):
+ * data-plan-tier is top (a warm metal), high (a cool metal), mid (an outline) or free (plain text).
+ * provider is the account's extension ID; without it the tier comes from the word alone.
+ */
+export function PlanPill(props: { plan: string; provider?: string }) {
   const plan = props.plan.trim();
   if (!plan) return null;
   return (
-    <span class="plan-pill" data-part="plan-pill" data-plan-tier={planTier(plan)}>
+    <span class="plan-pill" data-part="plan-pill" data-plan-tier={planTier(plan, props.provider)}>
       {plan}
     </span>
   );
@@ -375,7 +379,7 @@ export function AccountRow(props: {
             )}
           </span>
         </span>
-        <span class="account-plan">{plan && <PlanPill plan={plan} />}</span>
+        <span class="account-plan">{plan && <PlanPill plan={plan} provider={a.extension} />}</span>
         <span class="account-side">
           {limited ? (
             <Limits windows={props.windows} account={name} identities={ids} now={now} provider={provider} />

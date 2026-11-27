@@ -235,11 +235,13 @@
     background: var(--px-color-meter-track);
   }
 
+  /* The fill moves to its new width on a refresh, over motion.duration (0 under reduced motion). */
   .meter[data-mode="left"] > span {
     display: block;
     height: 100%;
     border-radius: 999px;
     background: var(--px-color-meter-fill);
+    transition: width var(--t);
   }
 
   .meter[data-mode="left"][data-tone="warn"] > span {

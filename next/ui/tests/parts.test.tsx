@@ -377,15 +377,34 @@ test("limits are read only for accounts that serve or wait", async () => {
 
 test("the plan pill's tier follows the plan word, and there is no pill without a plan", () => {
   // The largest plans (Max 20x, Ultra, an API key's) are top; the next (Max 5x) are high.
+  // Claude: Max 20x ($200) gold, Max 5x and Max ($100) silver, Pro ($20) and Team an outline.
+  expect(planTier("Max 20x", "pluxy/claude")).toBe("top");
+  expect(planTier("Max 5x", "pluxy/claude")).toBe("high");
+  expect(planTier("Max", "pluxy/claude")).toBe("high");
+  expect(planTier("Pro", "pluxy/claude")).toBe("mid");
+  expect(planTier("Team", "pluxy/claude")).toBe("mid");
+  expect(planTier("Free", "pluxy/claude")).toBe("free");
+  // ChatGPT (Codex): pro is its $200 plan, gold; plus and the business plans an outline.
+  expect(planTier("pro", "pluxy/codex")).toBe("top");
+  expect(planTier("plus", "pluxy/codex")).toBe("mid");
+  expect(planTier("team", "pluxy/codex")).toBe("mid");
+  expect(planTier("enterprise", "pluxy/codex")).toBe("mid");
+  expect(planTier("free", "pluxy/codex")).toBe("free");
+  // Gemini: Ultra gold, Pro an outline. xAI: SuperGrok Heavy gold, SuperGrok an outline.
+  expect(planTier("Ultra", "pluxy/gemini")).toBe("top");
+  expect(planTier("Pro", "pluxy/gemini")).toBe("mid");
+  expect(planTier("SuperGrok Heavy", "pluxy/xai")).toBe("top");
+  expect(planTier("SuperGrok", "pluxy/xai")).toBe("mid");
+  // An OpenAI-compatible key: paid (pay-as-you-go API use) is with the largest plans.
+  expect(planTier("paid", "pluxy/openai-compatible")).toBe("top");
+  expect(planTier("free", "pluxy/openai-compatible")).toBe("free");
+  // No provider, or one with no table: the words of the largest plans anywhere.
   expect(planTier("Max 20x")).toBe("top");
   expect(planTier("Max 5x")).toBe("high");
-  expect(planTier("Max")).toBe("high");
   expect(planTier("Ultra")).toBe("top");
   expect(planTier("API")).toBe("top");
   expect(planTier("Pro")).toBe("mid");
-  expect(planTier("Team")).toBe("mid");
-  expect(planTier("Plus")).toBe("mid");
-  expect(planTier("Enterprise")).toBe("mid");
+  expect(planTier("Plus", "acme/other")).toBe("mid");
   expect(planTier("Free")).toBe("free");
   expect(renderToString(<PlanPill plan=" Max 20x " />)).toBe(
     '<span class="plan-pill" data-part="plan-pill" data-plan-tier="top">Max 20x</span>',
