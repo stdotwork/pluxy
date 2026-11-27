@@ -235,3 +235,59 @@ test("Remove asks first, names the theme, and a built-in theme has none", async 
   await until(() => w.core.calls.includes("DELETE /themes/t3/nightfall"));
   expect(w.themes.current.theme.id).toBe("pluxy/default");
 });
+
+const cssOf = (node: FakeNode) => (node.style as unknown as { cssText?: string }).cssText ?? "";
+
+test("each theme in the gallery has a miniature of pluxy's frame in its own colours, light and dark when it has both", async () => {
+  const w = world();
+  // A theme someone added, with both appearances, its navigation on top and a flat frame (as Paper has).
+  const topFlat = { theme_version: 0, id: "me/topflat", name: "Top Flat", appearance: "both" };
+  expect(
+    await w.themes.addTheme(JSON.stringify({ ...topFlat, layout: { nav: "top", frame: "flat" } })),
+  ).toEqual({ replaced: false });
+  const m = await w.mount(<ThemesPage />);
+  await settle();
+  const previews = withClass(m.root, "mini-pair");
+  // Default has both appearances, Terminal is dark only.
+  expect(previews.map((p) => attribute(p, "data-halves"))).toEqual(["2", "1", "2"]);
+  const halves = (preview: FakeNode) => withClass(preview, "mini");
+  const [def, terminal, flat] = previews as [FakeNode, FakeNode, FakeNode];
+  // The miniature's colours are the theme's own tokens, set on the miniature itself: Default's two
+  // halves are its light and its dark ground, so a mix of tokens resolves against the theme.
+  const [light, dark] = halves(def).map(cssOf);
+  expect(light).toContain("--px-color-bg:#fcfcfc;");
+  expect(dark).toContain("--px-color-bg:#111113;");
+  expect(withClass(def, "mini-half").map((h) => attribute(h, "data-half"))).toEqual(["light", "dark"]);
+  expect(withClass(terminal, "mini-half").map((h) => attribute(h, "data-half"))).toEqual(["dark"]);
+  // The miniature draws the theme's own layout: a theme with its navigation on top and a flat frame
+  // shows that, and Terminal a rail.
+  const [flatLight] = halves(flat) as [FakeNode];
+  expect([attribute(flatLight, "data-nav"), attribute(flatLight, "data-frame")]).toEqual(["top", "flat"]);
+  expect(attribute(halves(terminal)[0] as FakeNode, "data-nav")).toBe("rail");
+  // Each card says which appearances the theme offers.
+  const cards = withClass(m.root, "theme-card").map((c) => withClass(c, "theme-modes")[0]?.textContent);
+  expect(cards).toEqual(["Light and dark", "Dark only", "Light and dark"]);
+  // The miniatures are pictures: no text in them, and the cards stay named by their theme.
+  for (const p of previews) expect(p.textContent).toBe("");
+});
+
+test("a theme file dropped on the drop zone is added like a chosen one, and an oversize one is refused unread", async () => {
+  const w = world();
+  const m = await w.mount(<ThemesPage />);
+  const zone = withClass(m.root, "theme-drop")[0] as FakeNode;
+  const drop = async (file: unknown) => {
+    const event = new Event("drop") as Event & { dataTransfer?: unknown };
+    event.dataTransfer = { files: [file] };
+    await act(async () => {
+      zone.dispatchEvent(event);
+    });
+    await settle();
+  };
+  await drop({ size: 257 * 1024, text: async () => "never read" });
+  expect(notices(m.root)).toEqual(["The file is over 256 KiB."]);
+  expect(w.core.calls.filter((c) => c.startsWith("PUT"))).toEqual([]);
+
+  await drop({ size: nightfallText.length, text: async () => nightfallText });
+  await until(() => w.themes.current.theme.id === "t3/nightfall");
+  expect(notices(m.root)).toEqual(["Added and turned on Nightfall."]);
+});

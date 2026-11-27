@@ -20,6 +20,7 @@ import {
   planTier,
   RequestRow,
   SettingRow,
+  SettingsSearchContext,
   StatePane,
   ToolRow,
   useNaming,
@@ -881,6 +882,88 @@ test("a setting that saves on change says Saving…, then goes back with a notic
   expect(m.text()).toContain("the disk is full");
   expect(input.checked).toBe(false);
   await m.unmount();
+});
+
+test("a setting that was saved says Saved, and the next change takes it away until that one is saved too", async () => {
+  let answer: (r: Reply<unknown>) => void = noop;
+  function Probe() {
+    const s = useSetting(false, () => new Promise<Reply<unknown>>((resolve) => (answer = resolve)));
+    return (
+      <SettingRow name="Log every request" saving={s.saving} saved={s.saved} error={s.error}>
+        <Switch label="Log every request" checked={s.value} onChange={s.set} />
+      </SettingRow>
+    );
+  }
+  const m = await mountIn(<Probe />);
+  const input = all(m.root, "input")[0] as FakeNode;
+  const toggle = async (on: boolean) => {
+    input.checked = on;
+    await act(async () => {
+      input.dispatchEvent(new Event("change"));
+    });
+    await settle();
+  };
+  const reply = async (r: Reply<unknown>) => {
+    await act(async () => {
+      answer(r);
+    });
+    await settle();
+  };
+  expect(m.text()).not.toContain("Saved");
+  await toggle(true);
+  // On its way: Saving…, not Saved.
+  expect(m.text()).toContain("Saving…");
+  expect(m.text()).not.toContain("Saved");
+  await reply({ status: 200, body: {} });
+  expect(m.text()).toContain("Saved");
+  expect(m.text()).not.toContain("Saving…");
+  // A new change: Saved goes at once, and comes back once that one is saved.
+  await toggle(false);
+  expect(m.text()).not.toContain("Saved");
+  await reply({ status: 200, body: {} });
+  expect(m.text()).toContain("Saved");
+  // A save that fails never says Saved.
+  await toggle(true);
+  await reply({ status: 500, error: { code: "internal", message: "the disk is full" } });
+  expect(m.text()).not.toContain("Saved");
+  expect(m.text()).toContain("the disk is full");
+  await m.unmount();
+});
+
+test("a Settings page's search keeps the rows that hold every word, in the name, sentence, note or key", async () => {
+  const rows = () => (
+    <>
+      <SettingRow
+        name="Log every request"
+        description="Keeps each request's log."
+        configKey="logs.request_log"
+      >
+        <input />
+      </SettingRow>
+      <SettingRow name="Outbound proxy" description="Send requests through this proxy.">
+        <input />
+      </SettingRow>
+      <SettingRow name="Address" note="Takes effect the next time pluxy starts.">
+        <input />
+      </SettingRow>
+    </>
+  );
+  const names = (query: string) =>
+    plain(
+      renderToString(<SettingsSearchContext.Provider value={query}>{rows()}</SettingsSearchContext.Provider>),
+    );
+  expect(names("")).toContain("Log every request");
+  expect(names("")).toContain("Outbound proxy");
+  // Every word has to be there, in any case, in any order.
+  expect(names("PROXY through")).toContain("Outbound proxy");
+  expect(names("PROXY through")).not.toContain("Log every request");
+  expect(names("proxy log")).not.toContain("Outbound proxy");
+  expect(names("proxy log")).not.toContain("Log every request");
+  // The settings file's key and a row's note are searched too.
+  expect(names("request_log")).toContain("Log every request");
+  expect(names("request_log")).not.toContain("Address");
+  expect(names("starts")).toContain("Address");
+  expect(names("starts")).not.toContain("Outbound proxy");
 });
 
 test("a setting that worked keeps its value; a disabled one says why", async () => {

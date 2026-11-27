@@ -247,6 +247,27 @@ test("the page says what an extension is, and each row shows the provider, its I
   expect(m.text()).toContain("Available to install");
 });
 
+test("each extension has a tile with its provider's first letter, one series colour for the same extension every time", async () => {
+  const w = world();
+  const m = await w.mount(<ExtensionsPage />);
+  const tile = (root: FakeNode, id: string) => {
+    const mark = withClass(rowOf(root, id), "ext-mark")[0];
+    if (!mark) throw new Error(`no tile on ${id}`);
+    return mark;
+  };
+  const claude = tile(m.root, "pluxy/claude");
+  expect(claude.textContent).toBe("C");
+  // A picture beside the name, which says it: hidden from assistive technology.
+  expect(claude.attributes.find((a) => a.name === "aria-hidden")?.value).toBe("true");
+  const series = (n: FakeNode) => Number(n.attributes.find((a) => a.name === "data-series")?.value);
+  expect(series(claude)).toBeGreaterThanOrEqual(1);
+  expect(series(claude)).toBeLessThanOrEqual(6);
+  expect(tile(m.root, "pluxy/codex").textContent).toBe("C");
+  await m.unmount();
+  const again = await world().mount(<ExtensionsPage />);
+  expect(series(tile(again.root, "pluxy/claude"))).toBe(series(claude));
+});
+
 test("none of the old words are left on the page", async () => {
   const w = world();
   const m = await w.mount(<ExtensionsPage />);
