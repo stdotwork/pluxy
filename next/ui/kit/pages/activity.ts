@@ -51,6 +51,13 @@ const t = strings("activity", {
     "{account} is the first account in the first group that could take it: the group fills one first.",
   whyLeastActive: "{account} had the fewest requests running in the first group.",
   whySoonestReset: "{account}'s limit resets soonest in the first group, so pluxy spends it first.",
+  decisionTry: "{account}: {word}",
+  decisionNone: "Tried {tried}. No account answered.",
+  decisionThen: "Tried {tried}. Then {account} answered in {time}.",
+  decisionAnswered: "{account} answered in {time}.",
+  detourLater: "5th or later",
+  detourFallback: "fallback {step}",
+  detourBackup: "via backup",
   hotspotSome: "{count} of the {total} failed requests asked for {model}.",
   hotspotAll: "All {total} failed requests asked for {model}.",
   figRequestsOne: "1 request",
@@ -163,6 +170,11 @@ export interface Story {
   note?: string;
   /** Sentences, in order. */
   lines: string[];
+  /**
+   * The sentences that are not about the attempts: the fallback, and why no account took it. The
+   * attempts have their own sentence (decisionOf) and their timeline.
+   */
+  rest: string[];
   /** After the lines: each account the request left out, and why. */
   leftOut: { account: string; text: string }[];
   /**
@@ -255,11 +267,17 @@ export function whyOf(e: UsageEvent, name: (account: string) => string, now = Da
   const tried = e.tried ?? [];
   const step = e.chain_step ?? 0;
   const lines: string[] = [];
-  const story: Story = { lines, leftOut: [] };
+  const rest: string[] = [];
+  const story: Story = { lines, rest, leftOut: [] };
   const notes: string[] = [];
+  /** A sentence about the request as a whole, which the attempts' own sentence does not cover. */
+  const say = (line: string) => {
+    lines.push(line);
+    rest.push(line);
+  };
   if (step > 1) {
     const model = fallbackModel(e);
-    lines.push(
+    say(
       model ? t("fallback", { asked: e.model, model, step }) : t("fallbackUnnamed", { asked: e.model, step }),
     );
     notes.push(t("fallbackNote", { step }));
@@ -286,20 +304,63 @@ export function whyOf(e: UsageEvent, name: (account: string) => string, now = Da
   } else if (tried.length > 1) {
     lines.push(t("failedEvery"));
   } else if (e.left_out && e.left_out.length > 0) {
-    lines.push(t("noAccount"));
+    say(t("noAccount"));
   } else if (e.error_code === "not_found") {
-    lines.push(t("noServe", { model: e.model }));
+    say(t("noServe", { model: e.model }));
     story.noServe = true;
   } else if (e.error_code === "auth" || e.error_code === "permission") {
-    lines.push(t("keyRefused"));
+    say(t("keyRefused"));
   } else {
-    lines.push(t("couldNotSend", { word: failureWord(e) }));
+    say(t("couldNotSend", { word: failureWord(e) }));
   }
   // The accounts routing left out, after those it tried, if any.
   story.leftOut = (e.left_out ?? []).map((l) => ({ account: name(l.account), text: leftOutText(l, now) }));
   const last = tried[tried.length - 1];
   story.next = last ? { kind: "account", account: last.account } : { kind: "log" };
   return story;
+}
+
+const lower = (word: string) => word.charAt(0).toLowerCase() + word.slice(1);
+
+/**
+ * The one sentence a request's pane opens with: which accounts were tried and what each came to,
+ * and which one answered, in how long. took says a length of time as a person reads it. Undefined
+ * when the record names no account at all (the story's other sentences say why).
+ */
+export function decisionOf(
+  e: Pick<UsageEvent, "failed" | "account" | "tried" | "status">,
+  name: (account: string) => string,
+  took: string,
+): string | undefined {
+  const tried = e.tried ?? [];
+  const failedTries = tried.filter((x) => x.result !== "ok");
+  const list = failedTries
+    .map((x) => t("decisionTry", { account: name(x.account), word: lower(failureWord(x.result, e.status)) }))
+    .join("; ");
+  if (e.failed) return tried.length > 0 ? t("decisionNone", { tried: list }) : undefined;
+  const winner = e.account ?? tried[tried.length - 1]?.account;
+  if (!winner) return undefined;
+  return failedTries.length > 0
+    ? t("decisionThen", { tried: list, account: name(winner), time: took })
+    : t("decisionAnswered", { account: name(winner), time: took });
+}
+
+/** The ordinals a request that went to the second, third or fourth account says: 2nd, 3rd, 4th. */
+const ORDINALS = ["2nd", "3rd", "4th"];
+
+/**
+ * What the list says about a detour in two words, beside the account: "2nd" when the second
+ * account it tried answered (3rd, 4th, then "5th or later"), "via backup" when a backup answered
+ * with nothing tried before it, and "fallback 2" when a fallback model's step 2 answered. The
+ * words are the first of the story's note, in short. Undefined for a request that went straight.
+ */
+export function detourOf(e: UsageEvent): string | undefined {
+  if (e.failed) return undefined;
+  const others = (e.tried ?? []).slice(0, -1).filter((x) => x.result !== "ok").length;
+  if (others > 0) return ORDINALS[others - 1] ?? t("detourLater");
+  if ((e.chain_step ?? 0) > 1) return t("detourFallback", { step: e.chain_step ?? 0 });
+  if (e.why === "backup") return t("detourBackup");
+  return undefined;
 }
 
 /**
