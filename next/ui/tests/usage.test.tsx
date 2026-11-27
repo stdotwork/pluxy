@@ -163,6 +163,11 @@ test("the pane's decision sentence names what was tried, what each came to, and 
   ).toBe("Tried aurora: rate limited. No account answered.");
   // A failure that reached no account has nothing to say here: the story's other sentences do.
   expect(decisionOf(event({ failed: true, error_code: "not_found" }), name, "1 s")).toBeUndefined();
+  // A sub-millisecond finish reads as "<1 ms", never "0 ms".
+  expect(timeTaken(0)).toBe("<1 ms");
+  expect(timeTaken(0.4)).toBe("<1 ms");
+  expect(timeTaken(1)).toBe("1 ms");
+  expect(decisionOf(event({ account: "a" }), name, timeTaken(0))).toBe("aurora answered in <1 ms.");
 });
 
 test("the story's rest leaves out the sentences the decision says, and keeps the others", () => {

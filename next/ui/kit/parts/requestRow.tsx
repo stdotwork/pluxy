@@ -24,6 +24,7 @@ const t = strings("parts.requestRow", {
   trace: "Trace",
   tokenCounts: "in {input}, out {output}, cached {cached}",
   attempts: "Attempts",
+  underMs: "<1 ms",
   ms: "{count} ms",
   seconds: "{count} s",
   minutes: "{minutes}m {seconds}s",
@@ -31,8 +32,9 @@ const t = strings("parts.requestRow", {
 
 const n = (v: number | undefined) => (v ?? 0).toLocaleString();
 
-/** How long a request took, as a person reads a wait: 420 ms, 2.2 s, 1m 5s. */
+/** How long a request took, as a person reads a wait: <1 ms, 420 ms, 2.2 s, 1m 5s. */
 export function timeTaken(ms: number): string {
+  if (Math.round(ms) < 1) return t("underMs");
   if (ms < 1000) return t("ms", { count: Math.round(ms) });
   if (ms < 60_000) return t("seconds", { count: (ms / 1000).toFixed(1) });
   return t("minutes", { minutes: Math.floor(ms / 60_000), seconds: Math.round((ms % 60_000) / 1000) });
