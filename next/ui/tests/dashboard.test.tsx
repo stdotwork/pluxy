@@ -43,6 +43,36 @@ describe("the verdict", () => {
     expect(verdictOf(safe, counts({ serving: 2 })).headline).toBe("pluxy is in safe mode.");
   });
 
+  test("accounts that serve are not called everything when most of the week's requests failed", () => {
+    const normal = { safe_mode: false };
+    const now = Date.now();
+    // Two of three failed: the walk's own numbers.
+    for (const c of [counts({ serving: 1 }), counts({ serving: 1, waiting: 1 })]) {
+      const v = verdictOf(normal, c, undefined, now, { total: 3, failed: 2 });
+      expect(v.kind).toBe("most-failed");
+      expect(v.headline).toBe("Accounts are serving, but most requests failed.");
+      expect(v.note).toBe("Activity lists the failed requests, with the reason for each.");
+    }
+    // Half is not most; a week with no requests says nothing of failure; an old core's missing week too.
+    expect(verdictOf(normal, counts({ serving: 1 }), undefined, now, { total: 4, failed: 2 }).headline).toBe(
+      "Everything is serving.",
+    );
+    expect(verdictOf(normal, counts({ serving: 1 }), undefined, now, { total: 0, failed: 0 }).kind).toBe(
+      "serving",
+    );
+    expect(verdictOf(normal, counts({ serving: 1 })).kind).toBe("serving");
+    // What needs the person, or serves nothing, still comes first; so does safe mode.
+    expect(
+      verdictOf(normal, counts({ needs: 1, serving: 1 }), undefined, now, { total: 3, failed: 3 }).kind,
+    ).toBe("needs-you");
+    expect(verdictOf(normal, counts({ off: 1 }), undefined, now, { total: 3, failed: 3 }).kind).toBe(
+      "nothing-serving",
+    );
+    expect(
+      verdictOf({ safe_mode: true }, counts({ serving: 1 }), undefined, now, { total: 3, failed: 3 }).kind,
+    ).toBe("safe-mode");
+  });
+
   test("safe mode comes before every other, also with accounts that need the person or no accounts", () => {
     expect(verdictOf({ safe_mode: true }, counts({ needs: 2, serving: 1 })).kind).toBe("safe-mode");
     expect(verdictOf({ safe_mode: true }, counts({})).kind).toBe("safe-mode");
@@ -429,6 +459,20 @@ describe("the page", () => {
     expect(text).toContain("Address for tools");
     expect(text).toContain("http://127.0.0.1:8317");
     expect(text).toContain("Serving");
+  });
+
+  test("when two of three requests failed the headline does not say everything is serving", async () => {
+    const failed = {
+      ...usageBody(3),
+      success_count: 1,
+      failure_count: 2,
+      series: [{ start: new Date().toISOString(), requests: 3, failure_count: 2, total_tokens: 0 }],
+    };
+    const page = await mount([{ ...good, usage: ok(failed) }]);
+    const text = page.text();
+    expect(text).toContain("Accounts are serving, but most requests failed.");
+    expect(text).not.toContain("Everything is serving.");
+    expect(text).toContain("33.3% succeeded");
   });
 
   test("when only the seven days cannot be read, the accounts stay and one line offers Try again", async () => {

@@ -19,6 +19,8 @@ const t = strings("home.logic", {
   firstBack: " The first is back {when}.",
   nothingNeedsYou: "Nothing needs you.",
   everythingServing: "Everything is serving.",
+  mostFailed: "Accounts are serving, but most requests failed.",
+  mostFailedNote: "Activity lists the failed requests, with the reason for each.",
   noAccounts: "pluxy has no accounts yet.",
   waiting: "{count} waiting",
   serving: "{count} serving",
@@ -114,6 +116,7 @@ export type VerdictKind =
   | "needs-you"
   | "nothing-serving"
   | "nothing-needs-you"
+  | "most-failed"
   | "serving";
 
 export interface Verdict {
@@ -126,13 +129,16 @@ export interface Verdict {
 /**
  * The page's verdict, the first that matches: safe mode (without GET /status, none is known);
  * no accounts at all; accounts that need the person; nothing serving; accounts that wait; else
- * everything serves. firstBack is when the first waiting account is back, for the note.
+ * everything serves. firstBack is when the first waiting account is back, for the note. week is
+ * the last seven days' requests: when most of them failed, the verdict says so in place of the two
+ * that call the accounts fine, because the person reads those as "it works".
  */
 export function verdictOf(
   status: { safe_mode: boolean } | undefined,
   counts: Counts,
   firstBack?: number,
   now = Date.now(),
+  week?: { total: number; failed: number },
 ): Verdict {
   if (status?.safe_mode) return { kind: "safe-mode", headline: t("safeMode"), note: t("safeModeNote") };
   if (counts.total === 0) return { kind: "no-accounts", headline: t("noAccounts") };
@@ -142,6 +148,8 @@ export function verdictOf(
       firstBack !== undefined && firstBack > now ? t("firstBack", { when: backWhen(firstBack, now) }) : "";
     return { kind: "nothing-serving", headline: t("nothingServing"), note: t("nothingServingNote") + back };
   }
+  if (week && week.total > 0 && week.failed * 2 > week.total)
+    return { kind: "most-failed", headline: t("mostFailed"), note: t("mostFailedNote") };
   if (counts.waiting > 0) return { kind: "nothing-needs-you", headline: t("nothingNeedsYou") };
   return { kind: "serving", headline: t("everythingServing") };
 }

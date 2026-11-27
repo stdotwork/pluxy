@@ -15,7 +15,9 @@ import {
   isTicked,
   joinNames,
   kindGroups,
+  kindPhrase,
   kindTitle,
+  onComputer,
   type PickStatus,
   pickStatuses,
   type Results,
@@ -36,7 +38,8 @@ const t = strings("setupAccounts", {
   adding: "Adding {names}…",
   tickOne: "Tick at least one.",
   failed: "Could not add {title}: {error}.",
-  addedList: "Added: {names}.",
+  canConnect: "pluxy can now connect to {names}.",
+  addBelow: "Add your account below.",
   addAnother: "Add another kind",
   none: "This copy of pluxy has no kinds of account to add.",
   signIn: "{label}. Sign in below with the same account.",
@@ -95,11 +98,14 @@ function KindRow(props: {
   ticked: boolean;
   why?: string;
   busy: boolean;
+  /** pluxy runs on another computer: what it found is on that one. */
+  remote: boolean;
   onTick: (ticked: boolean) => void;
 }) {
   const { pick, status } = props;
   const title = kindTitle(pick);
-  const why = props.why ?? pick.because;
+  const found = props.why ?? pick.because;
+  const why = found && onComputer(found, props.remote);
   const added = status.state === "running" || status.state === "stopped";
   const error = status.state === "install-failed" ? status.error : undefined;
   const text = (
@@ -150,7 +156,7 @@ function KindRow(props: {
       )}
       {status.state === "install-failed" && (
         <p class="setup-pick-error" role="alert">
-          {t("failed", { title, error: (error ?? t("noReason")).replace(/\.$/, "") })}
+          {t("failed", { title: kindPhrase(pick), error: (error ?? t("noReason")).replace(/\.$/, "") })}
         </p>
       )}
     </li>
@@ -166,6 +172,7 @@ function Kinds(props: {
   needed: Record<string, string>;
   adding: boolean;
   addError?: string;
+  remote: boolean;
   onTick: (id: string, ticked: boolean) => void;
   onAdd: () => void;
 }) {
@@ -178,7 +185,7 @@ function Kinds(props: {
   const sending = toInstall(setup, props.choices, results);
   const titles = sending.map((id) => {
     const pick = setup.picks.find((p) => p.id === id);
-    return pick ? kindTitle(pick) : id;
+    return pick ? kindPhrase(pick) : id;
   });
   const anyAdded = [...statuses.values()].some((s) => s.state === "running" || s.state === "stopped");
   const row = (pick: SetupPick) => (
@@ -189,6 +196,7 @@ function Kinds(props: {
       ticked={ticked(pick)}
       why={props.needed[pick.id]}
       busy={props.adding}
+      remote={props.remote}
       onTick={(on) => props.onTick(pick.id, on)}
     />
   );
@@ -246,6 +254,8 @@ export function AccountsStep(props: {
   needed: Record<string, string>;
   adding: boolean;
   addError?: string;
+  /** pluxy runs on another computer than the one showing the page. */
+  remote?: boolean;
   /** The account added on this page, once one was. */
   signedIn?: string;
   onTick: (id: string, ticked: boolean) => void;
@@ -263,7 +273,8 @@ export function AccountsStep(props: {
   const count = props.accounts?.length ?? 0;
   const formOpen = !props.hadAccounts || another || props.signedIn !== undefined;
   const kindsOpen = running.length === 0 || moreKinds || failed || props.adding;
-  const names = running.map((kind) => kind.title ?? kind.id);
+  const names = running.map((kind) => kind.phrase ?? kind.title ?? kind.id);
+  const remote = props.remote ?? false;
   if (running.length === 0 && (!offered || setup.registries === 0)) {
     return (
       <div class="setup-kinds">
@@ -287,6 +298,7 @@ export function AccountsStep(props: {
           needed={props.needed}
           adding={props.adding}
           addError={props.addError}
+          remote={remote}
           onTick={props.onTick}
           onAdd={() => {
             setMoreKinds(false);
@@ -295,7 +307,10 @@ export function AccountsStep(props: {
         />
       ) : (
         <p class="setup-line">
-          <span>{t("addedList", { names: joinNames(names) })}</span>
+          <span>
+            {t("canConnect", { names: joinNames(names) })}
+            {count === 0 && ` ${t("addBelow")}`}
+          </span>
           <Button onClick={() => setMoreKinds(true)}>{t("addAnother")}</Button>
         </p>
       )}
@@ -314,7 +329,7 @@ export function AccountsStep(props: {
           {count === 0 &&
             signInsToName(setup, running).map((signIn) => (
               <p key={`${signIn.provider}/${signIn.from}`} class="muted">
-                {t("signIn", { label: signIn.label.replace(/\.$/, "") })}
+                {t("signIn", { label: onComputer(signIn.label.replace(/\.$/, ""), remote) })}
               </p>
             ))}
           {formOpen && (

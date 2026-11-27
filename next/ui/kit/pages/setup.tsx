@@ -165,14 +165,16 @@ export function SetupPage(props: { options?: SetupOptions }) {
   const started = useRef<{ hadAccounts: boolean; open?: StepNo }>(undefined);
   const remote = options?.isRemote ?? !onThisMachine(host.address);
 
-  // A sign-in can finish somewhere else (a browser tab, a device code): the accounts are read
-  // again when this page is looked at again.
+  // A sign-in can finish somewhere else (a browser tab, a device code), and so can a coding tool's
+  // settings (pasted into its file on pluxy's computer): the accounts are read, and pluxy asked to
+  // look at its tools again, when this page is looked at again.
   // Which accounts can take requests depends on the extensions core runs: those are read again too.
   useEffect(() => {
     const again = () => {
       if (document.visibilityState !== "visible") return;
       accounts.reload();
       status.reload();
+      void tools.scan();
     };
     window.addEventListener("focus", again);
     document.addEventListener("visibilitychange", again);
@@ -180,7 +182,7 @@ export function SetupPage(props: { options?: SetupOptions }) {
       window.removeEventListener("focus", again);
       document.removeEventListener("visibilitychange", again);
     };
-  }, [accounts.reload, status.reload]);
+  }, [accounts.reload, status.reload, tools.scan]);
 
   const tools2 = connectedTools(setup, options?.extraTools);
   const done: Record<StepNo, boolean> = {
@@ -321,6 +323,7 @@ export function SetupPage(props: { options?: SetupOptions }) {
               needed={needed}
               adding={adding}
               addError={addError}
+              remote={remote}
               signedIn={signedIn}
               onTick={(id, on) => setChoices((c) => ({ ...c, [id]: on }))}
               onAdd={add}
