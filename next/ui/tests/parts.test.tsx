@@ -172,6 +172,8 @@ for (const c of CASES) {
   test(`AccountRow, ${c.name}: group ${c.group}, mark "${c.word}", ${c.fix ? c.fix.label : "no button"}`, () => {
     const html = row(c.a, { running: c.running });
     expect(attr(html, "data-group")).toBe(c.group);
+    // The mark's colour group matches the condition's own group (a model cooldown stays serving).
+    expect(html).toContain(`class="group-mark" data-group="${c.group}"`);
     // The mark's accessible name is the condition word, the same as stateText's.
     expect(html).toContain(`role="img" aria-label="${c.word}"`);
     const found = buttons(html);

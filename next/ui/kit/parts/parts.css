@@ -376,8 +376,7 @@
     color: var(--px-color-danger);
   }
 
-  .account-row[data-group="waiting"] .account-word,
-  .account-row[data-condition="serving"][data-tall] .account-word {
+  .account-row[data-group="waiting"] .account-word {
     color: var(--px-color-warn);
   }
 
