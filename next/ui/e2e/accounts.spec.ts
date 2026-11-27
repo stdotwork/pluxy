@@ -178,3 +178,57 @@ test("an account set in the settings file offers no Remove… on its page; one a
   await expect(page).toHaveURL(/#\/accounts$/);
   await expect.poll(async () => (await listed()).some((a) => a.id === "gone-01")).toBe(false);
 });
+
+test("provider chips filter with a pool card, and List | Cards switches the view and persists via the list layout", async ({
+  page,
+}) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Accounts");
+
+  // Two providers (Local and Alpha): chips show counts and filter the list with a pool card.
+  const chips = page.getByRole("group", { name: "Filter by provider" });
+  await expect(chips.getByRole("button", { name: /^All\s+3$/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(chips.getByRole("button", { name: /Alpha\s+2/ })).toBeVisible();
+  await expect(chips.getByRole("button", { name: /Local\s+1/ })).toBeVisible();
+  await expect(page.locator('[data-part="pool-card"]')).toHaveCount(0);
+
+  await chips.getByRole("button", { name: /Alpha/ }).click();
+  await expect(chips.getByRole("button", { name: /Alpha/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator('[data-part="pool-card"][data-provider="alpha"]')).toContainText(
+    "2 of 2 serving",
+  );
+  await expect(page.locator('[data-part="account-row"]')).toHaveCount(2);
+  await expect(accountRow(page, "alpha-1")).toBeVisible();
+  await expect(accountRow(page, "alpha-2")).toBeVisible();
+
+  await chips.getByRole("button", { name: /^All/ }).click();
+  await expect(page.locator('[data-part="pool-card"]')).toHaveCount(0);
+  await expect(page.locator('[data-part="account-row"]')).toHaveCount(3);
+
+  // List | Cards switches the view, syncs with html[data-list], and survives a reload.
+  const viewSwitch = page.getByRole("group", { name: "Account view" });
+  const listBtn = viewSwitch.getByRole("button", { name: "List", exact: true });
+  const cardsBtn = viewSwitch.getByRole("button", { name: "Cards", exact: true });
+  await expect(listBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "list");
+
+  await cardsBtn.click();
+  await expect(cardsBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "cards");
+  await expect(page.locator("html")).toHaveAttribute("data-list", "cards");
+  await expect(accountRow(page, "alpha-1")).toBeVisible();
+
+  await page.reload();
+  await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "cards");
+  await expect(cardsBtn).toHaveAttribute("aria-pressed", "true");
+
+  // Narrow viewport in Cards view fits without horizontal scroll.
+  await page.setViewportSize({ width: 560, height: 800 });
+  await expect(accountRow(page, "alpha-1")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
+
+  await listBtn.click();
+  await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "list");
+  await expect(page.locator("html")).toHaveAttribute("data-list", "table");
+});
