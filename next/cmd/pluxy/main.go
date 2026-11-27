@@ -1,7 +1,7 @@
 // Command pluxy is the pluxy core: pluxy serve (or pluxy with no subcommand) serves the client
 // APIs and answers through a provider extension; pluxy init writes a first config; pluxy help
 // lists the subcommands without calling core; every other subcommand is a client of a running
-// core's management API (next/management/README.md), but for pluxy key management, which reads
+// core's management API (docs/management-api.md), but for pluxy key management, which reads
 // only the config.
 package main
 

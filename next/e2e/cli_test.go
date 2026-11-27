@@ -59,7 +59,7 @@ func (r cliResult) String() string {
 }
 
 // The pluxy command against a running core: one command for each exit code the contract
-// gives (next/management/README.md), with --json printing the API's reply body unchanged on
+// gives (docs/cli.md, "Exit codes"), with --json printing the API's reply body unchanged on
 // standard output, and errors on standard error.
 func TestCLIExitCodes(t *testing.T) {
 	base := startCore(t, newUpstream(t), func(cfg map[string]any) { cfg["management_key"] = managementKey })

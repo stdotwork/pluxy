@@ -30,7 +30,7 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Exit codes of the client subcommands (next/management/README.md).
+// Exit codes of the client subcommands (docs/cli.md, "Exit codes").
 const (
 	exitOK          = 0
 	exitFailed      = 1
