@@ -9,7 +9,7 @@ import { usePrivacy } from "../privacy";
 import { Button, Notice, useKit } from "../ui";
 import { ConfigDialog } from "./configDialog";
 import { findAccount, hideSecrets } from "./configSource.helpers";
-import { configText as t } from "./configStrings";
+import { fileError, configText as t } from "./configStrings";
 
 export interface ConfigSourceProps {
   busy: boolean;
@@ -60,7 +60,11 @@ function reviewLines(before: string, after: string, format: ConfigDocument["form
 
 /** What a check or a save that core refused says: a mistake in the file, or why it failed. */
 function refusal(status: number, why: string) {
-  return status === 400 || status === 422 ? (why ? t("mistake", { error: why }) : t("mistakeEmpty")) : why;
+  return status === 400 || status === 422
+    ? why
+      ? t("mistake", { error: fileError(why) })
+      : t("mistakeEmpty")
+    : why;
 }
 
 export function ConfigSource(props: ConfigSourceProps) {
@@ -133,7 +137,7 @@ export function ConfigSource(props: ConfigSourceProps) {
     const why = problem(reply);
     if (why !== undefined) setError(why);
     else if (!reply.body?.valid)
-      setError(reply.body?.error ? t("mistake", { error: reply.body.error }) : t("mistakeEmpty"));
+      setError(reply.body?.error ? t("mistake", { error: fileError(reply.body.error) }) : t("mistakeEmpty"));
     else setMessage([t("noMistakes"), ...(reply.body.notices ?? [])].join("\n"));
   };
   const save = async () => {

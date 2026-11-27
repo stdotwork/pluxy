@@ -8,7 +8,9 @@ import type { ConfigDocument } from "../api/config";
 import type { CoreSettings } from "../api/settings";
 import type { Reply } from "../host";
 import { SettingRow, useSetting } from "../parts";
-import { Card, Switch } from "../ui";
+import { Button, Card, Switch, useKit } from "../ui";
+import { accessWarning, isLoopback, parseListen, type Warning } from "./configAccess.rules";
+import { ConfigDialog } from "./configDialog";
 import { ManagementKey, type ReplaceKey } from "./configKeys";
 import { configText as t } from "./configStrings";
 import { parseNumber, settingAt } from "./routing.rules";
@@ -23,9 +25,14 @@ interface RowProps {
   format?: ConfigDocument["format"];
   disabled?: string;
   change: ChangeSetting;
+  /** What saving this value would cost the person, when it would shut them out of pluxy. */
+  warning: (key: string, value: unknown) => Warning | undefined;
+  /** Shows a warning and says whether the person went ahead. */
+  ask: (warning: Warning) => Promise<boolean>;
 }
 
 const PROXY = "proxy-url";
+const LISTEN = "listen";
 
 /**
  * A proxy address as the row shows it. Core shows a saved user name and password as "redacted"
@@ -65,9 +72,17 @@ function Row(
 function SwitchRow(props: RowProps) {
   const f = props.field;
   const s = useSetting(settingAt(props.settings, f.key) === true, (on: boolean) => props.change(f.key, on));
+  const [, redraw] = useState(0);
+  // A change that would shut the person out waits for their answer. When they keep things as
+  // they are, the page draws the switch again as it was.
+  const change = async (on: boolean) => {
+    const warning = props.warning(f.key, on);
+    if (warning && !(await props.ask(warning))) return redraw((n) => n + 1);
+    void s.set(on);
+  };
   return (
     <Row {...props} saving={s.saving} error={s.error}>
-      <Switch label={f.name} checked={s.value} onChange={s.set} />
+      <Switch label={f.name} checked={s.value} onChange={(on) => void change(on)} />
     </Row>
   );
 }
@@ -82,7 +97,10 @@ function FieldRow(props: RowProps) {
   const f = props.field;
   // What core holds, as the field shows it. A proxy address comes back with its password hidden,
   // and shows without it.
-  const saved = String(settingAt(props.settings, f.key) ?? "");
+  // The listen address shows what the settings file holds: the new address that waits for a
+  // restart, else the one pluxy serves on.
+  const waiting = f.key === LISTEN ? props.settings.listen_after_restart : undefined;
+  const saved = waiting ?? String(settingAt(props.settings, f.key) ?? "");
   const proxy = f.key === PROXY ? proxyShown(saved) : undefined;
   const shownValue = proxy ? proxy.address : saved;
   // Whether the newest reply of the row was no answer at all.
@@ -133,16 +151,31 @@ function FieldRow(props: RowProps) {
       setRefused(t("proxyNeedsLogin"));
       return;
     }
-    base.current = text;
-    pending.current++;
-    setLost(false);
-    void s.set(text).then(() => {
-      pending.current--;
-      if (pending.current === 0 && lostReply.current) {
-        base.current = null;
-        setLost(true);
-      }
-      setRound((n) => n + 1);
+    if (f.key === LISTEN && !parseListen(typed)) {
+      setRefused(t("listenInvalid"));
+      return;
+    }
+    const send = () => {
+      base.current = text;
+      pending.current++;
+      setLost(false);
+      void s.set(text).then(() => {
+        pending.current--;
+        if (pending.current === 0 && lostReply.current) {
+          base.current = null;
+          setLost(true);
+        }
+        setRound((n) => n + 1);
+      });
+    };
+    // A change that would shut the person out waits for their answer; when they keep things as
+    // they are, the field goes back to what is saved.
+    const warning = props.warning(f.key, typed);
+    if (!warning) return send();
+    void props.ask(warning).then((go) => {
+      if (go) return send();
+      base.current = shownValue;
+      setDraft(shownValue);
     });
   };
   const input = {
@@ -164,7 +197,7 @@ function FieldRow(props: RowProps) {
   return (
     <Row
       {...props}
-      note={proxy?.login ? t("proxySaved") : undefined}
+      note={proxy?.login ? t("proxySaved") : f.key === LISTEN ? listenNote(props.settings) : undefined}
       saving={s.saving}
       error={refused ?? (lost ? t("noAnswerRow") : s.error)}
     >
@@ -175,6 +208,20 @@ function FieldRow(props: RowProps) {
       )}
     </Row>
   );
+}
+
+/**
+ * What a saved listen address still needs: a restart, and, when other computers can reach it, the
+ * setting that lets them sign in.
+ */
+function listenNote(settings: CoreSettings): string | undefined {
+  const waiting = settings.listen_after_restart;
+  const notes: string[] = [];
+  if (waiting) notes.push(t("listenWaits", { now: settings.listen, next: waiting }));
+  const next = parseListen(waiting ?? settings.listen ?? "");
+  if (next && !isLoopback(next.host) && settings.management_allow_remote === false)
+    notes.push(t("listenNeedsRemote"));
+  return notes.length ? notes.join(" ") : undefined;
 }
 
 function FieldRows(props: Omit<RowProps, "field"> & { fields: Field[] }) {
@@ -229,17 +276,33 @@ export function ConfigSettings(props: {
   keys: ReplaceKey;
 }) {
   const f = fields();
+  const { host } = useKit();
+  const [asking, setAsking] = useState<{ warning: Warning; answer: (go: boolean) => void }>();
+  const ask = (warning: Warning) =>
+    new Promise<boolean>((answer) => {
+      setAsking({ warning, answer });
+    });
+  const reach = { fromThisComputer: props.settings.from_this_computer !== false, reachedAt: host.address };
   const rows = {
     settings: props.settings,
     format: props.format,
     disabled: props.disabled,
     change: props.change,
+    warning: (key: string, value: unknown) => accessWarning(key, value, reach),
+    ask,
+  };
+  const close = (go: boolean) => {
+    asking?.answer(go);
+    setAsking(undefined);
   };
   return (
     <div class="stack config-settings">
       <Section id="network" title={t("network")}>
         <FieldRows {...rows} fields={f.network} />
         <LinkRow name={t("routing")} about={t("routingAbout")} label={t("openRouting")} href="#/routing" />
+      </Section>
+      <Section id="access" title={t("access")}>
+        <FieldRows {...rows} fields={f.access} />
       </Section>
       <Section id="logging" title={t("logging")}>
         <FieldRows {...rows} fields={f.logging} />
@@ -252,6 +315,19 @@ export function ConfigSettings(props: {
           disabled={props.disabled}
         />
       </Section>
+      {asking && (
+        <ConfigDialog title={asking.warning.title} close={() => close(false)}>
+          {asking.warning.body.map((paragraph) => (
+            <p key={paragraph}>{paragraph}</p>
+          ))}
+          <div class="actions">
+            <Button variant="danger" onClick={() => close(true)}>
+              {asking.warning.yes}
+            </Button>
+            <Button onClick={() => close(false)}>{asking.warning.no}</Button>
+          </div>
+        </ConfigDialog>
+      )}
     </div>
   );
 }

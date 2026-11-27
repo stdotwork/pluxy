@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/server"
+	"github.com/stdotwork/pluxy/next/management"
 )
 
 func dirNames(t *testing.T, dir string) []string {
@@ -266,5 +268,113 @@ func TestAccountRedactorRefusesACopyWithItsLine(t *testing.T) {
 	_, err := r.RestoreSettings([]byte(sent), []byte(cur))
 	if !errors.Is(err, server.ErrSecretCopy) || !strings.HasPrefix(err.Error(), "settings: line 3: a redacted value is a copy of a secret") || strings.Contains(err.Error(), key) {
 		t.Errorf("RestoreSettings = %v, want server.ErrSecretCopy naming line 3", err)
+	}
+}
+
+// The Config page saves the listen address and the remote-management switch as settings. A new
+// listen address is written to the file and served on after a restart; until then core keeps its
+// address and every other change still applies, and the settings say what waits.
+func TestSettingsSaveListenForARestartAndKeepApplyingTheRest(t *testing.T) {
+	h, path := startManagementCore(t, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
+	get := func() management.Settings {
+		t.Helper()
+		rec := manageCall(t, h, http.MethodGet, "/settings", "")
+		var s management.Settings
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &s) != nil {
+			t.Fatalf("GET /settings = %d %s", rec.Code, rec.Body)
+		}
+		return s
+	}
+	if s := get(); s.Listen != "127.0.0.1:0" || s.ListenAfterRestart != "" || s.ManagementAllowRemote || !s.FromThisComputer {
+		t.Fatalf("settings at the start = %+v", s)
+	}
+
+	if rec := manageCall(t, h, http.MethodPatch, "/settings", `{"listen": "127.0.0.1:18417"}`); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH listen = %d %s", rec.Code, rec.Body)
+	}
+	if s := get(); s.Listen != "127.0.0.1:0" || s.ListenAfterRestart != "127.0.0.1:18417" {
+		t.Errorf("after saving a listen address: listen %q, after restart %q", s.Listen, s.ListenAfterRestart)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), `"listen":"127.0.0.1:18417"`) {
+		t.Errorf("the file does not hold the address:\n%s", b)
+	}
+
+	// The rest still applies while the address waits: the file is not refused as a whole.
+	if rec := manageCall(t, h, http.MethodPatch, "/settings", `{"management_allow_remote": true}`); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH management_allow_remote with an address waiting = %d %s", rec.Code, rec.Body)
+	}
+	s := get()
+	if !s.ManagementAllowRemote || s.Listen != "127.0.0.1:0" || s.ListenAfterRestart != "127.0.0.1:18417" {
+		t.Errorf("settings = %+v", s)
+	}
+	var status management.Status
+	if rec := manageCall(t, h, http.MethodGet, "/status", ""); json.Unmarshal(rec.Body.Bytes(), &status) != nil || status.Desired.Revision != status.Active.Revision || status.Desired.Error != "" {
+		t.Errorf("status = %+v, want the newest file in use", status)
+	}
+
+	// Setting the address core serves on again leaves nothing waiting.
+	if rec := manageCall(t, h, http.MethodPatch, "/settings", `{"listen": "127.0.0.1:0"}`); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH the active address = %d %s", rec.Code, rec.Body)
+	}
+	if s := get(); s.ListenAfterRestart != "" {
+		t.Errorf("after restart = %q, want none", s.ListenAfterRestart)
+	}
+
+	// An address that is no address, or that this computer does not have, is refused: core would
+	// not start on it, and nothing is written.
+	before, _ := os.ReadFile(path)
+	for name, body := range map[string]string{
+		"no port":                                `{"listen": "127.0.0.1"}`,
+		"a port too large":                       `{"listen": "127.0.0.1:70000"}`,
+		"an address this computer does not have": `{"listen": "192.0.2.77:8400"}`,
+	} {
+		if rec := manageCall(t, h, http.MethodPatch, "/settings", body); rec.Code != http.StatusBadRequest || errorCodeOf(t, rec) != "invalid_request" {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Errorf("a refused address changed the file:\n%s", after)
+	}
+}
+
+// A call from another computer is told so, which is how a page knows that turning remote
+// management off would shut it out.
+func TestSettingsSayWhenTheCallIsFromAnotherComputer(t *testing.T) {
+	h, _ := startManagementCore(t, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"mgmt-key","management_allow_remote":true}`)
+	req := httptest.NewRequest(http.MethodGet, management.Prefix+"/settings", nil)
+	req.RemoteAddr = "192.0.2.10:5555"
+	req.Header.Set("Authorization", "Bearer mgmt-key")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var s management.Settings
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &s) != nil || s.FromThisComputer || !s.ManagementAllowRemote {
+		t.Errorf("GET /settings from another computer = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The Settings file tab: a new listen address in the text is no mistake. The check passes, the
+// save goes through with the rest of the edit applied, and the address waits for the restart.
+func TestConfigDocumentWithANewListenAddressSavesAndWaits(t *testing.T) {
+	h, path := startManagementCore(t, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
+	content := `{"listen":"127.0.0.1:18417","client_keys":["fake-client-key-1"],"management_key":"mgmt-key","management_allow_remote":true}`
+	body, _ := json.Marshal(map[string]string{"content": content})
+	rec := manageCall(t, h, http.MethodPost, "/config/validate", string(body))
+	var checked struct {
+		Valid bool   `json:"valid"`
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(rec.Body.Bytes(), &checked) != nil || !checked.Valid {
+		t.Fatalf("validate = %d %s", rec.Code, rec.Body)
+	}
+	if rec := manageCall(t, h, http.MethodPut, "/config", string(body)); rec.Code != http.StatusOK {
+		t.Fatalf("PUT /config = %d %s", rec.Code, rec.Body)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "127.0.0.1:18417") {
+		t.Errorf("file = %s", b)
+	}
+	var s management.Settings
+	rec = manageCall(t, h, http.MethodGet, "/settings", "")
+	if json.Unmarshal(rec.Body.Bytes(), &s) != nil || s.Listen != "127.0.0.1:0" || s.ListenAfterRestart != "127.0.0.1:18417" || !s.ManagementAllowRemote {
+		t.Errorf("settings = %+v", s)
 	}
 }

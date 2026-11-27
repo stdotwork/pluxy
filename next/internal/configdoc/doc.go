@@ -13,6 +13,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -59,7 +60,7 @@ func Parse(b []byte, isYAML bool) (*Doc, error) {
 	} else {
 		root, spans, err := parseJSON(b)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+			return nil, fmt.Errorf("%w: %v", ErrInvalid, jsonErrorAt(b, err))
 		}
 		d.root, d.spans = root, spans
 	}
@@ -67,6 +68,29 @@ func Parse(b []byte, isYAML bool) (*Doc, error) {
 		return nil, fmt.Errorf("%w: the config file must hold a mapping of settings", ErrInvalid)
 	}
 	return d, nil
+}
+
+// jsonErrorAt says where in b a JSON syntax error is: its line and column, counted from 1, as the
+// config's own parser says them. The streaming reader only knows roughly where it stopped, so the
+// whole document is read again for the exact place. An error that is no syntax error is as it was.
+func jsonErrorAt(b []byte, err error) error {
+	var syn *json.SyntaxError
+	if e := json.Unmarshal(b, new(any)); !errors.As(e, &syn) {
+		return err
+	}
+	off := int(syn.Offset) - 1 // the offset is after the byte that broke the syntax
+	early := syn.Error() == "unexpected end of JSON input"
+	if early {
+		off = len(bytes.TrimRight(b, " \t\r\n")) - 1
+	}
+	off = max(0, min(off, len(b)-1))
+	head := b[:off+1]
+	line := 1 + bytes.Count(head, []byte("\n"))
+	col := utf8.RuneCount(head[bytes.LastIndexByte(head, '\n')+1:])
+	if early {
+		return fmt.Errorf("not valid JSON: the file ends early, after line %d, column %d", line, col)
+	}
+	return fmt.Errorf("not valid JSON at line %d, column %d: %s", line, col, syn)
 }
 
 // parseJSON reads a JSON document into nodes, keeping the order of keys and where each
