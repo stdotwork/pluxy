@@ -14,8 +14,10 @@
     min-width: 0;
   }
 
-  .account-page[data-stale] .account-fade {
-    opacity: 0.7;
+  /* Keep every piece of text at full contrast during a stale refresh and dim only the bars. */
+  .account-page[data-stale] .account-limit-bar,
+  .account-page[data-stale] .account-bar-track {
+    opacity: 0.55;
   }
 
   /* ---- Opening header ----------------------------------------------------------------------- */
