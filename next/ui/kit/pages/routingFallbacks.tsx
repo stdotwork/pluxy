@@ -247,11 +247,17 @@ export function Fallbacks(props: {
   yaml: boolean;
   /** Core refused a fallback because of it. */
   onYaml: () => void;
+  /** Notifies the page when the fallback editor opens or closes. */
+  onOpenChange?: (open: boolean) => void;
 }) {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
   const naming = useNaming(props.accounts);
-  const [draft, setDraft] = useState<FallbackDraft>();
+  const [draft, setDraftState] = useState<FallbackDraft>();
+  const setDraft = (next: FallbackDraft | undefined) => {
+    setDraftState(next);
+    props.onOpenChange?.(next !== undefined);
+  };
   const [why, setWhy] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [removeError, setRemoveError] = useState<string>();

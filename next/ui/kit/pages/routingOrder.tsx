@@ -89,6 +89,8 @@ export interface OrderProps {
   weighted: boolean;
   /** A move or a weight is being saved. */
   busy: boolean;
+  /** Keep every row fix outlined because another primary button (such as the fallback editor) is open. */
+  quietAllFixes?: boolean;
   /** Saves an account's priority or weight. */
   change: (id: string, change: { priority?: number; weight?: number | null }) => Promise<unknown>;
   /** Turns an account on in place (shared AccountRow fix). */
@@ -258,7 +260,13 @@ export function AccountOrder(props: OrderProps) {
     typing.current = next;
     setWeightState(next);
   };
-  const [dragging, setDragging] = useState<Account>();
+  const [dragging, setDraggingState] = useState<Account>();
+  // Readable at once during dragover/drop before a state update flushes.
+  const draggingRef = useRef<Account | undefined>(undefined);
+  const setDragging = (next?: Account) => {
+    draggingRef.current = next;
+    setDraggingState(next);
+  };
   const [dragOver, setDragOver] = useState<string>();
   const [movedId, setMovedId] = useState<string>();
   const movedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -274,9 +282,11 @@ export function AccountOrder(props: OrderProps) {
   const running = props.running;
 
   // At most one filled (primary) repair button across the order stack.
-  const firstRepairId = sections
-    .flatMap((s) => s.tiers.flatMap((tier) => tier.accounts))
-    .find((a) => accountFix(a, accountCondition(a, running))?.variant === "primary")?.id;
+  const firstRepairId = props.quietAllFixes
+    ? undefined
+    : sections
+        .flatMap((s) => s.tiers.flatMap((tier) => tier.accounts))
+        .find((a) => accountFix(a, accountCondition(a, running))?.variant === "primary")?.id;
 
   const edit = (a: Account, text: string | undefined, save?: boolean) => {
     if (text !== undefined) return setWeight({ id: a.id, text });
@@ -288,7 +298,7 @@ export function AccountOrder(props: OrderProps) {
     if (next !== (a.weight ?? null)) void props.change(a.id, { weight: next });
   };
   const dropOn = (target: DropTarget) => {
-    const moved = dragging;
+    const moved = draggingRef.current;
     setDragging(undefined);
     setDragOver(undefined);
     if (!moved) return;
@@ -299,11 +309,13 @@ export function AccountOrder(props: OrderProps) {
     }
   };
   const allowDrop = (section: ProviderOrder, key: string) => (e: DragEvent) => {
-    if (dragging?.extension !== section.extension) return;
+    if (draggingRef.current?.extension !== section.extension) return;
     e.preventDefault();
     if (dragOver !== key) setDragOver(key);
   };
-  const clearOver = (key: string) => () => {
+  const clearOver = (key: string) => (e: DragEvent) => {
+    const target = e.currentTarget as HTMLElement | null;
+    if (target && e.relatedTarget instanceof Node && target.contains(e.relatedTarget)) return;
     if (dragOver === key) setDragOver(undefined);
   };
 
@@ -360,18 +372,18 @@ export function AccountOrder(props: OrderProps) {
                   <span class="order-provider-count num">
                     {t("providerCount", { count: total, serving })}
                   </span>
+                  <div
+                    class="order-edge"
+                    aria-hidden="true"
+                    data-edge="first"
+                    data-over={dragOver === firstEdge ? "" : undefined}
+                    onDragOver={allowDrop(section, firstEdge)}
+                    onDragLeave={clearOver(firstEdge)}
+                    onDrop={() => dropOn({ edge: "first" })}
+                  >
+                    {t("newFirst")}
+                  </div>
                 </header>
-                <div
-                  class="order-edge"
-                  aria-hidden="true"
-                  data-edge="first"
-                  data-over={dragOver === firstEdge ? "" : undefined}
-                  onDragOver={allowDrop(section, firstEdge)}
-                  onDragLeave={clearOver(firstEdge)}
-                  onDrop={() => dropOn({ edge: "first" })}
-                >
-                  {t("newFirst")}
-                </div>
                 {section.tiers.map((tier, index) => {
                   const tierKey = `${section.extension}:${tier.priority}`;
                   return (

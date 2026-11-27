@@ -96,6 +96,7 @@ export function RoutingPage() {
   const status = useLoad(api.status);
   const [error, setError] = useState<string>();
   const [yaml, setYaml] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [refreshed, setRefreshed] = useState(0);
   const [lastAt, setLastAt] = useState<number>();
   // What core said about moves not yet read back, so a row sits where it was put at once.
@@ -220,6 +221,7 @@ export function RoutingPage() {
                       running={running}
                       weighted={weighted}
                       busy={saving > 0}
+                      quietAllFixes={editorOpen}
                       change={change}
                       onTurnOn={turnOn}
                       onClearCooldown={clearCooldown}
@@ -234,6 +236,7 @@ export function RoutingPage() {
                 running={running}
                 yaml={yaml || config.data?.format === "yaml"}
                 onYaml={() => setYaml(true)}
+                onOpenChange={setEditorOpen}
               />
             </div>
             <aside class="routing-rules-pane" aria-labelledby="routing-rules-h">
