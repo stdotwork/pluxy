@@ -183,6 +183,14 @@ const rowOf = (root: FakeNode, tool: string) => {
   return row;
 };
 const keyRows = (root: FakeNode) => withPart(root, "tool-key");
+const keyMenuButton = (row: FakeNode) => {
+  const found = all(row, "button").find((b) => attribute(b, "aria-haspopup") === "menu");
+  if (!found) throw new Error(`no menu button in ${row.textContent.slice(0, 200)}`);
+  return found;
+};
+const openKeyMenu = async (row: FakeNode) => {
+  await press(keyMenuButton(row));
+};
 const buttonIn = (root: FakeNode, label: string) => {
   const found = all(root, "button").find((b) => b.textContent === label);
   if (!found) throw new Error(`no button ${label} in ${root.textContent.slice(0, 200)}`);
@@ -253,7 +261,7 @@ test("a pluxy that has no scan shows one line, and the address and keys still sh
   expect(m.text()).toContain(
     "This pluxy cannot look for coding tools. Use the address and a key below in your tool's settings.",
   );
-  expect(m.text()).toContain("Address for tools");
+  expect(m.text()).toContain("Point a tool at pluxy");
   expect(m.text()).toContain("Keys (1)");
   expect(withPart(m.root, "tool-row")).toHaveLength(0);
   expect(hasButton(m.root, "Try again")).toBe(false);
@@ -571,6 +579,7 @@ test("deleting the key a row's text holds takes it out of the text", async () =>
   await press(buttonIn(rowOf(m.root, "Claude Code"), "Make key"));
   expect(preText(m.root)).toContain("sk-secret-1");
   const made = keyRows(m.root).find((r) => r.textContent.includes("Claude Code")) as FakeNode;
+  await openKeyMenu(made);
   await press(buttonIn(made, "Delete"));
   await press(buttonIn(made, "Yes, delete"));
   expect(w.calls.some((c) => c.method === "DELETE" && c.path === "/client-keys/key-1")).toBe(true);
@@ -689,10 +698,12 @@ test("Delete asks first, naming the key when it has a name", async () => {
   });
   const m = await w.mount(<ToolsPage />);
   const [named, unnamed] = keyRows(m.root) as [FakeNode, FakeNode];
+  await openKeyMenu(named);
   await press(buttonIn(named, "Delete"));
   expect(named.textContent).toContain("Script stops working until it gets a new key.");
   expect(w.calls.some((c) => c.method === "DELETE")).toBe(false);
   await press(buttonIn(named, "Cancel"));
+  await openKeyMenu(unnamed);
   await press(buttonIn(unnamed, "Delete"));
   expect(unnamed.textContent).toContain("Any tool using this key stops working.");
   await press(buttonIn(unnamed, "Yes, delete"));
@@ -704,6 +715,7 @@ test("with one key Delete is disabled and says to add another first", async () =
   const w = world({ keys: [{ id: "k1", masked: "sk-***11" }] });
   const m = await w.mount(<ToolsPage />);
   const only = keyRows(m.root)[0] as FakeNode;
+  await openKeyMenu(only);
   expect(buttonIn(only, "Delete").disabled).toBe(true);
   expect(only.textContent).toContain("Add another key before deleting this one.");
 });
@@ -722,12 +734,14 @@ test("a refused delete of the last key (another tab) shows the same line, and 40
   const m = await w.mount(<ToolsPage />);
   const [first, second] = keyRows(m.root) as [FakeNode, FakeNode];
   expect(first.textContent).not.toContain("Add another key before deleting this one.");
+  await openKeyMenu(first);
   await press(buttonIn(first, "Delete"));
   await press(buttonIn(first, "Yes, delete"));
   expect(first.textContent).toContain("Add another key before deleting this one.");
   expect(first.textContent).not.toContain("this is the last client key");
   const reads = () => w.calls.filter((c) => c.method === "GET" && c.path === "/client-keys").length;
   const before = reads();
+  await openKeyMenu(second);
   await press(buttonIn(second, "Delete"));
   await press(buttonIn(second, "Yes, delete"));
   expect(reads()).toBe(before + 1);
@@ -743,6 +757,7 @@ test("a failed delete says why", async () => {
   });
   const m = await w.mount(<ToolsPage />);
   const first = keyRows(m.root)[0] as FakeNode;
+  await openKeyMenu(first);
   await press(buttonIn(first, "Delete"));
   await press(buttonIn(first, "Yes, delete"));
   expect(first.textContent).toContain("Could not delete the key. the settings file is read-only");
@@ -757,6 +772,7 @@ test("Rename saves the name on Save, and an empty name clears it", async () => {
   });
   const m = await w.mount(<ToolsPage />);
   const first = keyRows(m.root)[0] as FakeNode;
+  await openKeyMenu(first);
   await press(buttonIn(first, "Rename"));
   const input = all(first, "input")[0] as FakeNode;
   expect(input.value).toBe("Script");
@@ -768,6 +784,7 @@ test("Rename saves the name on Save, and an empty name clears it", async () => {
     body: { label: "Nightly job" },
   });
   expect(keyRows(m.root)[0]?.textContent).toContain("Nightly job");
+  await openKeyMenu(keyRows(m.root)[0] as FakeNode);
   await press(buttonIn(keyRows(m.root)[0] as FakeNode, "Rename"));
   await type(all(keyRows(m.root)[0] as FakeNode, "input")[0] as FakeNode, "  ");
   await submit(all(keyRows(m.root)[0] as FakeNode, "form")[0] as FakeNode);
@@ -781,6 +798,7 @@ test("a failed rename says why and keeps the field", async () => {
   });
   const m = await w.mount(<ToolsPage />);
   const first = keyRows(m.root)[0] as FakeNode;
+  await openKeyMenu(first);
   await press(buttonIn(first, "Rename"));
   await type(all(first, "input")[0] as FakeNode, "x");
   await submit(all(first, "form")[0] as FakeNode);
@@ -797,12 +815,16 @@ test("a pluxy that cannot rename (405) loses Rename on every key and says so onc
     rename: () => ({ status: 405, error: { code: "method_not_allowed", message: "method not allowed" } }),
   });
   const m = await w.mount(<ToolsPage />);
-  expect(keyRows(m.root).every((r) => hasButton(r, "Rename"))).toBe(true);
   const first = keyRows(m.root)[0] as FakeNode;
+  await openKeyMenu(first);
+  expect(hasButton(first, "Rename")).toBe(true);
   await press(buttonIn(first, "Rename"));
   await type(all(first, "input")[0] as FakeNode, "x");
   await submit(all(first, "form")[0] as FakeNode);
-  expect(keyRows(m.root).some((r) => hasButton(r, "Rename"))).toBe(false);
+  for (const r of keyRows(m.root)) {
+    await openKeyMenu(r);
+    expect(hasButton(r, "Rename")).toBe(false);
+  }
   expect(m.text().split("This pluxy cannot rename keys.")).toHaveLength(2);
   expect(all(m.root, "form")).toHaveLength(0);
 });
@@ -830,13 +852,13 @@ test("while the keys are read, and when they cannot be, the section says so and 
   expect(m.text()).toContain("No keys.");
 });
 
-test("the address is the host's, with Copy, and says who can reach it", async () => {
+test("the address uses ConnectionCard with Copy, reachability and the link to System", async () => {
   const w = world();
   const m = await w.mount(<ToolsPage />);
-  const section = descend(m.root).find(
-    (n) => attribute(n, "aria-labelledby") === "tools-address",
-  ) as FakeNode;
-  expect(section.textContent).toContain("http://127.0.0.1:8317");
+  const section = descend(m.root).find((n) => attribute(n, "aria-label") === "Address for tools") as FakeNode;
+  expect(withPart(section, "connection-card")).toHaveLength(1);
+  expect(section.textContent).toContain("Point a tool at pluxy");
+  expect(section.textContent).toContain("http://127.0.0.1:8317/v1");
   expect(section.textContent).toContain("Only programs on this computer can reach it.");
   expect(section.textContent).toContain(
     "Another program can use pluxy too: System lists the exact address each kind needs.",
@@ -844,6 +866,29 @@ test("the address is the host's, with Copy, and says who can reach it", async ()
   expect(hasButton(section, "Copy")).toBe(true);
   const system = all(section, "a").find((a) => a.textContent === "Addresses for other programs");
   expect(system && attribute(system, "href")).toBe("#/system");
+});
+
+test("every tool row renders a mark beside its name, and the key row menu toggles cleanly", async () => {
+  const w = world({
+    clients: [CLAUDE, CODEX, GONE, client("pi", "Pi"), client("hermes", "Hermes Agent")],
+    keys: [
+      { id: "k1", masked: "sk-***11", label: "Script" },
+      { id: "k2", masked: "sk-***22" },
+    ],
+  });
+  const m = await w.mount(<ToolsPage />);
+  for (const name of ["Claude Code", "Codex", "Pi", "Hermes Agent"]) {
+    const r = rowOf(m.root, name);
+    expect(descend(r).some((n) => attribute(n, "data-tool-mark") !== undefined)).toBe(true);
+  }
+  const first = keyRows(m.root)[0] as FakeNode;
+  expect(descend(first).filter((n) => attribute(n, "role") === "menu")).toHaveLength(0);
+  await openKeyMenu(first);
+  expect(descend(first).filter((n) => attribute(n, "role") === "menu")).toHaveLength(1);
+  expect(hasButton(first, "Rename")).toBe(true);
+  expect(hasButton(first, "Delete")).toBe(true);
+  await openKeyMenu(first);
+  expect(descend(first).filter((n) => attribute(n, "role") === "menu")).toHaveLength(0);
 });
 
 test("a 401 anywhere signs the person out", async () => {
@@ -870,6 +915,7 @@ test("no word on the page is one of the words it must not use", async () => {
   );
   await press(buttonIn(rowOf(m.root, "Claude Code"), "Set up"));
   await press(buttonIn(rowOf(m.root, "Claude Code"), "Make key"));
+  await openKeyMenu(keyRows(m.root)[0] as FakeNode);
   await press(buttonIn(keyRows(m.root)[0] as FakeNode, "Delete"));
   await press(buttonIn(buttonScope(m.root), "New key"));
   // Text nodes apart, so words in neighbouring elements stay apart.

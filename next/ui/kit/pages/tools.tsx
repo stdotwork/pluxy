@@ -8,7 +8,7 @@
 // goes when the person closes its notice, deletes the key or leaves the page.
 
 import type { ComponentChildren } from "preact";
-import { useEffect, useId, useRef, useState } from "preact/hooks";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { type Account, type ClientKey, problem, type Setup, type SetupClient } from "../api";
 import { Icon } from "../icons";
 import {
@@ -753,7 +753,7 @@ function ToolRows(props: {
             <span class="tools-other-mark">
               <Icon name="chevron" size={14} />
             </span>
-            <span>{t("otherTools", { count: groups.other.length })}</span>
+            {t("otherTools", { count: groups.other.length })}
           </summary>
           <div class="tool-rows">{groups.other.map(row)}</div>
         </details>
@@ -900,7 +900,7 @@ function KeyRow(props: {
   const questionId = useId();
   const menuId = useId();
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!menuOpen) return;
     const onPointerDown = (e: Event) => {
       if (menuWrap.current && !menuWrap.current.contains(e.target as Node | null)) setMenuOpen(false);
@@ -955,6 +955,12 @@ function KeyRow(props: {
   };
 
   const onMenuKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setMenuOpen(false);
+      triggerRef.current?.focus();
+      return;
+    }
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     const items = menuList.current
       ? [...menuList.current.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')]
@@ -998,6 +1004,12 @@ function KeyRow(props: {
             aria-controls={menuOpen ? menuId : undefined}
             aria-label={t("keyActions", { name: name.text })}
             onClick={() => setMenuOpen((o) => !o)}
+            onKeyDown={(e) => {
+              if (menuOpen && e.key === "Escape") {
+                e.preventDefault();
+                setMenuOpen(false);
+              }
+            }}
           >
             <EllipsisIcon />
           </button>
@@ -1007,7 +1019,6 @@ function KeyRow(props: {
             ref={menuList}
             id={menuId}
             class="tool-key-menu"
-            data-part="key-menu"
             role="menu"
             aria-label={t("keyActions", { name: name.text })}
             onKeyDown={onMenuKeyDown}

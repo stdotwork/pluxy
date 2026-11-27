@@ -1,7 +1,7 @@
 // The Tools page against a real core (panelcore -first-run: no account, one client key, and Claude
 // Code on its machine): the tools listed, the steps under a row, a key made for a tool and put in
 // its text, named keys, deleting with a question, and the address.
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { goTo, openPanel, signIn, useCore } from "./support";
 
 // panelcore compiles core and the fixture extensions before announcing readiness.
@@ -20,6 +20,9 @@ test.beforeEach(async ({ page, context }) => {
 const row = (page: Page, tool: string) => page.locator('[data-part="tool-row"]').filter({ hasText: tool });
 const keys = (page: Page) => page.getByRole("region", { name: /^Keys/ });
 const keyRow = (page: Page, name: string) => page.locator('[data-part="tool-key"]').filter({ hasText: name });
+const openKeyMenu = async (item: Locator) => {
+  await item.locator('button[aria-haspopup="menu"]').click();
+};
 
 /** Keys this test made are deleted, so the next test starts with the one key core was started with. */
 async function forgetMadeKeys() {
@@ -120,12 +123,15 @@ test("Make key puts a real key in the text and names it for the tool; Close take
   await expect(page.locator('[data-part="key-value"]')).toHaveCount(0);
 });
 
-test("a key made by name can be renamed and deleted after asking; the last key cannot be deleted", async ({
+test("a key made by name can be renamed and deleted from its row menu; the last key cannot be deleted", async ({
   page,
 }) => {
   const only = keys(page).locator('[data-part="tool-key"]');
   await expect(only).toHaveCount(1);
-  await expect(only.getByRole("button", { name: "Delete", exact: true })).toBeDisabled();
+  await openKeyMenu(only);
+  await expect(only.getByRole("menuitem", { name: "Delete", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(only.getByRole("menu")).toHaveCount(0);
   await expect(only).toContainText("Add another key before deleting this one.");
   await keys(page).getByRole("button", { name: "New key", exact: true }).click();
   await keys(page).getByLabel("Name", { exact: true }).fill("Script on my laptop");
@@ -140,27 +146,31 @@ test("a key made by name can be renamed and deleted after asking; the last key c
   // New key puts nothing in any tool's text.
   await row(page, "Claude Code").getByRole("button", { name: "Set up", exact: true }).click();
   await expect(row(page, "Claude Code").locator("pre")).toContainText("<client-key>");
-  // Rename.
-  await made.getByRole("button", { name: "Rename", exact: true }).click();
+  // Rename from the row menu.
+  await openKeyMenu(made);
+  await made.getByRole("menuitem", { name: "Rename", exact: true }).click();
   await made.getByLabel("Name", { exact: true }).fill("Nightly job");
   await made.getByRole("button", { name: "Save", exact: true }).click();
   const renamed = keyRow(page, "Nightly job");
   await expect(renamed).toBeVisible();
   const listed = await core.mgmt<{ keys: { label?: string }[] }>("GET", "/client-keys");
   expect(listed.body.keys.map((k) => k.label)).toContain("Nightly job");
-  // Delete asks first, naming the key; Cancel leaves it.
-  await renamed.getByRole("button", { name: "Delete", exact: true }).click();
+  // Delete from the row menu asks first, naming the key; Cancel leaves it.
+  await openKeyMenu(renamed);
+  await renamed.getByRole("menuitem", { name: "Delete", exact: true }).click();
   await expect(renamed).toContainText("Nightly job stops working until it gets a new key.");
   await renamed.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(renamed).toBeVisible();
-  await renamed.getByRole("button", { name: "Delete", exact: true }).click();
+  await openKeyMenu(renamed);
+  await renamed.getByRole("menuitem", { name: "Delete", exact: true }).click();
   await renamed.getByRole("button", { name: "Yes, delete", exact: true }).click();
   await expect(keys(page).locator('[data-part="tool-key"]')).toHaveCount(1);
   expect(
     (await fetch(`${core.base}/v1/models`, { headers: { Authorization: `Bearer ${value}` } })).status,
   ).toBe(401);
+  await openKeyMenu(keys(page).locator('[data-part="tool-key"]'));
   await expect(
-    keys(page).locator('[data-part="tool-key"]').getByRole("button", { name: "Delete", exact: true }),
+    keys(page).locator('[data-part="tool-key"]').getByRole("menuitem", { name: "Delete", exact: true }),
   ).toBeDisabled();
 });
 
@@ -176,18 +186,24 @@ test("a refused delete of the last key shows the same line", async ({ page }) =>
     (r) => r.request().method() === "DELETE" && r.url().includes("/client-keys/"),
   );
   const last = keys(page).locator('[data-part="tool-key"]').nth(1);
-  await last.getByRole("button", { name: "Delete", exact: true }).click();
+  await openKeyMenu(last);
+  await last.getByRole("menuitem", { name: "Delete", exact: true }).click();
   await last.getByRole("button", { name: "Yes, delete", exact: true }).click();
   expect((await asked).status()).toBe(409);
   await expect(last).toContainText("Add another key before deleting this one.");
 });
 
-test("the address has a Copy button and says who can reach it", async ({ page }) => {
+test("the address uses ConnectionCard with Copy and says who can reach it", async ({ page }) => {
   const address = page.getByRole("region", { name: "Address for tools" });
-  await expect(address).toContainText(core.base);
+  await expect(address.locator('[data-part="connection-card"]')).toBeVisible();
+  await expect(address).toContainText(`${core.base}/v1`);
   await expect(address).toContainText("Only programs on this computer can reach it.");
   await address.getByRole("button", { name: "Copy", exact: true }).click();
   await expect(address.getByRole("button", { name: "Copied", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${core.base}/v1`);
+  await address.getByRole("radio", { name: "Claude" }).click();
+  await expect(address).toContainText(core.base);
+  await address.getByRole("button", { name: "Copy", exact: true }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(core.base);
   await expect(address.getByRole("link", { name: "Addresses for other programs" })).toHaveAttribute(
     "href",
