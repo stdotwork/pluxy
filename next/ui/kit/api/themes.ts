@@ -1,4 +1,4 @@
-// The themes core keeps (next/management/README.md, "Themes"). Core checks a stored theme file is
+// The themes core keeps (docs/management-api.md, "Themes"). Core checks a stored theme file is
 // one UTF-8 JSON object of at most 256 KiB and takes its `name` for the list; the kit's reader
 // (theme/validate.ts) is the one validator of everything else.
 
