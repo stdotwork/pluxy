@@ -375,6 +375,7 @@
 
   .account-columns[data-even] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
   }
 
   @container (max-width: 52em) {
@@ -477,11 +478,15 @@
     color: var(--px-color-text-muted);
   }
 
-  .account-about a {
+  .account-about a,
+  .account-change a,
+  .account-sign-in a {
     text-decoration: none;
   }
 
-  .account-about a:hover {
+  .account-about a:hover,
+  .account-change a:hover,
+  .account-sign-in a:hover {
     text-decoration: underline;
   }
 
