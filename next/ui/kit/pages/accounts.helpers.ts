@@ -13,7 +13,7 @@ import {
   providerName,
 } from "../parts/account";
 import { strings } from "../strings";
-import { groupTiers } from "./routing";
+import { groupTiers } from "./routing.helpers";
 
 const t = strings("accounts.words", {
   accounts: { one: "{count} account", other: "{count} accounts" },

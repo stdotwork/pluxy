@@ -43,14 +43,15 @@ request", which says under it that it uses one request.
 | An account's page | Replaced the old Auth Files page's details. `#/accounts/<id>` opens it, under All accounts, with the account's name in the header strip; it shows the account's limits, what it did this week and the ways to change it. |
 | Add an account | Replaced OAuth Login. It adds API keys as well as sign-ins, from the login methods each running extension offers under the provider's name, so "OAuth" no longer describes it. A person never types an account ID: core makes it, and the account is named after the sign-in. The importer for CLIProxyAPI auth files is at the end of it. |
 | System | Replaced Management Center Info. "Management Center" was the upstream panel's product name. |
-| Routing, Config Panel | The old panel's names: these pages do the same job as the old ones did. |
+| Order & fallback | Replaced Routing, whose tiers, "Failover" and "Gateway policy" a person had to know the product to read. It is the second tab of Accounts. It shows, for each provider with two or more accounts, which goes first (`First`, `Backup 1`…): pluxy only ever picks among one provider's accounts, so a mixed list would have made another provider's account look like a backup. Under it are the fallbacks (what pluxy tries when no account can serve a model, such as ChatGPT when Claude runs out) and the rules by which accounts share requests, two shown and eight under "More rules". |
+| Config Panel | The old panel's name: this page does the same job as the old one did. |
 | Logs | Replaced the old panel's Logs Viewer. It holds two things, pluxy's own log and the full logs of failed requests, and "viewer" named neither. |
 | (Quota Management) | Gone: every account's row on All accounts shows its two shortest limits, and its page shows every limit. The old address `#/quota` opens All accounts. |
 | Requests, Usage | The two tabs of Activity; see [The Activity page](#the-activity-page). Requests keeps the ID `usage` of the page it replaced, so `#/usage` and `data-page="usage"` still work; Usage is `activity/usage`. |
 | Tools | A new page, named for what a person does there: connect a coding tool, copy the address for any other program, and make, name and delete the keys tools send. It sits under the Tools destination; in the desktop app its topics sit beside it. |
 | Set up pluxy | A new page, named for what a person does there. The panel opens it by itself on a first start; afterwards it stays among the Settings topics and shows the same things as they are now. |
 
-The navigation has five destinations: Home, Accounts (All accounts, with Routing as the tab
+The navigation has five destinations: Home, Accounts (All accounts, with the tab
 "Order & fallback", and each account's own page under All accounts), Activity (Requests and Usage), Tools (the Tools
 page, and in the desktop app its client pages as topics) and Settings, which lists every other page as a topic,
 the extensions' pages last. The old panel's groups (Operate, Gateway, Observe, Control) are gone.

@@ -91,7 +91,7 @@ render function, and where it sits:
 | `kind` | `"tab"`: one of the destination's tabs in the header strip. `"topic"`: one of its topics beside the page. Left out: the page is reached from the navigation entry itself or from another page |
 | `under` | The ID of the page it sits under. The header strip then shows the way back (`Accounts / Add an account`), and no tabs |
 | `addresses` | Other addresses the page answers: an exact old ID (All accounts answers `quota`, the Quota page it replaced), or a prefix ending in `/` for whatever follows it (an account's page answers `accounts/`, so `#/accounts/<id>` opens it). Where several pages match, the longest match wins |
-| `label` | Its name in its tab or topic entry, when the title does not fit there (Routing's tab reads "Order & fallback") |
+| `label` | Its name in its tab or topic entry, when the title does not fit there (Accounts' tab reads "All accounts") |
 | `section` | The group a topic is listed in: `core` (the default), `device` or `extensions` |
 | `tip` | The tooltip of its tab or topic entry |
 
@@ -197,7 +197,7 @@ visit), and `POST /client-keys` sends the name with the new key.
 | Accounts (`accounts`) | Accounts, the tab "All accounts"; `#/quota` opens it too | Auth Files (`/auth-files`) and AI Providers (`/ai-providers`), with the OAuth excluded models and OAuth model alias pages (`/auth-files/oauth-excluded`, `/auth-files/oauth-model-alias`) |
 | An account's page (`account`) | Accounts, under All accounts: `#/accounts/<id>`, and `#/accounts/<id>/sign-in` with its sign-in open | The details of one auth file on Auth Files |
 | Add an account (`add-account`) | Accounts, under the Accounts page | OAuth Login (`/oauth`) |
-| Routing (`routing`) | Accounts, the tab "Order & fallback" | Routing (`/routing`) |
+| Order & fallback (`routing`) | Accounts, the tab "Order & fallback" | Routing (`/routing`) |
 | Logs (`logs`) | Settings, a topic | Logs Viewer (`/logs`) |
 | Usage (`usage`) | Activity | No old panel page: the old desktop app's list of recorded requests |
 | Tools (`tools`) | Tools | No old page |
@@ -301,8 +301,6 @@ feature, it keeps the old label, unless the label named something this core does
 
 **Routing**
 
-- Drag and drop, and "Drop here to make a new tier": "Move up a tier" and "Move down a tier" move
-  an account into the next tier, or into a new tier past the first or the last.
 - The review dialog before saving: each change saves at once.
 - The route preview for a model: the browser guessed the route without seeing cooldowns or session
   bindings, so it could be wrong.

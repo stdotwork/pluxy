@@ -1,71 +1,367 @@
+/* Order & fallback (routing.tsx): account order, fallbacks and rules. The rows are the shared
+   SettingRow and StatePane (parts.css); this file lays out what is around them. */
 @layer kit {
+  /* The page is two columns while its own width allows, not the window's: a theme may narrow it. */
+  .routing-page {
+    container-type: inline-size;
+  }
+
   .routing-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 20rem);
     align-items: start;
-    gap: calc(var(--s) * 5);
+    gap: calc(var(--s) * 8);
   }
-  .routing-tiers,
-  .routing-policy {
+
+  .routing-fallbacks {
+    container-type: inline-size;
+  }
+
+  .routing-main,
+  .routing-rules-pane {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: calc(var(--s) * 8);
     min-width: 0;
   }
-  [data-part="tier"] {
-    min-width: 0;
-    border: var(--px-shape-border) solid var(--px-color-border);
-    border-radius: var(--px-shape-radius);
-    background: var(--px-color-surface);
-    overflow: hidden;
+
+  .routing-rules-pane {
+    gap: calc(var(--s) * 2);
   }
-  .routing-tier-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: calc(var(--s) * 3);
-    padding: calc(var(--s) * 3);
-    background: var(--px-color-surface-raised);
-  }
-  .routing-tier-head h2 {
+
+  .routing-layout h2 {
     margin: 0;
-    font-size: 1em;
+    font-size: var(--px-font-size-title);
   }
-  .routing-tiers .table {
-    min-width: 0;
-  }
-  .routing-tiers [data-part="badge"] {
-    white-space: nowrap;
-  }
-  .routing-identity,
-  .routing-state {
-    display: block;
-    overflow-wrap: anywhere;
-  }
-  .routing-actions {
+
+  .routing-section-head {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2) calc(var(--s) * 4);
+  }
+
+  .routing-section-intro,
+  .order-intro {
+    margin: calc(var(--s) * 2) 0 calc(var(--s) * 3);
+    color: var(--px-color-text-muted);
+  }
+
+  /* ---- Account order ------------------------------------------------------------------------ */
+
+  .order {
+    min-width: 0;
+  }
+
+  .order-intro {
+    margin-top: 0;
+  }
+
+  .order-provider {
+    min-width: 0;
+    margin-bottom: calc(var(--s) * 5);
+  }
+
+  .order-provider-name {
+    margin: 0 0 var(--s);
+    font-size: var(--px-font-size-body);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .order-tier {
+    min-width: 0;
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .order-tier-head {
+    display: flex;
+    align-items: baseline;
+    gap: calc(var(--s) * 3);
+    padding: calc(var(--s) * 2) calc(var(--s) * 2) var(--s);
+  }
+
+  .order-tier-head h4 {
+    margin: 0;
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .order-tier-head .muted {
+    font-size: var(--px-font-size-small);
+  }
+
+  .order-rows {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .order-row {
+    min-width: 0;
+  }
+
+  .order-line {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    min-height: var(--px-size-row);
+    padding-inline: calc(var(--s) * 2);
+  }
+
+  .order-handle {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: calc(var(--s) * 5);
+    color: var(--px-color-text-muted);
+    cursor: grab;
+  }
+
+  .order-handle:active {
+    cursor: grabbing;
+  }
+
+  .order-name {
+    flex: 1 1 8rem;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: var(--px-size-control);
+  }
+
+  .order-condition,
+  .order-file {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--px-size-control);
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    white-space: nowrap;
+  }
+
+  .order-arrows {
+    flex: none;
+    display: inline-flex;
     gap: var(--s);
   }
-  .routing-weight {
-    margin-top: calc(var(--s) * 2);
+
+  .order-line .btn {
+    min-width: var(--px-size-control);
+    white-space: nowrap;
   }
-  .routing-policy {
+
+  .order-weight {
+    display: grid;
+    gap: var(--s);
+    max-width: 24rem;
+    padding: calc(var(--s) * 2) calc(var(--s) * 2) calc(var(--s) * 3) calc(var(--s) * 11);
+  }
+
+  .order-single {
+    margin: 0;
+  }
+
+  /* Where a dragged account is dropped to start a new first or last group: there only during a drag. */
+  .order-edge {
+    display: none;
+    padding: calc(var(--s) * 2);
+    border: var(--px-shape-border) dashed var(--px-color-border);
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    text-align: center;
+  }
+
+  .order-provider[data-dragging] .order-edge {
+    display: block;
+  }
+
+  /* ---- Fallbacks ---------------------------------------------------------------------------- */
+
+  .fallback-list {
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .fallback {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "ask"
+      "line"
+      "actions";
+    gap: var(--s);
+    padding: calc(var(--s) * 2);
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .fallback-ask {
+    grid-area: ask;
+  }
+
+  .fallback-line {
+    grid-area: line;
+  }
+
+  .fallback-ask,
+  .fallback-line {
+    min-width: 0;
+    overflow-wrap: break-word;
+  }
+
+  /* A step stays on one line when it fits, so a model name is not cut at its hyphens. */
+  .fallback-step-text {
+    display: inline-block;
+    max-width: 100%;
+  }
+
+  .fallback-ask {
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .fallback-actions {
+    grid-area: actions;
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s);
+  }
+
+  .fallback-editor {
     display: grid;
     gap: calc(var(--s) * 3);
+    margin-top: calc(var(--s) * 4);
+    padding: calc(var(--s) * 3);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
   }
-  .routing-policy h2,
-  .routing-policy h3 {
-    margin-block: 0 calc(var(--s) * 2);
-    font-size: 1em;
+
+  .fallback-steps-label {
+    margin: 0;
+    font-weight: var(--px-font-weight-strong);
   }
-  .routing-policy fieldset {
+
+  .fallback-steps {
+    display: grid;
+    gap: calc(var(--s) * 3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .fallback-step {
+    display: grid;
+    grid-template-columns: calc(var(--s) * 5) minmax(0, 1fr);
+    align-items: start;
+    gap: calc(var(--s) * 2) calc(var(--s) * 2);
+  }
+
+  .fallback-n {
+    padding-top: calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+    text-align: center;
+  }
+
+  .fallback-fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    gap: calc(var(--s) * 2);
+  }
+
+  .fallback-accounts {
+    grid-column: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 1) calc(var(--s) * 4);
     min-width: 0;
     margin: 0;
     padding: 0;
     border: 0;
-    display: grid;
-    gap: calc(var(--s) * 3);
   }
-  @media (max-width: 1000px) {
+
+  .fallback-accounts legend {
+    padding: 0;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .fallback-account {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s);
+    min-height: var(--px-size-control);
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .fallback-account span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .fallback-step-actions {
+    grid-column: 2;
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: var(--s);
+  }
+
+  .fallback-step-actions .btn,
+  .fallback-add .btn {
+    min-width: var(--px-size-control);
+  }
+
+  .fallback-add {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2) calc(var(--s) * 3);
+  }
+
+  .fallback-editor p {
+    margin: 0;
+  }
+
+  /* ---- Rules -------------------------------------------------------------------------------- */
+
+  .routing-rules select,
+  .routing-rules input:not([type="checkbox"]) {
+    max-width: 100%;
+  }
+
+  .routing-rules .setting-control {
+    justify-content: flex-start;
+  }
+
+  .routing-more > summary {
+    display: flex;
+    align-items: center;
+    gap: var(--s);
+    min-height: var(--px-size-control);
+    padding-inline: calc(var(--s) * 2);
+    cursor: pointer;
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .routing-more > summary .icon {
+    transition: transform 0.1s;
+  }
+
+  .routing-more[open] > summary .icon {
+    transform: rotate(90deg);
+  }
+
+  @container (max-width: 48rem) {
     .routing-layout {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @container (max-width: 30rem) {
+    .fallback-fields {
       grid-template-columns: minmax(0, 1fr);
     }
   }

@@ -65,26 +65,21 @@ for (const [theme, control, main] of [
 }
 
 test("a table wider than its pane fades out on the side with more columns", async ({ page }) => {
-  // Order & fallback's first tier is wider than a phone-sized window.
+  // The System page's list of models is wider than a phone-sized window.
   await page.setViewportSize({ width: 380, height: 480 });
-  // An account whose long name makes its tier wider than the window.
-  await page.route("**/v0/management/accounts", async (route) => {
+  // A model served by an account whose long name makes its row wider than the window.
+  const wide = "anaccountwhosenamehasnoplacetobreakandmakesitstierwiderthanthewindow";
+  await page.route("**/v0/management/models", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     const reply = await route.fetch();
-    const body = (await reply.json()) as { accounts: unknown[] };
-    const wide = {
-      id: "anaccountwhosenamehasnoplacetobreakandmakesitstierwiderthanthewindow",
-      source: "login",
-      state: "active",
-      refreshable: false,
-      extension: "test/alpha",
-    };
-    await route.fulfill({ response: reply, json: { accounts: [...body.accounts, wide] } });
+    const body = (await reply.json()) as { models: unknown[] };
+    const model = { id: "wide-model", upstream: "wide-model", extension: "test/alpha", accounts: [wide] };
+    await route.fulfill({ response: reply, json: { models: [...body.models, model] } });
   });
   await openPanel(page, core);
   await signIn(page, core);
-  await page.goto(`${core.base}/panel/#/routing`);
-  const frame = page.locator('[data-part="list-frame"]').first();
+  await page.goto(`${core.base}/panel/#/system`);
+  const frame = page.locator('[data-part="list-frame"]').filter({ hasText: wide });
   const cue = (side: "::before" | "::after") =>
     frame.evaluate((el, s) => getComputedStyle(el, s).opacity, side);
   await expect(frame).toHaveAttribute("data-more", "end");

@@ -397,9 +397,9 @@ test("the header strip names the page, shows a destination's tabs, and the way b
   );
   await tabs.getByRole("link", { name: "Order & fallback", exact: true }).click();
   await expect(page).toHaveURL(/#\/routing$/);
-  await expect(page).toHaveTitle(/^Routing · /);
+  await expect(page).toHaveTitle(/^Order & fallback · /);
   await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("Accounts: Routing");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("Accounts: Order & fallback");
   await expect(tabs.getByRole("link", { name: "Order & fallback", exact: true })).toHaveAttribute(
     "aria-current",
     "page",

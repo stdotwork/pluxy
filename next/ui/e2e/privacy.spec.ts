@@ -178,9 +178,9 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   await expect(detail).toContainText(`ask ${EMAIL_MASKED} about ${AMP_MASKED}`);
   await expectMasked(page);
 
-  // Routing: two accounts whose masked names are the same keep keyboard focus apart.
-  await goTo(page, "Routing");
-  const twinDown = page.getByRole("button", { name: `Move down a tier: ${TWIN_MASKED}`, exact: true });
+  // Order & fallback: two accounts whose masked names are the same keep keyboard focus apart.
+  await goTo(page, "Order & fallback");
+  const twinDown = page.getByRole("button", { name: `Move ${TWIN_MASKED} down a group`, exact: true });
   await expect(twinDown).toHaveCount(2);
   await twinDown.nth(1).focus();
   await page.keyboard.press("Enter");
@@ -194,15 +194,15 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const lists = [...document.querySelectorAll('[data-part="list"]')];
+        const groups = [...document.querySelectorAll('[data-part="tier"]')];
         const active = document.activeElement;
         return {
-          tier: lists.indexOf(active?.closest('[data-part="list"]') as Element),
+          tier: groups.indexOf(active?.closest('[data-part="tier"]') as Element),
           name: active?.getAttribute("aria-label"),
         };
       }),
     )
-    .toEqual({ tier: 1, name: `Move down a tier: ${TWIN_MASKED}` });
+    .toEqual({ tier: 1, name: `Move ${TWIN_MASKED} down a group` });
   await expectMasked(page);
 
   // The System page's models list the accounts that serve them.

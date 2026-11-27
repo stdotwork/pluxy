@@ -312,7 +312,10 @@ These stay stable within a theme contract version:
 | `data-part="method"` | One way to sign in on Add an account: its name, how it signs in and Start; its sign-in shows under it once started. |
 | `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
 | `data-part="device-code"` | The user code to enter on a device sign-in page. |
-| `data-part="tier"` | A Routing priority tier, containing its heading and account list. |
+| `data-part="tier"` | One group of a provider's accounts on Order & fallback (First, Backup 1…), with its name, its priority and its accounts; `data-priority` is its priority |
+| `data-part="order-row"` | One account in a group on Order & fallback: its handle, mark, name, condition, weight and arrows; `data-condition` is its condition, as on its Accounts row |
+| `data-part="fallback"` | One fallback on Order & fallback: the model a tool asks for, its steps in order, Edit and Remove; `data-open` while the editor shows it |
+| `data-part="fallback-editor"` | The form that makes or changes a fallback, under the list of fallbacks |
 | `data-part="tile"` | One fact on the System page's about card: a label, its value and a note. |
 | `data-part="model-group"` | The models of one extension on the System page, under the extension's name and their count. |
 | `data-part="days"` | Home's chart of the last 7 days: seven day bars, each with its succeeded part and its failed part on top. |

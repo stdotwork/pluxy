@@ -5,6 +5,7 @@
 import type { Host, Reply } from "../host";
 import { strings } from "../strings";
 import { accountsApi } from "./accounts";
+import { chainsApi } from "./chains";
 import { configApi } from "./config";
 import { extensionsApi } from "./extensions";
 import { loginsApi } from "./logins";
@@ -20,6 +21,7 @@ import { usageApi } from "./usage";
 import { usageEventsApi } from "./usageEvents";
 
 export * from "./accounts";
+export * from "./chains";
 export * from "./config";
 export * from "./extensions";
 export * from "./logins";
@@ -39,6 +41,7 @@ export const api = (host: Host) => ({
   ...configApi(host),
   ...statusApi(host),
   ...accountsApi(host),
+  ...chainsApi(host),
   ...packagesApi(host),
   ...quotaApi(host),
   ...extensionsApi(host),
