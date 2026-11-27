@@ -14,6 +14,7 @@
   },
   "old_core": {"account":{"models":null}},
   "new_core": {"account":{"models":null}},
+  "volatile": ["client.body.error.message"],
   "exceptions": [
     {
       "path": "client.status",
@@ -25,7 +26,7 @@
       "kind": "gap",
       "reason": "For an unknown model the old core says unknown provider (invalid_request_error); the new core says no account serves the model, as Anthropic's not_found_error.",
       "want": {
-        "message": "no account serves model \"corpus-not-in-catalog\"",
+        "message": "(volatile)",
         "type": "not_found_error",
         "pluxy": "(volatile)"
       }

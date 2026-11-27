@@ -125,7 +125,7 @@ Copy a key from `client_keys` in `config.json`, or create a new one with `pluxy 
 ### No account serves the requested model
 
 ```json
-{"error":{"code":"model_not_found","message":"no account serves model \"nonexistent-model\"","pluxy":{"trace":"20261124091635-ce7ef4b16d5019cf","tried":[],"left_out":[]},"type":"invalid_request_error"}}
+{"error":{"code":"model_not_found","message":"no account serves model \"nonexistent-model\". pluxy serves: gpt-demo-large, gpt-demo-mini. Set the tool's model to one of them, or add a model alias to an account so that \"nonexistent-model\" goes to one of them.","pluxy":{"trace":"20261124091635-ce7ef4b16d5019cf","tried":[],"left_out":[]},"type":"invalid_request_error"}}
 ```
 
 HTTP 404. No enabled account serves that model name. `pluxy route nonexistent-model` fails with exit code 5 and prints:
@@ -133,6 +133,8 @@ HTTP 404. No enabled account serves that model name. `pluxy route nonexistent-mo
 ```text
 pluxy: no account serves nonexistent-model. See pluxy model list.
 ```
+
+A coding tool often causes this: it asks for a model of its own (Claude Code's `claude-opus-5-5`, Codex's `gpt-6.1-sol`) that an account of another service does not serve. The message names the models pluxy does serve. Either set the tool's model to one of them (`pluxy client show <tool>` prints the settings with a model filled in; add `--model <name>` to choose), or add a model alias to an account so the name the tool asks for goes to a model the account serves: in the panel, open **Activity**, open the failed request and choose **Add an alias**; in the config file, `model_alias` on the account.
 
 Run `pluxy model list` to see the model names your accounts serve. If a request failed after trying accounts or skipping blocked ones, the `pluxy` object lists `tried` and `left_out` with each account's public ID and state.
 

@@ -7,6 +7,7 @@
   },
   "old_core": {"account":{"models":null}},
   "new_core": {"account":{"models":null}},
+  "volatile": ["client.body.error.message"],
   "exceptions": [
     {
       "path": "client.status",
@@ -19,7 +20,7 @@
       "reason": "For an unknown model the old core answers in OpenAI's error shape (model_not_found, unknown provider) even to a Gemini client; the new core answers in Gemini's shape that no account serves the model.",
       "want": {
         "code": 404,
-        "message": "no account serves model \"corpus-not-in-catalog\"",
+        "message": "(volatile)",
         "status": "NOT_FOUND",
         "pluxy": "(volatile)"
       }

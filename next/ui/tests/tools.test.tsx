@@ -60,6 +60,8 @@ function world(
     remove?: (call: Call) => Reply<unknown> | undefined;
     used?: Record<string, number>;
     scanned?: boolean;
+    /** The models pluxy serves, as the text's paste reply lists them (none by default). */
+    models?: string[];
   } = {},
 ) {
   const calls: Call[] = [];
@@ -88,6 +90,8 @@ function world(
       if (!["claude-code", "codex", "opencode", "pi", "omp"].includes(id)) {
         return { status: 404, error: { code: "not_found", message: "no settings to paste" } };
       }
+      const models = init.models ?? [];
+      const asked = new URLSearchParams(path.split("?")[1] ?? "").get("model") || models[0];
       return {
         status: 200,
         body: {
@@ -98,10 +102,12 @@ function world(
           files: [
             {
               path: `~/.${id}/settings.json`,
-              content: `{"url": "http://127.0.0.1:8317", "key": "<client-key>", "model": "<model-id>"}`,
+              content: `{"url": "http://127.0.0.1:8317", "key": "<client-key>", "model": "${asked ?? "<model-id>"}"}`,
             },
           ],
           note: id === "codex" ? "Codex reads this at start." : undefined,
+          model: asked,
+          models,
         },
       };
     }
@@ -480,6 +486,47 @@ test("Set up opens the steps under one row at a time", async () => {
   expect(rowOf(m.root, "Codex").textContent).toContain("Codex reads this at start.");
   await press(buttonIn(rowOf(m.root, "Codex"), "Hide"));
   expect(withPart(m.root, "tool-steps")).toHaveLength(0);
+});
+
+test("the steps offer the models pluxy serves with the best match chosen, and picking one asks for the text with it", async () => {
+  const w = world({ models: ["fake-gpt-1", "fake-gpt-mini"] });
+  const m = await w.mount(<ToolsPage />);
+  await press(buttonIn(rowOf(m.root, "Claude Code"), "Set up"));
+  const row = rowOf(m.root, "Claude Code");
+  const pick = all(row, "select")[0];
+  if (!pick) throw new Error("no model picker in the steps");
+  expect(all(pick, "option").map((o) => o.textContent)).toEqual(["fake-gpt-1", "fake-gpt-mini"]);
+  expect(pick.value).toBe("fake-gpt-1");
+  expect(row.textContent).toContain("Model Claude Code starts with");
+  expect(preText(row)).toContain('"model": "fake-gpt-1"');
+  // The text names a model, so it does not ask for one to be put in.
+  expect(m.text()).not.toContain("Replace <model-id>");
+  const pastes = () =>
+    w.calls.filter((c) => c.path.startsWith("/setup/clients/claude-code/paste")).map((c) => c.path);
+  expect(pastes()).toEqual(["/setup/clients/claude-code/paste"]);
+  pick.value = "fake-gpt-mini";
+  await act(async () => {
+    pick.dispatchEvent(new Event("change"));
+  });
+  await settle();
+  expect(pastes()).toEqual([
+    "/setup/clients/claude-code/paste",
+    "/setup/clients/claude-code/paste?model=fake-gpt-mini",
+  ]);
+  expect(preText(rowOf(m.root, "Claude Code"))).toContain('"model": "fake-gpt-mini"');
+  expect(all(rowOf(m.root, "Claude Code"), "select")[0]?.value).toBe("fake-gpt-mini");
+});
+
+test("with no model served the steps say so and the text keeps the placeholder", async () => {
+  const w = world({ models: [] });
+  const m = await w.mount(<ToolsPage />);
+  await press(buttonIn(rowOf(m.root, "Claude Code"), "Set up"));
+  const row = rowOf(m.root, "Claude Code");
+  expect(all(row, "select")).toHaveLength(0);
+  expect(row.textContent).toContain(
+    "pluxy serves no models yet, so the text below has <model-id> where a model goes.",
+  );
+  expect(preText(row)).toContain('"model": "<model-id>"');
 });
 
 test("Make key sends the tool's name, puts the key in that row's text only, and names it in Keys", async () => {

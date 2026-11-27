@@ -480,6 +480,16 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             })
             .map_err(|e| format!("{e}: {:?}", text(main, page)))?;
             let target = s(&ok(main, "connection_get", json!({}))?["target"]);
+            // Core's accounts serve none of Claude Code's own model names, so the page started
+            // the three models with one core serves, not with claude-opus-5-5 and the others.
+            let served: Vec<String> = ok(
+                main,
+                "core_call",
+                json!({"method": "GET", "path": "/models"}),
+            )?["body"]["models"]
+                .as_array()
+                .map(|m| m.iter().map(|x| s(&x["id"])).collect())
+                .unwrap_or_default();
             let v: Value = serde_json::from_str(&read(&settings).unwrap_or_default())
                 .map_err(|e| format!("the applied file is not JSON: {e}"))?;
             let env = &v["env"];
@@ -488,9 +498,9 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                     && env["ANTHROPIC_BASE_URL"] == target.trim_end_matches('/')
                     && env["ANTHROPIC_AUTH_TOKEN"] == c.key
                     && env["API_TIMEOUT_MS"] == "1"
-                    && env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-5-5"
-                    && env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-5-5"
-                    && env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "claude-haiku-5-5"
+                    && served.contains(&s(&env["ANTHROPIC_DEFAULT_OPUS_MODEL"]))
+                    && env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == env["ANTHROPIC_DEFAULT_OPUS_MODEL"]
+                    && env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == env["ANTHROPIC_DEFAULT_OPUS_MODEL"]
                     && v["model"] == "opus",
                 format!(
                     "the file after the guide's apply (core {target}) holds env {} and model {}",

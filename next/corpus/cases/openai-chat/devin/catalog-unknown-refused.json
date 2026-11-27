@@ -7,6 +7,7 @@
   },
   "account_models": ["devin/swe-2"],
   "new_core": {"account":{"models":null}},
+  "volatile": ["client.body.error.message"],
   "exceptions": [
     {
       "path": "client.status",
@@ -19,7 +20,7 @@
       "reason": "For an unknown model the old core says unknown provider (invalid_request_error, param model); the new core says no account serves the model (model_not_found).",
       "want": {
         "code": "model_not_found",
-        "message": "no account serves model \"corpus-not-in-catalog\"",
+        "message": "(volatile)",
         "type": "invalid_request_error",
         "pluxy": "(volatile)"
       }

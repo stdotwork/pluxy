@@ -113,7 +113,7 @@ export function stateTone(state: string, of: StateOf = "extension"): StateTone {
 }
 
 const f = strings("failures", {
-  not_found: "No such model",
+  not_found: "Model not served",
   quota: "Limit used up",
   rate_limit: "Rate limited",
   auth: "Sign-in refused",

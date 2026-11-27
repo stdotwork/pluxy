@@ -474,6 +474,30 @@ describe("models", () => {
     expect(applies(ch).map((w) => w.input.opus)).toEqual(["claude-opus-9"]);
   });
 
+  test("a file pluxy has not set up starts with the models pluxy serves when Claude Code's own are not served, and Connect writes them", async () => {
+    const ch = channel();
+    const page = await mount(() => <ClaudeCodePage />, ch.invoke, ["fake-gpt-1", "fake-gpt-mini"]);
+    ch.reads[0]?.answer(claudeCode("not-configured", { opus: "", sonnet: "", haiku: "" }));
+    await settle();
+    expect(page.text()).toContain("so these start with fake-gpt-1, one your accounts serve.");
+    expect(page.text()).not.toContain("Your accounts do not offer");
+    await page.click("Connect Claude Code");
+    const input = applies(ch)[0]?.input;
+    expect([input?.opus, input?.sonnet, input?.haiku]).toEqual(["fake-gpt-1", "fake-gpt-1", "fake-gpt-1"]);
+  });
+
+  test("a file pluxy already set up keeps its models, served or not", async () => {
+    const ch = channel();
+    const page = await mount(() => <ClaudeCodePage />, ch.invoke, ["fake-gpt-1"]);
+    ch.reads[0]?.answer(
+      claudeCode("configured", { opus: "my-opus", sonnet: "my-sonnet", haiku: "my-haiku" }),
+    );
+    await settle();
+    expect(page.text()).not.toContain("so these start with");
+    expect(page.shown("Opus")).toBe("my-opus");
+    expect(page.shown("Haiku")).toBe("my-haiku");
+  });
+
   test("Codex clears what an import could not bring once its files are read again", async () => {
     const ch = channel({ ops: { import: () => ({ models: [], missing: ["odd-model"] }) } });
     const page = await mount(() => <CodexPage />, ch.invoke);

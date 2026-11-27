@@ -749,6 +749,12 @@ type ClientPaste struct {
 	Files []ClientPasteFile `json:"files"`
 	// Note says what the files need besides themselves; left out when nothing.
 	Note string `json:"note,omitempty"`
+	// Model is the model the files name for the tool to start with: the one the call asked for
+	// (its model parameter), else the best match among Models; empty when no model is served and
+	// none was asked for, and the files then hold the placeholder <model-id>.
+	Model string `json:"model,omitempty"`
+	// Models are the names of the models pluxy serves now, to choose Model from.
+	Models []string `json:"models"`
 }
 
 // ClientPasteFile is one file of a ClientPaste: where it goes (from the home folder, ~) and
