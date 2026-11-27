@@ -410,7 +410,7 @@ test("resetLabel formats weekday and clock with relative countdown, date beyond 
 test("paceOf places the even-burn tick and shows a sentence only when pace runs out before reset", () => {
   const now = new Date(2026, 10, 27, 15, 0, 0).getTime();
   const fiveH = 5 * 3600;
-  // 2h remaining of 5h -> evenLeft = 40%; actual 15% left -> 85% used in 3h -> runs out in ~32m (~1h 28m before reset).
+  // 2h remaining of 5h -> evenLeft = 40%; actual 15% left -> 85% used in 3h -> runs out at 15:31, 1h 29m before reset.
   const fast = paceOf(
     { id: "5h", window_seconds: fiveH, resets_at: Math.floor((now + 2 * 3600_000) / 1000), used_percent: 85 },
     now,
@@ -418,7 +418,7 @@ test("paceOf places the even-burn tick and shows a sentence only when pace runs 
   expect(fast?.kind).toBe("fast");
   expect(fast?.showTick).toBe(true);
   expect(fast?.evenLeft).toBeCloseTo(40, 1);
-  expect(fast?.text).toMatch(/^At this pace it runs out at 15:3[12], 1h 2[89]m before it resets\.$/);
+  expect(fast?.text).toBe("At this pace it runs out at 15:31, 1h 29m before it resets.");
 
   // 2h remaining of 5h -> evenLeft = 40%; actual 75% left -> lasts until reset: tick stays, no sentence.
   const ok = paceOf(
