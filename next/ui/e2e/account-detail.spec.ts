@@ -280,7 +280,8 @@ test("the account page shows mark, plan pill, full-width limits with reset times
   await expect(limits).toContainText("82% left");
   await expect(limits).toContainText(/Resets \w{3} \d\d:\d\d · in /);
   await expect(limits).toContainText(/At this pace it runs out .* before it resets\./);
-  await expect(limits).toContainText("At this pace it lasts until reset.");
+  await expect(limits).not.toContainText("At this pace it lasts until reset.");
+  await expect(limits.locator(".account-limit-pace")).toHaveCount(1);
   await expect(limits).toContainText("$42.10 left");
   await expect(limits.locator(".account-pace-tick")).toHaveCount(2);
 

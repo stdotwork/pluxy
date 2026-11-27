@@ -11,7 +11,6 @@ const t = strings("account.helpers", {
   resetAvailable: "Reset available",
   paceRunsOutAt: "At this pace it runs out at {when}, {before} before it resets.",
   paceRunsOutOn: "At this pace it runs out {when}, {before} before it resets.",
-  paceLasts: "At this pace it lasts until reset.",
   balanceLeft: "{amount} left",
   balanceTitle: "Credit balance",
 });
@@ -62,7 +61,7 @@ export interface PaceInfo {
   showTick: boolean;
   /** fast: burning ahead of an even pace and projected to run out before reset; ok: lasts until reset; even: nothing used yet. */
   kind: "fast" | "ok" | "even";
-  /** Plain sentence under the meter bar, when enough of the window has elapsed to say. */
+  /** Plain sentence under the meter bar, shown only when the present pace runs out before reset. */
   text?: string;
 }
 
@@ -102,7 +101,7 @@ export function paceOf(l: QuotaLimit, now = Date.now()): PaceInfo | undefined {
       };
     }
   }
-  return { evenLeft, showTick, kind: "ok", text: t("paceLasts") };
+  return { evenLeft, showTick, kind: "ok" };
 }
 
 /** A limit's heading on the account page: standard window name, or the provider's label for scoped/feature limits. */

@@ -407,7 +407,7 @@ test("resetLabel formats weekday and clock with relative countdown, date beyond 
   expect(resetLabel({ id: "5h" }, now)).toBeUndefined();
 });
 
-test("paceOf places the even-burn tick and projects running out or lasting until reset", () => {
+test("paceOf places the even-burn tick and shows a sentence only when pace runs out before reset", () => {
   const now = new Date(2026, 10, 27, 15, 0, 0).getTime();
   const fiveH = 5 * 3600;
   // 2h remaining of 5h -> evenLeft = 40%; actual 15% left -> 85% used in 3h -> runs out in ~32m (~1h 28m before reset).
@@ -420,14 +420,14 @@ test("paceOf places the even-burn tick and projects running out or lasting until
   expect(fast?.evenLeft).toBeCloseTo(40, 1);
   expect(fast?.text).toMatch(/^At this pace it runs out at 15:3[12], 1h 2[89]m before it resets\.$/);
 
-  // 2h remaining of 5h -> evenLeft = 40%; actual 75% left -> lasts until reset.
+  // 2h remaining of 5h -> evenLeft = 40%; actual 75% left -> lasts until reset: tick stays, no sentence.
   const ok = paceOf(
     { id: "5h", window_seconds: fiveH, resets_at: Math.floor((now + 2 * 3600_000) / 1000), used_percent: 25 },
     now,
   );
   expect(ok?.kind).toBe("ok");
   expect(ok?.showTick).toBe(true);
-  expect(ok?.text).toBe("At this pace it lasts until reset.");
+  expect(ok?.text).toBeUndefined();
 
   // 100% left or just started: no pace sentence.
   const unused = paceOf(
@@ -530,8 +530,12 @@ test("the page renders the header mark, plan pill, full-width limits with pace a
   expect(page.text()).toContain("80% left");
   expect(page.text()).toContain("Resets ");
   expect(page.text()).toContain("At this pace it runs out");
-  expect(page.text()).toContain("At this pace it lasts until reset.");
+  expect(page.text()).not.toContain("At this pace it lasts until reset.");
   expect(page.text()).toContain("$42.10 left");
+  const paceLines = all(page.root, "p").filter((n) =>
+    n.attributes.some((a) => a.name === "class" && a.value === "account-limit-pace"),
+  );
+  expect(paceLines).toHaveLength(1);
   const ticks = all(page.root, "span").filter((n) =>
     n.attributes.some((a) => a.name === "class" && a.value === "account-pace-tick"),
   );
