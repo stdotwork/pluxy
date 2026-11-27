@@ -27,7 +27,8 @@ const LIFETIME: Duration = Duration::from_secs(60);
 pub(crate) const SHOWN_LIFETIME: Duration = Duration::from_secs(10 * 60);
 /// How long a native caller waits for a confirmation's answer: its time to show, its time shown,
 /// and a little more for the answer to arrive.
-pub(crate) const WAIT: Duration = Duration::from_secs(60 + 10 * 60 + 15);
+pub(crate) const WAIT: Duration =
+    Duration::from_secs(LIFETIME.as_secs() + SHOWN_LIFETIME.as_secs() + 15);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Package {
     pub id: String,

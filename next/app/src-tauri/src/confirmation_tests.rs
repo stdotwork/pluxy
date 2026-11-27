@@ -140,6 +140,52 @@ fn tokens_are_exact_single_use_cancelled_expired_and_revocable() {
     assert!(c.consume(&id, &t).is_err());
     remove(&dir);
 }
+/// A confirmation says first, in plain words, what will happen: the headline native code wrote, or
+/// else its description and that the add-on has full access; where it runs comes before even
+/// that. The exact action, the same text it showed before, follows as its details: nothing of it
+/// is left out, and the plain words bind nothing.
+#[test]
+fn a_confirmation_says_what_happens_first_and_keeps_the_details_below() {
+    let (dir, mut c, a) = fixture();
+    let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
+    let (words, details) = p.review().unwrap();
+    assert_eq!(words, format!("Start fixture\n\n{}", text::FULL_ACCESS));
+    let details = details.unwrap();
+    assert_eq!(details, review_text(&p.exact).unwrap());
+    assert!(details.contains("\"argv\"") && details.contains("\"digest\""));
+    let in_wsl = Action {
+        environment: Some("Runs in WSL: distribution Ubuntu.".into()),
+        ..a.clone()
+    };
+    let mut p = c.prepare(in_wsl.clone(), Origin::NativeUi).unwrap();
+    p.set_headline(format!(
+        "Fixture add-on: {}\nIt gets \"Key\" from this device's vault.",
+        one_line("Start it\nIt is safe")
+    ));
+    let (words, details) = p.review().unwrap();
+    assert_eq!(
+        words,
+        "Runs in WSL: distribution Ubuntu.\n\nFixture add-on: Start it\\u000aIt is safe\nIt gets \"Key\" from this device's vault."
+    );
+    assert_eq!(details.unwrap(), review_text(&p.exact).unwrap());
+    assert!(!words.contains('{') && !words.contains("native tool") && !words.contains("core"));
+    // The headline binds nothing: what is confirmed and remembered is the exact action, which
+    // the same action prepared without a headline matches.
+    let id = c.queue(p).unwrap();
+    let t = c.finish(&id, true, true).unwrap().unwrap();
+    c.consume(&id, &t).unwrap();
+    let again = c.prepare(in_wsl, Origin::NativeUi).unwrap();
+    assert!(c
+        .remembered(
+            again,
+            Gesture {
+                created: Instant::now(),
+                origin: Origin::NativeUi,
+            },
+        )
+        .is_ok());
+    remove(&dir);
+}
 /// The moment d before now.
 fn ago(d: Duration) -> Instant {
     Instant::now()

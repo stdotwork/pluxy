@@ -1500,20 +1500,20 @@ One function, `toolAction` in `src/agentPages.ts`, gives a row its one button, b
 | The tool's add-on | The row's button |
 | --- | --- |
 | On | **Open** when the tool is Connected, else **Set up**; both open the tool's page |
-| Installed, off | **Turn on add-on**: the native confirmation (it names "full access to your user account"), answered in that dialog only; meanwhile "Answer the confirmation window to go on." |
-| Offered by a registry | **Install add-on** (quiet), then **Installing…**, then **Turn on add-on** |
+| Installed, off | **Turn on add-on**: the native confirmation (it names "full access to your user account"), answered in that dialog only; meanwhile "Answer the confirmation window to go on." Once it is on, the tool's page opens |
+| Offered by a registry | **Install add-on** (quiet), then **Installing…**, then the same press goes on as **Turn on add-on** does: its confirmation, then the tool's page |
 | Still being read | "Checking add-ons…" |
 | None to be had | no app button: the row keeps the kit's own **Set up** or **Needs its add-on** |
 
 In safe mode, or when this device's add-ons cannot be read, a row offers **Open** or **Set up** only,
 and a warning above the list says tool add-ons are paused. A failed step says why in one line under
 its row (`Could not install the add-on.` or `Could not turn on the add-on.`) and can be pressed again; a
-cancelled confirmation says nothing. One step runs at a time for each add-on (`src/toolRows.tsx`).
+cancelled confirmation says nothing and opens nothing. One step runs at a time for each add-on (`src/toolRows.tsx`).
 Lines under the list (`toolNotes`) say when a listed tool has no add-on to be had and when the
 Launcher add-on is not on. Add-ons are read as the window opens (`src/main.tsx`); registries are read
 only for a pluxy on this computer (`setupOffersNeeded`).
 
-From step 2, **Set up** or **Open** opens the tool's page with a strip above it, "Setting up pluxy."
+From step 2, **Set up** or **Open**, or an add-on turned on there, opens the tool's page with a strip above it, "Setting up pluxy."
 and **Back to setup**; the strip is kept in memory only and goes once the person leaves the page.
 Connected to a pluxy on another computer (`isRemote`), the list is that computer's tools, with the
 kit's own steps on each row, no add-on button, no extra rows, and links to the eight pages for this

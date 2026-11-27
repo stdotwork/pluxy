@@ -35,9 +35,9 @@
 
 use super::admission::{ok, press, require, settle, start};
 use super::key_entry_test::{clean_webview, watch};
+use super::log;
 use super::routing::{enable, install};
 use super::vault::{dialog_with, settle_unasked, type_key};
-use super::log;
 use crate::App;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;

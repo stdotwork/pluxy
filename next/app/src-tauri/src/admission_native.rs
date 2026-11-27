@@ -427,6 +427,16 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         text.contains(FULL_ACCESS) && text.contains("pluxy/tool") && text.contains(&tool),
         format!("the native confirmation shows: {text}"),
     )?;
+    // What will happen in plain words first, the exact record below it (on Linux under a
+    // Details heading; Windows and macOS show it in the scrolled area below the words).
+    require(
+        if cfg!(target_os = "linux") {
+            text.starts_with("Turn on the ") && text.contains("\nDetails\n{")
+        } else {
+            text.contains("Turn on the ")
+        },
+        format!("the native confirmation does not say first what it turns on: {text}"),
+    )?;
     out["dialog"] = json!(text.lines().next().unwrap_or_default());
     press("alt+c")?;
     let r = settle(main, &slot)?;
