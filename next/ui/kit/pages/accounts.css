@@ -587,6 +587,18 @@
 
   /* Floating sticky batch bar while Select is on */
 
+  .main:has(.accounts-page[data-selecting]) {
+    scroll-padding-bottom: calc(var(--s) * 24);
+  }
+
+  .accounts-page[data-selecting] .accounts-fade {
+    padding-bottom: calc(var(--s) * 4);
+  }
+
+  .accounts-page[data-selecting] .accounts-item {
+    scroll-margin-bottom: calc(var(--s) * 24);
+  }
+
   .accounts-batch {
     position: sticky;
     bottom: calc(var(--s) * 4);
@@ -602,6 +614,18 @@
     background: var(--px-color-overlay);
     box-shadow: var(--px-shadow-overlay);
     animation: px-in var(--px-motion-duration-slow, 240ms) var(--px-motion-easing-drawer, ease-out);
+  }
+
+  /* Cover the gap beneath the floating bar so scrolling rows never peek out underneath it. */
+  .accounts-batch::after {
+    content: "";
+    position: absolute;
+    top: calc(100% - var(--r-card));
+    inset-inline: 0;
+    height: calc(var(--s) * 4 + var(--r-card) + 2px);
+    background: var(--px-color-bg);
+    z-index: -1;
+    pointer-events: none;
   }
 
   .accounts-batch-count {

@@ -245,3 +245,54 @@ test("provider chips filter with a pool card, and List | Cards stores an Account
   await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "list");
   await expect(page.locator("html")).toHaveAttribute("data-list", "table");
 });
+
+test("Select's sticky batch bar keeps the focused last row above it while scrolling", async ({ page }) => {
+  const many = Array.from({ length: 12 }, (_, i) => ({
+    id: `scroll-${String(i + 1).padStart(2, "0")}`,
+    label: `scroll-${String(i + 1).padStart(2, "0")}`,
+    extension: "test/alpha",
+    source: "login",
+    state: "active",
+    refreshable: false,
+  }));
+  await page.route("**/v0/management/accounts", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ accounts: many }),
+    });
+  });
+
+  await page.setViewportSize({ width: 1280, height: 480 });
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Accounts");
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  const bar = page.getByRole("toolbar", { name: "Actions for the selected accounts" });
+  await expect(bar).toBeVisible();
+
+  // Native focus (as keyboard Tab moves down the list) must keep every focused checkbox above the
+  // sticky bar, including rows that start behind it at the bottom of the scrollport.
+  for (let i = 1; i <= many.length; i++) {
+    const id = `scroll-${String(i).padStart(2, "0")}`;
+    const box = page.getByRole("checkbox", { name: `Select ${id}`, exact: true });
+    await box.evaluate((el) => (el as HTMLElement).focus());
+    const focusedRect = await box.boundingBox();
+    const barRect = await bar.boundingBox();
+    expect(focusedRect).not.toBeNull();
+    expect(barRect).not.toBeNull();
+    expect((focusedRect?.y ?? 0) + (focusedRect?.height ?? 0)).toBeLessThanOrEqual(barRect?.y ?? 0);
+  }
+
+  // At the end of scroll, the last row sits completely above the bar with no horizontal overflow.
+  await page.locator(".main").evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  const lastRowRect = await page.locator(".accounts-item").last().boundingBox();
+  const endBarRect = await bar.boundingBox();
+  expect(lastRowRect).not.toBeNull();
+  expect(endBarRect).not.toBeNull();
+  expect((lastRowRect?.y ?? 0) + (lastRowRect?.height ?? 0)).toBeLessThanOrEqual(endBarRect?.y ?? 0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
+});
