@@ -1,29 +1,48 @@
-# Point a client at pluxy
+# Point a coding tool at pluxy
 
-A client is the tool that sends requests through pluxy: a coding agent such as Claude Code or
-Codex, or anything else that speaks the OpenAI, Anthropic or Gemini API. This page lists what to
-put in each client's config. It assumes pluxy is running and has an account
-([quick start](../README.md#quick-start)).
+This page shows how to make a coding tool send its requests through pluxy. A client is any tool
+that does: a coding agent such as Claude Code or Codex, or anything else that speaks the OpenAI,
+Anthropic or Gemini API.
 
-pluxy never edits a client's files. `pluxy client show <tool>` prints the settings, and you paste
-them. The panel's **Tools** page, and step 2 of its guided setup, show the same text under each tool's
-**Set up**.
+You need a running pluxy with at least one account ([setup](setup.md)).
 
-Every block below has two placeholders:
+## Set up a tool
 
-- `<client-key>` is one of pluxy's client keys. The first one is in `client_keys` in pluxy's
-  `config.json`; `pluxy key add` makes another and prints it once. `pluxy key list` shows the
-  keys masked, with their IDs, and `pluxy client show <tool> --key-id <id>` names the key to use
-  in the output (still masked: pluxy never prints a stored key).
-- `<model-id>` is a model name from `pluxy model list`.
+1. **Get a client key.** A client key is the secret a tool sends to prove it may use pluxy. The
+   first one is in `client_keys` in pluxy's `config.json`. `pluxy key add` makes another and
+   prints it once. `pluxy key list` shows the keys masked, with their IDs.
+2. **Get a model name.** Run `pluxy model list` and pick a name from its `MODEL` column. The
+   settings for OpenCode, Pi and Oh My Pi have a `<model-id>` to fill in; those for Claude Code and
+   Codex do not.
+3. **Print the settings.** Run `pluxy client show <tool>`, with `<tool>` one of `claude-code`,
+   `codex`, `opencode`, `pi` or `omp`. It prints each file to change and what goes in it, with
+   core's address already filled in. It needs core to be running. `pluxy client show <tool>
+   --key-id <id>` names the key with that ID in the output, still masked: pluxy never prints a
+   stored key.
+4. **Paste them.** In the printed text, replace `<client-key>` with the key from step 1 and
+   `<model-id>` with the name from step 2. If the file already exists, add these keys to it; do
+   not replace the file. `pluxy client show` only prints: it changes no file.
+5. **Start the tool again** so it reads the new settings.
 
-The address in the blocks, `http://127.0.0.1:8317`, is pluxy's default. Your output has the
+The panel's **Tools** page shows the same settings under each tool's **Set up**, as numbered steps
+with a **Copy** button. Its **Make key** button makes a new client key and puts it into the text, so
+you do not paste it yourself. The panel's guided setup (the **Set up pluxy** page, called **Setup**
+once first-run setup is done) shows the same in its second step, "Your coding tool". The
+[desktop app](app.md) can also write a tool's files itself.
+
+Claude Desktop, Grok Build and Hermes Agent are set up from the desktop app only; `pluxy client
+show` does not know them.
+
+An unknown tool name fails with `pluxy: unknown client tool "<name>" (supported: claude-code,
+codex, opencode, pi, omp)` and exit code 2. The command also takes these names for a tool: `claude`
+for Claude Code, `codex-cli` for Codex, and `oh-my-pi` for Oh My Pi.
+
+The examples below show core on its default address, `http://127.0.0.1:8317`. Your output has the
 address your core listens on.
 
-The settings are shown as the whole file for a client with no config yet. If the file exists, add
-these keys to it; do not replace it.
+## What each tool gets
 
-## Claude Code
+### Claude Code
 
 `pluxy client show claude-code` prints:
 
@@ -42,7 +61,7 @@ Address: http://127.0.0.1:8317
 }
 ```
 
-## Codex CLI
+### Codex CLI
 
 `pluxy client show codex` prints:
 
@@ -60,7 +79,7 @@ wire_api = "responses"
 experimental_bearer_token = "<client-key>"
 ```
 
-## OpenCode
+### OpenCode
 
 `pluxy client show opencode` prints:
 
@@ -90,7 +109,7 @@ Address: http://127.0.0.1:8317
 }
 ```
 
-## Pi
+### Pi
 
 `pluxy client show pi` prints:
 
@@ -116,7 +135,7 @@ Address: http://127.0.0.1:8317
 Pi also needs pluxy's adapter in ~/.pi/agent/pluxy-cliproxyapi-provider, which the desktop app installs.
 ```
 
-## Oh My Pi
+### Oh My Pi
 
 `pluxy client show omp` prints:
 
@@ -140,21 +159,27 @@ modelRoles:
 
 ## Any other client
 
-A client that lets you set a base URL and an API key works without an entry here. Give it one of
-pluxy's client keys as the API key, and the base URL for the API it speaks:
+A client that lets you set a base URL and an API key needs no entry above. Give it one of pluxy's
+client keys as the API key, and the base URL of the API it speaks:
 
-| The client speaks | Base URL | pluxy reads the key from |
+| The client speaks | Base URL | Main paths |
 | --- | --- | --- |
-| OpenAI Chat Completions or Responses | `http://127.0.0.1:8317/v1` | `Authorization: Bearer <client-key>` |
-| Anthropic Messages | `http://127.0.0.1:8317` | `x-api-key: <client-key>`, or `Authorization: Bearer <client-key>` |
-| Gemini | `http://127.0.0.1:8317` (requests go to `/v1beta/...`) | `x-goog-api-key: <client-key>`, or `?key=<client-key>` |
+| OpenAI | `http://127.0.0.1:8317/v1` | `/v1/chat/completions`, `/v1/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/images/edits`, `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations` |
+| Anthropic | `http://127.0.0.1:8317` | `/v1/messages`, `/v1/messages/count_tokens` |
+| Gemini | `http://127.0.0.1:8317` | `/v1beta/models/<model>:generateContent`, `:streamGenerateContent`, `:countTokens`, `:embedContent`, `:batchEmbedContents` |
 
-`GET /v1/models` (and `GET /v1beta/models` for Gemini clients) lists the models the key can ask
-for.
+Every route reads the client key from `Authorization: Bearer <client-key>` or from `x-api-key:
+<client-key>`. Gemini's routes also read it from `x-goog-api-key: <client-key>` or from the `key`
+query parameter.
 
-## Keeping this page current
+`GET /v1/models` lists the models pluxy serves now (every client key sees the same list), in OpenAI's shape, or in Anthropic's
+for a client that sends an `anthropic-version` header or whose user agent starts with `claude-cli`. `GET /v1beta/models` lists them in Gemini's shape.
 
-Each tool's block is the unedited output of `pluxy client show <tool>` on a core listening on
-`127.0.0.1:8317`. When that output changes, run the command for each of `claude-code`, `codex`,
-`opencode`, `pi` and `omp` and paste the result over the block. `pluxy client show` with an
-unknown tool name lists the tools it knows.
+## Check that it works
+
+```bash
+curl http://127.0.0.1:8317/v1/models -H "Authorization: Bearer <client-key>"
+```
+
+A JSON list means the key and the address are right. With no accounts the list is empty. For an
+error from pluxy, see [Troubleshooting](troubleshooting.md#a-client-gets-an-error).
