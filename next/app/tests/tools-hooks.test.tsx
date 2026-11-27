@@ -95,15 +95,18 @@ describe("Install add-on and Turn on add-on", () => {
     expect(n.button("Turn on add-on").disabled).toBeFalsy();
   });
 
-  test("a cancelled confirmation window says nothing, and the row is ready again", async () => {
-    const m = await mount(turnOn("t/enable-3"), {
-      device_enable: () => Promise.reject("cancelled"),
+  // What the native side says when the confirmation window is answered No, and the short form.
+  for (const said of ["native enable cancelled; t/enable-3 stays disabled", "cancelled"]) {
+    test(`a cancelled confirmation window says nothing, and the row is ready again (${said})`, async () => {
+      const m = await mount(turnOn("t/enable-3"), {
+        device_enable: () => Promise.reject(said),
+      });
+      await m.click("Turn on add-on");
+      expect(m.text()).not.toContain("Could not");
+      expect(m.text()).not.toContain("Answer the confirmation window");
+      expect(m.button("Turn on add-on").disabled).toBeFalsy();
     });
-    await m.click("Turn on add-on");
-    expect(m.text()).not.toContain("Could not");
-    expect(m.text()).not.toContain("Answer the confirmation window");
-    expect(m.button("Turn on add-on").disabled).toBeFalsy();
-  });
+  }
 
   test("one step at a time for each add-on, however many rows show it", async () => {
     const reply = later<unknown>();

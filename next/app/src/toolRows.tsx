@@ -55,6 +55,9 @@ function useAddonStatus(pkg: string): AddonStatus {
   return statuses.get(pkg) ?? {};
 }
 
+/** The confirmation window was answered No: the app's own word for it, or the native side's. */
+const answeredNo = (message: string) => cancelled(message) || message.startsWith("native enable cancelled;");
+
 /**
  * Runs one step of an add-on, unless one is running for it already. A person's cancel of the
  * confirmation window ends it quietly; any other failure is kept, with its reason, until the
@@ -75,7 +78,7 @@ export async function runAddon(
     reply = { status: 0, error: { code: "native", message: String(e) } };
   }
   const message = reply.error?.message;
-  if (message === undefined || cancelled(message)) setStatus(pkg);
+  if (message === undefined || answeredNo(message)) setStatus(pkg);
   else setStatus(pkg, { failed: { step, reason: message } });
   changed();
 }
