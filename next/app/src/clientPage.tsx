@@ -154,8 +154,23 @@ export function keyFor(
  * person entered it. */
 export const keyMadeFor = (key: Secret, tool: string) => !!key.client_key && key.label === tool;
 
+const CANCELLED = new Set([
+  "cancelled",
+  "the action was cancelled",
+  "the action was cancelled.",
+  "the call was cancelled",
+  "the confirmation window was cancelled",
+  "the native confirmation was cancelled",
+  "the call was cancelled while its confirmation window was open",
+  "the call was cancelled while its native confirmation was open",
+]);
+
 /** Whether a native call's error is the person's cancel of its confirmation, which stops quietly. */
-export const cancelled = (e: string | undefined) => !!e && (e === "cancelled" || e.startsWith("cancelled:"));
+export const cancelled = (e: string | undefined) => {
+  if (!e) return false;
+  const lower = e.trim().toLowerCase();
+  return CANCELLED.has(lower) || lower.startsWith("cancelled:");
+};
 
 /** A native error as the second sentence of a line: its first letter a capital (pluxy keeps its
  * own lower-case name). */
