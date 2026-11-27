@@ -181,19 +181,21 @@ function ProviderMark(props: { extension: string; title: string }) {
 function ProviderTile(props: { group: MethodGroup; compact?: boolean; onPick: () => void }) {
   const title = displayName(props.group);
   return (
-    <button
-      type="button"
-      data-part="provider-tile"
-      data-extension={props.group.extension}
-      data-compact={props.compact ? "" : undefined}
-      onClick={props.onPick}
-    >
-      <ProviderMark extension={props.group.extension} title={title} />
-      <span class="provider-text">
-        <strong>{title}</strong>
-        {!props.compact && <span class="muted">{tileSummary(props.group)}</span>}
-      </span>
-    </button>
+    <li>
+      <button
+        type="button"
+        data-part="provider-tile"
+        data-extension={props.group.extension}
+        data-compact={props.compact ? "" : undefined}
+        onClick={props.onPick}
+      >
+        <ProviderMark extension={props.group.extension} title={title} />
+        <span class="provider-text">
+          <strong>{title}</strong>
+          {!props.compact && <span class="muted">{tileSummary(props.group)}</span>}
+        </span>
+      </button>
+    </li>
   );
 }
 
@@ -419,44 +421,40 @@ export function AddAccountPage(
                 return (
                   <>
                     <p>{t("chooseProvider")}</p>
-                    <div
-                      class="provider-tiles"
-                      data-part="provider-tiles"
-                      role="group"
-                      aria-label={t("providers")}
-                    >
+                    <ul class="provider-tiles" data-part="provider-tiles" aria-label={t("providers")}>
                       {tiles.map((group) => (
                         <ProviderTile key={group.extension} group={group} onPick={pick(group)} />
                       ))}
                       {more.length > 0 && (
-                        <button
-                          type="button"
-                          class="provider-more"
-                          aria-expanded={moreOpen}
-                          onClick={() => setMoreOpen(!moreOpen)}
-                        >
-                          <span class="provider-more-mark" aria-hidden="true">
-                            <Icon name="plus" size={14} />
-                          </span>
-                          <span class="provider-text">
-                            <strong>{t("moreProviders")}</strong>
-                            <span class="muted">{t("moreCount", { count: more.length })}</span>
-                          </span>
-                        </button>
+                        <li>
+                          <button
+                            type="button"
+                            class="provider-more"
+                            aria-expanded={moreOpen}
+                            onClick={() => setMoreOpen(!moreOpen)}
+                          >
+                            <span class="provider-more-mark" aria-hidden="true">
+                              <Icon name="plus" size={14} />
+                            </span>
+                            <span class="provider-text">
+                              <strong>{t("moreProviders")}</strong>
+                              <span class="muted">{t("moreCount", { count: more.length })}</span>
+                            </span>
+                          </button>
+                        </li>
                       )}
-                    </div>
+                    </ul>
                     {moreOpen && more.length > 0 && (
-                      <div
+                      <ul
                         class="provider-tiles"
                         data-part="provider-tiles"
                         data-more=""
-                        role="group"
                         aria-label={t("moreProviders")}
                       >
                         {more.map((group) => (
                           <ProviderTile key={group.extension} group={group} compact onPick={pick(group)} />
                         ))}
-                      </div>
+                      </ul>
                     )}
                   </>
                 );
@@ -496,10 +494,10 @@ export function AddAccountPage(
                         data-extension={group.extension}
                         aria-label={title}
                       >
-                        <h2>
+                        <div class="provider-head">
                           <ProviderMark extension={group.extension} title={title} />
-                          <span>{title}</span>
-                        </h2>
+                          <h2>{title}</h2>
+                        </div>
                         <ul class="method-list" aria-label={t("methods")}>
                           {shown.map((row) => {
                             const label = row.method.label || row.method.method;

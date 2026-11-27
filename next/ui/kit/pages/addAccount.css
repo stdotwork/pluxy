@@ -50,6 +50,9 @@
 
   /* ---- step 1: the provider tiles ------------------------------------------------------------- */
   .provider-tiles {
+    margin: 0;
+    padding: 0;
+    list-style: none;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
     gap: calc(var(--s) * 3);
@@ -58,6 +61,11 @@
   .provider-tiles[data-more] {
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr));
     gap: calc(var(--s) * 2);
+  }
+
+  .provider-tiles > li {
+    display: grid;
+    min-width: 0;
   }
 
   [data-part="provider-tile"],
@@ -146,16 +154,19 @@
     gap: calc(var(--s) * 3);
   }
 
-  .method-group h2 {
+  .provider-head {
     display: flex;
     align-items: center;
     gap: calc(var(--s) * 2);
+  }
+
+  .method-group h2 {
     margin: 0;
     font-size: var(--px-font-size-title);
     font-weight: var(--px-font-weight-strong);
   }
 
-  .method-group h2 .provider-mark {
+  .provider-head .provider-mark {
     width: 24px;
     height: 24px;
     font-size: var(--px-font-size-small);

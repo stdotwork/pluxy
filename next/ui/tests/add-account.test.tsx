@@ -166,6 +166,30 @@ const start = (root: FakeNode, method: string) =>
     buttons(root).find((b) => attr(b, "aria-label") === `Start: ${method}`),
     `Start button for ${method}`,
   );
+/** Every node below root that has the attribute with the value. */
+const withAttr = (root: FakeNode, name: string, value: string): FakeNode[] => {
+  const found: FakeNode[] = [];
+  const walk = (node: FakeNode) => {
+    if (attr(node, name) === value) found.push(node);
+    for (const child of node.childNodes) walk(child);
+  };
+  walk(root);
+  return found;
+};
+/** The tile of a provider, when the page shows its providers as tiles. */
+const tile = (root: FakeNode, title: string) =>
+  buttons(root).find((b) => attr(b, "data-part") === "provider-tile" && b.textContent.includes(title));
+const PROVIDER_OF: Record<string, string> = {
+  "Claude subscription": "Claude",
+  "API key": "Claude",
+  "ChatGPT sign-in": "ChatGPT (Codex)",
+};
+/** Starts a way as a person does: picks the provider of the way when the tiles show, then presses Start. */
+async function begin(root: FakeNode, method: string, provider = PROVIDER_OF[method] ?? "Claude") {
+  const picked = tile(root, provider);
+  if (picked) await click(picked);
+  await click(start(root, method));
+}
 /** The input a label names. */
 const field = (root: FakeNode, label: string) =>
   must(
@@ -228,26 +252,108 @@ test("providers carry the guided setup's own names: a title replaces the plain n
   expect(page.text()).not.toContain("OpenAI Compatible");
 });
 
-test("Add an account asks for no ID: each provider's ways to sign in are rows with Start", async () => {
+test("Add an account asks for no ID: the providers are tiles, and a provider's ways are rows with Start", async () => {
   const w = world();
   const page = await w.mount(<AddAccountPage />);
   const text = page.text();
   expect(text).toContain("Add an account");
-  expect(text).toContain("Choose how to add it.");
+  // Step 1: a tile for each provider that has a way to sign in, with what it takes, and no ways yet.
+  expect(text).toContain("Which account do you want to add?");
+  expect(text).not.toContain("Choose how to add it.");
   for (const word of [
     "Claude",
-    "Codex",
+    "ChatGPT (Codex)",
     "Gemini",
-    "Opens your browser",
-    "Shows a code to enter",
-    "Uses an API key",
+    "Claude Pro or Max, or an Anthropic API key",
+    "A Google AI key, or Vertex AI",
   ])
     expect(text).toContain(word);
+  expect(withAttr(page.root, "data-part", "provider-tile")).toHaveLength(3);
+  expect(buttons(page.root).filter((b) => b.textContent === "Start")).toHaveLength(0);
+  // Step 2: the ways of the picked provider only, each with a sentence, and the browser one recommended.
+  await click(must(tile(page.root, "Claude"), "Claude tile"));
+  const ways = page.text();
+  expect(ways).toContain("Choose how to add it.");
+  for (const word of [
+    "Claude subscription",
+    "Sign in with your account in your browser.",
+    "Paste an API key from the service.",
+    "Recommended",
+  ])
+    expect(ways).toContain(word);
+  expect(ways).not.toContain("Get a code to enter on another device");
+  expect(ways).not.toContain("ChatGPT");
+  expect(withAttr(page.root, "data-part", "method")).toHaveLength(2);
+  expect(withAttr(page.root, "class", "method-badge")).toHaveLength(1);
   expect(text).not.toContain("pluxy/");
-  expect(text).not.toMatch(/Account ID|acc_/);
+  expect(ways).not.toContain("pluxy/");
+  expect(ways).not.toMatch(/Account ID|acc_/);
   // Only the Import files… line has a file input; there is no text input.
   expect(all(page.root, "input").filter((i) => attr(i, "type") !== "file")).toEqual([]);
-  expect(buttons(page.root).filter((b) => b.textContent === "Start")).toHaveLength(4);
+  expect(buttons(page.root).filter((b) => b.textContent === "Start")).toHaveLength(2);
+  // Back goes to the providers, and the tile just left has the focus.
+  await click(must(labelled(page.root, "All providers"), "All providers"));
+  expect(page.text()).toContain("Which account do you want to add?");
+  expect(withAttr(page.root, "data-part", "provider-tile")).toHaveLength(3);
+});
+
+test("the four main kinds are tiles and the other providers sit under More", async () => {
+  const ext = (extension: string) => ({ extension, methods: [apiKey] });
+  const names = [
+    "pluxy/xai",
+    "pluxy/kimi",
+    "pluxy/gemini",
+    "pluxy/openai-compatible",
+    "pluxy/codex",
+    "pluxy/claude",
+    "pluxy/devin",
+  ];
+  const w = world({ methods: [ok({ extensions: names.map(ext) })] });
+  const page = await w.mount(<AddAccountPage />);
+  const titles = () =>
+    withAttr(page.root, "data-part", "provider-tile").map((n) => attr(n, "data-extension"));
+  expect(titles()).toEqual(["pluxy/claude", "pluxy/codex", "pluxy/gemini", "pluxy/openai-compatible"]);
+  const more = must(
+    buttons(page.root).find((b) => b.textContent.includes("More providers")),
+    "More providers",
+  );
+  expect(more.textContent).toContain("3 more");
+  expect(attr(more, "aria-expanded")).toBe("false");
+  await click(more);
+  expect(titles()).toEqual([
+    "pluxy/claude",
+    "pluxy/codex",
+    "pluxy/gemini",
+    "pluxy/openai-compatible",
+    "pluxy/xai",
+    "pluxy/kimi",
+    "pluxy/devin",
+  ]);
+  await click(must(tile(page.root, "Kimi"), "Kimi tile"));
+  expect(page.text()).toContain("Choose how to add it.");
+  expect(
+    withAttr(page.root, "data-part", "method-group").flatMap((g) => all(g, "h2").map((h) => h.textContent)),
+  ).toEqual(["Kimi"]);
+});
+
+test("one provider with ways has no tile step, and a provider with none is not offered", async () => {
+  const w = world({
+    methods: [
+      ok({
+        extensions: [
+          { extension: "pluxy/claude", methods: [browser] },
+          { extension: "pluxy/devin", methods: [] },
+        ],
+      }),
+    ],
+  });
+  const page = await w.mount(<AddAccountPage />);
+  expect(page.text()).toContain("Choose how to add it.");
+  expect(page.text()).not.toContain("Which account do you want to add?");
+  expect(labelled(page.root, "All providers")).toBeUndefined();
+  // With one way and no other to suggest, Start is the page's filled button and there is no badge.
+  expect(page.text()).not.toContain("Recommended");
+  expect(attr(start(page.root, "Claude subscription"), "data-variant")).toBe("primary");
 });
 
 test("sign-in methods: loading, failed with Try again, and no provider with Open Extensions", async () => {
@@ -268,7 +374,7 @@ test("sign-in methods: loading, failed with Try again, and no provider with Open
   const failed = await broken.mount(<AddAccountPage />);
   expect(failed.text()).toContain("Could not read the sign-in methods.");
   await click(must(labelled(failed.root, "Try again"), "Try again"));
-  expect(failed.text()).toContain("Choose how to add it.");
+  expect(failed.text()).toContain("Which account do you want to add?");
 
   const none = world({ methods: [ok({ extensions: [{ extension: "pluxy/devin", methods: [] }] })] });
   const empty = await none.mount(<AddAccountPage />);
@@ -286,7 +392,7 @@ test("an API-key account is added with no id sent, and its sign-in form keeps th
         : undefined,
   });
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "API key"));
+  await begin(page.root, "API key");
   const key = field(page.root, "API key");
   expect(attr(key, "type")).toBe("password");
   // The fake DOM has no autoComplete property, so Preact writes the attribute under the name it was given.
@@ -306,7 +412,7 @@ test("an API-key account is added with no id sent, and its sign-in form keeps th
 test("optional inputs sit under More options; required ones do not", async () => {
   const w = world();
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "API key"));
+  await begin(page.root, "API key");
   const more = must(all(page.root, "details")[0], "More options");
   expect(must(all(more, "summary")[0], "summary").textContent).toBe("More options");
   const inside = all(more, "input").map((i) => attr(i, "type"));
@@ -326,7 +432,7 @@ test("Cancel stops a browser sign-in and goes back to the methods at once", asyn
         : undefined,
   });
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "Claude subscription"));
+  await begin(page.root, "Claude subscription");
   expect(page.text()).toContain("Waiting for sign-in…");
   expect(labelled(page.root, "Open sign-in page")).toBeDefined();
   expect(labelled(page.root, "Copy link")).toBeDefined();
@@ -337,7 +443,8 @@ test("Cancel stops a browser sign-in and goes back to the methods at once", asyn
   // The methods are back, with no dead end between.
   expect(page.text()).toContain("Choose how to add it.");
   expect(page.text()).not.toContain("Sign-in cancelled");
-  expect(buttons(page.root).filter((b) => b.textContent === "Start")).toHaveLength(4);
+  // Still on Claude's ways: Start for each of its two ways, none for another provider's.
+  expect(buttons(page.root).filter((b) => b.textContent === "Start")).toHaveLength(2);
   expect(w.posts()).toHaveLength(1);
 });
 
@@ -351,7 +458,7 @@ test("a refused Cancel says why and stays", async () => {
           : undefined,
   });
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "Claude subscription"));
+  await begin(page.root, "Claude subscription");
   await click(must(labelled(page.root, "Cancel"), "Cancel"));
   expect(page.text()).toContain("Action refused");
   expect(page.text()).not.toContain("Choose how to add it.");
@@ -375,7 +482,7 @@ test("a device sign-in shows its code large, with Copy code and Open sign-in pag
         : undefined,
   });
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "ChatGPT sign-in"));
+  await begin(page.root, "ChatGPT sign-in");
   const code = must(
     all(page.root, "strong").find((n) => attr(n, "data-part") === "device-code"),
     "code",
@@ -394,7 +501,7 @@ test("when the sign-in is done: Added, the name pluxy has, Save name, Open accou
   });
   let added = "";
   const page = await w.mount(<AddAccountPage onSuccess={(id) => (added = id)} />);
-  await click(start(page.root, "Claude subscription"));
+  await begin(page.root, "Claude subscription");
   expect(added).toBe("acc_1a2b3c4d");
   expect(page.text()).toContain("Added alice@example.com.");
   const name = field(page.root, "Name");
@@ -422,7 +529,7 @@ test("an API-key account has no name yet: the field is empty with an example, an
     reply: (c) => (c.method === "POST" && c.path === "/accounts" ? ok({ login: login("done") }) : undefined),
   });
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "Claude subscription"));
+  await begin(page.root, "Claude subscription");
   const name = field(page.root, "Name");
   expect(name.value).toBe("");
   expect(attr(name, "placeholder")).toBe("For example: Work OpenRouter");
@@ -439,7 +546,7 @@ test("a name over 64 characters is refused before anything is sent; a name may b
     reply: (c) => (c.method === "POST" && c.path === "/accounts" ? ok({ login: login("done") }) : undefined),
   });
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "Claude subscription"));
+  await begin(page.root, "Claude subscription");
   await type(field(page.root, "Name"), "x".repeat(65));
   await submit(must(all(page.root, "form")[0], "form"));
   expect(page.text()).toContain("Use at most 64 characters.");
@@ -461,7 +568,7 @@ test("a name core refuses is said, masked in privacy mode", async () => {
           : undefined,
   });
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "Claude subscription"));
+  await begin(page.root, "Claude subscription");
   expect(page.text()).not.toContain("alice");
   await type(field(page.root, "Name"), "Work");
   await submit(must(all(page.root, "form")[0], "form"));
@@ -480,7 +587,7 @@ test("embedded: no page title, no Open account and no CLIProxyAPI import; provid
   expect(page.text()).toContain("Gemini");
   expect(page.text()).not.toContain("Claude");
   expect(page.text()).not.toContain("Codex");
-  await click(start(page.root, "API key"));
+  await begin(page.root, "API key");
   await type(field(page.root, "API key"), "k");
   await submit(must(all(page.root, "form")[0], "form"));
   expect(page.text()).toContain("Added");
@@ -502,7 +609,7 @@ test("with privacy on the Name field starts empty, shows the name only masked as
     reply: (c) => (c.method === "POST" && c.path === "/accounts" ? ok({ login: login("done") }) : undefined),
   });
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "Claude subscription"));
+  await begin(page.root, "Claude subscription");
   const name = field(page.root, "Name");
   expect(page.text()).not.toContain("alice");
   expect(name.value).toBe("");
@@ -532,7 +639,7 @@ test("the guided setup's provider title names an unnamed account: Added your {ti
   const page = await w.mount(
     <AddAccountPage embedded providers={[{ id: "pluxy/codex", title: "ChatGPT (Codex)" }]} />,
   );
-  await click(start(page.root, "ChatGPT sign-in"));
+  await begin(page.root, "ChatGPT sign-in");
   expect(page.text()).toContain("Added your ChatGPT (Codex) account.");
 });
 
@@ -542,7 +649,7 @@ test("Cancel is there while the sign-in starts, leaves at once, and cancels the 
     reply: (c) => (c.method === "POST" && c.path === "/accounts" ? start1.promise : undefined),
   });
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "Claude subscription"));
+  await begin(page.root, "Claude subscription");
   expect(page.text()).toContain("Generating sign-in link…");
   // The first request is still out, and Cancel is already there.
   await click(must(labelled(page.root, "Cancel"), "Cancel while starting"));
@@ -568,7 +675,7 @@ test("Cancel says Cancelling… and cannot be pressed again while the request to
             : undefined,
   });
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "Claude subscription"));
+  await begin(page.root, "Claude subscription");
   await click(must(labelled(page.root, "Cancel"), "Cancel"));
   const waiting = must(labelled(page.root, "Cancelling…"), "Cancelling…");
   expect(waiting.disabled).toBe(true);
@@ -592,7 +699,7 @@ test("a sign-in that finished before Cancel reached core goes to the done screen
   });
   let added = "";
   const page = await w.mount(<AddAccountPage onSuccess={(id) => (added = id)} />);
-  await click(start(page.root, "Claude subscription"));
+  await begin(page.root, "Claude subscription");
   await click(must(labelled(page.root, "Cancel"), "Cancel"));
   expect(w.changes()).toContain("DELETE /logins/login-1");
   expect(added).toBe("acc_1a2b3c4d");
@@ -604,7 +711,7 @@ test("a sign-in that finished before Cancel reached core goes to the done screen
 test("Load from file puts text in the field and refuses a file that is not text, before it reaches the field", async () => {
   const w = world();
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "API key"));
+  await begin(page.root, "API key");
   const picker = all(page.root, "input").find(
     (i) => attr(i, "type") === "file" && attr(i, "aria-label") === "Load from file",
   );
@@ -786,7 +893,7 @@ test("a new account says pluxy checked it with the service, once the check has p
     reply: loginDone,
   });
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "Claude subscription"));
+  await begin(page.root, "Claude subscription");
   expect(page.text()).toContain("pluxy checked it with the service, and it works.");
   expect(page.text()).not.toContain("upstream");
 });
@@ -801,7 +908,7 @@ test("a new account whose check failed says why, and one still being checked say
     reply: loginDone,
   });
   const page = await failed.mount(<AddAccountPage />);
-  await click(start(page.root, "Claude subscription"));
+  await begin(page.root, "Claude subscription");
   expect(page.text()).toContain("pluxy could not check it with the service: the service refused the key");
   expect(page.text()).not.toContain("and it works");
   restoreDom();
@@ -821,7 +928,7 @@ test("a new account whose check failed says why, and one still being checked say
     },
   });
   const later = await w.mount(<AddAccountPage />);
-  await click(start(later.root, "Claude subscription"));
+  await begin(later.root, "Claude subscription");
   expect(later.text()).toContain("Checking it with the service…");
   expect(later.text()).not.toContain("and it works");
   // Each second the page asks again, until the check answers.
@@ -840,7 +947,7 @@ test("an account with an address and no name is offered the address as its name,
     reply: loginDone,
   });
   const page = await w.mount(<AddAccountPage />);
-  await click(start(page.root, "Claude subscription"));
+  await begin(page.root, "Claude subscription");
   const name = field(page.root, "Name");
   expect(name.value).toBe("127.0.0.1:18500");
   expect(labelled(page.root, "Save name")?.disabled).toBe(false);
@@ -870,7 +977,7 @@ test("the sentence for an unnamed account in a long-named kind reads as English:
       ]}
     />,
   );
-  await click(start(page.root, "API key"));
+  await begin(page.root, "API key");
   await type(field(page.root, "API key"), "k");
   await submit(must(all(page.root, "form")[0], "form"));
   expect(page.text()).toContain("Added your account for another service.");
