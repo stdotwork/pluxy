@@ -673,6 +673,11 @@ test("a failed action's message sits beside it and the page keeps its fields", a
 
 test("Where: picking the other choice shows its controls only, and switching says what it stops", async () => {
   const m = await mount(page(remote), settings({ connection_set: () => remote }));
+  // Where pluxy runs keeps its own title for connecting to a running pluxy (local or remote).
+  const titles = all(m.root, "label")
+    .filter((l) => m.attr(l, "class") === "where-choice-head")
+    .map((l) => all(l, "b")[0]?.textContent);
+  expect(titles).toEqual(["On this computer", "Connect to a pluxy that is already running"]);
   // The choice in use shows its controls: the form, with the address as it is now.
   expect(m.labels()).not.toContain("Switch to this computer");
   expect(m.labels()).toContain("Connect");

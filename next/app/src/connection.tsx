@@ -247,7 +247,7 @@ function Where(props: { connection: Connection; onChange: (c: Connection) => voi
               onChange={() => setChoice("there")}
             />
             <span>
-              <b>{FIRST.there.title}</b>
+              <b>{WHERE.thereTitle}</b>
               <small>{FIRST.there.about}</small>
             </span>
           </label>

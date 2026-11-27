@@ -370,6 +370,7 @@ export const WHERE = {
   title: "Where pluxy runs",
   now: "Now",
   where: "Where",
+  thereTitle: "Connect to a pluxy that is already running",
   thisApp: "This app",
   advanced: "Versions and advanced",
   runningHere: "Running on this computer",
