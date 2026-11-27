@@ -691,7 +691,7 @@
     border-top: var(--px-shape-border) solid var(--px-color-border);
   }
 
-  .tool-key {
+  .tools .tool-key {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -702,8 +702,8 @@
     transition: background var(--t);
   }
 
-  .tool-key:hover,
-  .tool-key[data-menu-open] {
+  .tools .tool-key:hover,
+  .tools .tool-key[data-menu-open] {
     background: color-mix(in srgb, var(--px-color-surface-raised) 55%, transparent);
   }
 
@@ -763,7 +763,7 @@
   }
 
   .tool-key-menu-btn:hover,
-  .tool-key[data-menu-open] .tool-key-menu-btn {
+  .tools .tool-key[data-menu-open] .tool-key-menu-btn {
     color: var(--px-color-text);
   }
 
@@ -833,7 +833,7 @@
   .tool-key-confirm,
   .tool-key-rename,
   .tool-key-note,
-  .tool-key > .notice {
+  .tools .tool-key > .notice {
     flex: 1 1 100%;
     margin: 0;
   }

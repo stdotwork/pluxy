@@ -290,6 +290,36 @@ test("key row menu supports Arrow keys, closes when focus leaves, and Cancel ret
   await expect(trigger).toBeFocused();
 });
 
+test("Tools key-row CSS stays scoped to .tools and does not paint a .tool-key outside it", async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    const wrap = document.createElement("div");
+    wrap.className = "tool-page";
+    const span = document.createElement("span");
+    span.id = "app-tool-key-probe";
+    span.className = "tool-key";
+    span.textContent = "Created for Claude Code";
+    wrap.append(span);
+    document.querySelector("main")?.append(wrap);
+  });
+  const probe = page.locator("#app-tool-key-probe");
+  await probe.hover();
+  const styles = await probe.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return {
+      backgroundColor: cs.backgroundColor,
+      borderBottomWidth: cs.borderBottomWidth,
+      paddingLeft: cs.paddingLeft,
+    };
+  });
+  expect(styles).toEqual({
+    backgroundColor: "rgba(0, 0, 0, 0)",
+    borderBottomWidth: "0px",
+    paddingLeft: "0px",
+  });
+});
+
 test("Refresh scans again", async ({ page }) => {
   const scan = page.waitForResponse(
     (r) => r.request().method() === "POST" && r.url().endsWith("/setup/scan"),
