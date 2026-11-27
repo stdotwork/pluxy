@@ -386,6 +386,14 @@ export function AddAccountPage(
     )?.focus();
   }, [selected, added, attempt]);
   useLayoutEffect(() => {
+    if (provider === undefined) return;
+    (
+      root.current?.querySelector<HTMLElement>('[data-part="method"] button[data-variant="primary"]') ||
+      root.current?.querySelector<HTMLElement>('[data-part="method"] button') ||
+      root.current?.querySelector<HTMLElement>(".provider-back button")
+    )?.focus();
+  }, [provider]);
+  useLayoutEffect(() => {
     if (backs === 0 || provider !== undefined) return;
     const own = lastProvider.current && `[data-extension=${JSON.stringify(lastProvider.current)}]`;
     (

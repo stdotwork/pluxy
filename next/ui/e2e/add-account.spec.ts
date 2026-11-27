@@ -76,9 +76,11 @@ test("Add an account asks for no ID: the providers are tiles, then a provider's 
   await expect(page.getByText("Have auth files from CLIProxyAPI?")).toBeVisible();
   await expect(page.getByText("Or bring them from CLIProxyAPI")).toBeVisible();
 
-  // The ways of the picked provider only.
-  await tile(page, "test/alpha").click();
+  // The ways of the picked provider only; picking from the keyboard moves focus to the new step.
+  await tile(page, "test/alpha").focus();
+  await page.keyboard.press("Enter");
   await expect(page.getByText("Choose how to add it.")).toBeVisible();
+  await expect(start(page, "Test browser")).toBeFocused();
   await expect(page.locator('[data-part="method-group"]')).toHaveCount(1);
   await expect(
     page.locator('[data-extension="test/alpha"]').getByRole("heading", { name: "Alpha" }),
