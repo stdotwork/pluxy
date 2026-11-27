@@ -552,10 +552,10 @@ describe("the page", () => {
     expect(groups.map(ids)).toEqual([["c-ok"], ["x-ok", "x-off"]]);
     const pools = parts(page.root, "pool-card");
     expect(pools.map((p) => attr(p, "data-provider"))).toEqual(["claude", "codex"]);
-    // Turned off is not counted in a pool; the band's accounts are, as unable to serve.
+    // Every account of the provider counts in its pool, including turned-off and needs-you ones.
     expect(pools.map((p) => p.textContent?.match(/\d of \d serving/)?.[0])).toEqual([
       "1 of 2 serving",
-      "1 of 2 serving",
+      "1 of 3 serving",
     ]);
   });
 

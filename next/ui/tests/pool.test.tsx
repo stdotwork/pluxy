@@ -31,7 +31,7 @@ const window = (seconds: number, used: number, resetIn?: number): QuotaLimit => 
 
 const read = (...limits: QuotaLimit[]): Windows => ({ state: "read", limits });
 
-test("the pool is the mean left of the accounts that serve, with one segment per account not turned off", () => {
+test("the pool is the mean left of the accounts that serve, with one segment per account including turned off", () => {
   const list = [
     account("a"),
     account("b"),
@@ -48,14 +48,21 @@ test("the pool is the mean left of the accounts that serve, with one segment per
   // (80 + 40) / 2
   expect(pool.left).toBe(60);
   expect(pool.serving).toBe(2);
-  expect(pool.total).toBe(3);
+  expect(pool.total).toBe(4);
   expect(pool.segments).toEqual([
     { id: "a", kind: "left", left: 80 },
     { id: "b", kind: "left", left: 40 },
     { id: "c", kind: "out" },
+    { id: "d", kind: "out" },
   ]);
   // b starts again first, in an hour: its 60 used come back, over the two counted.
   expect(pool.back).toEqual({ gain: 30, in: HOUR * 1000 });
+
+  // A provider whose accounts are all turned off still has a pool with its out segments.
+  const allOff = poolOf("pluxy/claude", [account("off", { disabled: true })], new Map(), undefined, NOW);
+  expect(allOff.total).toBe(1);
+  expect(allOff.serving).toBe(0);
+  expect(allOff.segments).toEqual([{ id: "off", kind: "out" }]);
 });
 
 test("the pool counts the window most serving accounts share, and an account without it is unknown", () => {

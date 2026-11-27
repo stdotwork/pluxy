@@ -65,10 +65,10 @@ test("Accounts and Home give the same accounts the same numbers", async ({ page 
     await expect(rows.nth(i).getByRole("link", { name: id, exact: true })).toBeVisible();
     await expect(rows.nth(i)).toHaveAttribute("data-group", group);
   }
-  // Each provider's pool counts its accounts not turned off: two of Alpha's four serve, and Gone's
-  // one cannot.
+  // Each provider's pool counts all of its accounts (including turned-off as unable to serve):
+  // two of Alpha's five serve, and Gone's one cannot.
   await expect(page.locator('[data-part="pool-card"][data-provider="alpha"]')).toContainText(
-    "2 of 4 serving",
+    "2 of 5 serving",
   );
   await expect(page.locator('[data-part="pool-card"][data-provider="gone"]')).toContainText(
     "Nothing is serving",

@@ -39,7 +39,7 @@ export interface Pool {
   serving: number;
   /** Accounts whose provider status could not be checked. */
   unchecked?: number;
-  /** The accounts counted: every one that is not turned off. */
+  /** Every account of this provider, including those that cannot serve or are turned off. */
   total: number;
   /** The next limit to start again among those counted: what it adds to the average, and when (ms from now). */
   back?: { gain: number; in: number };
@@ -72,8 +72,8 @@ function poolWindow(serving: Account[], windows: ReadonlyMap<string, Windows>): 
 }
 
 /**
- * One provider's pool from its accounts (any order; segments keep it). Accounts turned off are not
- * counted. running is core's running extensions (accountCondition).
+ * One provider's pool from its accounts (any order; segments keep it). Every account counts, with
+ * turned-off accounts drawn as unable to serve. running is core's running extensions (accountCondition).
  */
 export function poolOf(
   extension: string,
@@ -83,12 +83,10 @@ export function poolOf(
   now = Date.now(),
   statusFailed = false,
 ): Pool {
-  const members = accounts
-    .map((a) => {
-      const c = accountCondition(a, running, now);
-      return { a, c, unchecked: statusFailed && conditionUnchecked(a, c, running) };
-    })
-    .filter((m) => m.c.group !== "off");
+  const members = accounts.map((a) => {
+    const c = accountCondition(a, running, now);
+    return { a, c, unchecked: statusFailed && conditionUnchecked(a, c, running) };
+  });
   const serving = members.filter((m) => m.c.group === "serving" && !m.unchecked).map((m) => m.a);
   const uncheckedCount = members.filter((m) => m.unchecked).length;
   const seconds = poolWindow(serving, windows);
