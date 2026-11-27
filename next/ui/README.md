@@ -180,8 +180,9 @@ never changes core's management key.
 A host adds to the page through `corePages({ setup })` (`SetupOptions` in `kit/pages/setup.tsx`),
 and the panel passes nothing: `toolAction`, `extraTools`, `localPages` and `onRefresh` go to
 step 2's `ToolList` as they do on Tools; `isRemote` overrides the page's own reading of
-`host.address`; `onFinish` runs after setup is finished. The desktop app gives a "Set up" link
-to its own page for the tools it can set up on its own computer.
+`host.address`; `notes` puts lines above and under step 2's list (see below); `onFinish` runs after
+setup is finished. The desktop app gives each tool's row its one button (open the tool's page, or
+install or turn on the add-on the page needs).
 
 The Tools page (`#/tools`, `kit/pages/tools.tsx`) is where a person connects a coding tool and
 manages the keys tools send. It lists the tools core's scan found (Claude Code, Codex, OpenCode, Pi,
@@ -199,7 +200,8 @@ and the panel passes nothing: `toolAction(client)` is what goes at the end of a 
 `Set up`; `extraTools` are rows core's scan does not give; `keyOwners` reads the tool each key
 was made for, by key ID or masked key, for a key with no name; `isRemote` says the tools listed are
 on another computer than the one showing the page; `localPages` are links to the host's own pages
-for this computer's tools; `onRefresh` runs on `Refresh`. The page reads a key's name from its
+for this computer's tools; `onRefresh` runs on `Refresh`; `notes(clients)` gives lines to show above and
+under the list, from the tools it lists (the app says there when add-ons are paused or missing). The page reads a key's name from its
 `label`, `PATCH /client-keys/{id}` renames it (a pluxy that answers 405 loses `Rename` for the
 visit), and `POST /client-keys` sends the name with the new key.
 

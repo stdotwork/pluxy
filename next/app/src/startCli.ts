@@ -5,7 +5,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { useEffect } from "preact/hooks";
 import { strings } from "../../ui/kit/strings";
-import { LAUNCHER } from "./easyMode";
+import { LAUNCHER } from "./addonItems";
 
 const t = strings("startCli", {
   noLauncher: "The Launcher add-on is not installed on this computer. Install it in Add-ons.",

@@ -8,6 +8,7 @@ import { useState } from "preact/hooks";
 import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { strings } from "../../ui/kit/strings";
 import { Button, Notice, PageHead, Switch, useAction, useKit } from "../../ui/kit/ui";
+import type { AgentPage } from "./addonItems";
 import { Backups } from "./backups";
 import {
   FileChoice,
@@ -25,7 +26,6 @@ import {
   useStart,
   useToolSetup,
 } from "./clientPage";
-import type { AgentPage } from "./easyMode";
 import {
   CLIENT,
   type Held,
@@ -290,7 +290,6 @@ export const grokPage = (): AgentPage => ({
   id: "grok-build",
   package: PACKAGE,
   dest: "tools",
-  kind: "topic",
   under: "tools",
   title: t("title"),
   tip: t("tip"),
