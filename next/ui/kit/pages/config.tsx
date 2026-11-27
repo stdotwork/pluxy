@@ -24,7 +24,7 @@ import {
 } from "./configSource.helpers";
 import { fileError, configText as t } from "./configStrings";
 import { nest, settingAt } from "./routing.rules";
-import { SettingsColumn } from "./settingGroup";
+import { SettingsColumn, SettingsSearchScope } from "./settingGroup";
 
 /** core's settings as read: loading, read (at is when), or failed (over what was read before, if anything). */
 type SettingsLoad =
@@ -286,13 +286,15 @@ export function ConfigPage() {
                 {settings.phase === "failed" && (
                   <StaleNotice at={settings.at} error={settings.error} onRetry={tryAgain} />
                 )}
-                <ConfigSettings
-                  settings={settings.data}
-                  format={doc?.format}
-                  disabled={disabled}
-                  keys={keys}
-                  change={change}
-                />
+                <SettingsSearchScope>
+                  <ConfigSettings
+                    settings={settings.data}
+                    format={doc?.format}
+                    disabled={disabled}
+                    keys={keys}
+                    change={change}
+                  />
+                </SettingsSearchScope>
               </>
             )
           ) : file.phase === "loading" ? (

@@ -455,7 +455,7 @@ export function ThemesPage() {
   return (
     <>
       <PageHead title={t("title")} />
-      <SettingsColumn class="theme-sections">
+      <SettingsColumn class="theme-sections" search>
         <SettingGroup
           title={t("theme")}
           about={t("themeAbout")}

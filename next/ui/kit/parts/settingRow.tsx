@@ -2,8 +2,8 @@
 // saves on change says Saving… while it does, and a save that fails puts the control back to the
 // saved value with the reason under the row.
 
-import type { ComponentChildren } from "preact";
-import { useEffect, useId, useRef, useState } from "preact/hooks";
+import { type ComponentChildren, createContext } from "preact";
+import { useContext, useEffect, useId, useRef, useState } from "preact/hooks";
 import { Icon } from "../icons";
 import { usePrivacy } from "../privacy";
 import { strings } from "../strings";
@@ -14,6 +14,22 @@ const t = strings("parts.settingRow", {
   saving: "Saving…",
   saved: "Saved",
 });
+
+/**
+ * What a Settings page is searched for. A SettingRow whose name, sentence, note or settings-file
+ * key do not hold every word of it is not drawn. Empty: every row is drawn.
+ */
+export const SettingsSearchContext = createContext("");
+
+/** Whether text holds every word of query, in any case. */
+export function matchesSearch(query: string, ...texts: (string | undefined)[]): boolean {
+  const hay = texts.filter(Boolean).join(" ").toLowerCase();
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((word) => hay.includes(word));
+}
 
 /** How long "Saved" stays beside a setting that was saved. */
 const SAVED_SHOWS_MS = 1600;
@@ -124,6 +140,9 @@ export function SettingRow(props: {
 }) {
   const p = usePrivacy();
   const id = useId();
+  const search = useContext(SettingsSearchContext);
+  if (search && !matchesSearch(search, props.name, props.description, props.note, props.configKey))
+    return null;
   return (
     <div class="setting-row" data-part="setting-row" data-disabled={props.disabled ? "" : undefined}>
       <div class="setting-grid">

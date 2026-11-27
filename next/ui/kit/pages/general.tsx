@@ -75,7 +75,7 @@ export function GeneralPage(props: { options?: GeneralOptions }) {
   return (
     <>
       <PageHead title={t("title")} />
-      <SettingsColumn>
+      <SettingsColumn search>
         <SettingGroup title={t("look")}>
           <Appearance />
         </SettingGroup>

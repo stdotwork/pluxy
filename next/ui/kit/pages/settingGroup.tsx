@@ -3,15 +3,55 @@
 // saves the moment it changes, and says Saved beside it.
 
 import type { ComponentChildren } from "preact";
+import { useState } from "preact/hooks";
+import { Icon } from "../icons";
+import { SettingsSearchContext } from "../parts";
+import { strings } from "../strings";
 
-/** The column the groups sit in: centred, no wider than a row stays easy to read. */
-export function SettingsColumn(props: { children: ComponentChildren; class?: string }) {
+const t = strings("settingGroup", {
+  search: "Search settings",
+  none: "No setting matches that.",
+});
+
+/**
+ * The column the groups sit in: centred, no wider than a row stays easy to read. search puts the
+ * groups in a SettingsSearchScope.
+ */
+export function SettingsColumn(props: { children: ComponentChildren; class?: string; search?: boolean }) {
   return (
     <div
       class={props.class ? `settings-column ${props.class}` : "settings-column"}
       data-part="settings-column"
     >
-      {props.children}
+      {props.search ? <SettingsSearchScope>{props.children}</SettingsSearchScope> : props.children}
+    </div>
+  );
+}
+
+/**
+ * A field above the groups it holds that narrows every setting row in them to the ones that match
+ * what is typed (SettingRow), and says so when no row is left.
+ */
+export function SettingsSearchScope(props: { children: ComponentChildren }) {
+  const [query, setQuery] = useState("");
+  const asked = query.trim();
+  return (
+    <div class="settings-groups" data-searching={asked ? "" : undefined}>
+      <label class="settings-search">
+        <Icon name="search" size={14} />
+        <input
+          data-slot="input"
+          type="search"
+          aria-label={t("search")}
+          placeholder={t("search")}
+          value={query}
+          onInput={(e) => setQuery(e.currentTarget.value)}
+        />
+      </label>
+      <SettingsSearchContext.Provider value={asked}>{props.children}</SettingsSearchContext.Provider>
+      <p class="settings-none" role="status">
+        {asked ? t("none") : ""}
+      </p>
     </div>
   );
 }

@@ -139,4 +139,48 @@
       padding-inline: calc(var(--s) * 3);
     }
   }
+
+  /* Search: a field above the groups. While it holds words, a group with no matching row is gone
+     (the Themes gallery and its drop zone go with it), and a sentence says when no row is
+     left. */
+  .settings-search {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    min-height: var(--px-size-control-main);
+    padding-inline: calc(var(--s) * 3);
+    border: var(--px-shape-border) solid var(--px-color-input-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface);
+    color: var(--px-color-text-muted);
+  }
+
+  .settings-search:focus-within {
+    border-color: var(--px-color-focus);
+  }
+
+  .settings-search input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    background: none;
+    box-shadow: none;
+    outline: 0;
+    color: var(--px-color-text);
+  }
+
+  .settings-groups[data-searching] .setting-group:not(:has(.setting-row)) {
+    display: none;
+  }
+
+  .settings-none {
+    display: none;
+    margin: 0;
+    padding-inline: calc(var(--s) * 1);
+    color: var(--px-color-text-muted);
+  }
+
+  .settings-groups[data-searching]:not(:has(.setting-row)) > .settings-none {
+    display: block;
+  }
 }
