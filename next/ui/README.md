@@ -44,7 +44,7 @@ render(
 
 | `Shell` prop | What it does |
 | --- | --- |
-| `pages` | The pages to show. `corePages()` (`kit/pages/core.ts`) is the pages core offers: the panel shows exactly these, and the desktop app adds its own after them |
+| `pages` | The pages to show. `corePages()` (`kit/pages/core.ts`) is the pages core offers: the panel shows these, and the desktop app adds its own after them. The shell leaves out Setup when core answers `GET /setup` with 404 |
 | `privacy` | Privacy mode, kept where the build keeps it: the panel in the host's prefs (`prefsPrivacy`), the desktop app natively |
 | `status` | What the status block at the navigation's foot says (a `FrameStatus`, `kit/frame.tsx`) |
 | `extensionPages` | Adds the pages of the extensions that run, after the build's own ([extension pages](extension-pages/README.md)) |
@@ -58,14 +58,15 @@ Where pluxy runs page). `setup` (`SetupOptions` in `kit/pages/setup.tsx`) and `t
 Setup and Tools pages. A build bundles only the pages it imports, so the desktop app's pages add
 nothing to the panel.
 
-A page that saves a file (a theme file, a log, the usage table) calls `kit/save.tsx`, which
+A page that saves a file (a theme file, a log, the request list) calls `kit/save.tsx`, which
 downloads it as a browser does. A host whose window cannot download implements `saveFile`: the
 desktop app saves the file in the Downloads folder, and the page shows the path it answers.
 
 ### Privacy mode
 
 The **Hide names** setting in General hides account e-mail addresses and identifiers, for example
-while the person shares their screen (`kit/privacy.ts`). It changes only what pages show:
+while the person shares their screen (`kit/privacy.ts`). While it is on, the header strip shows a
+**Names hidden** button that turns it off. It changes only what pages show:
 
 - A page passes a value through `usePrivacy()`'s masks where it shows it (text, `title`,
   `aria-label`), and keeps the real value for calls, search, filters, copying and downloads.
@@ -103,7 +104,7 @@ changes.
 | `dest` | The destination the page belongs to. The destination's navigation entry opens its first page that sits under no other |
 | `kind` | `"tab"`: one of the destination's tabs in the header strip. `"topic"`: one of its topics beside the page. Left out: the page is reached from the navigation entry itself or from another page |
 | `under` | The ID of the page it sits under. The header strip then shows the way back, and no tabs |
-| `addresses` | Other addresses the page answers: an exact old ID, or a prefix ending in `/` for whatever follows it (the `account` page answers `accounts/`, so `#/accounts/<id>` opens it) |
+| `addresses` | Other addresses the page answers: an exact address (such as the ID of a page it replaced), or a prefix ending in `/` for whatever follows it (the `account` page answers `accounts/`, so `#/accounts/<id>` opens it) |
 | `label` | Its name in its tab or topic entry, when the title does not fit there |
 | `section` | The group a topic is listed in: `core` (the default), `device` or `extensions` |
 | `tip` | The tooltip of its tab or topic entry |
@@ -140,7 +141,7 @@ English text. Only English ships.
 ## Adding a page
 
 A page lives in `kit/pages/<page>.tsx` and owns everything about itself, so pages added side by
-side touch shared files only by one line each:
+side touch shared files only to list themselves:
 
 - **The page and its strings:** `kit/pages/<page>.tsx` declares its texts with
   `strings("<page>", {...})` and exports its `PageDef` as a function, such as
@@ -149,11 +150,10 @@ side touch shared files only by one line each:
   along what each part works out, as Accounts does (`accounts.tsx` the list, `account.tsx` one
   account's page, and `accounts.helpers.ts` the groups, counts and search both use).
 - **The page list:** one entry in `corePages()` (`kit/pages/core.ts`), in the order the page
-  shows among its destination's tabs or topics. The page ID never changes: it is the address and the theme hook
-  `data-page`.
+  shows among its destination's tabs or topics.
 - **Management calls:** the area's calls and reply types in `kit/api/<area>.ts`, as
-  `export const <area>Api = (host: Host) => ({...})`, and two lines in `kit/api/index.ts` (the
-  `export *` and the spread into `api`), so pages call `useKit().api.<call>`. Core's settings
+  `export const <area>Api = (host: Host) => ({...})`, and three lines in `kit/api/index.ts` (the
+  `import`, the `export *` and the spread into `api`), so pages call `useKit().api.<call>`. Core's settings
   (`GET` and `PATCH /settings`) are already there, in `kit/api/settings.ts`, for every page that
   shows them.
 - **Styles:** `kit/pages/<page>.css` beside the page, its rules inside `@layer kit { ... }`, and
@@ -165,8 +165,8 @@ side touch shared files only by one line each:
 - **Refreshing:** a page that refreshes on its own does so only while the document is visible.
   Use `useLoad` to read and `usePoll` (`kit/ui.tsx`) to keep a live value fresh; do not write a
   timer in a page.
-- **Tests:** a browser test for the page in `e2e/<page>.spec.ts`; unit tests in `tests/` only for
-  pure code.
+- **Tests:** a browser test for the page in `e2e/<page>.spec.ts`; unit tests in `tests/`, where
+  `tests/fakeDom.ts` lets a test mount a page without a browser.
 
 Three checks in `bun run lint` and `bun run test` hold the kit's rules, and each failure says what
 to do. Imports (Biome's `noRestrictedImports`, in `biome.json` here and in `../app/biome.json`): the
@@ -194,7 +194,7 @@ bun run test:browser   # builds, then runs the browser tests
 test (`e2e/extension-pages.spec.ts`) also runs in Firefox and WebKit, because extension pages are
 a security boundary, and a browser that cannot start fails the run. To run those locally, install
 them once with `bunx playwright install firefox webkit` and `bunx playwright install-deps webkit`.
-Each browser test starts its own core through `go run ./e2e/panelcore` (from `next/`), with fake
+Each browser test file starts one core, shared by its tests, through `go run ./e2e/panelcore` (from `next/`), with fake
 extensions, on a random port.
 
 ### A core with data to look at
@@ -212,13 +212,14 @@ It prints one line of JSON and runs until its stdin ends or you press Ctrl-C:
 sign in with `key` (the management key); send requests with `client_key`. Without `-listen` the
 port is random.
 
-The demo is seeded, so every run has the same data: 11 accounts of four providers in every state an
-account can be in except a broken credential file, three client keys, a fallback (`demo-best`),
-about 600 requests over the last week with a request log for each, and a few streaming requests
-always in flight. The requests are real ones that core routes to the fake extensions, so the
-usage, logs and account states are core's own; only the days before today are written into core's
-usage folder before it starts (`e2e/panelcore/demo.go`). `e2e/panelcore_demo_test.go` checks all
-of this through the management API.
+The demo is seeded: 11 accounts of four providers, in every state an account can be in except a
+broken credential file, three client keys and a fallback (`demo-best`). When it starts, it sends
+core over a hundred requests, which core routes to the fake extensions and logs, and it keeps four
+streaming requests in flight, so the usage, request logs and account states are core's own. The
+usage of the week before, and of today up to five minutes before core starts, is written into
+core's usage folder as day files before core starts (`e2e/panelcore/demo.go`); how many requests
+those hold depends on the day of the week and the time of day. `e2e/panelcore_demo_test.go`
+checks the accounts, client keys, fallback and usage through the management API.
 
 ### Edit loop
 
@@ -239,7 +240,7 @@ before it builds and tests core, so its tests always run against the panel of th
 ## What core serves
 
 `/panel/` and its files. The panel is a page for the management API, and the management API is always
-on: a config without `management_key` is refused at start and on a reload. Every reply carries a
+on: a config without `management_key` is refused at start and on a reload. Every page and file it serves carries a
 Content Security Policy that allows scripts, styles and requests only to core itself, images
 and fonts also from `data:` URLs, and frames only from the extension pages site. The page itself is revalidated on each load; the other files
 have content-hashed names and are cached.
