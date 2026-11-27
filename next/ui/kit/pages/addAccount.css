@@ -265,7 +265,9 @@
     letter-spacing: 0.12em;
   }
 
-  /* A sign-in waiting for the person is a pulsing dot and a sentence, not a boxed notice. */
+  /* A sign-in waiting for the person is a pulsing dot and a sentence, not a boxed notice.
+     The dot stays at full opacity in info-foreground (clearing 3:1 on every theme's raised
+     panel) and pulses an expanding ring around itself instead of fading. */
   .method .login-flow .notice[data-tone="muted"] {
     display: flex;
     align-items: center;
@@ -282,13 +284,23 @@
     width: 8px;
     height: 8px;
     border-radius: 999px;
-    background: var(--px-color-info);
-    animation: add-account-pulse calc(var(--px-motion-duration, 120ms) * 12) ease-in-out infinite;
+    background: var(--px-color-info-foreground);
+    animation: add-account-pulse calc(var(--px-motion-duration, 120ms) * 14) ease-out infinite;
   }
 
   @keyframes add-account-pulse {
-    50% {
-      opacity: 0.3;
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--px-color-info-foreground) 45%, transparent);
+    }
+    70%,
+    100% {
+      box-shadow: 0 0 0 5px transparent;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .method .login-flow .notice[data-tone="muted"]::before {
+      animation: none;
     }
   }
 
