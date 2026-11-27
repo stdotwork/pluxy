@@ -325,7 +325,7 @@ export function AccountRow(props: {
       onClearCooldown={props.onClearCooldown}
     />
   );
-  const plan = limited ? props.windows?.plan : undefined;
+  const plan = props.windows?.plan ?? (a.quota?.quota?.plan?.trim() || undefined);
   const provider = a.extension ? providerName(a.extension) : undefined;
   // The condition in words beside its dot, so the colour never says it alone. The dot's name says
   // it to assistive technology, so the word is hidden from it.

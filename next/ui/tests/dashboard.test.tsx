@@ -550,6 +550,7 @@ describe("the page", () => {
           source: "login",
           state: "reauth_required",
           refreshable: true,
+          quota: { fetched_at: new Date().toISOString(), quota: { plan: "Max 20x", limits: [] } },
         },
         { id: "c-ok", extension: "pluxy/claude", source: "login", state: "active", refreshable: true },
         {
@@ -572,6 +573,9 @@ describe("the page", () => {
     expect(fixes).toEqual([
       ["Sign in again", "primary"],
       ["Sign in again", "quiet"],
+    ]);
+    expect(parts(band, "plan-pill").map((p) => [p.textContent, attr(p, "data-plan-tier")])).toEqual([
+      ["Max 20x", "top"],
     ]);
     expect(attr(button(page.root, "Refresh"), "data-variant")).toBe("quiet");
     const groups = parts(page.root, "home-group", "class");

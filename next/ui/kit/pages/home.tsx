@@ -478,6 +478,7 @@ export function HomePage() {
           <AccountRow
             key={a.id}
             account={a}
+            windows={windows.get(a.id)}
             running={running}
             quietFix={i !== firstRepair}
             onTurnOn={turnOn}

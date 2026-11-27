@@ -313,12 +313,26 @@ test("an account's name is its label, else its ID, never shown twice, and masked
   expect(old).not.toContain("alice@example.com");
 });
 
-test("an account that needs the person or is turned off shows no limits, even when some were read", () => {
+test("an account that needs the person or is turned off shows no limits, even when some were read, but keeps its plan pill", () => {
   const windows: Windows = {
     state: "read",
+    plan: "Max 20x",
     limits: [{ id: "five", window_seconds: 18000, used_percent: 10 }],
   };
-  expect(row(account({ health: { state: "banned" } }), { windows })).not.toContain('data-part="limits"');
+  const banned = row(account({ health: { state: "banned" } }), { windows });
+  expect(banned).not.toContain('data-part="limits"');
+  expect(banned).toContain('data-part="plan-pill"');
+  expect(banned).toContain("Max 20x");
+  // Also reads a stored plan carried on the account when no windows were passed.
+  const stored = row(
+    account({
+      health: { state: "needs_login" },
+      quota: { fetched_at: iso(NOW), quota: { plan: "Pro", limits: [] } },
+    }),
+  );
+  expect(stored).not.toContain('data-part="limits"');
+  expect(stored).toContain('data-plan-tier="mid"');
+  expect(stored).toContain("Pro");
   expect(row(account({ disabled: true }), { windows })).not.toContain('data-part="limits"');
   expect(row(account(), { windows })).toContain('data-part="limits"');
 });
