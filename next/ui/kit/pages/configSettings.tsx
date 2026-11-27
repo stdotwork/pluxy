@@ -126,9 +126,10 @@ function FieldRow(props: RowProps) {
     if (text === shownValue && base.current !== null) return;
     setRefused(undefined);
     // A new address with no user name and password of its own would lose the saved ones: core
-    // keeps them only for the address they were saved with.
+    // keeps them only for the address they were saved with. Text that is no address (empty, or
+    // core's "direct" and "none" for no proxy) is sent: it means no proxy, and no password is lost.
     const typed = text.trim();
-    if (proxy?.login && typed !== "" && typed !== saved && !ownLogin(typed)) {
+    if (proxy?.login && typed !== saved && /^[a-z][a-z0-9+.-]*:\/\//i.test(typed) && !ownLogin(typed)) {
       setRefused(t("proxyNeedsLogin"));
       return;
     }

@@ -295,9 +295,12 @@ test("the outbound proxy saves on Enter, keeps its password while its address st
   expect(sent.length).toBe(sentBefore);
 
   // A URL core refuses goes back, with core's reason under the row.
-  await proxy.fill("ftp://proxy.example:21");
+  await proxy.fill("ftp://erin:pw3pw3pw3@proxy.example:21");
   await proxy.press("Enter");
-  await expect(row(page, "Outbound proxy").getByRole("alert")).toContainText("proxy");
+  await expect(row(page, "Outbound proxy").getByRole("alert")).toContainText(
+    "must use http://, https://, socks5:// or socks5h://",
+  );
+  expect(sent.length).toBe(sentBefore + 1);
   await expect(proxy).toHaveValue("socks5://127.0.0.1:1080");
   expect(await storedProxy()).toBe(held);
 

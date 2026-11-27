@@ -318,6 +318,21 @@ test("a saved proxy shows its address and a saved password apart; a new address 
   expect(patchesIn(w.calls)).toEqual([{ "proxy-url": "socks5://bob:pw@new.example:1080" }]);
 });
 
+test("a saved proxy turned off with empty, direct or none is sent, though it has no password of its own", async () => {
+  for (const off of ["direct", "none", ""]) {
+    const w = world();
+    const { root } = await w.mount();
+    const input = all(row(root, "Outbound proxy"), "input")[0] as FakeNode;
+    await type(input, off);
+    await enter(input);
+    expect(patchesIn(w.calls)).toEqual([{ "proxy-url": off }]);
+    expect(row(root, "Outbound proxy").textContent).not.toContain(
+      "The saved password belongs to the old address.",
+    );
+    for (const unmount of unmounts.splice(0)) await unmount();
+  }
+});
+
 test("text typed while a row's save is on its way stays when the reply comes", async () => {
   const patch = held();
   const w = world((c) => (c.method === "PATCH" ? patch.reply : undefined));
