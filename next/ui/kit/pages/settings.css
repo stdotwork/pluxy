@@ -105,6 +105,11 @@
     border-bottom: 0;
   }
 
+  /* Saving… and Saved sit before the control, so the control stays where it is when they come. */
+  .setting-group-card .setting-control .setting-saving {
+    order: -1;
+  }
+
   /* Saved: a tick and the word, for a moment, in the place Saving… was. It fades in; the theme's
      motion tokens turn that off for people who ask for less motion. */
   .setting-saving[data-saved] {
@@ -122,6 +127,14 @@
     }
   }
 
+  /* A waiting, empty or failed pane that stands where a group's card would be is drawn as one. */
+  .setting-group-body > .state-pane {
+    padding: calc(var(--s) * 5) calc(var(--s) * 4);
+    border: var(--px-shape-border) solid var(--px-color-card-border);
+    border-radius: var(--r-card);
+    background: var(--px-color-card);
+  }
+
   /* An empty state or notice inside a group takes the card's room too. */
   .setting-group-card > .notice,
   .setting-group-card > .empty,
@@ -131,6 +144,19 @@
 
   .setting-group-card > .state-pane {
     padding-inline: 0;
+  }
+
+  /* In a narrow row a setting stacks its control under its sentence, except a switch, which is
+     small enough to stay at the end of the line. */
+  @container (max-width: 40em) {
+    .setting-group-card > .setting-row .setting-grid:has(.switch) {
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+    }
+
+    .setting-group-card > .setting-row .setting-grid:has(.switch) .setting-control {
+      justify-content: flex-end;
+    }
   }
 
   @media (max-width: 40em) {

@@ -47,7 +47,7 @@
     margin-top: 0;
   }
   .setting-group-card > .table-frame {
-    margin: calc(var(--s) * 1) calc(var(--s) * 2);
+    margin: calc(var(--s) * 2) calc(var(--s) * 3);
   }
   /* The tables of one page share their columns, so the names line up from one provider to the next. */
   .system-group .table {
@@ -69,5 +69,19 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     vertical-align: bottom;
+  }
+
+  /* A narrow page: the model column no longer takes a share of the width, so the accounts column
+     keeps room for a name. */
+  @container (max-width: 36em) {
+    .system-group .table {
+      table-layout: auto;
+    }
+    .system-group th[scope="col"]:first-child {
+      width: auto;
+    }
+    .system-group td:last-child {
+      min-width: 9em;
+    }
   }
 }

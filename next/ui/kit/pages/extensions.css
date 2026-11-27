@@ -6,6 +6,22 @@
     margin: 0;
   }
 
+  /* The list and the opened extension side by side need room for both; the column answers to its
+     own width, since the navigation and the topics list take most of a small window. */
+  .ext {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 44em) {
+    html[data-detail="side"] .ext .master[data-open] {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    html[data-detail="side"] .ext .detail {
+      position: static;
+    }
+  }
+
   .ext-intro {
     padding-inline: calc(var(--s) * 1);
   }
@@ -16,7 +32,7 @@
     margin: 0;
   }
 
-  .setting-group-body > p {
+  .setting-group-body > p:not(.notice) {
     padding-inline: calc(var(--s) * 1);
   }
 

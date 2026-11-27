@@ -26,6 +26,15 @@ import { fileError, configText as t } from "./configStrings";
 import { nest, settingAt } from "./routing.rules";
 import { SettingsColumn, SettingsSearchScope } from "./settingGroup";
 
+/** A waiting or failed pane of a tab, in the card its rows would be in. */
+function PaneCard(props: Parameters<typeof StatePane>[0]) {
+  return (
+    <div class="setting-group-card" data-part="setting-card">
+      <StatePane {...props} />
+    </div>
+  );
+}
+
 /** core's settings as read: loading, read (at is when), or failed (over what was read before, if anything). */
 type SettingsLoad =
   | { phase: "loading" }
@@ -273,9 +282,9 @@ export function ConfigPage() {
         >
           {tab === "settings" ? (
             settings.phase === "loading" ? (
-              <StatePane kind="loading" title={t("loadingSettings")} />
+              <PaneCard kind="loading" title={t("loadingSettings")} />
             ) : !settings.data ? (
-              <StatePane
+              <PaneCard
                 kind="failed"
                 title={t("settingsFailed")}
                 details={settings.phase === "failed" ? settings.error : undefined}
@@ -298,9 +307,9 @@ export function ConfigPage() {
               </>
             )
           ) : file.phase === "loading" ? (
-            <StatePane kind="loading" title={t("loadingFile")} />
+            <PaneCard kind="loading" title={t("loadingFile")} />
           ) : file.phase === "failed" ? (
-            <StatePane
+            <PaneCard
               kind="failed"
               title={t("fileFailed")}
               details={file.error}

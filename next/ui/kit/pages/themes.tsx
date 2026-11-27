@@ -386,7 +386,7 @@ function AddTheme(props: {
         <textarea
           id={`${id}-json`}
           class="mono"
-          rows={5}
+          rows={6}
           spellcheck={false}
           placeholder={
             '{\n  "name": "Nightfall",\n  "appearance": "dark",\n  "canvas": "#1a1b26",\n  "accent": "#7aa2f7"\n}'
