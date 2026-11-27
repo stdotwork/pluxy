@@ -110,7 +110,7 @@ export function SettingControl({
   settings: CoreSettings;
   set: (value: Value) => void;
   immediate?: boolean;
-  strategies?: Record<CoreSettings["routing"]["strategy"], string>;
+  strategies?: Partial<Record<CoreSettings["routing"]["strategy"], string>>;
   /** With `immediate`: called with the reason when an entered value is refused; the saved value comes back. */
   invalid?: (reason: string) => void;
 }) {

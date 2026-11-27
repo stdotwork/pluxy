@@ -76,7 +76,7 @@ test("Tab goes through the frame in reading order: the navigation, the status bl
 }) => {
   await openPanel(page, core, "/panel/#/routing");
   await signIn(page, core);
-  await expect(page.getByRole("heading", { level: 1, name: "Routing" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Order & fallback" })).toBeVisible();
   const host = new URL(core.base).host;
   // Each stop's name, until focus is inside the page.
   const stops: string[] = [];

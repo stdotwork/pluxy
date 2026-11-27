@@ -101,7 +101,7 @@ const PAGES = [
   "Home",
   "Accounts",
   "Add an account",
-  "Routing",
+  "Order & fallback",
   "Logs",
   "Requests",
   "Usage",

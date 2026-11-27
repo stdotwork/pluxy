@@ -6,7 +6,7 @@ import type { Host } from "../host";
 
 export interface CoreSettings {
   routing: {
-    strategy: "round-robin" | "fill-first" | "weighted-round-robin" | "least-active";
+    strategy: "round-robin" | "fill-first" | "weighted-round-robin" | "least-active" | "soonest-reset";
     "session-affinity": boolean;
     /** A duration such as "1h" or "30m". */
     "session-affinity-ttl": string;
