@@ -105,7 +105,8 @@ func startSafeCore(t *testing.T, bin string) (string, []string) {
 		line := sc.Text()
 		t.Logf("core: %.4096s", line)
 		logged = append(logged, line)
-		if addr, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
+		if rest, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
+			addr, _, _ := strings.Cut(rest, " ")
 			go io.Copy(io.Discard, stderr) // keep draining what core logs later
 			return addr, logged
 		}

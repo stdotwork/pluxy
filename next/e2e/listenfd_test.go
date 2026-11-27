@@ -71,8 +71,8 @@ func TestListenFD(t *testing.T) {
 	sc := bufio.NewScanner(stderr)
 	said := ""
 	for sc.Scan() {
-		if a, ok := strings.CutPrefix(sc.Text(), "pluxy: listening on "); ok {
-			said = a
+		if rest, ok := strings.CutPrefix(sc.Text(), "pluxy: listening on "); ok {
+			said, _, _ = strings.Cut(rest, " ")
 			break
 		}
 	}

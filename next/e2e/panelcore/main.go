@@ -721,7 +721,8 @@ func startCore(bin, cfgPath, index string, env []string) (*core, error) {
 		for sc.Scan() {
 			line := sc.Text()
 			fmt.Fprintln(os.Stderr, "core: "+line)
-			if addr, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
+			if rest, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
+				addr, _, _ := strings.Cut(rest, " ")
 				select {
 				case c.listening <- addr:
 				default:
