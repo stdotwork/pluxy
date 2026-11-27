@@ -14,7 +14,7 @@ theme can change three things:
 
 Tokens and layout options are the stable part of the contract: a theme that only uses them keeps
 working as the UI changes. Custom CSS can only rely on the hooks listed under
-[Custom CSS](#custom-css); anything else in the UI's markup can change in any release.
+[Custom CSS](#custom-css); anything else in the UI's markup can change whenever the UI does.
 
 ## The file
 
@@ -76,7 +76,7 @@ A theme file is at most 256 KiB.
   offer falls back to that option's default; an unknown `appearance` falls back to `both`; custom
   CSS containing `@import` is dropped as a whole.
 
-So a theme written for a later version 0 UI, with tokens this UI does not know yet, still loads.
+So a version 0 theme with tokens this UI does not know still loads.
 
 ## Tokens
 
@@ -127,11 +127,8 @@ anything.
 | `color.code-bg` | Background of the configuration source editor, log views and diffs | `var(--px-color-surface-raised)` |
 | `color.code-text` | Their text | `var(--px-color-text)` |
 
-A default written as `var(--px-…)` follows another token, so a theme that sets only the older
-tokens gets matching colours for these. It does not look exactly as it did before they existed:
-placeholder text now has one colour and full opacity in every browser (`color.placeholder`), and a
-configuration diff now has a background (`color.code-bg`), where each had only the browser's or no
-colour of its own.
+A default written as `var(--px-…)` follows another token, so a theme that does not set it gets a
+colour that matches the tokens it does set.
 
 `color.nav` and `color.input-border` are mixed from other tokens in the same way: the navigation
 is a shade darker than `color.surface`, and an input's border is `color.text-muted` faded towards
@@ -258,9 +255,8 @@ What custom CSS cannot do:
 
 ### Hooks you can rely on
 
-Until pluxy's first release the contract stays at version 0, and these hooks can still change
-under it when a page is rebuilt: the Setup page's hooks were replaced this way. From the first
-release on, they stay stable within a theme contract version:
+While `theme_version` is 0, a page that is rebuilt can still rename or drop its hooks (see
+[Changes to this contract](#changes-to-this-contract)).
 
 | Hook | Where |
 | --- | --- |
@@ -374,7 +370,7 @@ CSS of a theme written for T3 Code matches the parts both UIs have:
 | `data-slot="dialog-popup"` | A dialog window (`data-part="dialog"`) |
 | `data-slot="sidebar"` | The navigation (`data-part="nav"`), in every `nav` layout |
 
-Every other class name, element and attribute can change in any release.
+Every other class name, element and attribute can change whenever the UI does.
 
 ## Where themes are kept
 
@@ -448,7 +444,8 @@ extensions, shown on System.)
 - Adding a token, a layout option, a layout value or a hook does not change `theme_version`. A UI
   that does not know them ignores them, as described above.
 - Renaming or removing any of them, or changing what one means, raises `theme_version`. A renamed
-  token keeps its old name as an alias for the whole next version.
+  token keeps its old name as an alias for the whole next version. The one exception: while
+  `theme_version` is 0, a page that is rebuilt can rename or drop its own hooks without raising it.
 - A UI refuses a theme whose `theme_version` is newer than it supports and keeps the theme it had.
 
 ## T3 Code themes

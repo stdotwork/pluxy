@@ -1,11 +1,11 @@
-# Extension pages, version 0
+# Extension pages
 
 An extension package can bring its own pages for the panel and the desktop app, and a
-settings form the panel draws for it. This is the contract for both: what goes in the package,
-how core serves the pages, what a page may do, and the message channel a page talks to the
-panel through.
+settings form the panel draws for it. This is the contract for both, version 0: what goes in the
+package, how core serves the pages, what a page may do, and the message channel a page talks to
+the panel through.
 
-The short version: a page is a document from the extension's own files, shown in a sandboxed
+A page is a document from the extension's own files, shown in a sandboxed
 frame from a **separate site**. It cannot reach the panel, core's management API, storage, or
 any site but the pages site. It can only ask the panel, over a message channel, for the few things its manifest
 declares. It never receives the management key.
@@ -33,9 +33,7 @@ A page **cannot**, whatever its code does:
 - navigate the panel, open windows or pop-ups, submit forms, or show dialogs (`alert`,
   `confirm`, `prompt`): the frame's sandbox does not allow them;
 - navigate its own frame to another site: the panel's policy lets its frames show only the pages
-  site, and Chromium, Firefox and WebKit refuse any other address in the frame (the browser
-  test checks this; the specification does not spell it out for a navigation the frame starts
-  itself). Whenever the frame gets another document (an error page, or the page reloading
+  site, and Chromium, Firefox and WebKit refuse any other address in the frame. Whenever the frame gets another document (an error page, or the page reloading
   itself), the panel closes the page's channel;
 - read the clipboard: the frame is given no permissions (`allow=""`);
 - keep anything in storage, or read another extension's settings: there is no method for it.
@@ -134,8 +132,7 @@ check. Settings are kept by core, per extension, in `{packages.dir}/.settings/<p
 declares is dropped the next time the settings change. On Windows the `.settings` folder is checked
 and made private, as core's [credentials folder](../../README.md#accounts-added-by-login) is,
 each time settings are loaded or saved; a settings file that another account owns is skipped, as
-if none were stored, and the next save replaces it. Core does not send settings to the
-extension's program yet; in version 0 they are for the extension's pages.
+if none were stored, and the next save replaces it. Settings reach the extension's pages, not its program.
 
 ## How core serves pages
 
@@ -302,7 +299,7 @@ pluxy.on("theme", (theme) => { /* the library already applied it */ });
 sets `data-appearance`, the layout options and `data-privacy` (`on` or `off`) as `data-*`
 attributes there, and does it again on every `theme` event.
 
-## Limits of version 0
+## Limits
 
 - The desktop app shows each page in a webview of its own, which can call no app command, with
   the page in the same sandboxed frame and the same channel ([the app's README](../../app/README.md#extension-pages)).
@@ -310,5 +307,4 @@ attributes there, and does it again on every `theme` event.
   including direct scheme requests from a frame. It also bounds package totals and queued replies,
   permits one hello per document, and binds messages to the native webview and document generation.
 - A package needs a program even when it only brings pages.
-- Settings reach the extension's pages, not its program.
 - The page's frame has a fixed size within the panel's content area; a page cannot resize it.

@@ -3,54 +3,8 @@
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
 model service, and streams the reply back; a provider may also sign in to accounts and renew their
-credentials (see [Login and refresh](#login-and-refresh)). Version 0.1 adds
-[sessions](#sessions): a run of requests on one account whose upstream keeps state between them,
-such as a Responses WebSocket. Version 0.2 adds [token counting](#count_tokens) and the
-thinking suffix of a model name (`options.thinking_suffix`). Version 0.3 adds
-[model lists](#models): the models an account serves, for the model lists clients ask core for.
-Version 0.4 adds [account checks](#check): whether an account works, asked without generating.
-Version 0.5 adds [quota](#quota), what an account's plan allows and how much of it is used, and
-the identity of a login's grant, so core can check that a new login to an account signs in to
-the same upstream account. Version 0.6 adds an error's `quota_window_minutes`: how long the
-usage window that ran out is. Version 0.7 adds [endpoint calls](#endpoint): client requests to a
-provider's endpoints beyond generation, such as Responses compaction, whose reply the extension
-writes. Version 0.8 adds the request's [`caller`](#the-request): a value that stands for the
-client key a request came with, so an extension can keep what it learns from replies per client.
-Version 0.9 adds optional non-secret account settings to a login grant. Version 0.10 adds the
-optional quota `plan_ends_at`, the end of the subscription in Unix seconds. Version 0.11 adds
-the account's [`proxy_url`](#accounts): the proxy the call's upstream traffic goes through.
-Version 0.12 adds the account's [`headers`](#headers): extra HTTP headers on that traffic.
-Version 0.13 adds [upstream capture](#upstream-capture): what the extension sent upstream and got
-back, for core's request logs. Version 0.14 adds [payload rules](#payload-rules): fields of the
-upstream JSON body that the config sets, fills in or removes. Version 0.15 has a session turn carry
-them too. Version 0.16 adds an error's `dropped`: what a refusal under the `reject` drop policy
-could not carry. Version 0.17 adds a captured body's `body_stopped`: the extension did not read it
-to its end. Version 0.18 adds a model list's `from`: whether the list came from the account at the
-provider or from the extension's built-in catalog. Version 0.19 adds a quota limit's `feature`: the
-limit counts a feature of the plan, not the account's requests to its models. Version 0.20 adds the
-error code `account_closed`: the provider closed, suspended or deactivated the account, or refused it
-for a breach of terms. Version 0.21 adds what a package is, for someone who does not know its ID: a
-manifest's `title`, `summary` and `kind`, and in a [registry index](#registry-index) the same with
-the registry's `tier`. Version 0.22 adds the account's
-[`timeouts`](#timeouts): upstream request limits for response headers, stream byte gaps and
-non-streamed completion. Version 0.23 adds [alive frames](#alive-frames): the extension tells core
-its upstream is still sending, and core ends a call that sends nothing at all for too long.
-Version 0.24 adds a model's `capabilities`: what the model supports and when it was deprecated. It
-is deliberately small; later versions add more capabilities and operations without changing what
-is described here. An extension written for version 0 works unchanged with a core that speaks 0.24
-(see [Versioning](#versioning)). Version 0.25 adds a [tool result](#the-request)'s `content` parts
-and its `is_error` flag. Version 0.26 adds a [tool choice](#the-request)'s allowed tool list: the
-tools the model may choose from, where the client named a set rather than one tool. Version 0.27
-adds [native-only calls](#native-only-calls): an extension that parses the client's body itself gets
-a `generate` call's request without its parsed form, so the request's content crosses the socket
-once. Version 0.28 adds the request's [service tier and verbosity](#the-request): `options.service_tier`
-and `options.verbosity`. Version 0.29 adds the canonical [web search tool](#the-request):
-`tool.type = "web_search"` and `tool.web_search`. Version 0.30 adds the canonical
-[code execution tool](#the-request) and its forced tool choice (`tool.type = "code_execution"` and
-`tool_choice.mode = "code_execution"`). Version 0.31 adds canonical web search citations on a
-message item's `item.end` (`citations`) and web search sources on `finish` (`sources`; see
-[Events](#events)). Version 0.32 adds canonical code execution results on `finish`
-(`code_executions`; see [Events](#events)).
+credentials (see [Login and refresh](#login-and-refresh)). [Versioning](#versioning) lists what
+each minor version adds.
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -71,7 +25,7 @@ client ──HTTP──▶ core ──one local socket connection per call──
 - Closing the connection is how core cancels a call.
 - A call has exactly one terminal outcome: a `finish` event or an `error` event. A connection
   that ends without one is an error, never a success.
-- A [session](#sessions) (0.1) is the one call that carries more than one request: its connection
+- A [session](#sessions) (since 0.1) is the one call that carries more than one request: its connection
   stays open while core sends one turn after another, each answered like a `generate` call.
 
 ## Package manifest
@@ -100,17 +54,16 @@ An extension ships as a folder with a manifest named `pluxy-extension.json`:
 | `programs` | Program to run per platform, keyed by Go's `GOOS/GOARCH`. Paths are relative to the manifest's folder and may not leave it. |
 | `ui` | Optional: pages the panel shows for the extension, with their own `version`. See [extension pages](../ui/extension-pages/README.md#ui). |
 | `config` | Optional: the schema of the extension's settings, with its own `version`; the panel draws a form from it. See [extension pages](../ui/extension-pages/README.md#config). |
-| `title` | Since 0.21; core does not need it, `pluxy-pack` refuses to pack a provider extension without it (and an app tool that sets `summary` or `"kind": "client"` without it): the package's name for people, a few words such as `Claude`. One line, at most 80 characters. |
-| `summary` | Since 0.21; needed by `pluxy-pack` as `title` is: one sentence saying what it adds, for someone who does not know the provider. One line, at most 300 characters. |
+| `title` | Since 0.21: the package's name for people, a few words such as `Claude`. One line, at most 80 characters. Core does not need it; `pluxy-pack` refuses to pack a provider extension without it, or an app tool that sets `summary` or `"kind": "client"`. |
+| `summary` | Since 0.21: one sentence saying what the package adds, for someone who does not know the provider. One line, at most 300 characters. `pluxy-pack` needs it as it needs `title`. |
 | `kind` | Since 0.21, optional: what the package adds. `provider` (the default for a manifest with `protocol`), or `client` for an app tool that points a coding client at core. Later versions add kinds. |
 
 The package version, manifest version, protocol version and the versions of `ui` and `config`
-are separate on purpose: each can change without the others. Later versions add more optional
-parts (themes) with their own version fields.
+are separate: each can change without the others.
 
-App contributions use manifest version 1. See the [app package contract](../app/app-host/README.md)
-and its [tutorial](../app/app-host/TUTORIAL.md). Core refuses app-only packages; mixed packages
-use only their provider part in core. Provider operations and wire version 0.7 are unchanged.
+App contributions use manifest version 1 (see the [app package contract](../app/app-host/README.md)
+and its [tutorial](../app/app-host/TUTORIAL.md)); it changes no provider operation or frame. Core
+refuses app-only packages, and uses only the provider part of a mixed package.
 
 ### Release archives
 
@@ -177,12 +130,11 @@ and when the manifest inside has the release's ID and version, a manifest versio
 protocol version core speaks and a program for core's platform. Core reads at most 8 MiB of an
 index. Unknown fields are ignored, so later versions of the format can add optional ones.
 
-A registry earns trust by what it lists, not by where it is: the curated registry lists releases
-its maintainers reviewed, each pinned by digest, and a local or private registry is used only when
-core's config names it. A digest pins the archive the registry listed; it does not prove who built
-it. Version 0 has no signatures, so nothing stops a registry, or whoever controls it, from
-listing an older release or a changed digest; core refuses a changed digest only for a version it
-has installed.
+Trust: the curated registry lists releases its maintainers reviewed, each pinned by digest; core
+uses a local or private registry only when its config names it. A digest pins the archive the
+registry listed; it does not prove who built it. Version 0 has no signatures, so a registry, or
+whoever controls it, can list an older release or a changed digest; core refuses a changed digest
+only for a version it has installed.
 
 ## Starting and the handshake
 
@@ -194,6 +146,7 @@ Windows) and these variables:
 | `PLUXY_PROTOCOL_VERSIONS` | Protocol versions core speaks, comma-separated, for example `0`. |
 | `PLUXY_SOCKET` | Path of the Unix socket the extension must listen on. Its folder is private to this extension process. |
 | `PLUXY_EXTENSION_ID` | The manifest `id`, for logs. |
+| `PLUXY_TEST_LOGIN_HOSTS` | Passed on only when core's own environment holds it; only tests set it. With `1`, an extension may take the address of its provider's login or token endpoint from an account's settings, so a test can point it at a fake provider. Without it the extension uses the provider's own hosts: an account's settings must not decide where a login's codes or a refresh token are sent. The Go SDK's `sdk.TestLoginHost` applies the rule. |
 
 The extension then:
 
@@ -209,28 +162,18 @@ The extension then:
 
    The fields are a fixed marker, the chosen protocol version, the network type and the address.
 
-One more variable is passed on when core's own environment holds it: `PLUXY_TEST_LOGIN_HOSTS`.
-Only tests set it. With it set to `1`, an extension may take the address of its provider's login
-or token endpoint from an account's settings, so a test can point it at a fake provider; without
-it the extension must use the provider's own hosts, because account settings are data a stored
-account carries and must not decide where a login's codes or a refresh token are sent. The Go
-SDK's `sdk.TestLoginHost` applies the rule.
+If `PLUXY_PROTOCOL_VERSIONS` is not set, the program was not started by pluxy: it says so on
+stderr and exits with a non-zero status.
 
-If `PLUXY_PROTOCOL_VERSIONS` is not set, the program was not started by pluxy: it should say so on
-stderr and exit with a non-zero status.
-
-Core waits for the handshake line for a limited time (10 seconds by default, counted from the
-program running, so the time the system takes to start it does not count); the `describe` call
-below keeps to the same deadline, so these are the only limits on how long starting an extension
-may take. Limits on the work itself are elsewhere: an account's [`timeouts`](#timeouts) bound an
-upstream request, and core [ends a call](#alive-frames) whose extension has sent it nothing at
-all for too long. After the line, core sends a `describe` call and checks that the reply's `id`
-matches the manifest.
+Core waits for the handshake line for 10 seconds by default, counted from when the program is
+running (the time the system takes to start it does not count). After the line, core sends a
+`describe` call, which keeps to the same deadline, and checks that the reply's `id` matches the
+manifest. These are the only limits on how long starting an extension may take.
 
 Anything the extension writes to stderr goes to core's log, prefixed with the extension ID. Never
 write credentials there. Anything written to stdout after the handshake line is also logged.
-Core removes the credentials it knows of from these lines. So that this covers the credential a
-`refresh` or `login` returns, core holds every line while either runs and logs them when it ends.
+Core removes the credentials it knows of from these lines. While a `refresh` or `login` runs,
+core holds every line and logs them when it ends, so this also covers the credential it returns.
 Core ends a login after 15 minutes; a refresh has no deadline, so one that hangs holds the lines
 until the extension exits. At most 1 MiB is held, counting 64 bytes for each line besides its
 text; past that, the rest of the held lines are left out, with notes saying so. When more than
@@ -240,16 +183,15 @@ text; past that, the rest of the held lines are left out, with notes saying so. 
 
 Core closes the extension's stdin to ask it to stop. The extension stops accepting calls, ends the
 calls it is running and exits. Core kills the process if it is still running 5 seconds later.
-Because stdin also closes when core itself dies, an extension that follows this rule never
-outlives its core.
+Stdin also closes when core itself dies, so an extension that follows this rule never outlives its
+core.
 
-Core starts and stops extension programs as it needs them, so a program must not count on a
-long life. It stops a program that has had no calls for a while and starts it again for the next
-call. When a new version of an extension is installed, core starts the new program next to the
-old one, sends new calls to the new one, and asks the old one to stop once its calls have ended
-(or at a deadline). A program that exits on its own is restarted after a backoff, and one that
-keeps crashing is no longer started. None of this changes the protocol: each program sees one
-start, its calls and one stop.
+A program must not count on a long life. Core stops a program that has had no calls for a while
+and starts it again for the next call. When a new version of an extension is installed, core
+starts the new program next to the old one, sends new calls to the new one, and asks the old one to
+stop once its calls have ended (or at a deadline). A program that exits on its own is restarted
+after a backoff; one that keeps crashing is no longer started. Each program sees one start, its
+calls and one stop.
 
 ## Framing
 
@@ -272,7 +214,7 @@ Core opens a connection and writes one call frame:
 | Field | Meaning |
 | --- | --- |
 | `id` | Call ID for logs and traces. Unique per core process. |
-| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`; version 0.2 adds `count_tokens`; version 0.3 adds `models`; version 0.4 adds `check`; version 0.5 adds `quota`; version 0.7 adds `endpoint`. |
+| `op` | The operation: `describe`, `generate`, `login` and `refresh`; since 0.1 `session`, since 0.2 `count_tokens`, since 0.3 `models`, since 0.4 `check`, since 0.5 `quota`, and since 0.7 `endpoint`. |
 | `account` | For `generate`, `count_tokens`, `endpoint`, `refresh`, `session`, `models`, `check` and `quota`: the account to use (below). For `login`: the account being signed in to, with its `id`, `settings`, `proxy_url` and `headers` but no `credential`. |
 | `request` | For `generate`, `count_tokens` and `endpoint`: the model request (below). |
 | `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
@@ -299,9 +241,8 @@ operations the extension serves: always `generate`, plus `login` and `refresh` w
 accounts, `session` when it holds [sessions](#sessions), `count_tokens` when it
 [counts tokens](#count_tokens), `models` when it lists its accounts' [models](#models), and
 `check` when it [checks](#check) its accounts, `quota` when it reads their [quota](#quota), and
-`endpoint` when it serves [endpoint calls](#endpoint). An
-extension that lists `login` also
-lists its `login_methods` (see [Login and refresh](#login-and-refresh)). Since 0.27, a
+`endpoint` when it serves [endpoint calls](#endpoint). An extension that lists `login` also lists
+its `login_methods` (see [Login and refresh](#login-and-refresh)). Since 0.27, a
 `native_parser` above 0 says the extension takes [native-only calls](#native-only-calls), and
 which version of core's parsers it parses them with.
 
@@ -320,16 +261,17 @@ that blocking should reach your upstream read. This is how a slow client slows t
 instead of filling memory.
 
 Extensions do not retry on their own: report what happened with a structured error and let core
-decide. Two built-in extensions make a single resend before any content has been sent to core: the
-Codex extension drops encrypted reasoning items and resends once on an upstream HTTP 400 refusing
-foreign encrypted reasoning (`invalid_encrypted_content`, or a message that the encrypted content
-could not be verified or decrypted; not when `drop_policy` is `reject`), and
-the Gemini extension resends a `GenerateContent` request once when the upstream reply ends with
-`MALFORMED_FUNCTION_CALL` before any content is sent.
+decide. Two built-in extensions resend once, before any content has been sent to core:
+
+- Codex drops encrypted reasoning items and resends on an upstream HTTP 400 that refuses foreign
+  encrypted reasoning (`invalid_encrypted_content`, or a message that the encrypted content could
+  not be verified or decrypted), unless `drop_policy` is `reject`.
+- Gemini resends a `GenerateContent` request when the upstream reply ends with
+  `MALFORMED_FUNCTION_CALL` before any content is sent.
 
 ### `count_tokens`
 
-Version 0.2. Counts the input tokens a request would use on the account, as Anthropic's
+Since 0.2. Counts the input tokens a request would use on the account, as Anthropic's
 `/v1/messages/count_tokens` and Gemini's `countTokens` do, without generating anything. The call
 carries `account` and `request` as `generate` does (`stream` is false; the request's items, tools
 and options are what to count), and the reply is a stream of events as for `generate`, without
@@ -342,22 +284,23 @@ with `raw` as it is, and any other client with the count in its own shape.
 {"type": "finish", "finish": {"reason": "stop"}, "usage": {"input_tokens": 42, "raw": {"input_tokens": 42}}}
 ```
 
-Count with the upstream's own count endpoint. An account that cannot count (its upstream has no
-such endpoint, or not for this request's format) answers with code `unsupported`, scope
-`credential` and `retryable` true, so core tries another account. Core sends `count_tokens` only
-to an extension whose describe reports `protocol_minor` 2 or more and lists it in `operations`;
-for any other, core treats the account as one that cannot count. Core routes a count like a
-request: the same accounts, blocks and retries. An extension does not estimate: when the count
-gets no answer and an account tried answered `unsupported` with a scope other than `request` and
-without `dropped` (one that cannot count, or a drop refusal from an extension before 0.16, which
-sends no `dropped`), core answers the client with its own estimate (unless the config turns
-`token_count_estimate` off, then with the last error). Otherwise the last error reaches the client
-as it is: an upstream's 400 or 429, a refusal under `drop_policy` `reject` (an `unsupported` error
-with `dropped`), or an `unsupported` error with scope `request`.
+Count with the upstream's own count endpoint; an extension does not estimate. An account that
+cannot count (its upstream has no such endpoint, or not for this request's format) answers with
+code `unsupported`, scope `credential` and `retryable` true, so core tries another account. Core
+sends `count_tokens` only to an extension whose describe reports `protocol_minor` 2 or more and
+lists it in `operations`; for any other, core treats the account as one that cannot count. Core
+routes a count like a request: the same accounts, blocks and retries.
+
+When the count gets no answer and an account tried answered `unsupported` with a scope other than
+`request` and without `dropped` (one that cannot count, or a drop refusal from an extension before
+0.16, which sends no `dropped`), core answers the client with its own estimate, or with the last
+error when the config turns `token_count_estimate` off. Otherwise the last error reaches the
+client as it is: an upstream's 400 or 429, a refusal under `drop_policy` `reject` (an
+`unsupported` error with `dropped`), or an `unsupported` error with scope `request`.
 
 ### `models`
 
-Version 0.3. Core asks which models an account serves, for the model lists clients ask core for
+Since 0.3. Core asks which models an account serves, for the model lists clients ask core for
 (`GET /v1/models` and Gemini's `GET /v1beta/models`). Core sends it only to an extension that
 reports `protocol_minor` 3 or more and lists `models` in `operations`; for any other extension's
 accounts, core lists only the models the account's config names.
@@ -389,7 +332,7 @@ event as for `generate`.
 | model `context_length`, `max_completion_tokens` | Its context window and longest reply, in tokens. |
 | model `input_token_limit`, `output_token_limit` | Gemini's names for the same limits, where the provider gives them apart. Default: the two above. |
 | model `generation_methods`, `input_modalities`, `output_modalities` | Gemini's `supportedGenerationMethods`, `supportedInputModalities` and `supportedOutputModalities`. |
-| model `capabilities` | Optional, since 0.24: what the model supports and when it was deprecated — `tools`, `structured_output`, `vision`, `pdf`, `reasoning` (booleans), `reasoning_levels` (optional list from `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` when `reasoning` is true), and `deprecated_at` (optional Unix seconds). For an extension below 0.24, core ignores `capabilities` and fills them from its catalogue only. |
+| model `capabilities` | Optional, since 0.24: what the model supports and when it was deprecated — `tools`, `structured_output`, `vision`, `pdf`, `reasoning` (booleans), `reasoning_levels` (optional list from `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` when `reasoning` is true), and `deprecated_at` (optional Unix seconds). For an extension below 0.24, core ignores `capabilities` and fills them from its catalog only. |
 
 Every field but `id` is optional and shown only where a client's list has a place for it. Core
 renames, leaves out and prefixes the listed models by the account's naming rules (its `models`,
@@ -405,7 +348,7 @@ serving any model, so reply with an empty list when the account's models are not
 
 ### `check`
 
-Version 0.4. Core asks whether an account works, without generating anything: when it starts,
+Since 0.4. Core asks whether an account works, without generating anything: when it starts,
 when a reload adds an account or changes one (its settings, its credential or its extension), and
 when a login adds an account or one comes back after a new login. Core shows the result in the
 management API's account listing and its log. It never waits for a check before serving
@@ -437,11 +380,11 @@ account cannot be checked without a generation (the upstream has no such call), 
 
 ### `quota`
 
-Version 0.5. Core asks what an account's plan allows and how much of it is used, for the
+Since 0.5. Core asks what an account's plan allows and how much of it is used, for the
 management API's quota view (`GET /v0/management/accounts/{id}/quota`). Core sends it only to an
 extension that reports `protocol_minor` 5 or more and lists `quota` in `operations`, and only when
 someone asks or to check an account that routing keeps out after a refusal (at most once every 15
-minutes for each such account; see core's README, "Accounts and routing"): core does not poll
+minutes for each such account; see [core's README](../README.md#accounts-and-routing)): core does not poll
 accounts that serve.
 
 ```json
@@ -472,7 +415,7 @@ event as for `generate`.
 | limit `resets_at` | When it resets, in Unix seconds. |
 | limit `window_seconds` | The length of its usage window. |
 | limit `models` | The models it applies to, when not all of the account's. |
-| limit `feature` | Optional, since 0.19: `true` when the limit counts a feature of the plan (code review, another app's allowance, a credit pool for one product) rather than the account's requests to its models. A feature's limit lists no `models`. Core ignores it from an extension older than 0.19. |
+| limit `feature` | Optional, since 0.19: `true` when the limit counts a feature of the plan (code review, another app's allowance, a credit pool for one product) rather than the account's requests to its models. A feature's limit lists no `models`. |
 | `raw` | The provider's replies the quota was read from, as one JSON object, for what `limits` has no place for. |
 
 Every field of a limit but `id` is optional; report what the provider gives.
@@ -483,16 +426,17 @@ it resets, if it covers the block. A limit covers the whole account unless it sa
 with `models` covers only blocks on those models, and one with `feature` covers none. So a limit
 that counts only some of the account's requests must say so, with `models` when the extension can
 name them and `feature` when it counts a feature, or core may keep the whole account out until it
-resets. Read the quota from the
-provider's own usage endpoint for the account's subscription, with the same client identity
+resets.
+
+Read the quota from the provider's own usage endpoint for the account's subscription, with the same client identity
 (user agent and the like) the extension uses for the account's requests, and never with a request
 that spends from the plan (a generation). An account that has no plan or balance to report (for
-example, an API key on a provider with no usage endpoint) answers with code `unsupported` and scope `credential`. Core
-removes the account's credential from every string and from `raw`, as from every other reply.
+example, an API key on a provider with no usage endpoint) answers with code `unsupported` and
+scope `credential`. Core removes the account's credential from every string and from `raw`, as from every other reply.
 
 ### `endpoint`
 
-Version 0.7. A client request to one of the provider's endpoints beyond generation, which core
+Since 0.7. A client request to one of the provider's endpoints beyond generation, which core
 passes to an account's extension. Except for core-built bodies below, core reads nothing of it
 but the model, and the extension writes the reply's body. Core sends it only to an extension whose describe reports
 `protocol_minor` 7 or more and lists `endpoint` in `operations`; for any other, core treats the
@@ -508,7 +452,7 @@ with `native.format` naming the endpoint:
 | --- | --- | --- |
 | `openai.responses.compact` | `POST /v1/responses/compact` (and `/backend-api/codex/responses/compact`) | A Responses request; the reply is one JSON object. Core refuses `"stream": true` itself. |
 | `openai.responses.input_tokens` | `POST /v1/responses/input_tokens` | A Responses token-count request; the reply is `{"object":"response.input_tokens","input_tokens":N}`. OpenAI-compatible accounts on the Responses wire and Codex API-key accounts send it to their upstream; when no account can count, core answers with its estimate. |
-| `codex.models` | `GET /v1/models?client_version=<version>` | Core builds `{"client_version":"<version>","models":[{"name":"team/coding","upstream":"gpt-6.1-sol","display_name":"Coding","non_codex":true}]}`. Presence of the query key selects this endpoint, even with an empty value. Core lists accounts of `pluxy/codex` under their normal aliases, exclusions and prefixes, keeps the first mapping of a repeated public name, and sorts by public name. `display_name` is omitted when empty. `non_codex` is true when any other extension's account can also serve that public name, including an account with an unknown model list; the extension then clears the Codex-only options as described below. The GET body is ignored. One direct call goes to the first enabled, usable `pluxy/codex` account in account order, carrying only its `account.id` (no settings or credential), with `request.model` empty. No routing reservation, cooldown, concurrency limit, credential renewal, result, rotation or usage event is involved; there are no retries. Without such an account core returns 200 `{"models":[]}` itself. The extension returns one JSON object in the Codex catalog shape, omitting unknown templates and replacing each slug with `name`. No upstream request or remote refresh is made. |
+| `codex.models` | `GET /v1/models?client_version=<version>` | A body core builds (see [`codex.models`](#codexmodels) below); the reply is one JSON object in the Codex catalog shape. |
 | `codex.alpha_search` | `POST /v1/alpha/search` (and `/backend-api/codex/alpha/search`) | Codex's search request, in Codex's own shape; the reply is one JSON object. Its `model` is optional: a request without one is sent to any account, with `request.model` empty. |
 | `openai.images.generations` | `POST /v1/images/generations` | An Images API request; the reply is one JSON object, or server-sent events when it asks for `"stream": true`. Core refuses a request without a `prompt` and names `gpt-image-2` as the model when it names none. |
 | `openai.images.edits` | `POST /v1/images/edits` | As for generations. A `multipart/form-data` edit arrives in its JSON form: each field a member (`n`, `output_compression` and `partial_images` as numbers, `stream` as a boolean, `mask[file_id]` and `mask[image_url]` inside `mask`), the image files (`image[]`, else `image`) added to `images` as `{"image_url": "data:..."}` and the mask file as `mask.image_url`. Core refuses a form without an image file. |
@@ -516,18 +460,37 @@ with `native.format` naming the endpoint:
 | `openai.audio.transcriptions` | `POST /v1/audio/transcriptions` | A transcription request whose `multipart/form-data` body arrives in its JSON form: each field a member, repeated fields as lists, and the uploaded `file` as `{"filename": "...", "content_type": "...", "data": "<base64>"}`. Served by OpenAI-compatible accounts (rebuilt as multipart passthrough) and Gemini accounts (translated to `:generateContent` inline audio for `json` and `text` within Google's 20 MB inline limit; timestamp/diarization formats and unsupported fields answer retryable credential-scoped `unsupported`). The reply is the upstream's JSON, text or event-stream body under its `Content-Type`; it is not base64-encoded. Core refuses a request without the file. |
 | `openai.audio.translations` | `POST /v1/audio/translations` | As for transcriptions, with the same JSON form and reply. Served by OpenAI-compatible accounts; Gemini accounts leave it unserved (retryable credential-scoped `unsupported`). |
 | `openai.embeddings` | `POST /v1/embeddings` | An OpenAI Embeddings API request, served by OpenAI-compatible accounts whose wire is Chat or Responses and by Gemini accounts; the reply is one JSON object. |
-| `gemini.embed_content` | `POST /v1beta/models/{model}:embedContent` | Version 0.36. A Gemini `EmbedContentRequest` JSON body (the model comes from the URL path and is placed in `request.model`), answered with one `EmbedContentResponse` JSON object. Core sends it only to an extension whose describe reports `protocol_minor` 36 or more (skipping older extensions with a retryable unsupported error). Served by Gemini accounts (passthrough on Gemini API; translated on Vertex AI) and OpenAI-compatible accounts (translated to `POST {base_url}/embeddings` on Chat or Responses wires; passthrough on a Gemini wire). Google's clients may send the client key in `x-goog-api-key` or `?key=`. |
-| `gemini.batch_embed_contents` | `POST /v1beta/models/{model}:batchEmbedContents` | Version 0.36. A Gemini `BatchEmbedContentsRequest` JSON body (the model comes from the URL path and is placed in `request.model`), answered with one `BatchEmbedContentsResponse` JSON object. Core gates it on `protocol_minor` 36 or more and routes it as for `gemini.embed_content`. |
+| `gemini.embed_content` | `POST /v1beta/models/{model}:embedContent` | Since 0.36. A Gemini `EmbedContentRequest` JSON body (the model comes from the URL path and is placed in `request.model`), answered with one `EmbedContentResponse` JSON object. Core sends it only to an extension whose describe reports `protocol_minor` 36 or more (skipping older extensions with a retryable unsupported error). Served by Gemini accounts (passthrough on Gemini API; translated on Vertex AI) and OpenAI-compatible accounts (translated to `POST {base_url}/embeddings` on Chat or Responses wires; passthrough on a Gemini wire). Google's clients may send the client key in `x-goog-api-key` or `?key=`. |
+| `gemini.batch_embed_contents` | `POST /v1beta/models/{model}:batchEmbedContents` | Since 0.36. A Gemini `BatchEmbedContentsRequest` JSON body (the model comes from the URL path and is placed in `request.model`), answered with one `BatchEmbedContentsResponse` JSON object. Core gates it on `protocol_minor` 36 or more and routes it as for `gemini.embed_content`. |
 | `gemini.interactions` | `POST /v1beta/interactions` | Gemini's Interactions API request, in Google's own shape; the reply is one JSON object, or server-sent events when it asks for `"stream": true`, which the extension sends with each event's name. The request names a model or an agent: core refuses one that names both or neither, a `stream` that is not a boolean, and a body that is not JSON, removes a `models/` prefix from the model, and sends a request with an agent and no model to any account, with `request.model` empty. The client's `Api-Revision` header is in `native.headers` (`api-revision`). Google's clients may send the client key in `x-goog-api-key` or `?key=`. |
-
-For `codex.models`, `non_codex` clears `prefer_websockets`, `use_responses_lite`,
-`supports_reasoning_effort_updates`, `supports_search_tool` and an existing
-`supports_image_detail_original` to false, sets `service_tiers` to an empty array and `tool_mode`
-to `"direct"`, and sets `apply_patch_tool_type`, `upgrade` and `availability_nux` to null.
-Catalog errors are returned without updating routing state, and are never retried.
 
 Adding an endpoint format uses the existing version 0.7 operation and frames; it does not
 require a new protocol minor version (as with `codex.alpha_search` and `gemini.interactions`).
+
+#### `codex.models`
+
+- The presence of the `client_version` query key selects this endpoint, even with an empty value.
+  The GET body is ignored.
+- Core builds the body
+  `{"client_version":"<version>","models":[{"name":"team/coding","upstream":"gpt-6.1-sol","display_name":"Coding","non_codex":true}]}`.
+  It lists accounts of `pluxy/codex` under their normal aliases, exclusions and prefixes, keeps
+  the first mapping of a repeated public name, and sorts by public name. `display_name` is omitted
+  when empty. `non_codex` is true when any other extension's account can also serve that public
+  name, including an account with an unknown model list.
+- One direct call goes to the first enabled, usable `pluxy/codex` account in account order,
+  carrying only its `account.id` (no settings or credential), with `request.model` empty. No
+  routing reservation, cooldown, concurrency limit, credential renewal, result, rotation or usage
+  event is involved. Catalog errors are returned without updating routing state, and are never
+  retried. Without such an account core returns 200 `{"models":[]}` itself.
+- The extension returns one JSON object in the Codex catalog shape, omitting unknown templates and
+  replacing each slug with `name`. It makes no upstream request or remote refresh.
+- For a model with `non_codex`, the extension clears `prefer_websockets`, `use_responses_lite`,
+  `supports_reasoning_effort_updates`, `supports_search_tool` and an existing
+  `supports_image_detail_original` to false, sets `service_tiers` to an empty array and
+  `tool_mode` to `"direct"`, and sets `apply_patch_tool_type`, `upgrade` and
+  `availability_nux` to null.
+
+#### The reply
 
 The reply is a stream of events as for `generate`, without items: `response.start`, whose
 `response.format` is the endpoint's format and whose `response.raw` says how to send the body,
@@ -544,55 +507,71 @@ order, then `finish`, with `usage` when the upstream reported it.
 | --- | --- |
 | `content_type` | The body's media type, which core sends as the reply's `Content-Type`. Required. With `text/event-stream`, core sends each piece to the client as soon as it arrives, less any end it holds back (below). |
 
+#### Secrets in the body
+
 The body is text: send it as it should reach the client. Core removes the account's secrets from it
 (its credential and the secrets in its `settings`, `proxy_url` and `headers`; see
-[Accounts](#accounts)) as from `raw` fields, and reads the pieces as one text for the forms it
-removes (as they are, escaped in JSON or a URL, base64; see [Errors](#errors)): a secret in one of
+[Secrets](#secrets)) as from `raw` fields, and reads the pieces as one text for the forms it
+removes (as they are, escaped in JSON or a URL, base64; see [Secrets](#secrets)): a secret in one of
 those forms that one piece ends partway through and the next goes on with is removed too. To do so,
-core holds back the end of a piece that could be the start of one, fewer bytes than the longest of
-those forms, until the next piece shows whether it is one. When a secret could be part of a JSON
-number, core also holds back a colon, bracket or comma at the end of a piece, with any spaces after
-it and the number that follows, if any (a run of digits, `-`, `+`, `.`, `e` and `E` that starts
-with a digit or `-`), when they take 64 bytes or fewer, so that a number holding the secret
-becomes `0` as a whole; where they start inside one of those forms, it holds back that form too.
-Other text is not held back for this, such as the `e` that ends `there`. Core also reads the
-pieces as one text for a secret spelled with other escapes that it decodes (`\u0073` for `s`, `%73`,
-`\\u0073` in JSON quoted twice): it holds back an escape at the end of a piece that the next piece
-could complete (a backslash, `\u` with fewer than four hex digits, the first half of a surrogate pair,
-`%` with fewer than two hex digits), and the end of a piece that decodes to the start of a secret,
-and it never cuts a piece inside an escape. For that it holds back at most 12 bytes for each byte of
-the longest of those forms, and at least 768 bytes, which covers escapes of up to 11 bytes for each
-byte of a secret (`\u005cu0073`), and runs of escapes nested by escaping the backslash again
-(`\\\\`, `\u005c\u005c`), which come through as they are. For one piece more it can hold back more,
-where the rest of a secret that began in what it had already sent goes on past the start of
-another (below). A start of a secret written with longer escapes (escapes of escapes, such as each
-character of `\u0073` escaped again, 36 bytes for each byte) is replaced with `[redacted]` whether it
-completes or not, together with what goes on with it in the decoded text up to the end of the
-secret it began; what follows that cannot go on with it comes through. Where an escape is nested so
-deep that core cannot follow what goes on with it within that limit, or where what follows it is so
-heavily escaped that core cannot tell what secrets it holds, core replaces instead what follows that
-could still be part of a secret or an escape: bytes of those kinds, up to the first other byte (such
-as a space or a comma), and no more than 48 bytes past the length of the longest of those forms in a
-row without a backslash or `%`. Where it stops at that limit, a secret that began in what it
-replaced is replaced whole. When a secret holds U+FFFD, core first reads each
-byte of invalid UTF-8 in the body as U+FFFD, as a JSON decoder does. Where holding back would change
-what core finds in the text whole (for example text so heavily escaped that core replaces all of it
-with `[redacted]`), core sends at once all it has, redacted whole, but for the end of what it would
-have held that this left as it was, which it goes on holding back. It then replaces with
-`[redacted]` the rest of a secret that began in what it would have held and that later pieces
-complete; what it sent of that start stays sent. It replaces too the rest of an escape that began
-there and that later pieces complete, up to where no escape or secret in the decoded text goes on:
-what the client got for that end may be `[redacted]`, after which the client reads the rest of
-such an escape on its own. Where the text after that is so heavily escaped
-that core cannot tell what secrets it holds, core replaces the rest of the run of bytes that can be
-part of a secret or an escape instead. It sends what it still holds once the body ends with
-`finish`, and drops it when the body breaks off with an error or is cancelled: the body is broken
-there anyway, and what it held could be part of a secret. Two limits remain. A number that, with
-what stands before it, takes more than 64 bytes and is cut between pieces may become `[redacted]`,
-or `0` followed by the rest of its digits, rather than `0`, which leaves the JSON invalid. And core
-reads as JSON each text that is JSON on its own, so where a cut makes a piece JSON on its own that
-the whole body is not (such as a JSON string), or the other way round, a number holding a secret may
-become `0` rather than `[redacted]`, or the other way round. In both the secret is still removed.
+core holds back the end of a piece until the next piece shows what it is:
+
+- The end of a piece that could be the start of one of those forms: fewer bytes than the longest
+  of those forms.
+- When a secret could be part of a JSON number: a colon, bracket or comma at the end of a piece,
+  with any spaces after it and the number that follows, if any (a run of digits, `-`, `+`, `.`,
+  `e` and `E` that starts with a digit or `-`), when they take 64 bytes or fewer, so that a
+  number holding the secret becomes `0` as a whole; where they start inside one of those forms,
+  that form too. Other text is not held back for this, such as the `e` that ends `there`.
+- For a secret spelled with other escapes that core decodes (`\u0073` for `s`, `%73`,
+  `\\u0073` in JSON quoted twice): an escape at the end of a piece that the next piece could
+  complete (a backslash, `\u` with fewer than four hex digits, the first half of a surrogate pair,
+  `%` with fewer than two hex digits), and the end of a piece that decodes to the start of a
+  secret. Core never cuts a piece inside an escape. For this it holds back at most 12 bytes for
+  each byte of the longest of those forms, and at least 768 bytes, which covers escapes of up to 11
+  bytes for each byte of a secret (`\u005cu0073`), and runs of escapes nested by escaping the
+  backslash again (`\\\\`, `\u005c\u005c`), which come through as they are. For one piece more
+  it can hold back more, where the rest of a secret that began in what it had already sent goes on
+  past the start of another (below).
+
+Escapes core cannot follow within that limit:
+
+- A start of a secret written with longer escapes (escapes of escapes, such as each character of
+  `\u0073` escaped again, 36 bytes for each byte) is replaced with `[redacted]` whether it
+  completes or not, together with what goes on with it in the decoded text up to the end of the
+  secret it began; what follows that cannot go on with it comes through.
+- Where an escape is nested so deep that core cannot follow what goes on with it within that
+  limit, or where what follows it is so heavily escaped that core cannot tell what secrets it
+  holds, core replaces instead what follows that could still be part of a secret or an escape:
+  bytes of those kinds, up to the first other byte (such as a space or a comma), and no more than
+  48 bytes past the length of the longest of those forms in a row without a backslash or `%`.
+  Where it stops at that limit, a secret that began in what it replaced is replaced whole.
+- Where holding back would change what core finds in the text whole (for example text so heavily
+  escaped that core replaces all of it with `[redacted]`), core sends at once all it has, redacted
+  whole, but for the end of what it would have held that this left as it was, which it goes on
+  holding back. It then replaces with `[redacted]` the rest of a secret that began in what it
+  would have held and that later pieces complete; what it sent of that start stays sent. It
+  replaces too the rest of an escape that began there and that later pieces complete, up to where
+  no escape or secret in the decoded text goes on: what the client got for that end may be
+  `[redacted]`, after which the client reads the rest of such an escape on its own. Where the text
+  after that is so heavily escaped that core cannot tell what secrets it holds, core replaces the
+  rest of the run of bytes that can be part of a secret or an escape instead.
+
+When a secret holds U+FFFD, core first reads each byte of invalid UTF-8 in the body as U+FFFD, as a
+JSON decoder does. Core sends what it still holds once the body ends with `finish`, and drops it
+when the body breaks off with an error or is cancelled: the body is broken there anyway, and what
+it held could be part of a secret.
+
+Two limits remain; in both the secret is still removed:
+
+- A number that, with what stands before it, takes more than 64 bytes and is cut between pieces may
+  become `[redacted]`, or `0` followed by the rest of its digits, rather than `0`, which leaves
+  the JSON invalid.
+- Core reads as JSON each text that is JSON on its own, so where a cut makes a piece JSON on its own
+  that the whole body is not (such as a JSON string), or the other way round, a number holding a
+  secret may become `0` rather than `[redacted]`, or the other way round.
+
+#### Errors in the reply
 
 Except for the direct `codex.models` call above, an `error` before `response.start` is
 routed as for `generate`: core tries another account when it is retryable, and otherwise answers
@@ -634,10 +613,18 @@ A credential has a `kind` and the fields that kind uses:
 | `refresh_at` | When core should renew the credential, in Unix seconds. Absent: 5 minutes before `expires_at`. A provider whose tokens are best renewed well ahead (days, for some) sets it. |
 | `data` | A JSON object of anything else the provider needs (an ID token, a service-account key, an account ID). Core stores it and passes it on without reading it. |
 
+### Secrets
+
 Every string in a credential except `kind` counts as secret: core removes each of them, in their
 JSON, URL and base64 forms and as quoted in core's own messages, from everything a call sends
-back. Keep values that are not secret,
-especially short ones, out of the credential. Core removes the secrets in the account's
+back. In events, it removes them from `message`, `provider_code`, `dropped`, every `raw` field,
+every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id`
+and the finish's `raw_reason`, before passing them on. In the error's `code` and `scope`, the
+response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is
+passed on as it is, and any other value that holds the credential is replaced whole with
+`[redacted]`. Keep values that are not secret, especially short ones, out of the credential.
+
+Core removes the secrets in the account's
 `settings` the same way: every value below a key named like a secret (such as `api_key`,
 `password`, `*_token`, `accessToken` or `aws_secret_access_key`: names are compared in lower case
 whatever joins their words, or none, and may end in a number or a word such as `value` or
@@ -649,8 +636,7 @@ hides them; of such a URL also its user name, its password, the two together (in
 too) and the value of each parameter named like a secret (`key`, `token`, `sig`, ...) in its query
 or fragment, split on `&` or `;`, as written and decoded, on their own. Below a key named like a secret, `true`, `false`, `null` and the empty string are
 not secrets: they carry none. Unlike a credential's strings, a settings secret shorter than 8
-bytes is left in text, since removing every occurrence of so short a string would mangle
-unrelated text; the management API still shows it as a placeholder. When the settings change,
+bytes is left in text (the management API still shows it as a placeholder). When the settings change,
 core keeps removing the secrets of every earlier settings from the extension's stderr and stdout
 until the program exits, for calls that still run with them.
 
@@ -677,9 +663,8 @@ In Go, `protocol.SecretParts(s, 8)` returns a secret's parts. With a smaller min
 returns shorter parts, so that a secret whose parts are all short, which has some, can be told
 from one with none of these structures, which has none.
 
-An upstream that refuses a credential often echoes a piece of it, such as its first 24
-characters and `...`, which none of the forms above is. So from an upstream's error text core also
-removes every run of token characters (letters, digits and `_-.+/=~`) that holds 4 or more
+An upstream may echo a piece of a credential, such as its first 24 characters and `...`, which
+none of the forms above is. So from an upstream's error text core also removes every run of token characters (letters, digits and `_-.+/=~`) that holds 4 or more
 consecutive characters of one of the account's secrets, or 8 or more of a long token, reading a
 run as written and with its
 escapes decoded (JSON's `\/`, `\\` and `\uXXXX` and percent-encoding's `%XX`, nested up to 8
@@ -689,10 +674,9 @@ secret is one run; whitespace, control characters, quotes, brackets, commas and 
 end a run. A PEM private key
 counts by its lines and its unwrapped body, at 8 bytes or more in a row. A long token is a secret
 that, trimmed of the whitespace around it, is one run of 32 or more token characters and is not
-base64 (standard or URL-safe, padded or not) of text. Both are almost always random, so 4 bytes of one would be a coincidence in
-most errors and would redact an ordinary word of them, such as `test` for a key that spells it, or
-`Signature` for a PEM key whose body spells `Sign`, while a fragment that short of a key is of no
-use. So a cut of 4 to 7 bytes of either is not removed. Every other secret stays at 4, each by its
+base64 (standard or URL-safe, padded or not) of text. A cut of 4 to 7 bytes of either is not
+removed, so an ordinary word of an error stays, such as `test` for a key that spells it, or
+`Signature` for a PEM key whose body spells `Sign`. Every other secret stays at 4, each by its
 own text: a shorter one, which may be hand-picked, and a longer value that can hold a shorter
 secret, such as a header with a scheme other than `Bearer` or `Basic`, a JSON value, or Basic's
 base64 of `user:password`.
@@ -748,7 +732,7 @@ sets of rules use.
 
 ### Proxy
 
-From version 0.11 an account may carry `proxy_url`, an `http://`, `https://`, `socks5://` or
+Since 0.11 an account may carry `proxy_url`, an `http://`, `https://`, `socks5://` or
 `socks5h://` URL: `scheme://[user:password@]host[:port]`. The extension sends every upstream
 request and connection of the call through it: model requests, WebSocket handshakes, token
 renewals in `refresh`, and everything a `login` sends (token exchange, device polling). An
@@ -779,7 +763,7 @@ all.
 
 ### Headers
 
-From version 0.12 an account may carry `headers`, an object of header name to value, such as
+Since 0.12 an account may carry `headers`, an object of header name to value, such as
 `{"X-Gateway-Key": "..."}` for a gateway in front of the provider. The extension sends each of
 them on every upstream request and connection of the call, the same set `proxy_url` covers:
 model requests, WebSocket handshakes, token renewals in `refresh`, and everything a `login`
@@ -802,7 +786,7 @@ its name, as text shows a header (`Name: value`, `Name:value`, `Name=value`, JSO
 `"Name":"value"`, with the name as configured, in canonical form, in lower case or in upper case),
 so it does not scrub unrelated text; in another spelling a value that short stays. A value made
 of parts, such as `Bearer <token>` or a list of cookies, has each part removed on its own too
-(see [Accounts](#accounts)). Other values are not removed.
+(see [Secrets](#secrets)). Other values are not removed.
 
 Core sends a call that has headers only to an extension whose describe reports
 `protocol_minor` 12 or more; for any other it fails the call itself with `unsupported` (scope
@@ -813,13 +797,12 @@ In Go, `sdk.Upstream` sets them on each request made with the handler's context.
 to another host or scheme (`https` to `http`) than the first request's it removes the headers
 whose names are secret, including a value the extension set itself under such a name, as
 `net/http` leaves out `Authorization` and `Cookie` there, so the redirect target never gets
-them; the other headers stay. As with a proxy, the SDK answers a call that carries headers with
-`unsupported` (scope `credential`, retryable) and never runs the handler when the extension
-process has not created any `sdk.Upstream` transport.
+them; the other headers stay. The SDK refuses a call that carries headers when the process has
+created no `sdk.Upstream` transport, as it does a call with a [proxy](#proxy).
 
 ### Timeouts
 
-From version 0.22 an account may carry `timeouts`, an object with `header_ms`, `idle_ms` and
+Since 0.22 an account may carry `timeouts`, an object with `header_ms`, `idle_ms` and
 `total_ms` in milliseconds. Each is optional; `0` turns that limit off. On a streamed upstream
 request, `header_ms` (default 60000) bounds the wait for HTTP response headers and `idle_ms`
 (default 300000) bounds the gap between raw upstream body bytes (and between messages on an
@@ -834,9 +817,8 @@ stream or request with an error instead.
 
 ## The request
 
-A request is an ordered list of typed items plus options. It is modelled on the prompt types of
-Vercel's AI SDK Language Model Specification and on the items of Open Responses, kept small for
-version 0. A [native-only call](#native-only-calls) (since 0.27) carries it without its `items`,
+A request is an ordered list of typed items plus options, modelled on the prompt types of Vercel's
+AI SDK Language Model Specification and on the items of Open Responses. A [native-only call](#native-only-calls) (since 0.27) carries it without its `items`,
 `tools` and `origin`, which the extension parses from `native.body`.
 
 ```json
@@ -862,12 +844,12 @@ version 0. A [native-only call](#native-only-calls) (since 0.27) carries it with
 | `model` | The model name the client asked for. |
 | `stream` | Whether the client asked for a streamed reply. Core always receives events; this only tells the extension how the client is being served, in case the upstream call should match. |
 | `items` | The conversation, in order. Absent in a [native-only call](#native-only-calls), as are `tools` and `origin`. |
-| `tools` | Tools the model may call: function tools (`parameters` is a JSON Schema), canonical `web_search` tools (version 0.29), or `native` tools (see below). |
-| `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required`, `tool` with `name`, or, since 0.30, `code_execution`; since 0.26 `allowed`: the tool names the model may choose from, with `mode` `auto` or `required`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it), `service_tier` and `verbosity` (version 0.28; see below), `thinking_suffix` (version 0.2; see below). An extension below 0.26 cannot read `tool_choice.allowed`: core sends the choice without the list and keeps only the function tools the list names in `tools`, so the model can still call only those, and refuses the request as invalid when the list names none of them. |
+| `tools` | Tools the model may call: function tools (`parameters` is a JSON Schema), canonical `web_search` tools (since 0.29), or `native` tools (see below). |
+| `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required`, `tool` with `name`, or, since 0.30, `code_execution`; since 0.26 `allowed`: the tool names the model may choose from, with `mode` `auto` or `required`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it), `service_tier` and `verbosity` (since 0.28; see below), `thinking_suffix` (since 0.2; see below). An extension below 0.26 cannot read `tool_choice.allowed`: core sends the choice without the list and keeps only the function tools the list names in `tools`, so the model can still call only those, and refuses the request as invalid when the list names none of them. |
 | `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`, and the headers the client names itself with: `user-agent`, `x-app`, `anthropic-dangerous-direct-browser-access`, `x-claude-code-session-id`, `x-client-request-id`, the `x-stainless-*` headers of Anthropic's SDKs, `x-client-app` and `x-anthropic-additional-protection`; and Claude Code's subagent, request and remote-session headers (`x-claude-code-agent-id`, `x-claude-code-parent-agent-id`, `x-claude-code-agent-type`, `x-claude-code-request-class`, `x-claude-code-prev-tool-durations`, `x-claude-code-compaction`, `x-claude-code-context-compacted`, `x-claude-remote-container-id`, `x-claude-remote-session-id`), which an extension should send upstream only for a request that names itself as Claude Code (`anthropicmessages.IsClaudeCode`: `x-app: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta); for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version`, `originator` and `user-agent`). |
 | `origin` | The request's top-level fields that have no place in the model (see Origin below). |
 | `drop_policy` | What to do when building a request would drop part of this one, whether core is building it for an extension below a minor version it needs (0.25's tool result parts, 0.28's service tier and verbosity) or the extension is building the upstream request: `report` (default: send what can be sent and report the losses) or `reject` (refuse with `unsupported`; since 0.16 the error's `dropped` names what could not be carried, which the message may name too). |
-| `caller` | Version 0.8. A value that stands for the client key the request came with: the same for every request with that key to this extension, different for another key or another extension, and not derivable from the key (core derives it with a secret it makes each time it starts, so it changes when core restarts). Absent when the client sent no key. Core sends it with `generate`, `count_tokens` and `endpoint` calls, to every extension. An extension that keeps state from replies across requests, such as reasoning to put back into a later turn, keys that state by `caller`, so one client never gets another's. |
+| `caller` | Since 0.8. A value that stands for the client key the request came with: the same for every request with that key to this extension, different for another key or another extension, and not derivable from the key (core derives it with a secret it makes each time it starts, so it changes when core restarts). Absent when the client sent no key. Core sends it with `generate`, `count_tokens` and `endpoint` calls, to every extension. An extension that keeps state from replies across requests, such as reasoning to put back into a later turn, keys that state by `caller`, so one client never gets another's. |
 
 Item types:
 
@@ -976,8 +958,8 @@ An extension below 0.29 does not receive `type: "web_search"` or `tool.web_searc
 every `web_search` tool in `tools` to `type: "native"` with its `origin` unchanged, except an
 `openai.chat` `web_search_options` tool (`origin.format: "openai.chat"` and
 `origin.path: "web_search_options"`), which core removes from `tools` and restores into the
-request's top-level `origin.raw` under `"web_search_options"` so older extensions receive the same
-request they did before 0.29.
+request's top-level `origin.raw` under `"web_search_options"`, so the extension gets the request
+in its 0.28 form.
 
 **Code execution tool.** Since 0.30, a tool with `type: "code_execution"` is a canonical
 provider-hosted code execution tool, read from Responses (`code_interpreter`), Messages
@@ -1000,7 +982,7 @@ core converts every `code_execution` tool in `tools` to `type: "native"` with it
 unchanged, restores a Responses `tool_choice` back into the request's top-level `origin.raw` under
 `"tool_choice": {"type":"code_interpreter"}` (clearing `options.tool_choice`), and restores a
 Messages `tool_choice` back to `mode: "tool"` with its `name` (defaulting to `"code_execution"`),
-so older extensions receive the same request they did before 0.30.
+so the extension gets the request in its 0.29 form.
 
 **Translation report.** The extension reports in the reply's `response.start` how it built its
 upstream request: `response.translation` with `from`, `to`, `passthrough` (true when the client's
@@ -1013,9 +995,9 @@ format cannot hold.
 
 ### Native-only calls
 
-Since 0.27. The parsed request (`items`, `tools`, `origin`) and `native.body` are the same content
-twice, each about as large as the client's body, while an extension that sends `native.body`
-upstream needs only the body. So an extension may say in describe that it parses the body itself,
+Since 0.27. The parsed request (`items`, `tools`, `origin`) repeats the content of `native.body`,
+and an extension that sends `native.body` upstream needs only the body. Such an extension may say
+in describe that it parses the body itself,
 and with which version of core's parsers: `native_parser`, an integer (`format.ParserVersion` in
 `next/format`, which the format packages raise whenever a parser makes something else of a body it
 already read). Core sends a `generate` call's request without its parsed form, with the call's
@@ -1050,16 +1032,16 @@ with deltas and closed, then one terminal event.
 
 | Type | Fields | Meaning |
 | --- | --- | --- |
-| `response.start` | `response`: `id`, `model`, `created` (Unix seconds), optional `format`, `raw`, `translation` and `headers` (0.34) | First event. `model` is the model that actually served the request. `format` names the upstream format the reply came from (for example `openai.chat`); `raw` is a JSON object of the upstream's reply-level fields that have no place in the model (for example `system_fingerprint`). `translation` is the translation report (above). `headers` (0.34) holds the upstream's documented rate-limit response headers by lower-case name (at most 32 entries, each value at most 256 bytes with no control characters); only explicit vendor-documented rate-limit headers are carried, and only values of a shape the vendors document: a non-negative integer (OpenRouter's reset is milliseconds since the Unix epoch) or exactly `-1`, an RFC 3339 time or a duration such as `1s`, `6m0s` or `17ms`, never cookies, tokens or other text. An all-digit ID cannot be told from a number, so it is carried. Core ignores `headers` from an extension below 0.34 and forwards to a client only headers documented for that client's format, with a value of those shapes; any other value is dropped. The conformance kit refuses an extension that sends one. |
+| `response.start` | `response`: `id`, `model`, `created` (Unix seconds), optional `format`, `raw`, `translation` and `headers` (0.34) | First event. `model` is the model that actually served the request. `format` names the upstream format the reply came from (for example `openai.chat`); `raw` is a JSON object of the upstream's reply-level fields that have no place in the model (for example `system_fingerprint`). `translation` is the translation report (above). `headers` (0.34) holds the upstream's documented rate-limit response headers by lower-case name (at most 32 entries, each value at most 256 bytes with no control characters); only explicit vendor-documented rate-limit headers are carried, and only values of a shape the vendors document: a non-negative integer (OpenRouter's reset is milliseconds since the Unix epoch) or exactly `-1`, an RFC 3339 time or a duration such as `1s`, `6m0s` or `17ms`, never cookies, tokens or other text. An all-digit ID cannot be told from a number, so it is carried. Core forwards to a client only headers documented for that client's format, with a value of those shapes; any other value is dropped. The conformance kit refuses an extension that sends one. |
 | `item.start` | `index`, `item`: `kind` (`message`, `reasoning`, `tool_call`), and for tool calls `call_id` and `name` | Opens output item `index`. |
 | `text.delta` | `index`, `delta` | Text for an open `message` item. |
 | `reasoning.delta` | `index`, `delta` | Reasoning text for an open `reasoning` item. |
 | `tool_input.delta` | `index`, `delta` | A fragment of the argument string for an open `tool_call` item. |
-| `item.end` | `index`; for a reasoning item, optional `opaque`: `format` and `data`; for a message item, optional `citations` (0.31): list of `{url, title?, start_index?, end_index?}` | Closes item `index`. `opaque` is the provider's opaque record of the reasoning, which it needs back to continue from it (for `anthropic.messages`, the thinking block's signature; for `openai.responses`, the reasoning item's `encrypted_content`). A client format with a place for it carries it: a Responses client gets a thinking signature as the reasoning item's `encrypted_content`, and a Messages client gets a Responses reasoning item's encrypted content as the thinking block's signature. When the client replays that item or block, the request builder for the provider's format turns it back into the provider's own. `citations` (0.31) holds web citations attached to the message item's text: each entry has an `http` or `https` `url`, optional `title`, and optional half-open `[start_index, end_index)` range in Unicode code points (runes) from the start of the message item's text. Core ignores `citations` from an extension below 0.31. One reply holds at most 4 MiB of citations (`llm.MaxCitationBytes`, counting each entry's `url`, `title` and 64 bytes of overhead, on its `item.end` events together), and, apart from them, 4 MiB of sources on `finish`; an extension leaves out the rest and reports them as a dropped loss. |
+| `item.end` | `index`; for a reasoning item, optional `opaque`: `format` and `data`; for a message item, optional `citations` (0.31): list of `{url, title?, start_index?, end_index?}` | Closes item `index`. `opaque` is the provider's opaque record of the reasoning, which it needs back to continue from it (for `anthropic.messages`, the thinking block's signature; for `openai.responses`, the reasoning item's `encrypted_content`). A client format with a place for it carries it: a Responses client gets a thinking signature as the reasoning item's `encrypted_content`, and a Messages client gets a Responses reasoning item's encrypted content as the thinking block's signature. When the client replays that item or block, the request builder for the provider's format turns it back into the provider's own. `citations` (0.31) holds web citations attached to the message item's text: each entry has an `http` or `https` `url`, optional `title`, and optional half-open `[start_index, end_index)` range in Unicode code points (runes) from the start of the message item's text. One reply holds at most 4 MiB of citations (`llm.MaxCitationBytes`, counting each entry's `url`, `title` and 64 bytes of overhead, on its `item.end` events together), and, apart from them, 4 MiB of sources on `finish`; an extension leaves out the rest and reports them as a dropped loss. |
 | `media` | `media` (0.33): `{kind, media_type, data}` | One image or audio part generated by the model, carried on its own event so each part fits a single protocol frame. `kind` is `image` or `audio`; `media_type` is one well-formed image or audio type from core's list (`image/png`, `image/jpeg`, `audio/wav` and the like; never `image/svg+xml`, and no type with text after the subtype); `data` is non-empty valid base64 up to 24 MiB per part and 96 MiB total per reply (parts beyond those limits or with unsafe/invalid data are dropped with a loss rather than failing the reply; an event whose `raw` also holds the part, and so would not fit one frame, is sent as `native` instead, with a loss). A part of a streamed upstream also has to fit one server-sent event (16 MiB), or the stream ends with an error. When core collects a reply to send whole to a Gemini client and the reply passes 64 MiB, core leaves out the last media parts, with a loss, until it fits. Core ignores `media` from an extension below 0.33 (turning an event with `raw` into `native`). |
 | `candidate` | `candidate` (0.35): `{index, kind, item?, delta?, call_id?, name?, media?, finish?}` | One step of a candidate reply after candidate 0 (`index >= 1`). `kind` is `text.delta`, `reasoning.delta`, `tool_call.start`, `tool_input.delta`, `tool_call.end`, `media`, or `finish`. Candidate 0 stays on the top-level item, delta, media and finish events unchanged so consumers that show one candidate never mix later candidates into candidate 0. Usage stays on the terminal `finish` event alone. Core ignores `candidate` from an extension below 0.35 (turning an event with `raw` into `native`). A candidate count on a request to an extension below 0.35 goes back into `origin.raw` where it can; see [Candidate count](#the-request). |
 | `native` | `raw` | Upstream data that has no place in the model, in the reply's `format`. For `openai.chat` it is `{"choices": [...]}`: choices after the first, as the upstream sent them, or `{"audio": ...}` for audio metadata chunks. For `openai.responses` and `anthropic.messages` it is an upstream stream event the model has no event for (for example `response.in_progress`, or `ping`, `message_delta` and a thinking block's `signature_delta`). For `gemini.generate_content` it is a stream chunk that produced no other event. |
-| `finish` | `finish`: `reason`, `raw_reason`; optional `usage`; optional `sources` (0.31): list of `{url, title?}`; optional `code_executions` (0.32): list of `{code?, language?, output?, failed?, files_omitted?}` | Terminal: success. `sources` (0.31) lists the `http` or `https` web sources returned by the upstream's hosted web searches in this reply. Core ignores `sources` from an extension below 0.31. `code_executions` (0.32) lists the completed server-side code execution runs in this reply (code or command, optional language, text output, whether it failed, and whether non-text outputs such as files or images were omitted). Core ignores `code_executions` from an extension below 0.32. One reply holds at most 4 MiB of runs (`llm.MaxCodeExecutionBytes`), and one run's code at most 1 MiB (`llm.MaxCodeExecutionCodeBytes`), streamed or not. A last record with only `files_omitted` set is not a run: it stands for runs the reply had that are not in the list, because they passed either limit or had no result the extension could read (a call with no result, a result in an unknown shape, a run still in progress, or an outcome the upstream left unspecified). `llm.CodeRuns` adds it once, and a client format reports it as a dropped loss. `finish` carries the whole upstream body in `raw` when the reply is not streamed or the upstream sent it in one event, and that body already holds the sources and runs; when `raw`, `sources` and `code_executions` together would pass the frame limit less 1 MiB, the extension leaves out the runs first (keeping the one `files_omitted` record) and then the sources, with a loss. |
+| `finish` | `finish`: `reason`, `raw_reason`; optional `usage`; optional `sources` (0.31): list of `{url, title?}`; optional `code_executions` (0.32): list of `{code?, language?, output?, failed?, files_omitted?}` | Terminal: success. `sources` (0.31) lists the `http` or `https` web sources returned by the upstream's hosted web searches in this reply. `code_executions` (0.32) lists the completed server-side code execution runs in this reply (code or command, optional language, text output, whether it failed, and whether non-text outputs such as files or images were omitted). One reply holds at most 4 MiB of runs (`llm.MaxCodeExecutionBytes`), and one run's code at most 1 MiB (`llm.MaxCodeExecutionCodeBytes`), streamed or not. A last record with only `files_omitted` set is not a run: it stands for runs the reply had that are not in the list, because they passed either limit or had no result the extension could read (a call with no result, a result in an unknown shape, a run still in progress, or an outcome the upstream left unspecified). `llm.CodeRuns` adds it once, and a client format reports it as a dropped loss. `finish` carries the whole upstream body in `raw` when the reply is not streamed or the upstream sent it in one event, and that body already holds the sources and runs; when `raw`, `sources` and `code_executions` together would pass the frame limit less 1 MiB, the extension leaves out the runs first (keeping the one `files_omitted` record) and then the sources, with a loss. |
 | `error` | `error` (below) | Terminal: failure. |
 
 Any event may carry `raw`: the upstream data it came from, for diagnostics. `raw` must be valid
@@ -1133,17 +1115,17 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | Field | Meaning |
 | --- | --- |
 | `code` | One of the codes below. |
-| `message` | Human-readable; safe to show to the client. Never include credentials. Core also removes the call's credential, and its JSON, URL and base64 forms, from `message`, `provider_code`, `dropped`, every `raw` field, every `opaque` `data`, the response's `id`, `model` and `translation`, every item's `call_id` and the finish's `raw_reason` of every event before passing them on, in case an upstream echoes it, and from `message` and `raw` the pieces of the account's secrets too (see [Accounts](#accounts)). In the error's `code` and `scope`, the response's `format`, the finish's `reason` and an opaque's `format`, a value core defines is passed on as it is and any other that holds the credential is replaced whole with `[redacted]`, so a very short credential cannot turn a value core acts on into another. |
+| `message` | Human-readable; safe to show to the client. Never include credentials; core removes the account's secrets from it (see [Secrets](#secrets)). |
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
 | `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. For `login` and `refresh` calls, see [Errors in login and refresh calls](#errors-in-login-and-refresh-calls). |
-| `scope` | What the failure is about: `request` (this request is bad), `credential` (this account), `model` (this model on this account), `endpoint` (the upstream endpoint). A rate limit or quota is `model` unless the provider says it covers the whole account, such as a subscription's used-up usage window; today's core also holds back only the model for a plain 429. When `scope` is absent, core takes `model` for `rate_limit`, `quota` and `not_found`, `credential` for `auth`, `permission` and `account_closed`, and `endpoint` for `upstream` and `unavailable`. |
+| `scope` | What the failure is about: `request` (this request is bad), `credential` (this account), `model` (this model on this account), `endpoint` (the upstream endpoint). A rate limit or quota is `model` unless the provider says it covers the whole account, such as a subscription's used-up usage window; core holds back only the model for a plain 429. When `scope` is absent, core takes `model` for `rate_limit`, `quota` and `not_found`, `credential` for `auth`, `permission` and `account_closed`, and `endpoint` for `upstream` and `unavailable`. |
 | `retry_after_ms` | When the upstream said to try again, in milliseconds from now. In Go, `sdk.RetryAfter` turns a `Retry-After` header (seconds or an HTTP date) into this value. |
 | `raw` | The upstream's error body, as the extension got it. Core removes the account's secrets from it before passing it on, as from `message`. |
 | `usage` | Usage the upstream reported before the failure, in the same form as `finish.usage`; absent when it reported none. A reply that fails partway may still have cost tokens. |
-| `quota_window_minutes` | Version 0.6. For code `quota`: the length, in minutes, of the usage window that is used up, when the upstream said (such as 300 for a five-hour window). Core passes it on in its [usage-limit reply](../README.md#accounts-and-routing). |
-| `dropped` | Version 0.16. Only on a refusal under the request's `drop_policy` `reject`: the paths of the request's parts the upstream's format cannot carry, as the translation's losses name them. Core tells such a refusal from an account that cannot serve the call by it (see [`count_tokens`](#count_tokens)). |
-| `headers` | Version 0.34. Documented upstream rate-limit response headers on an error reply (such as a 429), by lower-case name, subject to the same explicit allowlist and bounds as `response.start`'s `headers`. Core ignores `headers` from an extension below 0.34, redacts account secrets and their pieces from them, and forwards only headers documented for the client's format. |
+| `quota_window_minutes` | Since 0.6. For code `quota`: the length, in minutes, of the usage window that is used up, when the upstream said (such as 300 for a five-hour window). Core passes it on in its [usage-limit reply](../README.md#accounts-and-routing). |
+| `dropped` | Since 0.16. Only on a refusal under the request's `drop_policy` `reject`: the paths of the request's parts the upstream's format cannot carry, as the translation's losses name them. Core tells such a refusal from an account that cannot serve the call by it (see [`count_tokens`](#count_tokens)). |
+| `headers` | Since 0.34. Documented upstream rate-limit response headers on an error reply (such as a 429), by lower-case name, subject to the same explicit allowlist and bounds as `response.start`'s `headers`. Core removes the account's secrets and their pieces from them, and forwards only headers documented for the client's format. |
 
 Codes an extension sends:
 
@@ -1152,7 +1134,7 @@ Codes an extension sends:
 | `invalid_request` | The upstream rejected the request itself. |
 | `auth` | The credential was refused. |
 | `permission` | The credential is valid but not allowed this request. |
-| `account_closed` | Version 0.20. The provider closed, suspended or deactivated the account, or refused it for a breach of terms. Core always bans the account. When `retryable` is true, the request moves on to sibling accounts as any retry-safe account failure does, unless `scope` is `request` (the refusal is about this request's content): then it stops there. |
+| `account_closed` | Since 0.20. The provider closed, suspended or deactivated the account, or refused it for a breach of terms. Core always bans the account. When `retryable` is true, the request moves on to sibling accounts as any retry-safe account failure does, unless `scope` is `request` (the refusal is about this request's content): then it stops there. |
 | `not_found` | The model or resource does not exist upstream. |
 | `rate_limit` | Too many requests; try again later. |
 | `quota` | A usage allowance is used up. |
@@ -1226,30 +1208,28 @@ entered for the last prompt; nothing else follows the call frame:
 {"type": "login.input", "input": {"redirect_url": "http://localhost:1455/callback?code=...&state=..."}}
 ```
 
-From version 0.9, a login grant may also carry a `settings` object of non-secret,
+Since 0.9, a login grant may also carry a `settings` object of non-secret,
 extension-specific account settings. It must never hold a secret: secrets belong in
 `credential`. The extension validates and normalises these settings before returning them.
 When adding an account, core merges the grant's settings with those supplied by the caller:
 caller-supplied properties win, including explicit `null`; nested objects are replaced as a
 whole. On a login to an existing account, core ignores the grant's settings and keeps the
-account's existing settings. A grant without settings keeps the previous behaviour.
+account's existing settings. A grant without settings leaves the caller's settings as they are.
 Core validates grant settings at the extension boundary: `null` is treated as absent; any
-other value must be an object with an encoded size of at most 8192 bytes (8 KiB, matching
-the maximum total identity value bytes: 16 fields of 512 bytes). A non-object or oversized
+other value must be an object with an encoded size of at most 8192 bytes. A non-object or oversized
 value fails the login with `extension_protocol`. Caller settings must be an object or
 absent (`null` also means absent); `POST /accounts` refuses a non-object with `invalid_request`
 before starting a login. Like a grant's `identity`, core uses grant settings regardless of
 the extension's reported minor version, an exception to the general minor-version rule.
 
 `login.done` carries the `grant`: the new `credential`, a `label` naming the account for people
-(not secret) and, from version 0.5, its `identity`: the upstream account the credential signs in
+(not secret) and, since 0.5, its `identity`: the upstream account the credential signs in
 to, as an object of the fields the provider knows it by, such as
 `{"email": "user@example.com", "account_id": "..."}`. Identity is not secret, has at most 16 fields,
 and each name and value is a non-empty string (names up to 64 bytes, values up to 512). Core
 stores it with the account. On a new login to an existing account, every field of the stored
 identity must be in the new grant's identity with the same value, letter case aside; otherwise
-core refuses the login and keeps the old credential, so a login never silently turns an account
-into someone else's. Report the fields that tell two accounts apart: for a provider whose users
+core refuses the login and keeps the old credential. Report the fields that tell two accounts apart: for a provider whose users
 can belong to several workspaces, both the user and the workspace. An account stored without an
 identity is checked by `label` instead, when both have one: the last label a grant for it carried
 (none when no grant carried one; for an account imported from a credential file, the file's e-mail),
@@ -1287,9 +1267,9 @@ stored one with it; keep the old refresh token when the provider did not send a 
 Core sends at most one refresh per credential at a time, and every request that needs the same
 credential renewed waits for that one call. It applies the result only if the stored credential
 has not changed since the refresh began (a new login, a removal); otherwise the result is
-discarded. A refresh call is never cancelled because a client stopped waiting, since a provider
-that rotates refresh tokens ([RFC 9700 section 4.14](https://www.rfc-editor.org/rfc/rfc9700#section-4.14))
-may already have retired the old one: only core shutting down cancels it. Core renews a credential
+discarded. A refresh call is never cancelled because a client stopped waiting (a provider that
+rotates refresh tokens, [RFC 9700 section 4.14](https://www.rfc-editor.org/rfc/rfc9700#section-4.14),
+may already have retired the old one): only core shutting down cancels it. Core renews a credential
 at its `refresh_at` (on the first request after it), before first use when it is an `oauth`
 credential with no `access_token` (core does not send one on a request while the extension can
 renew it; a renewal that returns one counts as giving a credential already due), and when the upstream refuses it with an
@@ -1302,9 +1282,8 @@ credential already due for renewal, 30 seconds. An extension never refreshes on 
 For a `login` or `refresh` call, `retryable` is true only when the request never reached the
 provider. Send `retryable: true` only when you are sure of that: the connection was refused, the
 host name was not found, the TLS handshake failed, or anything else went wrong before the first
-byte of the request was written. A request that was written may have run. A provider that rotates
-refresh tokens may already have retired the old token, and a code exchange may already have used
-the code. So these are not retryable: a 5xx answer, a connection that was reset or timed out after
+byte of the request was written. A request that was written may have run, so these are not
+retryable: a 5xx answer, a connection that was reset or timed out after
 the request was sent, and a reply that could not be read or understood. Keep the code and scope you
 would use otherwise (for example `unavailable` with scope `endpoint`) and set `retryable` false. A
 429 stays retryable, with `retry_after_ms` when the provider said how long: the provider refused to
@@ -1320,12 +1299,11 @@ written.
 
 ## Sessions
 
-Version 0.1. Some upstreams keep state between requests on one connection. A Responses WebSocket
-keeps the previous response in memory for that socket only (with `store: false`, nothing else
-holds it), so the next request names it with `previous_response_id` and sends only the new input.
-A run of such requests needs the same upstream connection, on the same account, for its whole
-life. A **session** is how core hands that run to an extension: one local connection, one
-account, one request (a **turn**) at a time.
+Since 0.1. A **session** is a run of requests that needs the same upstream connection, on the
+same account, for its whole life: one local connection, one account, one request (a **turn**) at
+a time. For example, a Responses WebSocket keeps the previous response in memory for that socket
+only (with `store: false`, nothing else holds it), so the next request names it with
+`previous_response_id` and sends only the new input.
 
 Core opens sessions only with an extension whose describe lists `session` in `operations` and
 reports `protocol_minor` 1 or more.
@@ -1338,7 +1316,7 @@ reports `protocol_minor` 1 or more.
 
 | Field | Meaning |
 | --- | --- |
-| `session.format` | The kind of session: the request format of its turns, whose upstream state the session holds. Version 0.1 has `openai.responses` ([below](#openairesponses-sessions)). |
+| `session.format` | The kind of session: the request format of its turns, whose upstream state the session holds. The only kind is `openai.responses` ([below](#openairesponses-sessions)). |
 
 The extension answers with one frame:
 
@@ -1369,7 +1347,7 @@ terminal event. A turn's `error` ends that turn, not the session.
 | `alive` | Since 0.23: true when core takes [alive frames](#alive-frames) on the turn, as for `generate`. |
 
 Core removes every credential the session has carried, in all the forms listed under
-[Errors](#errors), from every event of every turn.
+[Secrets](#secrets), from every event of every turn.
 
 ### Interrupts
 
@@ -1403,8 +1381,8 @@ another account, another extension or a newer generation: no credential changes 
 through a conversation whose state lives upstream. A crash or stop of the program ends the session.
 
 Liveness: the extension checks its upstream connection itself (for example, a read deadline
-between upstream messages); that check is one of the named liveness checks the rule against
-network timeouts allows. The local session connection needs none: either end sees the other go
+between upstream messages), one of the named liveness checks that
+[core's design](../../docs/design.md#inside-core) allows in place of time limits. The local session connection needs none: either end sees the other go
 when the connection closes.
 
 ### `openai.responses` sessions
@@ -1437,7 +1415,7 @@ removes `previous_response_id`.
 
 ## Payload rules
 
-Version 0.14. Core's config may hold payload rules (see [the README](../README.md#payload-rules)):
+Since 0.14. Core's config may hold payload rules (see [the README](../README.md#payload-rules)):
 fields to set, fill in or remove in the JSON body an extension sends upstream, for the requests
 they name. Core works out which rules apply to a `generate`, `count_tokens` or `endpoint` call, or
 (0.15) a session turn, and sends them, and only them, in the frame's `payload`:
@@ -1489,7 +1467,7 @@ Rules:
   default writes where the body the extension built has no value: a field the extension filled
   in itself counts as present.
 - A query that matches nothing names nothing to write or remove. Writing a path creates what it
-  needs, as today's core does: the objects on the way that are missing (in place of a value on
+  needs: the objects on the way that are missing (in place of a value on
   the way that is neither an object nor an array) and, for an index past an array's end, `null`
   elements up to it.
 
@@ -1497,24 +1475,21 @@ Core sends `payload` on a `generate`, `count_tokens` or `endpoint` call only to 
 describe reports `protocol_minor` 14 or more, and on a `session.turn` only to one that reports 15
 or more. A call or turn that rules apply to on an older extension it fails itself with
 `unsupported` (scope `credential`), so routing moves on and the request never leaves without them;
-a refused turn does not end its session. An extension that reports 14 can apply the rules to its
-HTTP requests but would send a session turn without them, which is why turns need 15.
+a refused turn does not end its session.
 
 In Go, `sdk.Upstream` applies them to each request made with the handler's context, with the
 engine in `github.com/stdotwork/pluxy/next/sdk/payload`; `sdk.WithPayloadRoot` on a request's
 context names the object that holds the request. A session handler passes the message it sends
 for a turn, made with the turn's context, to `sdk.ApplyPayload`, once, on the final message. A
 message it sends as an HTTP request through `sdk.Upstream` already gets the rules there, so it
-must not pass that message to `sdk.ApplyPayload` too: they would apply twice. As with a proxy,
-the SDK answers a call or turn that carries rules with `unsupported` (scope `credential`,
-retryable) and never runs the handler when the extension process has not created any
-`sdk.Upstream` transport.
+must not pass that message to `sdk.ApplyPayload` too: they would apply twice. The SDK refuses a
+call or turn that carries rules when the process has created no `sdk.Upstream` transport, as it
+does a call with a [proxy](#proxy).
 
 ## Upstream capture
 
-Version 0.13. Core writes request logs (see [the README](../README.md#request-logs)), and for a
-provider that rebuilds a request in another format, what it sent upstream and what came back is
-the first thing to look at. Core asks for it with `"capture": true` on a `generate`,
+Since 0.13. The extension reports what it sent upstream and what came back, for core's request
+logs (see [the README](../README.md#request-logs)). Core asks for it with `"capture": true` on a `generate`,
 `count_tokens` or `endpoint` call frame, or on a `session.turn` frame, only while its config
 writes every request to a request log (`logs.request_log`), and only to an extension whose
 describe reports `protocol_minor` 13 or more. A call without it records nothing and sends nothing
@@ -1558,7 +1533,7 @@ Rules:
   is about authentication (the rule under [Headers](#headers)) becomes `[redacted]`, keeping an
   authorization scheme such as `Bearer [redacted]`. Core also removes the call's credential, its
   proxy's password and its secret header values from everything in the frame, in all the forms
-  listed under [Errors](#errors), as from every event.
+  listed under [Secrets](#secrets), as from every event.
 - Keep at most 16 KiB of header lines per request and per response: each line (one value of one
   header) counts its name, its value and 3 bytes, so a header list has a count bound too (at
   most 5,461 lines). Take the names in sorted order; a line that does not fit is left out, and
@@ -1567,16 +1542,13 @@ Rules:
   its start and its end: never hold a whole stream, delay the request to read its body first, or
   delay a piece of a reply to record it. What the extension had not read when it sent the frame is
   not in it. Set `body_stopped` on a body whose reader did not see its end, however the read
-  stopped, unless every byte of a body of known length was read: a transport can send a request
-  body's last byte, and the upstream answer, before its last read sees the end. A body known to
-  have nothing to read is read to its end; the Go SDK treats only a body the transport gives as
-  `http.NoBody` that way. A response with neither a length nor chunked encoding whose connection
-  closes early cannot be told from one that ended there (Go reads it as the end, also over TLS
-  closed without its closing alert between two records): don't mark it, which would mark
-  complete ones too.
+  stopped, unless every byte of a body of known length was read (a transport can send a request
+  body's last byte, and get the upstream's answer, before its last read sees the end). A body known
+  to have nothing to read is read to its end; the Go SDK treats only a body the transport gives as
+  `http.NoBody` that way. Don't mark a response with neither a length nor chunked encoding whose
+  connection closes early: it cannot be told from one that ended there.
 - Leave out credential traffic the call makes for itself whose secrets core does not know, such
-  as trading a key for an access token: core removes only the account's own secrets, so the token
-  and what was sent for it would reach the request log.
+  as trading a key for an access token: core removes only the account's own secrets.
 - A WebSocket handshake is an exchange: the `GET` request and the `101` response's status and
   headers, with no body. The messages on the socket are not captured. A turn that uses a socket an
   earlier turn opened makes no exchange, and a socket opened by the `session` call itself, before
@@ -1598,10 +1570,10 @@ drops a run of 4 bytes or more at its end that starts a form of the credential, 
 out what could be the start of a secret of its config as on the start's side of a cut, with its
 window reaching back no further than the last line break, and ends the body with a line saying it
 was not read past there. An extension older
-than 0.17 never sets `body_stopped`, so its bodies are logged as before: one whose read stopped
-can keep the start of a secret at its end. From the body of a reply whose status is 400 or more,
+than 0.17 never sets `body_stopped`, so where its read of a body stopped, the logged body can keep
+the start of a secret at its end. From the body of a reply whose status is 400 or more,
 or of every reply when the call or turn ended in an error, core also removes the pieces of the
-account's secrets (see [Accounts](#accounts)); it holds the `diagnostic` frame until the terminal
+account's secrets (see [Secrets](#secrets)); it holds the `diagnostic` frame until the terminal
 event says which.
 
 In Go, `sdk.Upstream` does all of this for each client it wraps, for requests made with the
@@ -1610,10 +1582,9 @@ recorded.
 
 ## Alive frames
 
-A model can think for minutes while its upstream sends only bytes that carry no reply, such as
-keep-alive comments, so a call can be healthy and still send core nothing. From version 0.23 the
-extension says so with an `alive` frame, and core relies on it to tell a quiet call from one that
-stopped answering.
+Since 0.23. A model can think for minutes while its upstream sends only bytes that carry no reply,
+such as keep-alive comments. The extension then sends `alive` frames, and core relies on them to
+tell a quiet call from one that stopped answering.
 
 Core sets the call's `alive` (or the turn's) only for an extension that reports `protocol_minor`
 23 or more. During such a call or turn, when upstream bytes arrive (response headers or any body
@@ -1693,5 +1664,6 @@ a new major version, and core keeps speaking old versions for a while.
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,
-account checks, quota and endpoint calls; several turns at once in one session (OpenAI's `stream_id` lanes); realtime sessions
-(audio, WebRTC); a private data folder per extension.
+account checks, quota and endpoint calls; several turns at once in one session (OpenAI's
+`stream_id` lanes); realtime sessions (audio, WebRTC); a private data folder per extension; more
+optional manifest parts, such as themes, each with its own version field.
