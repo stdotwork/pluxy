@@ -412,10 +412,10 @@ test("the header strip names the page, shows a destination's tabs, and the way b
   const strip = page.locator('[data-part="header"]');
   await expect(strip.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
 
-  // Add Account sits under Accounts: no tabs, and the way back.
-  await goTo(page, "Add Account");
+  // Add an account sits under Accounts: no tabs, and the way back.
+  await goTo(page, "Add an account");
   await expect(tabs).toHaveCount(0);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("Add Account");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("Add an account");
   await strip.getByRole("link", { name: "Accounts", exact: true }).click();
   await expect(page).toHaveURL(/#\/accounts$/);
 

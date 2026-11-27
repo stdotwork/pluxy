@@ -2,45 +2,51 @@ import type { TargetedInputEvent } from "preact";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { type Login, type LoginInput, type LoginMethod, problem } from "./api";
 import type { Reply } from "./host";
+import { providerName } from "./parts";
 import { usePrivacy } from "./privacy";
 import { strings } from "./strings";
 import { Button, Notice, useCopy, useKit } from "./ui";
 
 const t = strings("loginFlow", {
-  accountId: "Account ID",
-  optional: "{label} (optional)",
-  chooseFile: "Choose file",
+  moreOptions: "More options",
+  loadFromFile: "Load from file",
   readFailed: "Could not read the file. Choose it again.",
-  add: "Add account",
-  signInAgain: "Sign in again",
+  notText: "That file is not text. Choose a text file.",
+  continue: "Continue",
   generating: "Generating sign-in link…",
   waiting: "Waiting for sign-in…",
-  authorize: "Open the sign-in page and authorize",
+  authorize: "Open the sign-in page and sign in there.",
   device: "Enter this code on the sign-in page",
-  deviceCode: "Device code:",
-  copyCode: "Copy device code",
-  open: "Open link",
+  copyCode: "Copy code",
+  open: "Open sign-in page",
   copy: "Copy link",
   copied: "Copied",
   copyFailed: "Could not copy. Select and copy the text instead.",
-  addressOrCode: "Address or code",
-  submit: "Submit",
+  pasteAddress: "Paste the address you land on",
   remaining: "Time left: {time}",
-  success: "Signed in.",
-  viewAccounts: "View accounts",
-  another: "Sign in to another account",
-  failed: "Sign-in failed: {reason}",
-  alreadyRunning: "A sign-in for this account ID is already running. Use another ID, or wait and start over.",
+  failed: "Sign-in did not finish: {reason}",
+  alreadyRunning: "A sign-in for this account is already running.",
+  differentAccount:
+    "That was a different {provider} account, so this one keeps its old sign-in. To use the other one, add it as a new account.",
+  details: "Details",
   noReason: "No reason given.",
-  invalidReply: "Core returned no sign-in data. Try again.",
-  pollStopped: "Could not check sign-in after three attempts. {reason}",
-  invalidId:
-    "Use 1–128 letters, digits, dots, underscores or hyphens, starting with a letter or digit. The ID must not end with a dot.",
-  startOver: "Start over",
+  wasCancelled: "It was cancelled.",
+  invalidReply: "pluxy returned no sign-in data. Try again.",
+  pollStopped: "Could not check the sign-in three times in a row. {reason}",
+  tryAgain: "Try again",
   cancel: "Cancel",
   cancelling: "Cancelling…",
-  cancelled: "Sign-in cancelled.",
 });
+
+/** A file's bytes as text, or nothing when they are not UTF-8 text (binary data, or a NUL in it). */
+export function textOfFile(bytes: ArrayBuffer): string | undefined {
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return text.includes("\0") ? undefined : text;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Values stay in this form's memory and go only into a management request body. */
 function LoginField(props: {
@@ -67,7 +73,7 @@ function LoginField(props: {
   return (
     <div class="stack" data-part="field">
       <label class="field" for={controlId}>
-        <span class="label">{props.field.optional ? t("optional", { label }) : label}</span>
+        <span class="label">{label}</span>
         {props.field.secret ? (
           <input data-slot="input" type="password" {...control} />
         ) : (
@@ -80,7 +86,7 @@ function LoginField(props: {
             ref={file}
             type="file"
             hidden
-            aria-label={t("chooseFile")}
+            aria-label={t("loadFromFile")}
             disabled={props.disabled || reading}
             onChange={async (e) => {
               const input = e.currentTarget;
@@ -95,7 +101,9 @@ function LoginField(props: {
               props.onReading(true);
               setError(undefined);
               try {
-                props.onChange(await selected.text());
+                const text = textOfFile(await selected.arrayBuffer());
+                if (text === undefined) setError(t("notText"));
+                else props.onChange(text);
               } catch {
                 setError(t("readFailed"));
               } finally {
@@ -104,8 +112,8 @@ function LoginField(props: {
               }
             }}
           />
-          <Button disabled={props.disabled || reading} onClick={() => file.current?.click()}>
-            {t("chooseFile")}
+          <Button variant="quiet" disabled={props.disabled || reading} onClick={() => file.current?.click()}>
+            {t("loadFromFile")}
           </Button>
         </div>
       )}
@@ -114,6 +122,7 @@ function LoginField(props: {
   );
 }
 
+/** The inputs a method asks for: the required ones, then the optional ones under More options. */
 function LoginFields(props: {
   fields: LoginInput[];
   values: Record<string, string>;
@@ -121,18 +130,26 @@ function LoginFields(props: {
   onChange(name: string, value: string): void;
   onReading(name: string, reading: boolean): void;
 }) {
+  const field = (f: LoginInput) => (
+    <LoginField
+      key={f.name}
+      field={f}
+      value={props.values[f.name] ?? ""}
+      disabled={props.disabled}
+      onChange={(value) => props.onChange(f.name, value)}
+      onReading={(reading) => props.onReading(f.name, reading)}
+    />
+  );
+  const optional = props.fields.filter((f) => f.optional);
   return (
     <>
-      {props.fields.map((field) => (
-        <LoginField
-          key={field.name}
-          field={field}
-          value={props.values[field.name] ?? ""}
-          disabled={props.disabled}
-          onChange={(value) => props.onChange(field.name, value)}
-          onReading={(reading) => props.onReading(field.name, reading)}
-        />
-      ))}
+      {props.fields.filter((f) => !f.optional).map(field)}
+      {optional.length > 0 && (
+        <details class="login-more" data-part="more-options">
+          <summary>{t("moreOptions")}</summary>
+          <div class="stack">{optional.map(field)}</div>
+        </details>
+      )}
     </>
   );
 }
@@ -162,18 +179,14 @@ export interface LoginFlowProps {
   method: LoginMethod;
   /** Replaces this account's credential instead of adding an account. */
   existingAccountId?: string;
-  /** A new account ID already chosen by the caller; methods without inputs start at once. */
-  newAccountId?: string;
+  /** What names the account this flow acts on (its label, project): masked, with its ID, in any text shown while privacy mode is on. */
+  identities?: readonly string[];
   /** Names of the inputs the account keeps in its settings; a sign-in again may leave them empty. */
   keptInputs?: string[];
+  /** Called with the account once the sign-in is done: the caller shows what comes next. */
   onSuccess(accountId: string): void;
-  /** Called to leave this flow (Cancel, Add another): the caller remounts it by key. */
-  onReset(completed: boolean): void;
-}
-
-export function suggestedAccountId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(6));
-  return `account-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  /** Called to leave this flow (Cancel, Try again): the caller shows its methods again. */
+  onReset(): void;
 }
 
 /** An input may be left empty when the method says so, or when a sign-in again keeps its value
@@ -182,32 +195,35 @@ export function optionalInput(field: LoginInput, kept: string[]): boolean {
   return field.optional === true || (!field.secret && kept.includes(field.name));
 }
 
-export function validAccountId(id: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id) && !id.endsWith(".");
-}
-
 /** Whether core refused a start because a sign-in for that account is already running. Core's
  * reply carries no field for it beyond the code `conflict`, so the sentence is matched too. */
 export function signInRunning(r: Reply<unknown>): boolean {
   return r.status === 409 && r.error?.code === "conflict" && /already running/.test(r.error.message);
 }
 
-/** Shared by adding an account and signing in to an existing account again. A sign-in still
- * waiting when the flow unmounts or the page is hidden for good is cancelled, as Cancel does. */
+/** Whether a sign-in again ended because it signed in to another account than the one named: core's
+ * message for it (cred.ErrIdentity) says so, and carries no field of its own. */
+export function differentAccount(message?: string): boolean {
+  return /signed in to a different account/.test(message ?? "");
+}
+
+/** Shared by adding an account and signing in to an existing account again. Adding sends no ID:
+ * core makes the account's. A sign-in still waiting when the flow unmounts or the page is hidden
+ * for good is cancelled, as Cancel does. */
 export function LoginFlow(props: LoginFlowProps) {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
-  const [accountId, setAccountId] = useState(suggestedAccountId);
   const [values, setValues] = useState<Record<string, string>>({});
   const [reading, setReading] = useState<Record<string, boolean>>({});
   const [answer, setAnswer] = useState<Record<string, string>>({});
   const [login, setLogin] = useState<Login>();
   const [busy, setBusy] = useState(false);
-  const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string>();
   const [pollError, setPollError] = useState<string>();
-  const [pollStopped, setPollStopped] = useState<string>();
+  // The poll gave up: core's reason, and whether it failed three times in a row (else the login is gone).
+  const [pollStopped, setPollStopped] = useState<{ reason: string; repeated: boolean }>();
   const [startError, setStartError] = useState<string>();
   const [deadline, setDeadline] = useState<number>();
   const [now, setNow] = useState(Date.now());
@@ -222,15 +238,15 @@ export function LoginFlow(props: LoginFlowProps) {
   const cancelApi = useRef(api);
   cancelApi.current = api;
   const root = useRef<HTMLElement>(null);
-  const idHint = useId();
   success.current = props.onSuccess;
-  const id = props.existingAccountId ?? props.newAccountId ?? accountId;
+  // Core's words can name the account by its ID or label; privacy mode hides both in everything shown.
+  const identities = [...(props.identities ?? []), props.existingAccountId, login?.account];
+  const mask = (text: string | undefined) => p.text(text, identities);
   const kept = props.keptInputs ?? [];
   const inputs = (props.method.inputs ?? []).map((field) => ({
     ...field,
     optional: optionalInput(field, kept),
   }));
-  const validId = validAccountId(id);
   const readingFile = Object.values(reading).some(Boolean);
   const fileReading = (name: string, active: boolean) => setReading((all) => ({ ...all, [name]: active }));
 
@@ -276,16 +292,15 @@ export function LoginFlow(props: LoginFlowProps) {
   };
 
   const start = async () => {
-    if (locked.current || login || readingFile || !validId) return;
+    if (locked.current || login || readingFile) return;
     locked.current = true;
     setStarting(true);
     setStartError(undefined);
     const version = ++operation.current;
     try {
       const r = props.existingAccountId
-        ? await api.signInAgain(id, props.method.method, values)
+        ? await api.signInAgain(props.existingAccountId, props.method.method, values)
         : await api.startLogin({
-            id,
             extension: props.extension,
             method: props.method.method,
             input: values,
@@ -311,7 +326,7 @@ export function LoginFlow(props: LoginFlowProps) {
   };
 
   useEffect(() => {
-    if (!started.current && (props.newAccountId || props.existingAccountId) && inputs.length === 0) {
+    if (!started.current && inputs.length === 0) {
       started.current = true;
       void start();
     }
@@ -337,7 +352,7 @@ export function LoginFlow(props: LoginFlowProps) {
           failures++;
           if (r.status === 404 || failures >= 3) {
             stopped = true;
-            setPollStopped(r.status === 404 ? why : t("pollStopped", { reason: why }));
+            setPollStopped({ reason: why, repeated: r.status !== 404 });
             setPollError(undefined);
           } else setPollError(why);
         } else if (r.body?.login) {
@@ -394,10 +409,18 @@ export function LoginFlow(props: LoginFlowProps) {
       }
     }
   };
+  /**
+   * Cancel while the sign-in is starting leaves at once; the login core was starting is cancelled
+   * when core answers (the unmount does it). Cancel once it is pending says Cancelling… while core
+   * is asked, then goes back to the methods; core's refusal stays on screen. Core cancels without
+   * saying whether the sign-in had just finished, so the login is read once after a cancel that
+   * worked: one that is done went through, its account exists, and the done screen follows.
+   */
   const cancel = async () => {
-    if (!login || locked.current || cancelling) return;
+    if (!login || locked.current) return;
     locked.current = true;
     setBusy(true);
+    setCancelling(true);
     setError(undefined);
     const version = ++operation.current;
     try {
@@ -405,19 +428,20 @@ export function LoginFlow(props: LoginFlowProps) {
       if (!live.current || version !== operation.current || replyError(r)) return;
       const why = problem(r);
       setError(why);
-      if (!why) {
-        waiting.current = undefined;
-        setCancelling(true);
-        setAnswer({});
-      }
+      if (why) return;
+      waiting.current = undefined;
+      const after = await api.login(login.id);
+      if (!live.current || version !== operation.current || replyError(after)) return;
+      if (after.body?.login?.state === "done" && !problem(after)) accept(after.body.login);
+      else props.onReset();
     } finally {
       if (live.current && version === operation.current) {
         setBusy(false);
+        setCancelling(false);
         locked.current = false;
       }
     }
   };
-  const reset = () => props.onReset(login?.state === "done");
 
   const prompt = login?.state === "pending" && !pollStopped ? login.prompt : undefined;
   const url =
@@ -425,12 +449,18 @@ export function LoginFlow(props: LoginFlowProps) {
     safeLink(prompt?.verification_uri);
   const promptInputs =
     prompt?.inputs ??
-    (prompt?.kind === "browser" ? [{ name: "redirect_url", label: t("addressOrCode") }] : []);
+    (prompt?.kind === "browser" ? [{ name: "redirect_url", label: t("pasteAddress") }] : []);
   const remaining = Math.max(0, Math.ceil(((deadline ?? now) - now) / 1000));
-  const terminalFailure = login?.state === "failed" || startError || pollStopped;
+  const ended = login?.state === "failed" || login?.state === "cancelled";
+  const terminalFailure = ended || startError || pollStopped;
+  // Core's own words for why it ended, masked when shown (with the account's identities).
+  const reason =
+    pollStopped?.reason ??
+    startError ??
+    (login?.state === "cancelled" ? t("wasCancelled") : login?.error?.message);
+  const other = ended && !!props.existingAccountId && differentAccount(login?.error?.message);
   const focusState = [
     starting,
-    cancelling,
     login?.state,
     promptKey.current,
     error,
@@ -457,7 +487,7 @@ export function LoginFlow(props: LoginFlowProps) {
   }, [focusState]);
   return (
     <section ref={root} class="login-flow stack" data-part="flow">
-      {!login && !starting && !startError && (
+      {!login && !starting && !startError && inputs.length > 0 && (
         <form
           class="stack"
           onSubmit={(e) => {
@@ -465,29 +495,6 @@ export function LoginFlow(props: LoginFlowProps) {
             void start();
           }}
         >
-          {!props.existingAccountId && !props.newAccountId && (
-            <div class="field" data-part="field">
-              <label>
-                <span class="label">{t("accountId")}</span>
-                <input
-                  data-slot="input"
-                  type="text"
-                  required
-                  maxLength={128}
-                  pattern="[A-Za-z0-9][A-Za-z0-9._\x2D]{0,127}"
-                  value={accountId}
-                  aria-invalid={!validId}
-                  aria-describedby={!validId ? idHint : undefined}
-                  onInput={(e) => setAccountId(e.currentTarget.value)}
-                />
-              </label>
-              {!validId && (
-                <small id={idHint} class="hint">
-                  {t("invalidId")}
-                </small>
-              )}
-            </div>
-          )}
           <LoginFields
             fields={inputs}
             values={values}
@@ -496,39 +503,42 @@ export function LoginFlow(props: LoginFlowProps) {
             onChange={(name, value) => setValues((all) => ({ ...all, [name]: value }))}
           />
           <div class="actions">
-            <Button type="submit" variant="primary" disabled={readingFile || !validId}>
-              {t(props.existingAccountId ? "signInAgain" : "add")}
+            <Button type="submit" variant="primary" disabled={readingFile}>
+              {t("continue")}
             </Button>
-            <Button onClick={reset}>{t("cancel")}</Button>
+            <Button onClick={props.onReset}>{t("cancel")}</Button>
           </div>
         </form>
       )}
       {starting && (
-        <Notice tone="muted">{t(props.method.kind === "browser" ? "generating" : "waiting")}</Notice>
-      )}
-      {prompt && !cancelling && (
         <>
-          {(prompt.kind === "browser" || prompt.kind === "device") && (
-            <p>{t(prompt.kind === "browser" ? "authorize" : "device")}</p>
+          <Notice tone="muted">{t(props.method.kind === "browser" ? "generating" : "waiting")}</Notice>
+          <div data-login-cancel="">
+            <Button onClick={props.onReset}>{t("cancel")}</Button>
+          </div>
+        </>
+      )}
+      {prompt && (
+        <>
+          {/* The provider's own words, when it gives some; else ours. */}
+          {prompt.message ? (
+            <p>{mask(prompt.message)}</p>
+          ) : (
+            (prompt.kind === "browser" || prompt.kind === "device") && (
+              <p>{t(prompt.kind === "browser" ? "authorize" : "device")}</p>
+            )
           )}
-          {prompt.message && <p>{p.text(prompt.message)}</p>}
           {prompt.kind === "device" && prompt.user_code && (
-            <div class="stack">
-              <span>{t("deviceCode")}</span>
-              <strong class="mono" data-part="device-code" aria-live="polite" aria-atomic="true">
-                {prompt.user_code}
-              </strong>
-              <div>
-                <CopyButton value={prompt.user_code}>{t("copyCode")}</CopyButton>
-              </div>
-            </div>
+            <strong class="mono" data-part="device-code" aria-live="polite" aria-atomic="true">
+              {prompt.user_code}
+            </strong>
           )}
-          {url && (
-            <>
-              <a href={url} target="_blank" rel="noopener noreferrer" class="mono">
-                {url}
-              </a>
-              <div class="actions">
+          <div class="actions">
+            {prompt.kind === "device" && prompt.user_code && (
+              <CopyButton value={prompt.user_code}>{t("copyCode")}</CopyButton>
+            )}
+            {url && (
+              <>
                 <Button
                   onClick={() => {
                     window.open(url, "_blank", "noopener,noreferrer");
@@ -536,12 +546,12 @@ export function LoginFlow(props: LoginFlowProps) {
                 >
                   {t("open")}
                 </Button>
-                <CopyButton value={url}>{t("copy")}</CopyButton>
-              </div>
-            </>
-          )}
+                {prompt.kind === "browser" && <CopyButton value={url}>{t("copy")}</CopyButton>}
+              </>
+            )}
+          </div>
           {deadline !== undefined && (
-            <p>
+            <p class="muted">
               {t("remaining", {
                 time: `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`,
               })}
@@ -565,7 +575,7 @@ export function LoginFlow(props: LoginFlowProps) {
               />
               <div>
                 <Button type="submit" variant="primary" disabled={busy || readingFile}>
-                  {t("submit")}
+                  {t("continue")}
                 </Button>
               </div>
             </form>
@@ -574,48 +584,33 @@ export function LoginFlow(props: LoginFlowProps) {
       )}
       {login?.state === "pending" && !pollStopped && (
         <>
-          <Notice tone="muted">{t(cancelling ? "cancelling" : "waiting")}</Notice>
+          <Notice tone="muted">{t("waiting")}</Notice>
           <div data-login-cancel="">
-            <Button onClick={() => void cancel()} disabled={busy || cancelling}>
-              {t("cancel")}
+            <Button onClick={() => void cancel()} disabled={busy}>
+              {cancelling ? t("cancelling") : t("cancel")}
             </Button>
           </div>
         </>
       )}
-      {error && <Notice tone="danger">{p.text(error)}</Notice>}
-      {pollError && <Notice tone="danger">{p.text(pollError)}</Notice>}
-      {login?.state === "done" && (
-        <>
-          <Notice tone="ok">{t("success")}</Notice>
-          <div class="actions">
-            <Button
-              onClick={() => {
-                location.hash = "/accounts";
-              }}
-            >
-              {t("viewAccounts")}
-            </Button>
-            {!props.existingAccountId && <Button onClick={reset}>{t("another")}</Button>}
-          </div>
-        </>
-      )}
+      {error && <Notice tone="danger">{mask(error)}</Notice>}
+      {pollError && <Notice tone="danger">{mask(pollError)}</Notice>}
       {terminalFailure && (
         <>
           <Notice tone="danger">
-            {t("failed", {
-              reason: p.text(pollStopped ?? startError ?? login?.error?.message) ?? t("noReason"),
-            })}
+            {other
+              ? t("differentAccount", { provider: providerName(props.extension) })
+              : pollStopped?.repeated
+                ? t("pollStopped", { reason: mask(reason) ?? t("noReason") })
+                : t("failed", { reason: mask(reason) ?? t("noReason") })}
           </Notice>
+          {other && reason && (
+            <details class="login-details" data-part="login-details">
+              <summary>{t("details")}</summary>
+              <pre class="mono">{mask(reason)}</pre>
+            </details>
+          )}
           <div>
-            <Button onClick={reset}>{t("startOver")}</Button>
-          </div>
-        </>
-      )}
-      {login?.state === "cancelled" && (
-        <>
-          <Notice tone="muted">{t("cancelled")}</Notice>
-          <div>
-            <Button onClick={reset}>{t("startOver")}</Button>
+            <Button onClick={props.onReset}>{t("tryAgain")}</Button>
           </div>
         </>
       )}

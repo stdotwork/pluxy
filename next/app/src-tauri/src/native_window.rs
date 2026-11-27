@@ -3,7 +3,7 @@
 //!
 //! - `first`: the default size; resizing and moving; a pending login polls while the window
 //!   shows, not while it is minimized (unmapped, as a window manager iconifies it), and again
-//!   once it is restored, and its "Open link" opens the sign-in page in the browser, no window
+//!   once it is restored, and its "Open sign-in page" opens the sign-in page in the browser, no window
 //!   of the app's own; the default, Keep in the tray, closes the window without asking; with
 //!   Ask saved, closing asks, Cancel keeps the window, Keep in the tray closes it and
 //!   leaves no webview or web process; the real tray item reopens it at the size and place it
@@ -344,30 +344,32 @@ fn browser_log() -> Vec<String> {
         .collect()
 }
 
-/// A pending login polls while the window shows, not while it is minimized, and its "Open link"
-/// goes to the person's browser, never to a window of the app's own.
+/// A pending login polls while the window shows, not while it is minimized, and its "Open sign-in
+/// page" goes to the person's browser, never to a window of the app's own.
 fn polling(c: &mut Checks, app: &AppHandle) {
     // The page draws every method from one reply, so once one shows, test/alpha's shows too, if
     // core runs test/alpha. A failure names the step that did not happen.
+    // The address test/alpha's browser sign-in gives the person (next/e2e/testext/main.go).
+    const SIGN_IN_URL: &str = "https://login.example.test/authorize";
     let tile = "[...document.querySelectorAll('[data-part=method]')].find((t) => t.closest('[data-extension]')?.dataset.extension === 'test/alpha' && t.textContent.includes('Test browser'))";
     let missing = if !goto(app, "add-account", "[data-part=method]") {
-        Some("Add account shows no sign-in method within 10 s")
+        Some("Add an account shows no sign-in method within 10 s")
     } else if main_eval(
         app,
-        &format!("(() => {{ const b = [...({tile})?.querySelectorAll('button') ?? []].find((b) => b.textContent.trim() === 'Test browser'); if (!b || b.disabled) return false; b.click(); return true; }})()"),
+        &format!("(() => {{ const b = [...({tile})?.querySelectorAll('button') ?? []].find((b) => b.textContent.trim() === 'Start'); if (!b || b.disabled) return false; b.click(); return true; }})()"),
     ) != Some(json!(true))
     {
-        Some("Add account has no enabled Test browser button from test/alpha")
+        Some("Add an account has no enabled Start button for test/alpha's Test browser")
     } else if within(10, || {
         (main_eval(
             app,
-            "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Open link')",
+            "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Open sign-in page')",
         ) == Some(json!(true)))
         .then_some(())
     })
     .is_none()
     {
-        Some("no Open link button within 10 s of clicking Test browser")
+        Some("no Open sign-in page button within 10 s of pressing Start on Test browser")
     } else {
         None
     };
@@ -378,18 +380,14 @@ fn polling(c: &mut Checks, app: &AppHandle) {
     ) {
         return;
     }
-    // Open link: the sign-in page's own address reaches the browser, and the window opens
+    // Open sign-in page: the sign-in page's own address reaches the browser, and the window opens
     // nothing of its own.
-    let link = main_eval(
-        app,
-        "document.querySelector('[data-part=flow] a[target=_blank]')?.href ?? null",
-    )
-    .and_then(|v| v.as_str().map(String::from));
+    let link = Some(SIGN_IN_URL.to_string());
     let opened_before = browser_log().len();
     let webviews = app.webviews().len();
     let clicked = main_eval(
         app,
-        "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Open link'); if (!b) return false; b.click(); return true; })()",
+        "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Open sign-in page'); if (!b) return false; b.click(); return true; })()",
     );
     let opened = within(10, || {
         let l = browser_log();
@@ -401,13 +399,13 @@ fn polling(c: &mut Checks, app: &AppHandle) {
             && opened
                 .as_ref()
                 .is_some_and(|l| l.last().is_some_and(|last| Some(last) == link.as_ref())),
-        format!("Open link opens the sign-in page in the browser: {link:?} as {opened:?}"),
+        format!("Open sign-in page opens the sign-in page in the browser: {link:?} as {opened:?}"),
     );
     sleep(1000);
     let own = app.webviews().len() - webviews;
     c.check(
         own == 0,
-        format!("Open link opens no window of the app's own ({own} webviews more)"),
+        format!("Open sign-in page opens no window of the app's own ({own} webviews more)"),
     );
     let before = LOGIN_READS.load(SeqCst);
     sleep(5000);

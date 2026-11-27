@@ -58,6 +58,7 @@ whichever provider reports it and however the provider words it.
 | Temporary local block after errors (noun) | `cooldown` | `cooling` |
 | The same, as a state | `cooling down` | `cooling` |
 | Clear that block | `Clear cooldown` | |
+| Fill a secret input from a file on this computer (a key a person saved in a file) | `Load from file` | |
 | Sign-in action | `Sign in` (owner to confirm; not yet applied) | `Log in`, `Login` |
 
 The old panel's health labels (`Healthy`, `Warning`, `Disabled`) were a separate scale from these terms.

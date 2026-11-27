@@ -306,10 +306,10 @@ These stay stable within a theme contract version:
 | `data-part="log-line"` | One core log line; `data-level` is `info`, `warn` or empty for a line without a level |
 | `data-part="select"` | An item's batch selection checkbox |
 | `data-part="batch"` | All accounts' bar of actions for the selected accounts, while Select is on |
-| `data-part="upload-results"` | The result of each CLIProxyAPI auth file imported on Add Account: the account it became, or why it was not added |
+| `data-part="upload-results"` | The result of each CLIProxyAPI auth file imported on Add an account: the account it became, or why it was not added |
 | `data-part="key-notice"` | A notice revealing a newly generated key until closed or its tab is left |
 | `data-part="key-value"` | The selectable value of a newly generated key inside its notice |
-| `data-part="method"` | A sign-in method tile with its label, kind caption and selected flow. |
+| `data-part="method"` | One way to sign in on Add an account: its name, how it signs in and Start; its sign-in shows under it once started. |
 | `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
 | `data-part="device-code"` | The user code to enter on a device sign-in page. |
 | `data-part="tier"` | A Routing priority tier, containing its heading and account list. |
@@ -333,7 +333,12 @@ These stay stable within a theme contract version:
 | `data-part="account-page"` | One account's own page; `data-group` is its group, as on its row |
 | `data-part="account-opening"` | The top of an account's page: its provider and plan, its condition and why, and its one fix |
 | `data-part="account-more"` | An account's "Settings, models and a test request" disclosure |
-| `data-part="auth-import"` | Add Account's "Have auth files from CLIProxyAPI?" line and its results |
+| `data-part="auth-import"` | Add an account's "Have auth files from CLIProxyAPI?" line and its results |
+| `data-part="round-notice"` | The notice above a page's lists when a round of reads did not all work: what could not be read, and Try again |
+| `data-part="method-group"` | One provider on Add an account, under its name: its ways to sign in, each a row with Start |
+| `data-part="more-options"` | A sign-in's optional inputs, folded under More options |
+| `data-part="login-details"` | The Details fold of a sign-in that ended with a message from pluxy, such as signing in to a different account |
+| `data-part="account-added"` | What Add an account shows once the sign-in is done: Added, the optional Name, Save name, Open account and Add another |
 | `data-part="account-row"` | One account on one line, the same on every page: its group's mark, name, provider, plan and limits, and why and its fix when it needs the person or waits. `data-group` is `needs`, `waiting`, `serving` or `off`; `data-condition` is `serving`, `cooling`, `exhausted`, `needs_login`, `banned`, `broken`, `no_provider` or `off`, or `unchecked` when the status that says whether its provider runs could not be read (its mark then has `data-group="unchecked"`); `data-tall` is set on a row that says why under the name; `data-wide` on the Accounts list's wider row |
 | `data-part="request-row"` | One request on one line: its time, model, account, key, tokens, time taken and result. `data-failed` is set on a failed one; `data-open` while it shows its details; `data-compact` on Home's shorter row, a link to the request |
 | `data-part="setting-row"` | One setting: its name and what it does beside its control. `data-disabled` is set while the control cannot be used |

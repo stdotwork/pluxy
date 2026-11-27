@@ -3,20 +3,19 @@ import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
-test("Add Account with no provider says a provider comes first and links to Set up pluxy", async ({
+test("Add an account with no provider says a provider comes first and links to Extensions", async ({
   page,
 }) => {
   await page.route("**/v0/management/login-methods", (route) => route.fulfill({ json: { extensions: [] } }));
   await openPanel(page, core);
   await signIn(page, core);
-  await goTo(page, "Add Account");
-  await expect(page.getByText("No running extension offers a sign-in method.")).toBeVisible();
-  await expect(page.getByText("Install an extension first")).toBeVisible();
-  await page.getByRole("main").getByRole("link", { name: "Set up pluxy", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Set up pluxy" })).toBeVisible();
+  await goTo(page, "Add an account");
+  await expect(page.getByText("There is no provider to sign in with yet.")).toBeVisible();
+  await page.getByRole("main").getByRole("link", { name: "Open Extensions", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Extensions" })).toBeVisible();
 });
 
-test("Home with no account links to Add Account", async ({ page }) => {
+test("Home with no account links to Add an account", async ({ page }) => {
   await page.route("**/v0/management/accounts", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     await route.fulfill({ json: { accounts: [] } });
@@ -25,7 +24,7 @@ test("Home with no account links to Add Account", async ({ page }) => {
   await signIn(page, core);
   await expect(page.getByRole("heading", { level: 2, name: "pluxy has no accounts yet." })).toBeVisible();
   await page.getByRole("link", { name: "Add an account", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Add Account" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Add an account" })).toBeVisible();
 });
 
 test("Home with every account out says so and leads to each fix", async ({ page }) => {

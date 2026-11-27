@@ -41,7 +41,7 @@ request", which says under it that it uses one request.
 | Home | The landing page, in place of the old panel's Dashboard: it answers whether the person's coding tools can be served, so it is named for where a person starts, not for a dashboard of figures. Its ID stays `status`, from the earlier Status page, so the address `#/status` and theme rules for `data-page="status"` keep working. |
 | Accounts | The old Auth Files and AI Providers pages in one, as the tab "All accounts". This core has one kind of account, whether it comes from the config or from a sign-in, so the list groups accounts by what they need from the person (Needs you, Waiting, Serving, Turned off), not by where they come from. |
 | An account's page | Replaced the old Auth Files page's details. `#/accounts/<id>` opens it, under All accounts, with the account's name in the header strip; it shows the account's limits, what it did this week and the ways to change it. |
-| Add Account | Replaced OAuth Login. It adds API keys as well as sign-ins, from the login methods each running extension offers, so "OAuth" no longer describes it. |
+| Add an account | Replaced OAuth Login. It adds API keys as well as sign-ins, from the login methods each running extension offers under the provider's name, so "OAuth" no longer describes it. A person never types an account ID: core makes it, and the account is named after the sign-in. The importer for CLIProxyAPI auth files is at the end of it. |
 | System | Replaced Management Center Info. "Management Center" was the upstream panel's product name. |
 | Routing, Config Panel | The old panel's names: these pages do the same job as the old ones did. |
 | Logs | Replaced the old panel's Logs Viewer. It holds two things, pluxy's own log and the full logs of failed requests, and "viewer" named neither. |
@@ -108,7 +108,7 @@ and does not stop the others. An extension that is still starting is read again 
 
 ## Where an API key added in the panel lives
 
-An API key added on the Add Account page becomes an account in core's credential store: a folder
+An API key added on the Add an account page becomes an account in core's credential store: a folder
 with one file per account, readable only by core's user and, on Windows, SYSTEM (`credentials_dir`, by default
 `credentials` beside the config file). It is never written to `config.yaml`, and no management
 reply shows it again.

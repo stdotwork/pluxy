@@ -258,7 +258,7 @@ test("Accounts: an empty list leads to Add an account, a search with no match ca
     "An account is a subscription or an API key that pluxy sends your requests through.",
   );
   await pane.getByRole("link", { name: "Add an account", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Add Account" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Add an account" })).toBeVisible();
 
   await page.unroute("**/v0/management/accounts");
   await accountsAre(

@@ -39,7 +39,7 @@
 //!   Anthropic variable in its environment; an executable override runs the override instead;
 //! - uninstall: disabled and removed, no pluxy/claude-code process is left and the files are as
 //!   the last step left them;
-//! - easy: Beginner Mode, the guided setup (`easy_mode_native.rs`): a sign-in in its Add Account,
+//! - easy: Beginner Mode, the guided setup (`easy_mode_native.rs`): a sign-in in its Add an account,
 //!   then Claude Code installed, enabled, applied and started through the guide, with cancels
 //!   that change nothing and a confirmation the guide cannot answer;
 //! - audit: the key and the login canary are in no window answer and no confirmation, no

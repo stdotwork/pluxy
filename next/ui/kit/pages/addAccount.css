@@ -1,13 +1,56 @@
 @layer kit {
-  .add-account > .field {
+  .add-account {
     max-width: var(--px-size-detail);
   }
 
-  .account-method {
+  .add-account > p {
+    margin: 0;
+  }
+
+  .method-group {
+    display: grid;
+    gap: var(--s);
+  }
+
+  .method-group h2 {
+    margin: 0;
+    font-size: var(--px-font-size-title);
+  }
+
+  /* One way to add an account per line, on hairlines: what it is called, how it signs in, Start. */
+  .method-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .method {
     min-width: 0;
+    padding-block: calc(var(--s) * 2);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .method-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 3);
+    min-height: var(--px-size-row);
+  }
+
+  .method-text {
+    display: grid;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .method-row .btn {
+    flex: none;
   }
 
   .login-flow {
+    margin-top: calc(var(--s) * 2);
     font-weight: normal;
     overflow-wrap: anywhere;
     text-align: start;
@@ -23,6 +66,27 @@
     letter-spacing: 0.08em;
   }
 
+  .login-more > summary,
+  .login-details > summary {
+    min-height: var(--px-size-control);
+    padding-block: var(--s);
+    cursor: pointer;
+  }
+
+  .login-more > .stack {
+    margin-top: calc(var(--s) * 2);
+  }
+
+  .login-details pre {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .added > .field {
+    max-width: var(--px-size-detail);
+  }
+
   .auth-import {
     margin-top: calc(var(--s) * 4);
     padding-top: calc(var(--s) * 3);
@@ -31,6 +95,10 @@
 
   .auth-import p {
     margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
   }
 
   .auth-import-lines {

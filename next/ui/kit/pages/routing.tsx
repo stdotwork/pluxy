@@ -21,7 +21,7 @@ const t = strings("routing", {
   tip: "Priority tiers and failover",
   refresh: "Refresh",
   loading: "Loading routing…",
-  empty: "No accounts to route yet. Add one on Add Account.",
+  empty: "No accounts to route yet. Add one on Add an account.",
   preferred: "Preferred",
   fallback: "Fallback {index}",
   priority: "Priority {priority}",
