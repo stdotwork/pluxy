@@ -93,8 +93,14 @@
 // <out-dir>.stage-<random>, beside it, removed when the build fails or is stopped (SIGINT or SIGTERM:
 // exit 130), so <out-dir> is as it was; then it puts the stage in place, keeping <out-dir>/home, once
 // the renamed <out-dir> is checked again (swapIn). A signal during the swap is handled when it ends:
-// exit 130, saying which build is in place. Run it with <out-dir>/bin/pluxy-app-local. It has no
-// updater key, so it never updates itself.
+// exit 130, saying which build is in place. It has no updater key, so it never updates itself. It
+// also comes with the coding-tool add-ons (the native tools of ../app-tools): each one's Linux
+// program built with Cargo, packed by `pluxy-pack -app-tools`, and each archive's descriptor
+// signed with another key made here and dropped when the command ends (signAppTools), into
+// <out-dir>/lib/pluxy Local/app-tools/ with the signed index and publisher.json (that key's ID and
+// public key); the record also names <out-dir>/start and that index. The app is built with the
+// artifact-test-trust feature too, so it accepts that key from a trust profile in its HOME, which
+// <out-dir>/start (local-start.sh) writes before it starts the app. Run it with <out-dir>/start.
 //
 // release builds the release validator (src-tauri/examples/validate-release-config.rs, a debug
 // tooling build with the same config and features), then the app with tauri build --no-bundle: the
@@ -106,8 +112,9 @@
 // <reason>`; the exit code is 0 only for valid.
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, type KeyObject, randomBytes, randomUUID, sign } from "node:crypto";
 import {
+  chmodSync,
   copyFileSync,
   cpSync,
   existsSync,
@@ -125,6 +132,7 @@ import {
 } from "node:fs";
 import { arch, homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { hex, publicHex } from "./native/admission";
 import { appImageHeader, type Pin, pinnedBytes, runtimeBytes } from "./native/appimage";
 import { release as coreRelease } from "./native/core-steps";
 import { signUpdate, updaterKey } from "./native/minisign";
@@ -697,6 +705,93 @@ const LOCAL_NAME = "pluxy (local build)";
 /** The record a local build's folder holds (see the top of this file). */
 export const LOCAL_RECORD = "local-build.json";
 
+/** Signs the coding-tool add-ons pluxy-pack -app-tools packed into packed (its app-tools/index.json
+ * and the archives it names) into dest: each archive copied after its size and SHA-256 are checked
+ * against the index, and each artifact given its descriptor (the app host README, "Signed descriptor
+ * bytes") signed with a publisher key made here, whose private key never leaves this process; then
+ * the index, and publisher.json with that key's ID and public key, never its private key. Returns the
+ * add-ons' IDs and the key's ID. */
+export function signAppTools(packed: string, dest: string): { packages: string[]; keyId: string } {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const keyId = `local-build-${randomUUID()}`;
+  const from = join(packed, "app-tools");
+  const index = JSON.parse(readFileSync(join(from, "index.json"), "utf8")) as {
+    packages: Record<
+      string,
+      { releases: { version: string; artifacts: Record<string, Record<string, unknown>> }[] }
+    >;
+  };
+  mkdirSync(dest, { recursive: true });
+  for (const [id, p] of Object.entries(index.packages)) {
+    for (const r of p.releases) {
+      for (const [platform, a] of Object.entries(r.artifacts)) {
+        const url = a.url as string;
+        if (typeof url !== "string" || basename(url) !== url) {
+          throw new Error(`${id} ${r.version}: its archive is not named as a file beside the index`);
+        }
+        const bytes = readFileSync(join(from, url));
+        const sha256 = createHash("sha256").update(bytes).digest("hex");
+        if (sha256 !== a.sha256 || bytes.length !== a.size) {
+          throw new Error(`${url}: its size or SHA-256 differs from the index pluxy-pack wrote`);
+        }
+        a.key_id = keyId;
+        a.public_key = publicHex(publicKey);
+        const descriptor = descriptorOf(id, r.version, platform, bytes.length, sha256);
+        a.descriptor = descriptor;
+        a.signature = signed(descriptor, privateKey);
+        writeFileSync(join(dest, url), bytes);
+      }
+    }
+  }
+  writeFileSync(join(dest, "index.json"), `${JSON.stringify(index, null, 2)}\n`);
+  writeFileSync(
+    join(dest, "publisher.json"),
+    `${JSON.stringify({ key_id: keyId, public_key: publicHex(publicKey) }, null, 2)}\n`,
+  );
+  return { packages: Object.keys(index.packages).sort(), keyId };
+}
+
+/** The exact descriptor bytes signed for one native add-on archive, in the field order the app's
+ * verifier reads. */
+function descriptorOf(id: string, version: string, platform: string, size: number, sha256: string): string {
+  return JSON.stringify({ id, version, tier: "native", platform, size, sha256 });
+}
+
+function signed(descriptor: string, key: KeyObject): string {
+  return hex(sign(null, Buffer.from(descriptor, "utf8"), key));
+}
+
+/** The local build's coding-tool add-ons (see the top of this file), into dest: every app tool
+ * with a Linux program, built as next-app-tools-pack.yml builds them, packed by pluxy-pack and
+ * signed (signAppTools). */
+async function localTools(
+  work: string,
+  dest: string,
+  run: Runner,
+): Promise<{ packages: string[]; keyId: string }> {
+  const tools = join(next, "app-tools");
+  const names: string[] = [];
+  for (const folder of readdirSync(tools).sort()) {
+    // pluxy-pack never packs the app's own test fixtures (appToolFixtures in cmd/pluxy-pack).
+    const manifest = join(tools, folder, "pluxy-extension.json");
+    if (folder === "usage-fixture" || !existsSync(manifest)) continue;
+    const program = JSON.parse(readFileSync(manifest, "utf8")).app?.programs?.["linux/amd64"];
+    if (typeof program === "string") names.push(basename(program));
+  }
+  await run("cargo", ["build", "--release", "--locked", ...names.flatMap((n) => ["--bin", n])], tools);
+  const built = join(resolve(tools, process.env.CARGO_TARGET_DIR || "target"), "release");
+  const programs = join(work, "programs");
+  mkdirSync(join(programs, "linux-amd64"), { recursive: true });
+  for (const n of names) copyFileSync(join(built, n), join(programs, "linux-amd64", n));
+  const packed = join(work, "tools");
+  await run(
+    "go",
+    ["run", "./cmd/pluxy-pack", "-out", packed, "-app-tools", programs, "-platforms", "linux/amd64"],
+    next,
+  );
+  return signAppTools(packed, dest);
+}
+
 /** A version of its own for one local build, the app's and its core's: the core version the app
  * names, then +local. and 12 random hex digits. */
 export function localVersion(): string {
@@ -989,7 +1084,7 @@ export async function localBuild(
   try {
     const version = localVersion();
     const program = join(outDir, "bin", LOCAL.mainBinaryName);
-    let core: BundledCore;
+    let core: BundledCore & { addOns: string[] };
     try {
       core = await build(stage, version, program, stop);
       stop.check();
@@ -1015,15 +1110,15 @@ export async function localBuild(
         `stopped by ${stop.stopped} once the new build was in place: ${outDir} holds the new build, pluxy ${version}`,
       );
     }
-    const config = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), LOCAL.identifier);
-    const data = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), LOCAL.identifier);
     console.log(
       `local build: pluxy ${version} with ${core.packages.length} providers: ${core.packages.join(", ")}`,
     );
-    console.log(`local build: ${outDir}`);
-    console.log(`local build: run it with ${program}`);
+    console.log(`local build: ${core.addOns.length} coding-tool add-ons: ${core.addOns.join(", ")}`);
     console.log(
-      `local build: its settings and data go to ${config} and ${data}; building again leaves them as they are`,
+      `local build: start it with ${join(outDir, "start")}; its accounts and settings stay in ${join(outDir, "home")} when you build again`,
+    );
+    console.log(
+      `local build: ${join(outDir, "start")} --real-home runs it on your own home folder and coding tools instead`,
     );
   } finally {
     stop.end();
@@ -1031,14 +1126,16 @@ export async function localBuild(
   }
 }
 
-/** Builds the local build into stage, at version, with its record naming program (its path once
- * in place), and returns its core. */
-async function buildStage(
+/** Builds the local build into stage, at version, with its record naming program and the rest by
+ * their paths once in place (in program's folder's parent), and returns its core and the IDs of its
+ * coding-tool add-ons. stop runs each command (a Stoppable's run; the tests give a stand-in, and
+ * CARGO_TARGET_DIR for where the programs it builds land). */
+export async function buildStage(
   stage: string,
   version: string,
   program: string,
-  stop: Stoppable,
-): Promise<BundledCore> {
+  stop: { run: Runner },
+): Promise<BundledCore & { addOns: string[] }> {
   const work = join(stage, "work");
   mkdirSync(work);
   // The real provider extensions, as the bundled registry of the core the build comes with.
@@ -1054,34 +1151,61 @@ async function buildStage(
     stop.run,
   );
   const core = cores[version] as BundledCore;
+  const lib = join(stage, "lib", LOCAL.productName);
+  const tools = await localTools(work, join(lib, "app-tools"), stop.run);
   const overlay = join(work, "tauri.local.conf.json");
   writeFileSync(overlay, JSON.stringify({ ...LOCAL, version }));
   await stop.run(
     tauri,
-    ["build", "--ci", "--no-bundle", "--features", "local-build", "--config", overlay, "--", "--locked"],
+    [
+      "build",
+      "--ci",
+      "--no-bundle",
+      "--features",
+      "local-build,artifact-test-trust",
+      "--config",
+      overlay,
+      "--",
+      "--locked",
+    ],
     app,
     { ...(process.env as Record<string, string>), PLUXY_BUNDLED_CORE: core.manifest },
   );
   // The installed layout bundled_core.rs `place` reads on Linux: the core's program beside the
   // app's, and its bundled/ in the app's resource folder, lib/<product name>/core/bundled.
   const bin = join(stage, "bin");
-  const lib = join(stage, "lib", LOCAL.productName);
   mkdirSync(bin);
   mkdirSync(join(lib, "core"), { recursive: true });
-  copyFileSync(join(targetDir, "release", LOCAL.mainBinaryName), join(bin, LOCAL.mainBinaryName));
+  // Where tauri build put the app, by the CARGO_TARGET_DIR it was given.
+  const appTarget = resolve(tauriDir, process.env.CARGO_TARGET_DIR || "target");
+  copyFileSync(join(appTarget, "release", LOCAL.mainBinaryName), join(bin, LOCAL.mainBinaryName));
   copyFileSync(join(core.dir, coreProgram), join(bin, coreProgram));
   cpSync(join(core.dir, "bundled"), join(lib, "core", "bundled"), { recursive: true });
+  copyFileSync(join(app, "local-start.sh"), join(stage, "start"));
+  chmodSync(join(stage, "start"), 0o755);
   const kept = { version: core.version, packages: core.packages };
   rmSync(work, { recursive: true, force: true });
+  const outDir = dirname(dirname(program));
   writeFileSync(
     join(stage, LOCAL_RECORD),
     `${JSON.stringify(
-      { program, identifier: LOCAL.identifier, product_name: LOCAL.productName, bundled_core: kept },
+      {
+        program,
+        identifier: LOCAL.identifier,
+        product_name: LOCAL.productName,
+        bundled_core: kept,
+        start: join(outDir, "start"),
+        app_tools: {
+          index: join(outDir, "lib", LOCAL.productName, "app-tools", "index.json"),
+          key_id: tools.keyId,
+          packages: tools.packages,
+        },
+      },
       null,
       2,
     )}\n`,
   );
-  return core;
+  return { ...core, addOns: tools.packages };
 }
 
 /** The build's OUT_DIR whose receipt the built binary carries: its snapshots describe that build. */

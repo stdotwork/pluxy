@@ -3,6 +3,7 @@
 // leaves (the command itself, with stand-in commands that fail or wait), and its version.
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -18,8 +19,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { checkOutDir, LOCAL_RECORD, localVersion, swapIn } from "../package";
+import { basename, join } from "node:path";
+import { buildStage, checkOutDir, LOCAL_RECORD, localVersion, signAppTools, swapIn } from "../package";
 
 /** A test that needs file modes to hold: root reads and removes past them. */
 const asUser = test.skipIf(process.getuid?.() === 0);
@@ -514,7 +515,7 @@ try {
         JSON.stringify({ program, identifier: "dev.pluxy.desktop.local", product_name: "pluxy Local", bundled_core: { version, packages: [] } }),
       );
       if (when === "build") process.kill(process.pid, "SIGTERM");
-      return { version, manifest: "", dir: "", packages: [] };
+      return { version, manifest: "", dir: "", packages: [], addOns: [] };
     },
     move: (from, to) => {
       if (when === "replace" && from === outDir) {
@@ -581,6 +582,148 @@ try {
   });
 });
 
+describe("buildStage", () => {
+  /** The add-ons' programs the build must make: each app tool's linux/amd64 program, but the app's
+   * own test fixture's, read from the manifests in next/app-tools. */
+  function toolPrograms(): string[] {
+    const tools = join(app, "..", "app-tools");
+    const names: string[] = [];
+    for (const folder of readdirSync(tools)) {
+      const manifest = join(tools, folder, "pluxy-extension.json");
+      if (folder === "usage-fixture" || !existsSync(manifest)) continue;
+      const program = JSON.parse(readFileSync(manifest, "utf8")).app?.programs?.["linux/amd64"];
+      if (typeof program === "string") names.push(basename(program));
+    }
+    return names.sort();
+  }
+
+  /** Runs buildStage into a new stage with commands that write what the real ones would (each
+   * program, pluxy-pack's archives and index, the bundle-core tool's core, the app), with
+   * CARGO_TARGET_DIR at a folder of the test's, and returns the stage, the build's folder once in
+   * place, what buildStage returned and the commands it ran. */
+  async function planned() {
+    const root = tempDir();
+    const target = join(root, "target");
+    const stage = join(root, "stage");
+    mkdirSync(stage);
+    const outDir = join(root, "local-build");
+    const calls: { cmd: string; args: string[]; env?: Record<string, string> }[] = [];
+    const after = (args: string[], flag: string) => args[args.indexOf(flag) + 1] as string;
+    const run = async (cmd: string, args: string[], _cwd: string, env?: Record<string, string>) => {
+      calls.push({ cmd, args, env });
+      if (cmd === "go" && args[0] === "run" && args.includes("-app-tools")) {
+        const programs = join(after(args, "-app-tools"), "linux-amd64");
+        const dest = join(after(args, "-out"), "app-tools");
+        mkdirSync(dest, { recursive: true });
+        const packages: Record<string, unknown> = {};
+        for (const name of readdirSync(programs)) {
+          const bytes = Buffer.from(`archive of ${readFileSync(join(programs, name), "utf8")}`);
+          const url = `pluxy-${name}-0.1.0-linux-amd64.tar.gz`;
+          writeFileSync(join(dest, url), bytes);
+          const sha256 = createHash("sha256").update(bytes).digest("hex");
+          packages[`pluxy/${name}`] = {
+            releases: [
+              { version: "0.1.0", artifacts: { "linux/amd64": { url, size: bytes.length, sha256 } } },
+            ],
+          };
+        }
+        writeFileSync(join(dest, "index.json"), JSON.stringify({ registry_version: 0, packages }));
+      } else if (cmd === "go" && args[0] === "run") {
+        mkdirSync(join(after(args, "-out"), "bundled"), { recursive: true });
+        writeFileSync(join(after(args, "-out"), "bundled", "index.json"), '{"packages":{"pluxy/openai":{}}}');
+      } else if (cmd === "go" && args[0] === "build") {
+        writeFileSync(after(args, "-o"), "core program");
+      } else if (cmd === "cargo" && args.includes("--release")) {
+        mkdirSync(join(target, "release"), { recursive: true });
+        for (const name of args.filter((_, i) => args[i - 1] === "--bin")) {
+          writeFileSync(join(target, "release", name), `program ${name}`);
+        }
+      } else if (cmd === "cargo" && args.includes("bundle-core")) {
+        // The tool's own build: the stand-in below is the tool.
+      } else if (basename(cmd) === "bundle-core") {
+        const out = args[4] as string;
+        mkdirSync(join(out, "core", "bundled"), { recursive: true });
+        writeFileSync(join(out, "core", "pluxy"), "core program");
+        writeFileSync(join(out, "core", "bundled", "index.json"), '{"packages":{"pluxy/openai":{}}}');
+        writeFileSync(join(out, "bundled-core.json"), "{}");
+      } else if (basename(cmd) === "tauri") {
+        mkdirSync(join(target, "release"), { recursive: true });
+        writeFileSync(join(target, "release", "pluxy-app-local"), "app program");
+      } else throw new Error(`a command the plan does not have: ${cmd} ${args.join(" ")}`);
+    };
+    const before = process.env.CARGO_TARGET_DIR;
+    process.env.CARGO_TARGET_DIR = target;
+    try {
+      const built = await buildStage(
+        stage,
+        "0.1.0+local.0123456789ab",
+        join(outDir, "bin", "pluxy-app-local"),
+        {
+          run,
+        },
+      );
+      return { stage, outDir, built, calls };
+    } finally {
+      if (before === undefined) delete process.env.CARGO_TARGET_DIR;
+      else process.env.CARGO_TARGET_DIR = before;
+    }
+  }
+
+  test("builds and signs every coding-tool add-on into the stage", async () => {
+    const { stage, built, calls } = await planned();
+    const programs = toolPrograms();
+    expect(programs.length).toBeGreaterThan(0);
+    const cargo = calls.find((c) => c.cmd === "cargo" && c.args.includes("--release"));
+    expect(cargo?.args.filter((_, i, a) => a[i - 1] === "--bin").sort()).toEqual(programs);
+    const tools = join(stage, "lib", "pluxy Local", "app-tools");
+    const publisher = JSON.parse(readFileSync(join(tools, "publisher.json"), "utf8"));
+    const index = JSON.parse(readFileSync(join(tools, "index.json"), "utf8"));
+    const ids = programs.map((p) => `pluxy/${p}`).sort();
+    expect(Object.keys(index.packages).sort()).toEqual(ids);
+    for (const id of ids) {
+      const a = index.packages[id].releases[0].artifacts["linux/amd64"];
+      expect(a.key_id).toBe(publisher.key_id);
+      expect(existsSync(join(tools, a.url))).toBe(true);
+    }
+    expect(built.addOns).toEqual(ids);
+  });
+
+  test("builds the app with the local-build and artifact-test-trust features, beside its core", async () => {
+    const { stage, built, calls } = await planned();
+    const tauri = calls.filter((c) => basename(c.cmd) === "tauri");
+    expect(tauri).toHaveLength(1);
+    const args = tauri[0]?.args ?? [];
+    expect(args[args.indexOf("--features") + 1]).toBe("local-build,artifact-test-trust");
+    expect(tauri[0]?.env?.PLUXY_BUNDLED_CORE).toBe(built.manifest);
+    expect(readFileSync(join(stage, "bin", "pluxy-app-local"), "utf8")).toBe("app program");
+    expect(readFileSync(join(stage, "bin", "pluxy"), "utf8")).toBe("core program");
+    expect(existsSync(join(stage, "lib", "pluxy Local", "core", "bundled", "index.json"))).toBe(true);
+    expect(existsSync(join(stage, "work"))).toBe(false);
+  });
+
+  test("puts start in the stage, runnable, and a record naming it and the add-ons where they will be", async () => {
+    const { stage, outDir, built } = await planned();
+    expect(readFileSync(join(stage, "start"), "utf8")).toBe(
+      readFileSync(join(app, "local-start.sh"), "utf8"),
+    );
+    expect(lstatSync(join(stage, "start")).mode & 0o777).toBe(0o755);
+    const tools = join(stage, "lib", "pluxy Local", "app-tools");
+    const publisher = JSON.parse(readFileSync(join(tools, "publisher.json"), "utf8"));
+    expect(JSON.parse(readFileSync(join(stage, LOCAL_RECORD), "utf8"))).toEqual({
+      program: join(outDir, "bin", "pluxy-app-local"),
+      identifier: "dev.pluxy.desktop.local",
+      product_name: "pluxy Local",
+      bundled_core: { version: "0.1.0+local.0123456789ab", packages: ["pluxy/openai"] },
+      start: join(outDir, "start"),
+      app_tools: {
+        index: join(outDir, "lib", "pluxy Local", "app-tools", "index.json"),
+        key_id: publisher.key_id,
+        packages: built.addOns,
+      },
+    });
+  });
+});
+
 describe("localVersion", () => {
   test("is the core version the app names with 12 random hex digits as build metadata, new on each call", () => {
     const core: string = JSON.parse(readFileSync(join(app, "core-release.json"), "utf8")).version;
@@ -590,5 +733,114 @@ describe("localVersion", () => {
     expect(a).toMatch(form);
     expect(b).toMatch(form);
     expect(a).not.toBe(b);
+  });
+});
+
+describe("signAppTools", () => {
+  /** What pluxy-pack -app-tools writes: app-tools/index.json and the archives it lists. */
+  function packed(): { dir: string; archives: Record<string, Buffer> } {
+    const dir = tempDir();
+    mkdirSync(join(dir, "app-tools"));
+    const archives: Record<string, Buffer> = {};
+    const packages: Record<string, unknown> = {};
+    for (const [id, extra] of [
+      ["pluxy/claude-code", { title: "Claude Code", kind: "client", tier: "pick" }],
+      ["pluxy/agent-usage", { tier: "verified" }],
+    ] as const) {
+      const url = `${id.replace("/", "-")}-0.1.0-linux-amd64.tar.gz`;
+      const bytes = randomBytes(4096);
+      archives[url] = bytes;
+      writeFileSync(join(dir, "app-tools", url), bytes);
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      packages[id] = {
+        ...extra,
+        releases: [{ version: "0.1.0", artifacts: { "linux/amd64": { url, sha256, size: bytes.length } } }],
+      };
+    }
+    writeFileSync(join(dir, "app-tools", "index.json"), JSON.stringify({ registry_version: 0, packages }));
+    return { dir, archives };
+  }
+
+  /** An Ed25519 public key from its 32 bytes in hex. */
+  const ed25519 = (hex: string) =>
+    createPublicKey({
+      key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), Buffer.from(hex, "hex")]),
+      format: "der",
+      type: "spki",
+    });
+
+  test("signs each archive's descriptor, in the verifier's field order, with a key it names", () => {
+    const { dir, archives } = packed();
+    const dest = join(tempDir(), "app-tools");
+    const r = signAppTools(dir, dest);
+    expect(r.packages).toEqual(["pluxy/agent-usage", "pluxy/claude-code"]);
+    expect(r.keyId).toMatch(/^local-build-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const publisher = JSON.parse(readFileSync(join(dest, "publisher.json"), "utf8"));
+    expect(Object.keys(publisher)).toEqual(["key_id", "public_key"]);
+    expect(publisher.key_id).toBe(r.keyId);
+    expect(publisher.public_key).toMatch(/^[0-9a-f]{64}$/);
+    // start reads publisher.json line by line: one field a line, two spaces in.
+    expect(readFileSync(join(dest, "publisher.json"), "utf8")).toBe(
+      `{\n  "key_id": "${r.keyId}",\n  "public_key": "${publisher.public_key}"\n}\n`,
+    );
+    const index = JSON.parse(readFileSync(join(dest, "index.json"), "utf8"));
+    expect(index.packages["pluxy/claude-code"].title).toBe("Claude Code");
+    type Artifact = Record<"url" | "sha256" | "key_id" | "public_key" | "descriptor" | "signature", string>;
+    type Listed = { releases: { artifacts: Record<string, Artifact> }[] };
+    for (const [id, p] of Object.entries(index.packages as Record<string, Listed>)) {
+      const a = p.releases[0]?.artifacts["linux/amd64"] as Artifact;
+      const bytes = archives[a.url] as Buffer;
+      expect(readFileSync(join(dest, a.url)).equals(bytes)).toBe(true);
+      expect(a.key_id).toBe(r.keyId);
+      expect(a.public_key).toBe(publisher.public_key);
+      expect(a.descriptor).toBe(
+        `{"id":"${id}","version":"0.1.0","tier":"native","platform":"linux/amd64","size":${bytes.length},"sha256":"${a.sha256}"}`,
+      );
+      expect(
+        verify(null, Buffer.from(a.descriptor), ed25519(a.public_key), Buffer.from(a.signature, "hex")),
+      ).toBe(true);
+    }
+    expect(readdirSync(dest).sort()).toEqual(
+      [...Object.keys(archives), "index.json", "publisher.json"].sort(),
+    );
+  });
+
+  test("writes no private key, in PEM or JWK form, into any file", () => {
+    const dest = join(tempDir(), "app-tools");
+    signAppTools(packed().dir, dest);
+    for (const name of readdirSync(dest)) {
+      const text = readFileSync(join(dest, name), "latin1");
+      expect(text).not.toContain("PRIVATE KEY");
+      expect(text).not.toMatch(/"d"\s*:/);
+    }
+  });
+
+  test("makes a new key each time", () => {
+    const { dir } = packed();
+    const a = signAppTools(dir, join(tempDir(), "a"));
+    const b = signAppTools(dir, join(tempDir(), "b"));
+    expect(a.keyId).not.toBe(b.keyId);
+  });
+
+  test("refuses an archive whose bytes are not the ones the index lists", () => {
+    const { dir, archives } = packed();
+    const url = Object.keys(archives)[0] as string;
+    const bytes = Buffer.from(archives[url] as Buffer);
+    bytes[100] = (bytes[100] as number) ^ 1;
+    writeFileSync(join(dir, "app-tools", url), bytes);
+    expect(() => signAppTools(dir, join(tempDir(), "app-tools"))).toThrow(
+      `${url}: its size or SHA-256 differs from the index pluxy-pack wrote`,
+    );
+  });
+
+  test("refuses an archive named outside the index's folder", () => {
+    const { dir } = packed();
+    const path = join(dir, "app-tools", "index.json");
+    const index = JSON.parse(readFileSync(path, "utf8"));
+    index.packages["pluxy/agent-usage"].releases[0].artifacts["linux/amd64"].url = "../elsewhere.tar.gz";
+    writeFileSync(path, JSON.stringify(index));
+    expect(() => signAppTools(dir, join(tempDir(), "app-tools"))).toThrow(
+      "pluxy/agent-usage 0.1.0: its archive is not named as a file beside the index",
+    );
   });
 });

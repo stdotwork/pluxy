@@ -1,4 +1,5 @@
-//! Production roots are compiled, never imported from HOME. Test roots require both gates.
+//! Production roots are compiled, never imported from HOME. Test roots load from a profile in HOME
+//! only in a build that may use one (`PROFILE_TRUST`), and only when the profile and its marker hold.
 use crate::artifact::decode_hex;
 #[cfg(feature = "artifact-test-trust")]
 use crate::artifact::valid_publisher;
@@ -9,6 +10,17 @@ use std::{fs, path::Path};
 pub const MARKER_FILE: &str = ".pluxy-test-trust-profile.json";
 pub const PROFILE_FILE: &str = ".pluxy-test-trust-roots.json";
 pub const COMPILED_TEST_TRUST: bool = cfg!(feature = "artifact-test-trust");
+/// Whether this build loads a test trust profile from HOME: `artifact-test-trust` together with the
+/// local build's identity (`local-build`, package.ts local) or the native test's (`native-test`).
+/// The feature alone, in any other build (a debug build, say), compiles the profile's checks but
+/// refuses every profile, so no root in HOME is trusted.
+pub const PROFILE_TRUST: bool = cfg!(all(
+    feature = "artifact-test-trust",
+    any(feature = "local-build", feature = "native-test")
+));
+/// What `TrustStore::load` answers for a profile in a build that loads none.
+pub const NO_PROFILE: &str =
+    "this build loads no test trust profile: only a local build or a native-test build does";
 pub const PRODUCTION_TRUST: &str = include_str!("../trust/production.json");
 
 #[derive(Deserialize)]
@@ -50,6 +62,9 @@ impl TrustStore {
         }
         #[cfg(feature = "artifact-test-trust")]
         if home.join(MARKER_FILE).exists() {
+            if !PROFILE_TRUST {
+                return Err(NO_PROFILE.into());
+            }
             check_profile(home)?;
             let bytes = read_bounded(&home.join(PROFILE_FILE))?;
             config = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;

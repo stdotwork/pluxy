@@ -257,11 +257,13 @@ jobs:
           PY
       # The test trust built in: the trust profile and the updater gate, the release gate (which
       # must refuse a test build), and on Windows the access-list check of the profile
-      # (src/win_acl.rs).
+      # (src/win_acl.rs). The profile loads only with native-test or local-build beside
+      # artifact-test-trust: the first run checks the feature alone refuses it.
       - name: Artifact signature and test trust controls
         working-directory: next/app/src-tauri
         run: |
           cargo test --locked --features artifact-test-trust --test artifact_trust --test release_config
+          cargo test --locked --features native-test,artifact-test-trust --test artifact_trust
           if [ "$RUNNER_OS" = Windows ]; then
             cargo test --locked --features artifact-test-trust --lib win_acl::
           fi

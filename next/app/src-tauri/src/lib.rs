@@ -3253,6 +3253,11 @@ pub fn run() {
         feature = "local-build"
     ))]
     std::hint::black_box(&PLUXY_TEST_BUILD);
+    // A local build offers no Open at sign-in; a login item an earlier one wrote starts nothing.
+    if startup::refused_launch(!cfg!(feature = "local-build"), std::env::args_os()) {
+        eprintln!("pluxy-app: {}: not opening at sign-in", startup::NO_SIGN_IN);
+        return;
+    }
     let context = tauri::generate_context!();
     // The updater plugin exists only when the updater gate passes, before anything else runs: a
     // build without updater trust never loads it.
@@ -3383,6 +3388,12 @@ pub fn run() {
                 autostart_base,
                 app.config().identifier.clone(),
             );
+            // A local build opens only through its start (`startup::Store::without_sign_in`).
+            let startup_store = if cfg!(feature = "local-build") {
+                startup_store.without_sign_in()
+            } else {
+                startup_store
+            };
             let preferences = startup_store.load();
             #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
             let confirmations =

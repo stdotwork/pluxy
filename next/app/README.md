@@ -401,6 +401,9 @@ back with the reason when the save fails). A row is not drawn until the native s
   Turning Open at sign-in off removes pluxy's entry (and turns Start in the tray off). Merely opening the app does
   not register it. The displayed choice is read from that entry, including desktop disable flags.
   A file without pluxy's ownership marker is shown as a conflict and left alone.
+  A [local build](#the-local-build) offers no Open at sign-in: the row says it opens only with its
+  start command, Start in the tray is not drawn, and a login launch (`--autostart`) of it, from an
+  entry an earlier local build wrote, ends at once.
 - **Start in the tray** (disabled until Open at sign-in is on, and when there is no tray) suppresses the window only for an autostart launch in managed mode when
   the session has a StatusNotifier watcher and a registered tray host. Local and remote modes
   host no core, so they open normally. In that case no window or webview is
@@ -1921,8 +1924,9 @@ check, `release-package: failed: <reason>`.
 
 ### The local build
 
-The local build is the desktop app built to open and use on this Linux computer, with a core and
-the real provider extensions inside. It is not a release and cannot pass for one. From `next/`:
+The local build is the desktop app built to open and use on this Linux computer, with a core, the
+real provider extensions and the coding-tool add-ons inside. It is not a release and cannot pass
+for one. From `next/`:
 
 ```bash
 make app-local                        # into next/app/local-build
@@ -1931,55 +1935,132 @@ make app-local LOCAL=/some/folder     # into a folder of your choice
 
 `make app-local` builds the web panel core embeds (`make panel`), installs and builds the window
 (`bun run build`), then runs `bun run package:local <folder>` here. It needs what the app's other
-builds need ([Build and check](#build-and-check)) and Go. Its last lines give the build's version,
-the providers it carries, where it is and how to start it. It builds only into a new or empty
-folder or an earlier local build ([Building it again](#building-it-again)).
+builds need ([Build and check](#build-and-check)), Go, and Rust for the add-ons. Its last lines give
+the build's version, the providers and add-ons it carries, how to start it, and that its accounts
+and settings stay when you build again. It builds only into a new or empty folder or an earlier
+local build ([Building it again](#building-it-again)).
 
 The folder holds:
 
 | Path in the folder | What it is |
 | --- | --- |
-| `bin/pluxy-app-local` | The app. Start it from here. |
+| `start` | What you run: it writes the trust profile below, then starts the app (`local-start.sh` here). |
+| `bin/pluxy-app-local` | The app. |
 | `bin/pluxy` | The core the app comes with ([The core the app comes with](#the-core-the-app-comes-with)). |
 | `lib/pluxy Local/core/bundled` | The core's bundled registry: every provider extension in `next/extensions`, built by `go run ./cmd/pluxy-pack`. |
-| `local-build.json` | The app's path, the core's version and the IDs of the providers it carries. |
+| `lib/pluxy Local/app-tools` | The coding-tool add-ons: every tool in `next/app-tools` with a Linux program, built with Cargo and packed by `pluxy-pack -app-tools`, the signed index the app installs them from (`index.json`), and `publisher.json`, the ID and public key of the key that signed them. |
+| `home/` | The home folder the app runs in by default, made by `start`. |
+| `local-build.json` | The app's path, `start`'s, the core's version and the IDs of the providers and add-ons it carries. |
 
-Start it with `next/app/local-build/bin/pluxy-app-local` from the repository's root (or from the
-folder you gave). On first launch, choose **On this computer**: the app copies the
-core it came with into its own cores, starts it on a free loopback port and connects. Setup and
-Extensions then offer the providers; none is installed until you install it, and installing one
-needs no network, since the archives are in the folder.
+Start it with `next/app/local-build/start` from the repository's root (or `start` in the folder you
+gave). On first launch, choose **On this computer**: the app copies the pluxy it came with into its
+own cores, starts it on a free loopback port and connects. Setup and Extensions then offer the
+providers, and **Add-ons** lists the coding-tool add-ons under **Available to install**, from the
+source `local-build`. None is installed until you install it, and installing needs no network,
+since the archives are in the folder. An installed add-on shows as **Verified** and starts turned
+off; turning it on (**Turn on** on Add-ons, or **Turn on add-on** on its tool's page) asks you in a
+native confirmation, as in any build. Then its page works as [The tool pages](#the-tool-pages) and
+the pages after it describe: **Connect Claude Code** on the Claude Code page, for example, makes a
+key for Claude Code and points it at this build's pluxy, and **Disconnect** or **Restore backup**
+undoes that.
+
+It runs one of two ways:
+
+- **By itself** (`start`, the default). The app's HOME is `home/` in the build's folder, and its
+  settings and data go under it (`home/.config/dev.pluxy.desktop.local`,
+  `home/.local/share/dev.pluxy.desktop.local`), so nothing of yours is kept. Only passing state
+  goes elsewhere, as for any program: the socket a second launch uses to find the open window, in
+  `pluxy-app` in your runtime folder (`$XDG_RUNTIME_DIR`) or else in the system's temporary
+  folder, and the temporary files the app and the tools it starts may make there. The tool
+  pages act on that home too: **Connect Claude Code** writes `home/.claude/settings.json`, and
+  **Connect Codex** `home/.codex/config.toml`. That is right for trying the app, and useless for
+  real work. Building again keeps `home/` ([Building it again](#building-it-again)).
+- **On your own tools** (`start --real-home`). The app runs with your HOME, so the tool pages read
+  and write your own `~/.claude`, `~/.codex` and the rest. Before it starts, it prints each file
+  and folder it writes and the commands that remove them, each path in single quotes so that
+  pasting a command runs nothing in the path: the trust profile's two files in your
+  home folder, the app's settings and data folders (`~/.config/dev.pluxy.desktop.local` and
+  `~/.local/share/dev.pluxy.desktop.local`), and a tool's settings only when you confirm
+  **Connect**, **Disconnect** or **Restore backup** on its page. Connect points that tool at this
+  build's pluxy, away from any other pluxy it used. The backups the tool pages keep are in the
+  app's data, so press **Disconnect** on each tool's page before you delete that folder. It refuses
+  to start, saying what to fix, when your home folder is a link or not a folder, belongs to another
+  user, or other users can open it (its mode has any group or other bit: `chmod 700` it), and
+  when the path of your home folder, `$XDG_CONFIG_HOME` or `$XDG_DATA_HOME` holds a quote,
+  backslash or control character. Like the app, it ignores an `$XDG_CONFIG_HOME` or
+  `$XDG_DATA_HOME` that is not an absolute path.
+
+How the app comes to trust the add-ons: it is built with the `artifact-test-trust` feature, the
+one the native tests use ([Package signatures and trust](#package-signatures-and-trust)), beside
+`local-build`. Together (or with the native tests' `native-test`) they load publisher roots from
+a trust profile in the process HOME, and only when that HOME is
+private, holds a marker naming it, and the app is given the marker's nonce as
+`PLUXY_TEST_TRUST_NONCE`. `start` writes that profile: one root, for publisher `pluxy`, whose
+source is this build's `lib/pluxy Local/app-tools/index.json` at its absolute path and whose key is
+the one in `publisher.json`; and it names that index in the app's `device-registries.json` when
+that file does not exist yet. When it exists, `start` leaves it as it is and reads it as JSON:
+when none of its registries has this index as its `url`, it says what to add, and when the file is
+not JSON, that it cannot be read.
+It rewrites the root at each start, and keeps the marker and its nonce while the marker names that
+home, so an app already running keeps its trust. Nothing else changes: every add-on's signature,
+size, SHA-256, manifest and installed files are checked as in any build, an archive changed after
+the build is refused, and turning one on still asks you. The Rust test
+`local_build_start_trusts_its_add_ons_and_refuses_a_flipped_byte` (`tests/artifact_trust.rs`, run
+with the `artifact-test-trust` and `native-test` features, as CI does) checks that with an add-on signed the way the build signs
+them: the profile `start` writes lets the app install it, and one flipped byte in its archive is
+refused. With `PLUXY_LOCAL_BUILD` naming a build's folder, it runs on that build's own `start` and
+every one of its add-ons.
 
 How it differs from a release:
 
 - **Its own name and folders.** Identifier `dev.pluxy.desktop.local`, product name
-  `pluxy Local`, program `pluxy-app-local`. Its settings go to
-  `~/.config/dev.pluxy.desktop.local`, its data and cores to
-  `~/.local/share/dev.pluxy.desktop.local` (under `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` when
-  set), and its login entry, if you turn one on, to its own file
-  (`dev.pluxy.desktop.local.desktop`), so it never shares anything with an installed release. The
-  entry's name is written when you turn **Open at sign-in** on, so an entry an earlier build
-  wrote keeps that build's name until you turn it off and on again.
-- **Marked as a local build.** The window's title, the tray's tooltip and its Open item, and the
-  login item's name say "pluxy (local build)". The `local-build` Cargo feature also puts the test
-  build marker in the program, so the [release validator](#validate-release-inputs) refuses the
-  program given as an artifact (`test build marker/identity in artifact`), refuses the build's own
-  config for its identifier and product name, and refuses the `local-build` feature (`test cargo
-  feature in release`).
+  `pluxy Local`, program `pluxy-app-local`. Its settings go to a `dev.pluxy.desktop.local` folder in
+  its config folder, and its data and cores to one in its data folder: under `home/` when `start`
+  runs it, and in `~/.config` and `~/.local/share` (or `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME`)
+  with `--real-home`, so it never shares anything with an installed release.
+- **No Open at sign-in.** It opens only with its `start`, which sets its home folder and its
+  add-on trust; at sign-in nothing would. So Where pluxy runs says so in place of the switch, and
+  a login launch of it ends at once: a login entry an earlier local build wrote
+  (`dev.pluxy.desktop.local.desktop` in your autostart folder) starts nothing. Delete that file to
+  remove it.
+- **Marked as a local build.** The window's title and the tray's tooltip and its Open item say
+  "pluxy (local build)". The `local-build` Cargo feature also puts the test build marker in the
+  program. Given the build's own snapshots and program, the
+  [release validator](#validate-release-inputs) refuses its identity first:
+  `release configuration refused: release identifier/product must be dev.pluxy.desktop/pluxy`.
+  Given a release identifier and product name in that config instead, it refuses each of the
+  build's `local-build` and `artifact-test-trust` features:
+  `release configuration refused: test cargo feature in release`. Those checks come before the scan
+  of the program, so this build's own inputs never reach it; the marker is the further check that
+  refuses a program carrying it (`test build marker/identity in artifact`) should its config and
+  features ever get past them, as the `release_config` tests show with made-up inputs.
 - **No test checks.** It is built in the release profile without the `native-test` feature, so it
   runs no checks and does not exit by itself, as the test package does.
-- **Keys made for the build.** Its core is a release the command makes, as the test package's
-  are, signed with a publisher key made for that one build; the private key stays in the
-  command's memory and is gone when it ends. Nothing is signed with a key kept in the repository.
-  The build has no updater key, so it never updates itself: build it again to update it.
-- **No coding-tool add-ons yet.** The native tools in `next/app-tools` are not built into it,
-  and it has no trusted source for them, so it cannot install them.
+- **Keys made for the build.** Its core and its add-ons are signed with two publisher keys made for
+  that one build; the private keys stay in the command's memory and are gone when it ends. Nothing
+  is signed with a key kept in the repository. The build has no updater key, so it never updates
+  itself: build it again to update it.
+- **Trust from a file, not compiled in.** A release trusts only roots compiled into it (none yet)
+  and never reads HOME for them. This build trusts whatever root a valid profile in its HOME
+  names. That is weaker: any program running as you can write a profile naming its own key, and
+  then start the app with it to have its own native tool admitted. It is acceptable for a build that never
+  ships, because a program running as you can already change the build's files, and the profile
+  binds the trust closely: the key exists only for this build and its private half is gone, the
+  root names only this build's index path, and the marker's nonce reaches only an app `start`
+  started. A release build, built without `artifact-test-trust`, never reads the profile, and a
+  build with that feature but neither `local-build` nor `native-test` refuses it, so the trust
+  cannot reach either. Another local build has its own key and path; started on the same home, its
+  `start` replaces the root, and the add-ons the first build installed no longer verify against it.
 
-To remove it, quit the app (its core stops with it), then delete the build folder and its data:
+To remove it, quit the app (its pluxy stops with it), then delete the build folder (with `home/` in
+it). If you ran it with `--real-home`, press **Disconnect** on each tool page you connected first,
+then delete what `start` printed:
 
 ```bash
-rm -rf next/app/local-build ~/.config/dev.pluxy.desktop.local ~/.local/share/dev.pluxy.desktop.local
-rm -f ~/.config/autostart/dev.pluxy.desktop.local.desktop   # only if you turned on Open at sign-in
+rm -rf next/app/local-build
+rm -f ~/.pluxy-test-trust-profile.json ~/.pluxy-test-trust-roots.json   # only after --real-home
+rm -rf ~/.config/dev.pluxy.desktop.local ~/.local/share/dev.pluxy.desktop.local   # likewise
+rm -f ~/.config/autostart/dev.pluxy.desktop.local.desktop   # only if an earlier local build's Open at sign-in was on
 ```
 
 ### Building it again
@@ -2006,10 +2087,11 @@ After a change, quit the app (from its tray menu when it is in the tray), then r
    one, and then `<folder>.old` is removed. If a step fails, the message says where the old build
    or its `home/` is, and nothing that still holds `home/` is removed.
 
-So a rebuild replaces `bin/`, `lib/` and `local-build.json`, keeps `home/`, and removes anything
-else in the folder. `home/` is where the app keeps its settings and data when you start it with
-`HOME` pointing there; started as above, they are in `~/.config/dev.pluxy.desktop.local` and
-`~/.local/share/dev.pluxy.desktop.local`, which a rebuild does not touch either.
+So a rebuild replaces `bin/`, `lib/`, `start` and `local-build.json`, keeps `home/`, and removes
+anything else in the folder. `home/` is where the app keeps its accounts, settings and data when
+`start` runs it, so they stay. Started with `--real-home`, they are in
+`~/.config/dev.pluxy.desktop.local` and `~/.local/share/dev.pluxy.desktop.local`, which a rebuild
+does not touch either.
 
 Each build has a version of its own, the core version the app names (`core-release.json`) followed
 by `+local.` and 12 random hex digits, such as `0.1.0+local.90a173983d0c`. The app and its core
@@ -2021,6 +2103,12 @@ and installed providers stay. An installed provider keeps running the copy you i
 when the new build carries a changed one at the same version: to run the new one, remove the
 provider and install it again (on Extensions, or `pluxy ext remove` and `pluxy ext install`); its
 accounts stay.
+
+The add-ons are signed with a key made for each build, and `start` trusts only the key of the build
+it belongs to. So after a rebuild, the add-ons installed in `home/` show as **Unverified** and turned
+off, and Add-ons says to remove them: **Remove** each one there, **Install** it again and turn it on.
+What Connect wrote into a tool's settings stays, so the tool keeps reaching pluxy meanwhile; only
+its page in the app waits for its add-on.
 
 ### The updater gate
 
@@ -2318,8 +2406,11 @@ execute anything. See [the signed descriptor contract](app-host/README.md#signed
 
 Production publisher and updater roots are empty. The shared trust loader reports
 `not configured` for native-tier and updater trust and never substitutes test keys.
-The `artifact-test-trust` cargo feature permits a test runner to load public roots only from a
-private temporary HOME with a runner-created trust marker. A temporary HOME alone grants no trust.
+The `artifact-test-trust` cargo feature, in a build that also has `native-test` (the native
+tests) or `local-build` (the [local build](#the-local-build)), permits public roots to be loaded
+only from a private HOME with a trust marker: a test runner's temporary one, or the one the local
+build's `start` writes. With the feature alone, in any other build, a profile is refused
+(`trust::PROFILE_TRUST`). A temporary HOME alone grants no trust.
 Private signing keys are generated at runtime and kept only in temporary fixture directories.
 Tauri updater signatures have their own format; descriptor signatures cannot replace them.
 

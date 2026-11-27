@@ -18,7 +18,9 @@ path = "src/main.rs"
 # For the native test only (native/run.ts): the app probes its webviews' command access and
 # reports on stderr. Never in a release build.
 native-test = []
-# Loads publisher roots only for tests that create an isolated temporary trust profile.
+# Publisher roots from a trust profile in HOME (src/trust.rs), loaded only together with local-build
+# (package.ts local, whose start writes the profile) or native-test (the native tests, which make an
+# isolated temporary one). With neither, the profile is refused. Never in a release build.
 artifact-test-trust = []
 # The local build (package.ts local): the window's title says so, and the program carries the
 # test build marker, so the release gate refuses it. Never in a release build.
