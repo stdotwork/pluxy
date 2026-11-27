@@ -26,8 +26,9 @@ func (c *mcore) waitUsageEvents(t *testing.T, n int) ([]usageEvent, string) {
 	}
 }
 
-// A request that fell back says how many attempts it took and what each hit, the last by "ok";
-// a request that went to one account and succeeded carries no tried.
+// A request that fell back says how many attempts it took, what each hit, the last by "ok", and
+// why the account that answered was chosen; a request that went to one account and succeeded
+// carries no tried.
 func TestUsageSaysWhatAFallbackTried(t *testing.T) {
 	u := newUpstream(t)
 	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
@@ -57,6 +58,10 @@ func TestUsageSaysWhatAFallbackTried(t *testing.T) {
 	if e.Attempts != 2 || !slices.Equal(e.Tried, want) || e.Account != "second" || e.Tried[1].Account != resp.Header.Get("X-Pluxy-Account") {
 		t.Fatalf("attempts %d, tried %+v, want 2 and %+v; account %q\n%s", e.Attempts, e.Tried, want, e.Account, raw)
 	}
+	// The second account is a backup: the first, ahead of it in the order, could not take it.
+	if e.Why != "backup" {
+		t.Fatalf("why %q, want backup\n%s", e.Why, raw)
+	}
 
 	// The first account is cooling now: the next request goes to one account and succeeds.
 	resp = post(t, context.Background(), base, clientKey, plainBody)
@@ -73,7 +78,7 @@ func TestUsageSaysWhatAFallbackTried(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := rawEvents.Events[1]
-	if events[1].Attempts != 1 || string(last["attempts"]) != "1" {
+	if events[1].Attempts != 1 || string(last["attempts"]) != "1" || events[1].Why != "backup" {
 		t.Fatalf("one successful attempt: %s", raw)
 	}
 	if _, has := last["tried"]; has {

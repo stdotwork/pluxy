@@ -37,6 +37,20 @@ const t = strings("activity", {
   busy: "busy with other requests",
   skipped: "not reached before the request gave up",
   notTried: "not tried",
+  backupNote: "backup",
+  whyPinned: "The request asked for {account} by name.",
+  whySession: "{account} answered this conversation's last request, so pluxy kept the conversation there.",
+  whyOnly: "{account} is the only account that serves {model}.",
+  whyFirst: "{account} comes first in its provider's account order.",
+  whyBackup:
+    "{account} is a backup in its provider's account order: no account above it could take the request then.",
+  whyOnlyFree: "{account} was the only account in the first group that could take it then.",
+  whyRoundRobin: "It was {account}'s turn: the accounts in the first group take turns.",
+  whyWeighted: "{account} was next by weight: the first group splits requests by weight.",
+  whyFillFirst:
+    "{account} is the first account in the first group that could take it: the group fills one first.",
+  whyLeastActive: "{account} had the fewest requests running in the first group.",
+  whySoonestReset: "{account}'s limit resets soonest in the first group, so pluxy spends it first.",
   hotspotSome: "{count} of the {total} failed requests asked for {model}.",
   hotspotAll: "All {total} failed requests asked for {model}.",
   figRequestsOne: "1 request",
@@ -151,6 +165,11 @@ export interface Story {
   lines: string[];
   /** After the lines: each account the request left out, and why. */
   leftOut: { account: string; text: string }[];
+  /**
+   * Why pluxy chose the account that answered, as a sentence; order: the reason is the account
+   * order of Order & fallback, which the story links to.
+   */
+  reason?: { text: string; order: boolean };
   /** The model no account serves: the story links to Accounts. */
   noServe?: boolean;
   /** The one next step of a failed request: an attempt's account, or its log. */
@@ -194,6 +213,41 @@ function fallbackModel(e: UsageEvent): string | undefined {
 }
 
 /**
+ * Why routing chose the account that answered, by the record's why; undefined for a record
+ * that does not say, or a reason this does not know. order: the reason is the account order.
+ */
+function reasonOf(e: UsageEvent, account: string): Story["reason"] {
+  const model = (e.chain_step ?? 0) > 1 ? (fallbackModel(e) ?? e.model) : e.model;
+  const said = (text: string, order: boolean) => ({ text, order });
+  switch (e.why) {
+    case "pinned":
+      return said(t("whyPinned", { account }), false);
+    case "session":
+      return said(t("whySession", { account }), false);
+    case "only":
+      return said(t("whyOnly", { account, model }), false);
+    case "first":
+      return said(t("whyFirst", { account }), true);
+    case "backup":
+      return said(t("whyBackup", { account }), true);
+    case "only-free":
+      return said(t("whyOnlyFree", { account }), true);
+    case "round-robin":
+      return said(t("whyRoundRobin", { account }), true);
+    case "weighted":
+      return said(t("whyWeighted", { account }), true);
+    case "fill-first":
+      return said(t("whyFillFirst", { account }), true);
+    case "least-active":
+      return said(t("whyLeastActive", { account }), true);
+    case "soonest-reset":
+      return said(t("whySoonestReset", { account }), true);
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Why a request went where it did, by what its record holds. name turns an account's ID or
  * public ID into the name shown (masked by the caller's naming).
  */
@@ -212,12 +266,14 @@ export function whyOf(e: UsageEvent, name: (account: string) => string, now = Da
   }
   if (!e.failed) {
     const others = tried.slice(0, -1).filter((x) => x.result !== "ok").length;
+    const account = e.account ?? tried[tried.length - 1]?.account;
     if (others > 0) {
-      const last = tried[tried.length - 1];
-      const account = e.account ?? last?.account;
       lines.push(t("succeededAfter", { account: account ? name(account) : "", count: others }));
       notes.unshift(t("after", { count: others }));
+    } else if (e.why === "backup") {
+      notes.unshift(t("backupNote"));
     }
+    if (account) story.reason = reasonOf(e, name(account));
     story.note = notes.join(", ") || undefined;
     return story;
   }
@@ -231,7 +287,6 @@ export function whyOf(e: UsageEvent, name: (account: string) => string, now = Da
     lines.push(t("failedEvery"));
   } else if (e.left_out && e.left_out.length > 0) {
     lines.push(t("noAccount"));
-    story.leftOut = e.left_out.map((l) => ({ account: name(l.account), text: leftOutText(l, now) }));
   } else if (e.error_code === "not_found") {
     lines.push(t("noServe", { model: e.model }));
     story.noServe = true;
@@ -240,6 +295,8 @@ export function whyOf(e: UsageEvent, name: (account: string) => string, now = Da
   } else {
     lines.push(t("couldNotSend", { word: failureWord(e) }));
   }
+  // The accounts routing left out, after those it tried, if any.
+  story.leftOut = (e.left_out ?? []).map((l) => ({ account: name(l.account), text: leftOutText(l, now) }));
   const last = tried[tried.length - 1];
   story.next = last ? { kind: "account", account: last.account } : { kind: "log" };
   return story;
