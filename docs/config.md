@@ -86,6 +86,17 @@ page or with `pluxy setup apply --pick <id>` (see [setup.md](setup.md)).
 
 The first config is written as JSON only. A `config.yaml` is written by a person.
 
+The first config holds the management key, so pluxy checks the folder it goes into before writing
+it, whether that is pluxy's home or the folder of a `-config` path. A missing folder is made so only
+your user can read it. A folder that is already there, such as one `PLUXY_HOME` names, is refused
+when it is a link, belongs to another user, or (on Linux and macOS) lets group or others write in
+it: nothing is written, and the command exits 1 saying why and what to do (for the last case,
+`chmod go-w <folder>`, or another folder). On Windows a folder other accounts can open is given the
+private access list of the [credentials folder](providers.md#how-accounts-added-by-sign-in-are-kept-and-renewed)
+instead. Only that folder is checked, not the folders above it; on macOS only by its permission
+bits, not an access list added with `chmod +a`; and only when a first config is written: a config
+that is already there is used without the check.
+
 ### Folders beside the config
 
 Core makes these folders next to the config file it runs on:

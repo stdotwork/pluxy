@@ -362,9 +362,12 @@ does that). Sign in with the new key.
 ### The sign-in form says "This pluxy answers only the computer it runs on"
 
 Remote management is off. The panel's page loads from any machine, but the management API answers
-only the machine core runs on unless `management_allow_remote` is `true` in `config.json`. A browser
-on another machine, or one reaching core through a proxy or tunnel that forwards the client's address
-(`X-Forwarded-For`, `X-Real-IP` or `Forwarded`), gets a 403 with the code `remote_disabled`. Open the
+only the machine core runs on unless `management_allow_remote` is `true` in `config.json`. A call
+counts as this machine's when it comes from a loopback address (`127.0.0.1`, `::1`), or from the very
+address it arrived at: a program on this machine calling core at a network address core listens on.
+A browser on another machine, or one reaching core through a proxy or tunnel that names the client in
+`X-Forwarded-For`, `X-Real-IP` or `Forwarded`, gets a 403 with the code `remote_disabled`. A client a
+[trusted proxy](config.md#top-level) names counts as this machine only when it is a loopback address. Open the
 panel on core's own machine, or set `"management_allow_remote": true` there (`pluxy help` shows where
 `config.json` is) and save it: core reloads the file by itself, so sign in again. Docker needs it,
 because requests through a published port arrive from Docker's network address: see [Setup](setup.md).
