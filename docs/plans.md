@@ -24,9 +24,11 @@ to do:
 
 - **The remaining translation gaps** that hit these four. The list of gaps found so far has not yet
   been split by provider, so the size of this work is known only once that is done.
-- **Web search on Gemini** in every request. Today pluxy turns a client's web search into Gemini's
-  search tool only when the request asks for it and has no function tools beside it; otherwise the
-  search tool is dropped, and the drop is reported.
+- **Web search when the upstream is Gemini.** Today the Gemini provider sends a client's web search
+  as Gemini's search tool only when the account talks to Google's own API, the model supports the
+  tool, and the request has no function tools beside it (Gemini's API does not take both in one
+  request). Coding tools nearly always send function tools, so for them the search tool is
+  dropped, and the drop is reported.
 - **Video endpoints.** Image generation, speech and transcription endpoints exist; no provider
   serves video through pluxy yet.
 - **A live quota reading for Gemini accounts.** Today a Gemini account's quota shows only what its
@@ -56,7 +58,8 @@ session affinity on by default, and replies that say which account served them.
 
 - **A registry in four tiers:** hidden dependencies that other packages pull in, the setup picks
   (about ten), a verified marketplace, and unverified third-party sources installed only after a
-  warning. Installing a package is to be as simple as dropping in a file, from an open-source
+  warning. Today a registry marks each package `pick`, `verified` or `unverified`, and core shows
+  the mark and enforces nothing by it. Installing a package is to be as simple as dropping in a file, from an open-source
   community marketplace, an official marketplace whose packages may be closed-source or paid, or
   any other source, such as a GitHub repository, that pluxy does not verify.
 - **A hosted, signed official registry**, so extensions and model lists update without a new
@@ -108,8 +111,8 @@ support for Kimi, xAI, Meta and Devin.
   Antigravity, Kimi and ZCode.
 - UI languages other than English, Chinese first.
 - Deciding which remaining EasyCLIProxyAPI features to keep.
-- Settings for containers taken from the environment: the management key and the folder pluxy may
-  write to.
+- Core's management key taken from the environment, for containers. (Today only the `pluxy`
+  command reads a management key from the environment, and `PLUXY_HOME` names pluxy's folder.)
 
 ### Reaching pluxy
 

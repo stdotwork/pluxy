@@ -185,9 +185,9 @@ of a request is kept to one pass on each side:
 
 - **The request is parsed once on each side and sent to the extension once** (the next section).
   Idle upstream connections are kept for concurrent requests.
-- **A translated request's Chat body is written in one pass.** The extension writes the messages
-  straight into one buffer, sized once, and escapes each text once, so a 100 KB request allocates
-  about 129 KB.
+- **A translated request's Chat body is written in one pass.** The extension's body writer
+  (`next/format/openaichat/bodywriter.go`) writes the messages straight into one buffer, sized
+  once, and escapes each text once; a 100 KB request was measured allocating about 129 KB.
 - **Large call frames are written and read in one pass.** A call's frame is about 100 KB, nearly all
   of it the client's body. Core writes the body into the frame without walking it through the
   general JSON encoder, and the extension reads the frame with the repository's own JSON scanner
@@ -228,13 +228,14 @@ never reads the parsed form.
 
 So an extension can say it parses the body itself, and with which version of core's parsers (the
 SDK does, with its own release's `format.ParserVersion`), and core then leaves the parsed form out
-whenever the body is still the one it parsed and the extension's parser version is core's. The extension parses the body with the same parsers core uses, so its
-handler gets the same request as before; an extension from another release whose parsers differ
-gets the full request. A test keeps what the parsers make of each corpus and format-test request
+whenever the body is still the one it parsed and the extension's parser version is core's. The
+extension parses the body with the same parsers core uses, so its handler gets the same request it
+would get with the parsed form; an extension from another release whose parsers differ gets the
+full request. A test keeps what the parsers make of each corpus and format-test request
 in a golden file and fails, naming some of them, until the version is raised when a recorded
 request's parse changes; a request added to the corpus or the format tests need not be recorded
 to pass.
-The tradeoff: core no longer encodes the parsed form for such a call, but the extension parses the
+The tradeoff: core does not encode the parsed form for such a call, but the extension parses the
 body in place of decoding it, also when it only passes the body through, since a handler's
 request is a plain value that cannot be filled only when it is read. Core still sends the full
 request when the body changed after parsing (a thinking suffix taken off its model), when the

@@ -46,9 +46,10 @@ reason; see [Adding cases](#adding-cases) for a new case.
 ## How pluxy is run
 
 pluxy runs as a separate program on a random local port, with a fresh temporary folder
-holding its config and its `HOME`. Its environment is cleared except for `PATH` and `TZ=UTC` (the
-zone the recordings were made in), and outbound proxies are set to a closed local port, so its
-background requests cannot reach the internet. The fake upstream is on loopback, which is never
+holding its config and its `HOME`. Its environment is cleared and holds only `PATH`, `TZ=UTC` (the
+zone the recordings were made in), `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and
+`TMPDIR` inside that folder, and outbound proxies set to a closed local port, so its background
+requests cannot reach the internet. The fake upstream is on loopback, which is never
 proxied.
 
 The generated config is the same for every case:
@@ -58,7 +59,7 @@ The generated config is the same for every case:
   `sk-Cq7Vx2Np9Lw4Zr8-2`, `sk-Cq7Vx2Np9Lw4Zr8-3` and so on, all pointed at the same upstream.
   The fake account secrets hold no words: pluxy removes from an error every run of text
   that shares 4 characters with one of the account's secrets, so a word in a fake key would
-  vanish from the error messages the cores are compared on;
+  vanish from the error messages the corpus compares;
 - the client key `corpus-client-key`;
 - routing that never waits: pluxy runs its default routing, which never waits, and still
   moves a request on to another account within one round;
@@ -82,6 +83,7 @@ Providers with their own folder of cases, with what CLIProxyAPI ran when each wa
 | Provider | pluxy | CLIProxyAPI (as recorded) |
 | --- | --- | --- |
 | `openai-compatible` | OpenAI-compatible extension, `wire_api` chat | an `openai-compatibility` entry |
+| `claude` | Claude extension, API key, with `base_url` | a Claude API key with a custom base URL |
 | `openai-responses`, `anthropic`, `gemini` | OpenAI-compatible extension, `wire_api` responses, messages or gemini | a Codex API key without the Codex identity, a Claude API key, a Gemini API key |
 | `codex` | Codex extension, API key | a Codex API key (Codex identity on) |
 | `codex-oauth` | Codex extension, a ChatGPT subscription's OAuth credential | a Codex auth file |
@@ -149,7 +151,7 @@ settings for every case.
 
 `client`: `method` (default `POST`), `path`, `headers`, `auth` (`client-key` by default,
 `management-key`, `none`, or a literal token), and `body` (JSON) or `body_text` (literal text,
-for bodies that are not JSON). `then` lists more requests of the same form, sent one after
+for bodies that are not JSON). The case's `then` lists more requests of the same form, sent one after
 another once the reply before has ended, for behaviour that shows across requests (which account
 each one goes to, a cooldown a failure leaves); their replies are the observation's `then`, and
 the global exceptions and volatile paths for `client` apply to each of them. The runner adds
@@ -209,6 +211,9 @@ its reply was recorded; nothing runs it now.
 `volatile`: paths whose values change between runs (timestamps, trace IDs). They are replaced by
 `"(volatile)"` before any comparison.
 
+`unordered`: paths of arrays whose order is not compared (CLIProxyAPI listed models in no fixed
+order). After masking, each is sorted by its elements' JSON.
+
 `exceptions`: known differences. Each has:
 
 - `path`: an observation path. Without `want` or `absent` it covers only the difference at that
@@ -256,7 +261,7 @@ An observation is JSON:
   `event`, `id` or `comment` when present. `body_error` is set when the body broke off.
 - Headers are compared by value, except `Connection`, `Content-Length`, `Date`, `Host`,
   `Keep-Alive` and `Transfer-Encoding`, which describe the connection rather than the behaviour.
-- Object key order and whitespace are not compared; array order is.
+- Object key order and whitespace are not compared; array order is, except under `unordered`.
 - Timing is not compared (whether a stream arrives incrementally is the e2e tests' job).
 
 A path joins keys with `.` and puts array indexes in brackets:
@@ -279,7 +284,7 @@ management key `corpus-management-key` (not a secret) when a request has `"auth"
   `{{auth_index}}` stood for the `auth_index` CLIProxyAPI gave its one auth file (a hash of the
   file's path). CLIProxyAPI's `POST /v0/management/api-call` relay needed both: it calls an
   absolute URL and puts the account's token where a header or the body says `$TOKEN$`. Only
-  `{{upstream}}` is expanded now, in a `body_text` sent to pluxy.
+  `{{upstream}}` and `{{private_key}}` (below) are expanded now, in a `body_text` sent to pluxy.
 - CLIProxyAPI's reply to `old_client` is the case's recorded `client`; the replies to
   `old_client_more` are the recorded `client_more`, which pluxy's observation does not have.
 
