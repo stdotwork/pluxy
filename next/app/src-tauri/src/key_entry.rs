@@ -20,6 +20,9 @@ pub(crate) mod text {
     pub(crate) const KEEP: &str = "_Keep the key on this device";
     pub(crate) const CANCEL: &str = "_Cancel";
     pub(crate) const OK: &str = "_OK";
+    /// The confirm button when the window asks whether the person trusts the network: pressing it
+    /// is their answer, so it is not the default and Enter does not press it.
+    pub(crate) const TRUST_OK: &str = "_Trust this network and connect";
     pub(crate) const COPY: &str = "Co_py";
     pub(crate) const CLOSE: &str = "_Close";
 }
@@ -33,19 +36,25 @@ mod platform;
 #[cfg(any(windows, target_os = "macos"))]
 pub(crate) use platform::{request_as, reveal};
 
-/// The management key's entry, with its choice to keep the key on this device.
-pub(crate) fn request(app: &AppHandle, summary: String) -> Result<Option<Input>, &'static str> {
-    request_as(app, text::MANAGEMENT_TITLE, summary, true)
+/// The management key's entry, with its choice to keep the key on this device; with trust, its
+/// confirm button is the person's answer that they trust the network (`text::TRUST_OK`).
+pub(crate) fn request(
+    app: &AppHandle,
+    summary: String,
+    trust: bool,
+) -> Result<Option<Input>, &'static str> {
+    request_as(app, text::MANAGEMENT_TITLE, summary, true, trust)
 }
 
 /// A hidden entry titled title, saying summary; with keep, a choice (off at first) to keep the
-/// key on this device.
+/// key on this device; with trust, `text::TRUST_OK` as its confirm button, with no default.
 #[cfg(target_os = "linux")]
 pub(crate) fn request_as(
     app: &AppHandle,
     title: &'static str,
     summary: String,
     keep: bool,
+    trust: bool,
 ) -> Result<Option<Input>, &'static str> {
     use gtk::prelude::*;
     use std::{cell::RefCell, rc::Rc, sync::mpsc};
@@ -66,15 +75,22 @@ pub(crate) fn request_as(
             gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
             &[
                 (text::CANCEL, gtk::ResponseType::Cancel),
-                (text::OK, gtk::ResponseType::Accept),
+                (
+                    if trust { text::TRUST_OK } else { text::OK },
+                    gtk::ResponseType::Accept,
+                ),
             ],
         );
-        dialog.set_default_response(gtk::ResponseType::Accept);
+        if !trust {
+            dialog.set_default_response(gtk::ResponseType::Accept);
+        }
         let content = dialog.content_area();
         content.set_border_width(16);
         content.set_spacing(12);
         let label = gtk::Label::new(Some(&summary));
         label.set_xalign(0.0);
+        label.set_line_wrap(true);
+        label.set_max_width_chars(60);
         content.add(&label);
         let entry = gtk::Entry::new();
         entry.set_visibility(false);
@@ -192,6 +208,7 @@ pub(crate) fn request_as(
     _: &AppHandle,
     _: &'static str,
     _: String,
+    _: bool,
     _: bool,
 ) -> Result<Option<Input>, &'static str> {
     Err("native key entry is supported on Linux, Windows and macOS only")

@@ -36,6 +36,10 @@ export interface Connection {
   };
   /** Why the app is not connected, when it is not. */
   error?: string;
+  /** How what the app sends reaches the core it is connected to: over https, to this computer,
+   * only over Tailscale (which this computer carries; nothing is sent when it does not), or over
+   * plain http on a network the person said in the key window that they trust. */
+  link?: "https" | "here" | "tailscale" | "plain";
 }
 
 /** What the person sets on the Connection page. */
@@ -45,9 +49,6 @@ export interface ConnectionChange {
   ca_file?: string;
   core_path?: string;
   core_source?: string;
-  /** A remote pluxy at a plain http address that is not a Tailscale one: the person ticked that
-   * they trust the network. The native side refuses such an address without it. */
-  trust_network?: boolean;
 }
 
 /** The app's own core versions, in managed mode. */

@@ -50,6 +50,81 @@ impl Reply {
 pub struct Client {
     base: String,
     agent: ureq::Agent,
+    /// Nothing is sent unless Tailscale carries the connection (`Route::tailscale_only`).
+    tailscale_only: bool,
+}
+
+/// Where a client's connections go (`Client::routed`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Route {
+    /// Every connection goes to this address, whatever the core's name resolves to later; the
+    /// request still names the core's host, and https still checks its certificate for that name.
+    /// Ignored when a proxy from the environment carries the calls.
+    pub pin: Option<std::net::SocketAddr>,
+    /// Each new connection is made only to an address Tailscale carries from this computer
+    /// (`tailnet::carries_with`, with the interfaces as they are then); otherwise nothing is
+    /// sent, and the call fails as `tailscale`.
+    pub tailscale_only: bool,
+}
+
+/// Why nothing was sent: Tailscale does not carry the connection to the core's address from this
+/// computer (`Route::tailscale_only`).
+#[derive(Debug)]
+pub struct NotOverTailscale;
+
+impl std::fmt::Display for NotOverTailscale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Tailscale does not carry the connection to this address")
+    }
+}
+
+impl std::error::Error for NotOverTailscale {}
+
+/// The resolver of a routed client: the pinned address, or what the name resolves to, and with
+/// `tailscale_only` only the addresses Tailscale carries now.
+#[derive(Debug)]
+struct Routed(Route);
+
+impl ureq::unversioned::resolver::Resolver for Routed {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+        use ureq::unversioned::resolver::DefaultResolver;
+        let found = match self.0.pin {
+            Some(addr) => {
+                let mut one = self.empty();
+                one.push(addr);
+                one
+            }
+            None => DefaultResolver::default().resolve(uri, config, timeout)?,
+        };
+        if !self.0.tailscale_only {
+            return Ok(found);
+        }
+        let locals = crate::tailnet::local_addresses().unwrap_or_default();
+        let mut carried = self.empty();
+        for addr in found.iter() {
+            if crate::tailnet::carries_with(addr.ip(), &locals) {
+                carried.push(*addr);
+            }
+        }
+        if carried.is_empty() {
+            return Err(ureq::Error::Io(std::io::Error::other(NotOverTailscale)));
+        }
+        Ok(carried)
+    }
+}
+
+/// Whether calls to base go through a proxy from the environment: never to a core on this
+/// computer or over plain http, where a proxy would see the key; over https, as the environment
+/// says, since a proxy sees no key there.
+pub fn proxied(base: &str) -> bool {
+    let direct =
+        url::Url::parse(base).is_ok_and(|u| crate::conn::is_loopback(&u) || u.scheme() == "http");
+    !direct && ureq::Proxy::try_from_env().is_some()
 }
 
 /// The calls core takes as PUT: the config, the theme that is on, and one stored theme, whose
@@ -159,12 +234,22 @@ fn transport_message(error: &ureq::Error) -> String {
             return format!("nothing sent to the app's core: {why}");
         }
     }
-    let _ = error;
+    if not_over_tailscale(error) {
+        return format!("nothing sent: {NotOverTailscale}");
+    }
     "core transport failed".into()
+}
+
+/// Whether error is a routed client's refusal to send outside Tailscale (`Route::tailscale_only`).
+fn not_over_tailscale(error: &ureq::Error) -> bool {
+    matches!(error, ureq::Error::Io(e) if e.get_ref().is_some_and(|e| e.is::<NotOverTailscale>()))
 }
 
 // Classify transport failures without formatting library errors: those may include request data.
 fn transport_kind(error: &ureq::Error) -> &'static str {
+    if not_over_tailscale(error) {
+        return "tailscale";
+    }
     match error {
         ureq::Error::Tls(_) | ureq::Error::Rustls(_) | ureq::Error::TlsRequired => "tls",
         ureq::Error::Timeout(_) => "timeout",
@@ -397,6 +482,31 @@ impl Client {
                 core_tcp::CoreConnector(Arc::new(pin)),
                 DefaultResolver::default(),
             ),
+            tailscale_only: false,
+        }
+    }
+
+    /// A client for the core at base whose connections go where route says (`Route`).
+    pub fn routed(
+        base: &str,
+        certs: Option<Vec<Certificate<'static>>>,
+        mut route: Route,
+    ) -> Client {
+        if route == Route::default() {
+            return Client::build(base, certs);
+        }
+        if proxied(base) {
+            // The proxy's address is resolved, not the core's.
+            route.pin = None;
+        }
+        Client {
+            base: base.trim_end_matches('/').to_string(),
+            agent: ureq::Agent::with_parts(
+                Client::config(base, certs),
+                ureq::unversioned::transport::DefaultConnector::default(),
+                Routed(route),
+            ),
+            tailscale_only: route.tailscale_only,
         }
     }
 
@@ -404,6 +514,7 @@ impl Client {
         Client {
             base: base.trim_end_matches('/').to_string(),
             agent: Client::config(base, certs).into(),
+            tailscale_only: false,
         }
     }
 
@@ -412,15 +523,10 @@ impl Client {
             Some(c) => RootCerts::Specific(Arc::new(c)),
             None => RootCerts::WebPki,
         };
-        // A core on this computer, and one reached over plain http, is reached directly: a
-        // proxy from the environment would see the key. Others honour the proxy settings; over
-        // https a proxy sees no key.
-        let direct = url::Url::parse(base)
-            .is_ok_and(|u| crate::conn::is_loopback(&u) || u.scheme() == "http");
-        let proxy = if direct {
-            None
-        } else {
+        let proxy = if proxied(base) {
             ureq::Proxy::try_from_env()
+        } else {
+            None
         };
         ureq::Agent::config_builder()
             .proxy(proxy)
@@ -436,6 +542,11 @@ impl Client {
 
     pub fn base(&self) -> &str {
         &self.base
+    }
+
+    /// Whether this client sends only where Tailscale carries the connection (`Route`).
+    pub fn tailscale_only(&self) -> bool {
+        self.tailscale_only
     }
 
     /// Calls `method` on path (under `/v0/management`) with key; with an empty key, with no

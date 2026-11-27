@@ -5,24 +5,25 @@
 //! - **local**: a core already running on this computer, such as a system service; the app only
 //!   connects, never starts or stops it;
 //! - **remote**: a core on another computer, shown with its address: over https; or over plain
-//!   http to a Tailscale address, or to another address once the person said they trust the
-//!   network (`remote_origin`).
+//!   http that Tailscale carries from this computer (`tailnet.rs`), or that the person said, in
+//!   the native key window, goes over a network they trust (`Link`).
 //!
 //! The management key stays here: the window gets a view of the connection without it.
 //! Nothing in this module needs Tauri, so the tests drive it against a real core.
 
 use crate::artifact::PublisherKeys;
 use crate::bundled_core::Bundled;
-use crate::client::{certificates, Client, Reply, ROTATE};
+use crate::client::{certificates, Client, Reply, Route, ROTATE};
 use crate::cores::{self, Chooser, ConfigSnapshot, Store};
 use crate::managed::{core_program, write_private, Gone, Hold, ManagedCore, OnExit};
 use crate::recovery::Recovery;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use url::{Host, Url};
 
@@ -59,8 +60,9 @@ pub struct Settings {
     /// Where the app's own core versions come from, in managed mode: an index file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub core_source: Option<String>,
-    /// In remote mode over plain http to an address that is not a Tailscale one: the person said
-    /// they trust the network between here and there (`remote_origin`).
+    /// In remote mode over plain http: the person said, in the native key window, that they trust
+    /// the network between here and the core at `url`, so the app sends there even when Tailscale
+    /// does not carry it (`Link::Plain`). Kept only with the address it was given for.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub trust_network: bool,
 }
@@ -128,10 +130,6 @@ pub struct Change {
     pub ca_file: Option<String>,
     pub core_path: Option<String>,
     pub core_source: Option<String>,
-    /// The person said they trust the network to a remote core at a plain http address that is
-    /// not a Tailscale one, after the window said who could read what is sent there.
-    #[serde(default)]
-    pub trust_network: bool,
 }
 
 /// The connection as the window sees it: never the key.
@@ -155,6 +153,9 @@ pub struct View {
     pub core: Option<CoreView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// How what the app sends reaches the core it is connected to, in local and remote mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<Link>,
     /// Taken under the connection lock: a later view has a higher version, so the tray can
     /// drop a view that reaches it after a newer one.
     #[serde(skip)]
@@ -175,6 +176,7 @@ impl PartialEq for View {
             core_source,
             core,
             error,
+            link,
             version: _,
         } = self;
         (
@@ -188,6 +190,7 @@ impl PartialEq for View {
             core_source,
             core,
             error,
+            link,
         ) == (
             &other.mode,
             &other.target,
@@ -199,6 +202,7 @@ impl PartialEq for View {
             &other.core_source,
             &other.core,
             &other.error,
+            &other.link,
         )
     }
 }
@@ -313,12 +317,13 @@ fn origin_of(u: &Url) -> String {
     u.origin().ascii_serialization()
 }
 
-/// Whether u's host is on this computer.
+/// Whether u's host is on this computer. A name is compared without its trailing dots:
+/// `localhost.` is this computer too.
 pub fn is_loopback(u: &Url) -> bool {
     match u.host() {
         Some(Host::Ipv4(ip)) => IpAddr::V4(ip).is_loopback(),
         Some(Host::Ipv6(ip)) => IpAddr::V6(ip).is_loopback(),
-        Some(Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(Host::Domain(d)) => d.trim_end_matches('.').eq_ignore_ascii_case("localhost"),
         None => false,
     }
 }
@@ -335,34 +340,10 @@ pub fn local_origin(s: &str) -> Result<String, String> {
     Ok(origin_of(&u))
 }
 
-/// Whether u's host is a Tailscale address: one Tailscale gives a device (100.64.0.0/10 or
-/// fd7a:115c:a1e0::/48) or a MagicDNS name under ts.net. Tailscale encrypts what goes between
-/// its devices, so plain http to one is not readable on the networks in between.
-pub fn is_tailscale(u: &Url) -> bool {
-    match u.host() {
-        Some(Host::Ipv4(ip)) => {
-            let o = ip.octets();
-            o[0] == 100 && o[1] & 0xc0 == 64
-        }
-        Some(Host::Ipv6(ip)) => ip.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
-        Some(Host::Domain(d)) => d
-            .trim_end_matches('.')
-            .to_ascii_lowercase()
-            .ends_with(".ts.net"),
-        None => false,
-    }
-}
-
-/// Whether what is sent to u could be read on the networks between here and there: plain http
-/// to another computer that is not a Tailscale address.
-pub fn readable_on_the_way(u: &Url) -> bool {
-    u.scheme() == "http" && !is_loopback(u) && !is_tailscale(u)
-}
-
-/// The origin of a core on another computer: https; plain http to a Tailscale address; or plain
-/// http to any other address once the person said they trust the network (trust_network), since
-/// anyone on it could read the management key and all else sent there.
-pub fn remote_origin(s: &str, trust_network: bool) -> Result<String, String> {
+/// The origin of a core on another computer, over https or plain http. Plain http to this
+/// computer is local mode's. How plain http to another computer may go is the client's route
+/// (`Link`): only over Tailscale, unless the person trusted the network for that address.
+pub fn remote_origin(s: &str) -> Result<String, String> {
     let u = parse_origin(s)?;
     if u.scheme() == "http" && is_loopback(&u) {
         return Err(format!(
@@ -370,26 +351,76 @@ pub fn remote_origin(s: &str, trust_network: bool) -> Result<String, String> {
             origin_of(&u)
         ));
     }
-    if readable_on_the_way(&u) && !trust_network {
-        return Err(format!(
-            "{} is plain http, so anyone on that network could read the management key: use its https address, a Tailscale address, or say that you trust this network",
-            origin_of(&u)
-        ));
-    }
     Ok(origin_of(&u))
 }
 
-/// What the key window says about the way to base when that is not https: Tailscale encrypts
-/// it; plain http to another address does not.
-fn link_line(base: &str) -> Option<&'static str> {
-    let u = Url::parse(base).ok()?;
-    if u.scheme() == "https" || is_loopback(&u) {
-        None
-    } else if is_tailscale(&u) {
-        Some("Over Tailscale, which encrypts the connection.")
-    } else {
-        Some("Over plain http: anyone on this network can read the key and what the app sends.")
+/// Whether u is plain http to another computer, where what is sent can be read on the networks
+/// in between unless Tailscale carries it.
+fn plain_elsewhere(u: &Url) -> bool {
+    u.scheme() == "http" && !is_loopback(u)
+}
+
+/// The route of a client for the core at base before any name is resolved: plain http to another
+/// computer goes only where Tailscale carries it, unless the person trusted the network for it.
+fn unresolved_route(base: &str, trusted: bool) -> Route {
+    Route {
+        pin: None,
+        tailscale_only: Url::parse(base).is_ok_and(|u| plain_elsewhere(&u)) && !trusted,
     }
+}
+
+/// How what the app sends reaches a core.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Link {
+    /// Over https.
+    Https,
+    /// To this computer.
+    Here,
+    /// Over plain http that Tailscale carries from this computer, which encrypts it; nothing is
+    /// sent at a moment it does not (`client::Route::tailscale_only`).
+    Tailscale,
+    /// Over plain http that can be read on the networks in between: only once the person said
+    /// they trust the network.
+    Plain,
+}
+
+impl Link {
+    /// How a client's calls go.
+    fn of(client: &Client) -> Option<Link> {
+        let u = Url::parse(client.base()).ok()?;
+        Some(if is_loopback(&u) {
+            Link::Here
+        } else if u.scheme() == "https" {
+            Link::Https
+        } else if client.tailscale_only() {
+            Link::Tailscale
+        } else {
+            Link::Plain
+        })
+    }
+}
+
+/// The address to send to for the core at base: its name resolved once, and of the addresses it
+/// resolves to the first that takes a connection (the first, when none does, so the call says
+/// why); None when it resolves to nothing.
+fn peer_of(base: &str) -> Option<SocketAddr> {
+    use std::net::ToSocketAddrs;
+    let u = Url::parse(base).ok()?;
+    let host = match u.host()? {
+        Host::Domain(d) => d.to_string(),
+        Host::Ipv4(ip) => ip.to_string(),
+        Host::Ipv6(ip) => ip.to_string(),
+    };
+    let found: Vec<SocketAddr> = (host.as_str(), u.port_or_known_default()?)
+        .to_socket_addrs()
+        .ok()?
+        .collect();
+    found
+        .iter()
+        .find(|a| std::net::TcpStream::connect_timeout(a, Duration::from_secs(5)).is_ok())
+        .or(found.first())
+        .copied()
 }
 
 /// Where the app keeps its files.
@@ -439,7 +470,91 @@ pub(crate) struct KeyTarget {
     settings: Settings,
     client: Client,
     revision: u64,
-    pub summary: String,
+    certs: Option<Vec<ureq::tls::Certificate<'static>>>,
+    /// What the key window says the app switches from; None: it is not connected.
+    previous: Option<String>,
+    /// How the key would travel: as the client goes before `route_at`, then as it found.
+    link: Option<Link>,
+    /// Plain http to an address in Tailscale's ranges that Tailscale does not carry from here.
+    tailscale_shaped: bool,
+}
+
+impl KeyTarget {
+    /// Resolves the core's address once and sends every call of this target there
+    /// (`route_at`), so the call with no key and the call with the key reach the same computer.
+    /// Through a proxy from the environment (https only) the proxy's address is resolved instead.
+    pub(crate) fn route(self) -> Result<KeyTarget, String> {
+        let base = self.base().to_owned();
+        if crate::client::proxied(&base) {
+            return Ok(self.route_at(None, &[]));
+        }
+        let peer = peer_of(&base).ok_or("The host name could not be resolved.")?;
+        let locals = crate::tailnet::local_addresses().unwrap_or_default();
+        Ok(self.route_at(Some(peer), &locals))
+    }
+
+    /// The target with its calls sent to peer, and over plain http to another computer known as
+    /// over Tailscale only when Tailscale carries it from a computer with locals as its interface
+    /// addresses (`tailnet::carries_with`); then each new connection checks that again.
+    fn route_at(mut self, peer: Option<SocketAddr>, locals: &[IpAddr]) -> KeyTarget {
+        let base = self.base().to_owned();
+        let plain = Url::parse(&base).is_ok_and(|u| plain_elsewhere(&u));
+        let tailscale = plain && peer.is_some_and(|p| crate::tailnet::carries_with(p.ip(), locals));
+        self.tailscale_shaped =
+            plain && !tailscale && peer.is_some_and(|p| crate::tailnet::in_range(p.ip()));
+        self.client = Client::routed(
+            &base,
+            self.certs.clone(),
+            Route {
+                pin: peer,
+                tailscale_only: tailscale,
+            },
+        );
+        self.link = Link::of(&self.client);
+        self
+    }
+
+    fn base(&self) -> &str {
+        self.client.base()
+    }
+
+    /// Whether the key window must ask whether the person trusts the network: plain http that
+    /// Tailscale does not carry, to an address they have not trusted it for.
+    pub(crate) fn asks_trust(&self) -> bool {
+        self.link == Some(Link::Plain) && !self.settings.trust_network
+    }
+
+    /// What the key window says: the core, its certificate authority, how the key travels when
+    /// not over https, and what it switches from.
+    pub(crate) fn summary(&self) -> String {
+        let base = self.base();
+        let mut summary = format!("Key for {base}");
+        if let Some(ca) = &self.settings.ca_file {
+            summary.push_str(&format!("\nCertificate authority: {}", shown_path(ca)));
+        }
+        match self.link {
+            Some(Link::Tailscale) => {
+                summary.push_str("\nOver Tailscale, which encrypts the connection.")
+            }
+            Some(Link::Plain) => {
+                if self.tailscale_shaped {
+                    summary.push_str("\nTailscale does not carry the connection to this address from this computer, so it goes over plain http.");
+                }
+                summary.push_str("\nOver plain http: anyone on this network can read the key and what the app sends.");
+                if self.asks_trust() {
+                    summary.push_str("\nGo on only if you trust this network, such as your home network. Otherwise cancel, and use its https address, or its Tailscale address with Tailscale on here.");
+                }
+            }
+            _ => {}
+        }
+        if self.previous.as_deref() != Some(base) {
+            summary.push_str(&match &self.previous {
+                Some(p) => format!("\nSwitches from {p} to {base}"),
+                None => format!("\nConnects this app to {base}"),
+            });
+        }
+        summary
+    }
 }
 
 /// A rotation the person is asked to confirm, frozen to the connection it was prepared on.
@@ -700,7 +815,7 @@ impl Connection {
                 .url
                 .as_deref()
                 .ok_or_else(|| "no address set".to_string())
-                .and_then(|url| remote_origin(url, s.trust_network))
+                .and_then(remote_origin)
                 .and_then(|base| {
                     let certs = match &s.ca_file {
                         Some(f) => Some(
@@ -710,7 +825,8 @@ impl Connection {
                         ),
                         None => None,
                     };
-                    self.client = Some(Client::new(&base, certs));
+                    let route = unresolved_route(&base, s.trust_network);
+                    self.client = Some(Client::routed(&base, certs, route));
                     self.key = s.key.clone();
                     Ok(())
                 }),
@@ -1288,6 +1404,11 @@ impl Connection {
         self.error.clone().map_or(Ok(()), Err)
     }
 
+    /// The destination of a key entry, checked without the network: the address for its mode,
+    /// and the certificate authority file. Its client sends plain http to another computer only
+    /// where Tailscale carries it, unless the person trusted the network for that address before;
+    /// `KeyTarget::route` then resolves the address. Trust comes only from the saved settings or
+    /// the native key window, never from the page.
     pub(crate) fn prepare_key(&self, change: Option<Change>) -> Result<KeyTarget, String> {
         let ch = change.unwrap_or_else(|| Change {
             mode: self.settings.mode,
@@ -1295,19 +1416,15 @@ impl Connection {
             ca_file: self.settings.ca_file.clone(),
             core_path: None,
             core_source: None,
-            trust_network: self.settings.trust_network,
         });
         let mode = ch.mode.ok_or("choose a local or remote core")?;
         let url = ch.url.as_deref().unwrap_or("");
         let base = match mode {
             Mode::Local => local_origin(url)?,
-            Mode::Remote => remote_origin(url, ch.trust_network)?,
+            Mode::Remote => remote_origin(url)?,
             Mode::Managed => return Err("the app signs in to its own core by itself".into()),
         };
-        // Kept only where it is what lets the address through.
-        let trust_network = mode == Mode::Remote
-            && ch.trust_network
-            && Url::parse(&base).is_ok_and(|u| readable_on_the_way(&u));
+        let trust_network = self.trusts(mode, &base);
         let ca_file = ch.ca_file.filter(|f| !f.is_empty() && mode == Mode::Remote);
         let certs = match &ca_file {
             Some(f) => Some(certificates(
@@ -1315,31 +1432,22 @@ impl Connection {
             )?),
             None => None,
         };
-        let mut summary = format!("Key for {base}");
-        if let Some(ca) = &ca_file {
-            summary.push_str(&format!("\nCertificate authority: {}", shown_path(ca)));
-        }
-        if let Some(line) = link_line(&base) {
-            summary.push('\n');
-            summary.push_str(line);
-        }
         // The target last confirmed and saved, not the client in memory: a connection that failed,
         // or a managed core that stopped, has no client, and the saved target is still the source.
         let previous = match self.settings.mode {
-            Some(Mode::Local | Mode::Remote) => self.settings.url.as_deref(),
-            Some(Mode::Managed) => Some("the pluxy this app runs"),
+            Some(Mode::Local | Mode::Remote) => self.settings.url.clone(),
+            Some(Mode::Managed) => Some("the pluxy this app runs".into()),
             None => None,
         };
-        if previous != Some(base.as_str()) {
-            summary.push_str(&match previous {
-                Some(p) => format!("\nSwitches from {p} to {base}"),
-                None => format!("\nConnects this app to {base}"),
-            });
-        }
+        let client = Client::routed(&base, certs.clone(), unresolved_route(&base, trust_network));
         Ok(KeyTarget {
-            client: Client::new(&base, certs),
+            // Not checked yet: never said to be over Tailscale before `route_at` checked it.
+            link: Link::of(&client).filter(|l| *l != Link::Tailscale),
+            client,
             revision: self.revision,
-            summary,
+            certs,
+            previous,
+            tailscale_shaped: false,
             settings: Settings {
                 mode: Some(mode),
                 url: Some(base),
@@ -1348,6 +1456,16 @@ impl Connection {
                 ..Settings::default()
             },
         })
+    }
+
+    /// Whether the person trusted the network for plain http to the core at base in mode: only
+    /// as saved with that same address.
+    fn trusts(&self, mode: Mode, base: &str) -> bool {
+        mode == Mode::Remote
+            && self.settings.mode == Some(Mode::Remote)
+            && self.settings.url.as_deref() == Some(base)
+            && self.settings.trust_network
+            && Url::parse(base).is_ok_and(|u| plain_elsewhere(&u))
     }
 
     /// Whether the connection is still the one target was prepared on.
@@ -1431,11 +1549,10 @@ impl Connection {
                 let base = if mode == Mode::Local {
                     local_origin(url)?
                 } else {
-                    remote_origin(url, ch.trust_network)?
+                    remote_origin(url)?
                 };
-                next.trust_network = mode == Mode::Remote
-                    && ch.trust_network
-                    && Url::parse(&base).is_ok_and(|u| readable_on_the_way(&u));
+                // Trust given in the native key window stays with its address only.
+                next.trust_network = self.trusts(mode, &base);
                 next.ca_file = ch.ca_file.filter(|f| !f.is_empty() && mode == Mode::Remote);
                 let certs = match &next.ca_file {
                     Some(f) => Some(certificates(
@@ -1447,7 +1564,8 @@ impl Connection {
                 let same = self.settings.mode == Some(mode)
                     && self.settings.url == next.url
                     && self.settings.ca_file == next.ca_file;
-                let client = Client::new(&base, certs);
+                let client =
+                    Client::routed(&base, certs, unresolved_route(&base, next.trust_network));
                 // A metadata-only change preserves an existing key only for this same target. A
                 // kept key is replaced by the one in use, which differs after a rotated key could
                 // not be saved; signed out, the kept key stays as it is.
@@ -1726,6 +1844,7 @@ impl Connection {
             core_source: self.settings.core_source.clone(),
             core,
             error: self.error.clone(),
+            link: self.client.as_ref().and_then(Link::of),
             version: {
                 self.views += 1;
                 self.views
@@ -1759,13 +1878,113 @@ pub(crate) const KEY_REFUSED: &str = "This management key was not accepted.";
 /// How long a typed key is held for the next try at the same address.
 const HOLD_FOR: Duration = Duration::from_secs(10 * 60);
 
-/// A key the person typed that the pluxy it was typed for has not refused, held in memory (as the
-/// connection holds the key it uses) while they fix what failed, so the next try at the same address does not ask for it again.
-pub(crate) struct HeldKey {
+/// A key the person typed, in memory only; its bytes are overwritten with zeros when it is
+/// dropped.
+pub(crate) struct Secret(String);
+
+impl Drop for Secret {
+    fn drop(&mut self) {
+        // SAFETY: zero bytes are valid UTF-8, so the string stays a string until it is freed.
+        unsafe { self.0.as_bytes_mut() }.fill(0);
+    }
+}
+
+/// A key the person typed that the pluxy it was typed for has not refused, held while they fix
+/// what failed, for the next try at the same address with the same certificate authority file.
+struct HeldKey {
+    /// Which hold this is, so the timer of an earlier one leaves a later one alone.
+    id: u64,
     origin: String,
-    key: String,
+    ca_file: Option<String>,
+    key: Secret,
     remember: bool,
+    /// The person trusted the network for it (`KeyTarget::asks_trust`).
+    trusted: bool,
+    /// Typed at, plus `HOLD_FOR`: the key is dropped then, by a timer.
     until: Instant,
+}
+
+/// The held key, if any (`HeldKey`). It is dropped when its time ends, when a try is made at
+/// another address or with another certificate authority file, when the connection is changed or
+/// signed out of, and when the window closes to the tray (lib.rs).
+pub(crate) struct Held {
+    slot: Arc<Mutex<Option<HeldKey>>>,
+    hold_for: Duration,
+    holds: AtomicU64,
+}
+
+impl Default for Held {
+    fn default() -> Self {
+        Held::lasting(HOLD_FOR)
+    }
+}
+
+impl Held {
+    fn lasting(hold_for: Duration) -> Held {
+        Held {
+            slot: Arc::default(),
+            hold_for,
+            holds: AtomicU64::new(0),
+        }
+    }
+
+    /// Drops the held key, if any.
+    pub(crate) fn drop_key(&self) {
+        self.slot.lock().unwrap().take();
+    }
+
+    /// Drops the held key unless it was typed for origin with ca_file.
+    fn keep_only(&self, origin: &str, ca_file: Option<&str>) {
+        let mut slot = self.slot.lock().unwrap();
+        if slot
+            .as_ref()
+            .is_some_and(|k| k.origin != origin || k.ca_file.as_deref() != ca_file)
+        {
+            *slot = None;
+        }
+    }
+
+    /// The key held for origin with ca_file, taken out, when its time has not ended and, where the
+    /// window would ask whether the person trusts the network (asks_trust), they trusted it.
+    fn take(&self, origin: &str, ca_file: Option<&str>, asks_trust: bool) -> Option<HeldKey> {
+        let mut slot = self.slot.lock().unwrap();
+        let usable = slot.as_ref().is_some_and(|k| {
+            k.origin == origin
+                && k.ca_file.as_deref() == ca_file
+                && Instant::now() < k.until
+                && (k.trusted || !asks_trust)
+        });
+        if usable {
+            slot.take()
+        } else {
+            None
+        }
+    }
+
+    /// Holds k until its time ends, then drops it unless another key was held since.
+    fn hold(&self, mut k: HeldKey) {
+        let id = self.holds.fetch_add(1, Ordering::SeqCst) + 1;
+        k.id = id;
+        let wait = k.until.saturating_duration_since(Instant::now());
+        *self.slot.lock().unwrap() = Some(k);
+        let slot = Arc::clone(&self.slot);
+        std::thread::spawn(move || {
+            std::thread::sleep(wait);
+            let mut slot = slot.lock().unwrap();
+            if slot.as_ref().is_some_and(|k| k.id == id) {
+                *slot = None;
+            }
+        });
+    }
+
+    #[cfg(test)]
+    fn holds_for(&self, origin: &str) -> bool {
+        self.slot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|k| k.origin == origin)
+    }
 }
 
 /// How a key entry ended.
@@ -1780,61 +1999,80 @@ pub(crate) enum Entry {
     Failed(String),
 }
 
-/// One key entry, in the order a person can act on: the destination is checked (`prepare_key`),
-/// then whether a pluxy there would take a key from this computer (`reach`), and only then is the
-/// key asked for, with ask (it gets what the key window says; None: the person cancelled). A
-/// key typed for an address the pluxy there has not refused is held, and the next entry for that
-/// address within `HOLD_FOR` uses it instead of asking. No lock is held while anything goes over
-/// the network or the window is open.
+/// One key entry, in the order a person can act on: the destination is checked (`prepare_key`)
+/// and its address resolved once (route: `KeyTarget::route`; every call of this entry goes to
+/// the address it found), then whether a pluxy there would take a key from this computer
+/// (`reach`), and only then is the key asked for, with ask: it gets what the key window says,
+/// and whether the window must ask if the person trusts the network
+/// (`KeyTarget::asks_trust`), which its confirm button then answers; None: the person cancelled.
+/// A key typed for an address that the pluxy there has not refused is held (`Held`), and the
+/// next entry for that address and certificate authority file uses it instead of asking. No lock
+/// is held while anything goes over the network or the window is open.
 pub(crate) fn enter_key<K: AsRef<str>>(
     conn: &Mutex<Connection>,
-    held: &Mutex<Option<HeldKey>>,
+    held: &Held,
     change: Option<Change>,
-    ask: impl FnOnce(String) -> Result<Option<(K, bool)>, String>,
+    route: impl FnOnce(KeyTarget) -> Result<KeyTarget, String>,
+    ask: impl FnOnce(String, bool) -> Result<Option<(K, bool)>, String>,
 ) -> (Entry, View) {
     let prepared = conn.lock().unwrap().prepare_key(change);
     let target = match prepared {
+        Ok(t) => t,
+        Err(why) => {
+            held.drop_key();
+            return (Entry::Failed(why), conn.lock().unwrap().view());
+        }
+    };
+    let origin = target.settings.url.clone().unwrap_or_default();
+    let ca_file = target.settings.ca_file.clone();
+    held.keep_only(&origin, ca_file.as_deref());
+    let mut target = match route(target) {
         Ok(t) => t,
         Err(why) => return (Entry::Failed(why), conn.lock().unwrap().view()),
     };
     if let Err(why) = reach(&target.client) {
         return (Entry::Failed(why), conn.lock().unwrap().view());
     }
-    let origin = target.settings.url.clone().unwrap_or_default();
-    let kept = {
-        let mut h = held.lock().unwrap();
-        if h.as_ref().is_some_and(|k| Instant::now() >= k.until) {
-            *h = None;
-        }
-        h.as_ref()
-            .filter(|k| k.origin == origin)
-            .map(|k| (k.key.clone(), k.remember))
-    };
-    let (key, remember) = match kept {
-        Some(k) => k,
-        None => match ask(target.summary.clone()) {
-            Ok(Some((key, remember))) => (key.as_ref().to_owned(), remember),
+    let asks_trust = target.asks_trust();
+    let (key, remember, until) = match held.take(&origin, ca_file.as_deref(), asks_trust) {
+        Some(mut k) => (
+            std::mem::replace(&mut k.key, Secret(String::new())),
+            k.remember,
+            k.until,
+        ),
+        None => match ask(target.summary(), asks_trust) {
+            Ok(Some((key, remember))) => (
+                Secret(key.as_ref().to_owned()),
+                remember,
+                Instant::now() + held.hold_for,
+            ),
             Ok(None) => return (Entry::Cancelled, conn.lock().unwrap().view()),
             Err(why) => return (Entry::Failed(why), conn.lock().unwrap().view()),
         },
     };
-    let (result, view) = finish_key_unlocked(conn, target, &key, remember);
-    let mut h = held.lock().unwrap();
+    // The person trusted the network before, for this address, or now in the key window (or in
+    // the window of the held key's entry).
+    target.settings.trust_network |= asks_trust;
+    let trusted = target.settings.trust_network;
+    let (result, view) = finish_key_unlocked(conn, target, &key.0, remember);
     let entry = match result {
         Ok(()) => {
-            *h = None;
+            held.drop_key();
             Entry::SignedIn
         }
         Err(why) if why == KEY_REFUSED => {
-            *h = None;
+            held.drop_key();
             Entry::WrongKey(why)
         }
         Err(why) => {
-            *h = Some(HeldKey {
+            held.hold(HeldKey {
+                id: 0,
                 origin,
+                ca_file,
                 key,
                 remember,
-                until: Instant::now() + HOLD_FOR,
+                trusted,
+                until,
             });
             Entry::Failed(why)
         }
@@ -1975,6 +2213,7 @@ fn answered(r: Reply) -> Result<(), String> {
             Some("dns") => "The host name could not be resolved.",
             Some("io") => "The connection to pluxy failed (I/O).",
             Some("protocol") => "The reply from pluxy was not a valid HTTP response.",
+            Some("tailscale") => TAILSCALE_OFF,
             _ => "Could not reach pluxy, or could not read its reply.",
         }
         .into()),
@@ -1991,6 +2230,10 @@ fn answered(r: Reply) -> Result<(), String> {
         }),
     }
 }
+
+/// What the person reads when nothing was sent because Tailscale does not carry the connection to
+/// the address from this computer (`client::Route::tailscale_only`).
+const TAILSCALE_OFF: &str = "Tailscale does not carry the connection to this address from this computer, so nothing was sent. Turn Tailscale on here, or connect again to say you trust the network.";
 
 /// What the person reads when core refuses a call from this computer because remote management
 /// is off (403 `remote_disabled`). The panel says the same in `refusal`
@@ -2163,13 +2406,35 @@ mod tests {
         (dir, Mutex::new(Connection::open(dirs, None)))
     }
 
+    /// The interfaces of a computer on a home network with no Tailscale, and of one with it.
+    fn lan() -> Vec<IpAddr> {
+        ["127.0.0.1", "192.168.1.5", "::1"]
+            .map(|a| a.parse().unwrap())
+            .to_vec()
+    }
+    fn tailnet() -> Vec<IpAddr> {
+        ["127.0.0.1", "192.168.1.5", "100.101.1.2", "::1"]
+            .map(|a| a.parse().unwrap())
+            .to_vec()
+    }
+
+    /// The route of a stand-in pluxy: every call goes to its address (addr, from status_pluxy's
+    /// base), whatever the target's name, with locals as this computer's interfaces.
+    fn to_stand_in(
+        base: &str,
+        locals: Vec<IpAddr>,
+    ) -> impl FnOnce(KeyTarget) -> Result<KeyTarget, String> {
+        let addr: SocketAddr = base.trim_start_matches("http://").parse().unwrap();
+        move |t: KeyTarget| Ok(t.route_at(Some(addr), &locals))
+    }
+
     /// Key entry asks for the key only once the address answers as a pluxy that takes a key from
     /// this computer: an address nothing answers at, a certificate that does not check out and
     /// remote management being off are all said before any key window, and nothing is sent with
     /// a key until the person typed one.
     #[test]
     fn the_key_is_asked_for_only_once_the_address_answers() {
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::atomic::AtomicBool;
         let remote = std::sync::Arc::new(AtomicBool::new(false));
         let key = crate::managed::random_key();
         let right = key.clone();
@@ -2178,12 +2443,12 @@ mod tests {
             move |k| if k == right { "ok" } else { "wrong" },
         );
         let (dir, conn) = unchosen();
-        let held = Mutex::new(None);
+        let held = Held::default();
         let asked = std::cell::Cell::new(0);
         let ask = |key: &str| {
             let key = key.to_owned();
             let asked = &asked;
-            move |_: String| -> Result<Option<(String, bool)>, String> {
+            move |_: String, _: bool| -> Result<Option<(String, bool)>, String> {
                 asked.set(asked.get() + 1);
                 Ok(Some((key, false)))
             }
@@ -2199,13 +2464,14 @@ mod tests {
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let nowhere = format!("http://{}", closed.local_addr().unwrap());
         drop(closed);
-        let (entry, _) = enter_key(&conn, &held, to(&nowhere), ask(&key));
+        let (entry, _) = enter_key(&conn, &held, to(&nowhere), KeyTarget::route, ask(&key));
         assert!(matches!(entry, Entry::Failed(_)), "{entry:?}");
         // https to a server that speaks plain http: its certificate cannot be checked.
         let (entry, _) = enter_key(
             &conn,
             &held,
             to(&base.replace("http:", "https:")),
+            KeyTarget::route,
             ask(&key),
         );
         assert_eq!(
@@ -2215,7 +2481,7 @@ mod tests {
             )
         );
         // Remote management off: said with what to change, before a key is asked for.
-        let (entry, view) = enter_key(&conn, &held, to(&base), ask(&key));
+        let (entry, view) = enter_key(&conn, &held, to(&base), KeyTarget::route, ask(&key));
         assert_eq!(entry, Entry::Failed(REMOTE_MANAGEMENT_OFF.into()));
         assert!(!view.signed_in);
         assert_eq!(
@@ -2230,7 +2496,7 @@ mod tests {
         );
         // Turned on: asked once, and signed in.
         remote.store(true, Ordering::SeqCst);
-        let (entry, view) = enter_key(&conn, &held, to(&base), ask(&key));
+        let (entry, view) = enter_key(&conn, &held, to(&base), KeyTarget::route, ask(&key));
         assert_eq!(entry, Entry::SignedIn);
         assert!(view.signed_in);
         assert_eq!(asked.get(), 1);
@@ -2243,10 +2509,10 @@ mod tests {
 
     /// A key typed once is not asked for again while what failed after it is fixed: the next try
     /// at the same address sends it again. A key the pluxy refused is not kept, nor is a key
-    /// sent to another address than it was typed for.
+    /// sent to another address than it was typed for: a try at another address drops it.
     #[test]
     fn a_typed_key_is_used_again_at_its_address_until_that_pluxy_refuses_it() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
         let remote = std::sync::Arc::new(AtomicBool::new(true));
         let key = crate::managed::random_key();
         let right = key.clone();
@@ -2264,12 +2530,12 @@ mod tests {
         });
         let (other, _) = status_pluxy(remote, |_| "fail");
         let (dir, conn) = unchosen();
-        let held = Mutex::new(None);
+        let held = Held::default();
         let asked = std::cell::RefCell::new(Vec::<String>::new());
         let typing = |key: &str| {
             let key = key.to_owned();
             let asked = &asked;
-            move |summary: String| -> Result<Option<(String, bool)>, String> {
+            move |summary: String, _: bool| -> Result<Option<(String, bool)>, String> {
                 asked.borrow_mut().push(summary);
                 Ok(Some((key, false)))
             }
@@ -2281,36 +2547,33 @@ mod tests {
                 ..Change::default()
             })
         };
-        let (entry, _) = enter_key(&conn, &held, to(&base), typing(&key));
+        let route = KeyTarget::route;
+        let (entry, _) = enter_key(&conn, &held, to(&base), route, typing(&key));
         assert_eq!(
             entry,
             Entry::Failed("The reply from pluxy was 500: could not finish".into())
         );
         // The same address again: the key typed is sent, with no window.
-        let (entry, view) = enter_key(&conn, &held, to(&base), typing("never typed"));
+        let (entry, view) = enter_key(&conn, &held, to(&base), route, typing("never typed"));
         assert_eq!(entry, Entry::SignedIn);
         assert!(view.signed_in);
         assert_eq!(asked.borrow().len(), 1, "the key was asked for again");
         let keyed: Vec<String> = seen.lock().unwrap().iter().flatten().cloned().collect();
         assert_eq!(keyed, [format!("Bearer {key}"), format!("Bearer {key}")]);
         // Signed in, nothing is held: a later entry asks.
-        let (entry, _) = enter_key(&conn, &held, to(&base), typing("a wrong key"));
+        let (entry, _) = enter_key(&conn, &held, to(&base), route, typing("a wrong key"));
         assert_eq!(entry, Entry::WrongKey(KEY_REFUSED.into()));
         assert_eq!(asked.borrow().len(), 2);
         // A refused key is not held either.
-        let (entry, _) = enter_key(&conn, &held, to(&base), typing(&key));
+        let (entry, _) = enter_key(&conn, &held, to(&base), route, typing(&key));
         assert_eq!(entry, Entry::SignedIn);
         assert_eq!(asked.borrow().len(), 3);
         // Held for one address, never sent to another.
-        let (entry, _) = enter_key(&conn, &held, to(&other), typing("typed for other"));
+        let (entry, _) = enter_key(&conn, &held, to(&other), route, typing("typed for other"));
         assert!(matches!(entry, Entry::Failed(_)), "{entry:?}");
-        assert!(held
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|h| h.origin == other));
+        assert!(held.holds_for(&other));
         let before = seen.lock().unwrap().len();
-        let (entry, _) = enter_key(&conn, &held, to(&base), typing(&key));
+        let (entry, _) = enter_key(&conn, &held, to(&base), route, typing(&key));
         assert_eq!(entry, Entry::SignedIn);
         assert_eq!(
             asked.borrow().len(),
@@ -2322,8 +2585,287 @@ mod tests {
             "a key went to an address it was not typed for"
         );
         // A cancelled window holds nothing and changes nothing.
-        let (entry, _) = enter_key(&conn, &held, to(&other), |_| Ok(None::<(String, bool)>));
+        let (entry, _) = enter_key(&conn, &held, to(&other), route, |_, _| {
+            Ok(None::<(String, bool)>)
+        });
         assert_eq!(entry, Entry::Cancelled);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// A held key goes when the address changes, even when nothing answers at the new one, and
+    /// when the address is not one at all; it is tied to the certificate authority file as well
+    /// as the address; and it goes by itself when its time ends, not only at the next try.
+    #[test]
+    fn a_held_key_goes_when_its_time_ends_or_the_address_changes() {
+        use std::sync::atomic::AtomicBool;
+        let remote = std::sync::Arc::new(AtomicBool::new(true));
+        let (base, _) = status_pluxy(remote, |_| "fail");
+        let (dir, conn) = unchosen();
+        let held = Held::default();
+        let to = |url: &str| {
+            Some(Change {
+                mode: Some(Mode::Local),
+                url: Some(url.into()),
+                ..Change::default()
+            })
+        };
+        let typed = |_: String, _: bool| Ok(Some(("typed".to_string(), false)));
+        let (entry, _) = enter_key(&conn, &held, to(&base), KeyTarget::route, typed);
+        assert!(matches!(entry, Entry::Failed(_)), "{entry:?}");
+        assert!(held.holds_for(&base));
+        // Another address, where nothing answers: the key is dropped before anything is tried.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let nowhere = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        let (entry, _) = enter_key(&conn, &held, to(&nowhere), KeyTarget::route, typed);
+        assert!(matches!(entry, Entry::Failed(_)), "{entry:?}");
+        assert!(!held.holds_for(&base), "kept after the address changed");
+        // Held again, then an address that is not one.
+        enter_key(&conn, &held, to(&base), KeyTarget::route, typed);
+        assert!(held.holds_for(&base));
+        let (entry, _) = enter_key(&conn, &held, to("not an address"), KeyTarget::route, typed);
+        assert!(matches!(entry, Entry::Failed(_)), "{entry:?}");
+        assert!(!held.holds_for(&base), "kept after a bad address");
+        // The certificate authority file is part of what it was typed for.
+        let key = |ca: Option<&str>| HeldKey {
+            id: 0,
+            origin: "https://pluxy.example".into(),
+            ca_file: ca.map(str::to_owned),
+            key: Secret("typed".into()),
+            remember: false,
+            trusted: false,
+            until: Instant::now() + HOLD_FOR,
+        };
+        held.hold(key(Some("/home/me/ca.pem")));
+        assert!(held
+            .take("https://pluxy.example", Some("/home/me/other.pem"), false)
+            .is_none());
+        assert!(held.take("https://pluxy.example", None, false).is_none());
+        held.keep_only("https://pluxy.example", Some("/home/me/other.pem"));
+        assert!(!held.holds_for("https://pluxy.example"));
+        // Its time ends: it is gone without another try.
+        let brief = Held::lasting(Duration::from_millis(50));
+        brief.hold(HeldKey {
+            until: Instant::now() + brief.hold_for,
+            ..key(None)
+        });
+        assert!(brief.holds_for("https://pluxy.example"));
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(
+            !brief.holds_for("https://pluxy.example"),
+            "still held after its time ended"
+        );
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// A Tailscale-shaped address (100.64.0.0/10, also ISP shared address space) is over
+    /// Tailscale only when Tailscale carries it from this computer; otherwise it is plain http,
+    /// which the key window says and asks the person to trust. A name that does not resolve, such
+    /// as `.ts.net`, is never taken as Tailscale.
+    #[test]
+    fn a_tailscale_address_is_over_tailscale_only_when_tailscale_carries_it() {
+        let (dir, conn) = unchosen();
+        let target = |url: &str| {
+            conn.lock()
+                .unwrap()
+                .prepare_key(Some(Change {
+                    mode: Some(Mode::Remote),
+                    url: Some(url.into()),
+                    ..Change::default()
+                }))
+                .unwrap()
+        };
+        let peer: SocketAddr = "100.92.228.112:8317".parse().unwrap();
+        let ts = "http://100.92.228.112:8317";
+        let without = target(ts).route_at(Some(peer), &lan());
+        assert_eq!(without.link, Some(Link::Plain));
+        assert!(without.asks_trust());
+        assert!(!without.client.tailscale_only());
+        assert_eq!(
+            without.summary(),
+            "Key for http://100.92.228.112:8317\nTailscale does not carry the connection to this address from this computer, so it goes over plain http.\nOver plain http: anyone on this network can read the key and what the app sends.\nGo on only if you trust this network, such as your home network. Otherwise cancel, and use its https address, or its Tailscale address with Tailscale on here.\nConnects this app to http://100.92.228.112:8317"
+        );
+        let with = target(ts).route_at(Some(peer), &tailnet());
+        assert_eq!(with.link, Some(Link::Tailscale));
+        assert!(!with.asks_trust());
+        assert!(with.client.tailscale_only());
+        assert_eq!(
+            with.summary(),
+            "Key for http://100.92.228.112:8317\nOver Tailscale, which encrypts the connection.\nConnects this app to http://100.92.228.112:8317"
+        );
+        // This computer's own Tailscale address is not carried by Tailscale.
+        let own: SocketAddr = "100.101.1.2:8317".parse().unwrap();
+        let mine = target("http://100.101.1.2:8317").route_at(Some(own), &tailnet());
+        assert_eq!(mine.link, Some(Link::Plain));
+        // Before it is checked, it is never said to be over Tailscale.
+        let unchecked = target(ts);
+        assert_eq!(unchecked.link, None);
+        assert!(!unchecked.summary().contains("Tailscale"));
+        // A name that resolves to nothing is not routed at all.
+        assert!(target("http://.ts.net:8317").route().is_err());
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// A client that sends only over Tailscale sends nothing when Tailscale does not carry the
+    /// address, checked at each connection: the call fails, and says so.
+    #[test]
+    fn a_tailscale_only_client_sends_nothing_off_tailscale() {
+        use std::sync::atomic::AtomicBool;
+        let (base, seen) = status_pluxy(std::sync::Arc::new(AtomicBool::new(true)), |_| "ok");
+        let addr: SocketAddr = base.trim_start_matches("http://").parse().unwrap();
+        let client = Client::routed(
+            "http://100.92.228.112:8317",
+            None,
+            Route {
+                pin: Some(addr),
+                tailscale_only: true,
+            },
+        );
+        let r = client.call("a key", "GET", "/status", None);
+        assert_eq!(r.status, 0);
+        assert_eq!(r.error.as_ref().map(|e| e.code.as_str()), Some("tailscale"));
+        assert_eq!(answered(r), Err(TAILSCALE_OFF.into()));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(seen.lock().unwrap().is_empty(), "something was sent");
+    }
+
+    /// The call with no key and the call with the key go to the one address the name resolved to
+    /// when the person confirmed it, not to wherever the name points by the time the key is sent.
+    #[test]
+    fn the_check_and_the_key_go_to_the_address_resolved_once() {
+        use std::sync::atomic::AtomicBool;
+        let remote = std::sync::Arc::new(AtomicBool::new(true));
+        let key = crate::managed::random_key();
+        let right = key.clone();
+        let (pinned, at_pinned) =
+            status_pluxy(
+                remote.clone(),
+                move |k| if k == right { "ok" } else { "wrong" },
+            );
+        // Where the name points: a pluxy that must get nothing.
+        let (elsewhere, at_elsewhere) = status_pluxy(remote, |_| "ok");
+        let port = elsewhere.rsplit(':').next().unwrap();
+        let (dir, conn) = unchosen();
+        let held = Held::default();
+        let (entry, view) = enter_key(
+            &conn,
+            &held,
+            Some(Change {
+                mode: Some(Mode::Local),
+                url: Some(format!("http://localhost:{port}")),
+                ..Change::default()
+            }),
+            to_stand_in(&pinned, lan()),
+            |_, _| Ok(Some((key.clone(), false))),
+        );
+        assert_eq!(entry, Entry::SignedIn);
+        assert_eq!(view.target, Some(format!("http://localhost:{port}")));
+        assert_eq!(
+            *at_pinned.lock().unwrap(),
+            [None, Some(format!("Bearer {key}"))],
+            "the check and the key did not both reach the address resolved"
+        );
+        assert!(at_elsewhere.lock().unwrap().is_empty());
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// Trust in a network comes only from the native key window, for plain http that Tailscale
+    /// does not carry: the page cannot send it, it is asked again for every new address (so it
+    /// never carries over to another), and it is kept with the address it was given for only.
+    #[test]
+    fn trust_in_a_network_comes_from_the_key_window_and_stays_with_its_address() {
+        use std::sync::atomic::AtomicBool;
+        assert!(serde_json::from_str::<Change>(
+            r#"{"mode":"remote","url":"http://10.0.0.2:37575","trust_network":true}"#
+        )
+        .is_err());
+        let remote = std::sync::Arc::new(AtomicBool::new(true));
+        let key = crate::managed::random_key();
+        let right = key.clone();
+        let (pluxy, seen) = status_pluxy(remote, move |k| if k == right { "ok" } else { "wrong" });
+        let (dir, conn) = unchosen();
+        let held = Held::default();
+        let to = |url: &str| {
+            Some(Change {
+                mode: Some(Mode::Remote),
+                url: Some(url.into()),
+                ..Change::default()
+            })
+        };
+        let asked = std::cell::RefCell::new(Vec::<bool>::new());
+        let answer = |reply: Option<&str>| {
+            let reply = reply.map(str::to_owned);
+            let asked = &asked;
+            move |_: String, trust: bool| -> Result<Option<(String, bool)>, String> {
+                asked.borrow_mut().push(trust);
+                Ok(reply.map(|k| (k, false)))
+            }
+        };
+        let home = "http://pluxy-home.test:8317";
+        // Cancelled at the trust question: nothing with a key was sent, nothing kept.
+        let (entry, _) = enter_key(
+            &conn,
+            &held,
+            to(home),
+            to_stand_in(&pluxy, lan()),
+            answer(None),
+        );
+        assert_eq!(entry, Entry::Cancelled);
+        assert!(seen.lock().unwrap().iter().all(Option::is_none));
+        // Answered: the trust is kept with that address.
+        let (entry, view) = enter_key(
+            &conn,
+            &held,
+            to(home),
+            to_stand_in(&pluxy, lan()),
+            answer(Some(&key)),
+        );
+        assert_eq!(entry, Entry::SignedIn);
+        assert_eq!(view.link, Some(Link::Plain));
+        assert_eq!(*asked.borrow(), [true, true]);
+        let path = conn.lock().unwrap().dirs.settings();
+        assert!(Settings::load(&path).unwrap().trust_network);
+        // The same address again: not asked again.
+        let (entry, _) = enter_key(
+            &conn,
+            &held,
+            to(home),
+            to_stand_in(&pluxy, lan()),
+            answer(Some(&key)),
+        );
+        assert_eq!(entry, Entry::SignedIn);
+        assert_eq!(asked.borrow().last(), Some(&false));
+        // Another address: asked again, the trust does not carry over.
+        let (entry, _) = enter_key(
+            &conn,
+            &held,
+            to("http://pluxy-cafe.test:8317"),
+            to_stand_in(&pluxy, lan()),
+            answer(Some(&key)),
+        );
+        assert_eq!(entry, Entry::SignedIn);
+        assert_eq!(asked.borrow().last(), Some(&true));
+        // A change of address by the page carries no trust: its calls go only over Tailscale.
+        let mut c = conn.lock().unwrap();
+        c.change(Change {
+            mode: Some(Mode::Remote),
+            url: Some("http://pluxy-office.test:8317".into()),
+            ..Change::default()
+        })
+        .unwrap();
+        assert!(!Settings::load(&path).unwrap().trust_network);
+        assert_eq!(c.view().link, Some(Link::Tailscale));
+        drop(c);
+        // Kept across a restart only with its own address.
+        enter_key(
+            &conn,
+            &held,
+            to(home),
+            to_stand_in(&pluxy, lan()),
+            answer(Some(&key)),
+        );
+        let dirs = conn.lock().unwrap().dirs.clone();
+        assert_eq!(Connection::open(dirs, None).view().link, Some(Link::Plain));
         fs::remove_dir_all(dir).ok();
     }
 
@@ -2332,83 +2874,40 @@ mod tests {
     #[test]
     fn the_key_window_says_how_the_key_travels() {
         let (dir, conn) = unchosen();
-        let summary = |url: &str, trust_network: bool| {
-            conn.lock()
+        let summary = |url: &str, peer: &str| {
+            let t = conn
+                .lock()
                 .unwrap()
                 .prepare_key(Some(Change {
                     mode: Some(Mode::Remote),
                     url: Some(url.into()),
-                    trust_network,
                     ..Change::default()
                 }))
-                .map(|t| t.summary)
+                .unwrap();
+            t.route_at(Some(peer.parse().unwrap()), &lan()).summary()
         };
+        conn.lock().unwrap().settings = Settings {
+            mode: Some(Mode::Remote),
+            url: Some("http://10.0.0.2:37575".into()),
+            trust_network: true,
+            ..Settings::default()
+        };
+        // Trusted before for this address: said, not asked.
         assert_eq!(
-            summary("http://10.0.0.2:37575", true).unwrap(),
-            "Key for http://10.0.0.2:37575\nOver plain http: anyone on this network can read the key and what the app sends.\nConnects this app to http://10.0.0.2:37575"
+            summary("http://10.0.0.2:37575", "10.0.0.2:37575"),
+            "Key for http://10.0.0.2:37575\nOver plain http: anyone on this network can read the key and what the app sends."
         );
-        assert!(summary("http://10.0.0.2:37575", false).is_err());
         assert_eq!(
-            summary("http://100.101.102.103:8317", false).unwrap(),
-            "Key for http://100.101.102.103:8317\nOver Tailscale, which encrypts the connection.\nConnects this app to http://100.101.102.103:8317"
-        );
-        assert_eq!(
-            summary("https://pluxy.example", false).unwrap(),
-            "Key for https://pluxy.example\nConnects this app to https://pluxy.example"
+            summary("https://pluxy.example", "192.0.2.10:443"),
+            "Key for https://pluxy.example\nSwitches from http://10.0.0.2:37575 to https://pluxy.example"
         );
         conn.lock().unwrap().settings.mode = Some(Mode::Managed);
-        let managed = summary("https://pluxy.example", false).unwrap();
+        let managed = summary("https://pluxy.example", "192.0.2.10:443");
         assert_eq!(
             managed,
             "Key for https://pluxy.example\nSwitches from the pluxy this app runs to https://pluxy.example"
         );
         assert!(!managed.contains("core"));
-        fs::remove_dir_all(dir).ok();
-    }
-
-    /// The trust the person gave is kept with an address that needs it, so the app reconnects
-    /// there when it opens again, and only there.
-    #[test]
-    fn trust_in_a_network_is_kept_with_the_address_that_needs_it() {
-        let dir =
-            std::env::temp_dir().join(format!("pluxy-trust-{}", crate::managed::random_key()));
-        let dirs = Dirs {
-            config: dir.join("config"),
-            core: dir.join("core"),
-            cores: dir.join("cores"),
-        };
-        let mut c = Connection::open(dirs.clone(), None);
-        for (url, trust_network, kept) in [
-            ("http://10.0.0.2:37575", true, true),
-            ("http://100.101.102.103:8317", true, false),
-            ("https://pluxy.example", true, false),
-        ] {
-            c.change(Change {
-                mode: Some(Mode::Remote),
-                url: Some(url.into()),
-                trust_network,
-                ..Change::default()
-            })
-            .unwrap();
-            assert_eq!(
-                Settings::load(&dirs.settings()).unwrap().trust_network,
-                kept,
-                "{url}"
-            );
-            let again = Connection::open(dirs.clone(), None).view();
-            assert_eq!(
-                again.target.as_deref(),
-                Some(url),
-                "{url} after the app opens again"
-            );
-        }
-        assert!(c
-            .change(Change {
-                mode: Some(Mode::Remote),
-                url: Some("http://10.0.0.2:37575".into()),
-                ..Change::default()
-            })
-            .is_err());
         fs::remove_dir_all(dir).ok();
     }
 
@@ -2839,13 +3338,13 @@ mod tests {
                 ..Change::default()
             }))
             .unwrap();
-        assert_eq!(prepared.summary, "Key for https://example.com:9443\nSwitches from http://127.0.0.1:1234 to https://example.com:9443");
+        assert_eq!(prepared.summary(), "Key for https://example.com:9443\nSwitches from http://127.0.0.1:1234 to https://example.com:9443");
         assert_eq!(c.view(), before);
         assert_eq!(fs::read(dirs.settings()).unwrap(), saved);
         for (mode, url, ca) in [
             (Mode::Managed, "", None),
             (Mode::Local, "http://example.com", None),
-            (Mode::Remote, "http://example.com", None),
+            (Mode::Remote, "http://127.0.0.1:1234", None),
             (Mode::Remote, "https://example.com/path", None),
             (
                 Mode::Remote,
@@ -2862,6 +3361,15 @@ mod tests {
                 }))
                 .is_err());
         }
+        // Plain http to another computer, never trusted: it sends only over Tailscale.
+        let plain = c
+            .prepare_key(Some(Change {
+                mode: Some(Mode::Remote),
+                url: Some("http://example.com".into()),
+                ..Change::default()
+            }))
+            .unwrap();
+        assert!(plain.client.tailscale_only() && !plain.settings.trust_network);
         let prepared = c.prepare_key(None).unwrap();
         c.sign_out().unwrap();
         assert_eq!(
@@ -2906,7 +3414,7 @@ mod tests {
                 ..Change::default()
             }))
             .unwrap()
-            .summary
+            .summary()
         };
         assert_eq!(
             to_local(&c, "http://127.0.0.1:1234"),
@@ -2919,7 +3427,7 @@ mod tests {
             ..Change::default()
         };
         assert_eq!(
-            c2.prepare_key(Some(kept)).unwrap().summary,
+            c2.prepare_key(Some(kept)).unwrap().summary(),
             "Key for https://example.com:9443",
             "the saved target itself is no switch"
         );
@@ -3064,13 +3572,13 @@ mod tests {
         assert!(c
             .prepare_key(Some(change()))
             .unwrap()
-            .summary
+            .summary()
             .ends_with("Connects this app to http://127.0.0.1:1234"));
         c.settings.mode = Some(Mode::Managed);
         assert!(c
             .prepare_key(Some(change()))
             .unwrap()
-            .summary
+            .summary()
             .ends_with("Switches from the pluxy this app runs to http://127.0.0.1:1234"));
     }
 
@@ -3429,94 +3937,42 @@ mod tests {
         }
     }
 
-    /// A remote pluxy is reached over https; over plain http only at a Tailscale address
-    /// (100.64.0.0/10, fd7a:115c:a1e0::/48, a name under ts.net), or at another address once the
-    /// person said they trust the network.
+    /// A remote pluxy is reached over https, or over plain http to another computer (how that may
+    /// go is its route's: `Link`); never over plain http to this computer, `localhost.` included,
+    /// which is local mode's.
     #[test]
-    fn remote_means_https_tailscale_or_a_trusted_network() {
+    fn remote_means_another_computer() {
         assert_eq!(
-            remote_origin("https://pluxy.example", false).unwrap(),
+            remote_origin("https://pluxy.example").unwrap(),
             "https://pluxy.example"
         );
         assert_eq!(
-            remote_origin("https://127.0.0.1:9443/", false).unwrap(),
+            remote_origin("https://127.0.0.1:9443/").unwrap(),
             "https://127.0.0.1:9443"
         );
-        assert!(remote_origin("https://pluxy.example/sub", true).is_err());
-        // This computer over http is local mode's, trusted or not.
+        assert!(remote_origin("https://pluxy.example/sub").is_err());
         for here in [
             "http://127.0.0.1:8317",
             "http://localhost:8317",
+            "http://localhost.:8317",
+            "http://LOCALHOST..:8317",
             "http://[::1]:8317",
         ] {
-            assert!(
-                remote_origin(here, true).unwrap_err().contains("https"),
-                "{here}"
-            );
-        }
-        for tailscale in [
-            "http://100.64.0.1:8317",
-            "http://100.101.102.103:8317",
-            "http://100.127.255.254",
-            "http://[fd7a:115c:a1e0::1]:8317",
-            "http://[fd7a:115c:a1e0:ab12:4843:cd96:6258:b240]:8317",
-            "http://home-server.tail1234.ts.net:8317",
-            "http://Home-Server.Tail1234.TS.NET.:8317",
-        ] {
-            assert!(
-                remote_origin(tailscale, false).is_ok(),
-                "{tailscale} is a Tailscale address"
-            );
+            assert!(remote_origin(here).unwrap_err().contains("https"), "{here}");
+            assert!(local_origin(here).is_ok(), "{here}");
         }
         for elsewhere in [
             "http://pluxy.example",
             "http://10.0.0.2:37575",
-            "http://192.168.1.20:8317",
-            "http://100.63.255.255:8317",
-            "http://100.128.0.1:8317",
-            "http://[fd7a:115c:a1e1::1]:8317",
-            "http://ts.net:8317",
-            "http://home-server.ts.net.example:8317",
-            "http://home-server:8317",
+            "http://100.101.102.103:8317",
+            "http://home-server.tail1234.ts.net:8317",
+            "http://localhost.example:8317",
         ] {
-            let refused = remote_origin(elsewhere, false).unwrap_err();
-            assert!(
-                refused.contains("plain http") && refused.contains("https"),
-                "{elsewhere}: {refused}"
-            );
-            assert_eq!(
-                remote_origin(elsewhere, true).unwrap(),
-                Url::parse(elsewhere)
-                    .unwrap()
-                    .origin()
-                    .ascii_serialization(),
-                "{elsewhere} on a network the person trusts"
-            );
+            assert!(remote_origin(elsewhere).is_ok(), "{elsewhere}");
+            assert!(local_origin(elsewhere).is_err(), "{elsewhere}");
         }
     }
 
-    #[test]
-    fn settings_round_trip_and_a_broken_file_is_an_error() {
-        let dir = std::env::temp_dir().join(format!(
-            "pluxy-app-settings-{}",
-            crate::managed::random_key()
-        ));
-        let path = dir.join("connection.json");
-        assert_eq!(Settings::load(&path).unwrap(), Settings::default());
-        let s = Settings {
-            mode: Some(Mode::Remote),
-            url: Some("https://pluxy.example".into()),
-            ..Settings::default()
-        };
-        s.save(&path).unwrap();
-        assert_eq!(Settings::load(&path).unwrap(), s);
-        fs::write(&path, b"{not json").unwrap();
-        assert!(Settings::load(&path).is_err());
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    /// A sign-out whose save fails says so, and keeps the kept key in view, so it can be retried.
-    #[cfg(unix)]
     #[test]
     fn a_failed_sign_out_keeps_the_kept_key() {
         use std::os::unix::fs::PermissionsExt;

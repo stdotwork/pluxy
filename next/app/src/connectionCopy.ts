@@ -36,9 +36,6 @@ export const FORM = {
   back: "Back",
   waiting: "Waiting for the key…",
   note: "Next, a small window asks for its management key. On the computer pluxy runs on, it is the management_key line in pluxy's config.json (pluxy help there says where that file is), and pluxy key management --show-key prints it.",
-  plainHttp:
-    "Plain http is not encrypted: anyone on that network could read pluxy's management key and everything the app and your tools send it, such as account keys and prompts. Use it only on a network you trust, such as your home network, or use its Tailscale or https address instead.",
-  trust: "I trust this network",
 };
 
 export const HINT = {
@@ -46,8 +43,8 @@ export const HINT = {
   local: "On this computer. It runs on its own; the app only connects to it.",
   remote: "On another computer, over https.",
   remoteWithCertificate: "Over https, trusting that certificate authority file.",
-  tailscale: "On another computer, over Tailscale, which encrypts the connection.",
-  plainHttp: "On another computer, over plain http.",
+  plainHttp:
+    "On another computer, over plain http. Unless Tailscale carries it, the key window warns that others on the network could read what is sent, and asks whether you trust this network.",
   notAnAddress: "Start with https:// or http://, then the computer's name or number.",
 };
 
@@ -56,44 +53,21 @@ export interface AddressKind {
   /** The mode the native side holds this address to; unset when the address is not usable. */
   mode?: Extract<Mode, "local" | "remote">;
   hint: string;
-  /** Plain http to another computer, not over Tailscale: usable only once the person says they
-   * trust the network (the native side's trust_network). */
-  needsTrust?: boolean;
 }
 
-const LOOPBACK = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/;
-
-/** Whether host (as URL.hostname gives it) is a Tailscale address, as conn.rs is_tailscale holds
- * it: 100.64.0.0/10, fd7a:115c:a1e0::/48, or a MagicDNS name under ts.net. */
-export function isTailscale(host: string): boolean {
-  const v4 = /^100\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host);
-  if (v4) return Number(v4[1]) >= 64 && Number(v4[1]) <= 127;
-  if (/^\[fd7a:115c:a1e0(:|\])/i.test(host)) return true;
-  return /\.ts\.net\.?$/i.test(host);
-}
-
-/** How the app reaches the pluxy at url: over https, Tailscale or plain http, or on this computer. */
-export function linkOf(url?: string): "https" | "tailscale" | "plain" | "here" | undefined {
-  try {
-    const u = new URL(url ?? "");
-    if (LOOPBACK.test(u.hostname)) return "here";
-    if (u.protocol === "https:") return "https";
-    if (u.protocol !== "http:") return undefined;
-    return isTailscale(u.hostname) ? "tailscale" : "plain";
-  } catch {
-    return undefined;
-  }
-}
+/** A host on this computer, as URL.hostname gives it; `localhost.` (trailing dots) included, as
+ * conn.rs is_loopback holds it. */
+const LOOPBACK = /^(localhost\.*|127(\.\d{1,3}){3}|\[::1\])$/;
 
 /**
  * What kind of address this is, by the rules the native side holds each mode to (conn.rs
- * local_origin, remote_origin): any address on this computer is local; https anywhere else is
- * remote, and only the remote mode carries a certificate file, so an https address with one is
- * taken as remote; plain http to another computer is remote over Tailscale, and otherwise only
- * once the person says they trust the network (trusted). Anything else is refused here, before any
- * call.
+ * local_origin, remote_origin): any address on this computer is local; anything else is remote,
+ * and only the remote mode carries a certificate file, so an https address with one is taken as
+ * remote. Whether plain http to another computer goes over Tailscale, or only once the person
+ * trusts the network, is the native side's to find out and its key window's to ask. Anything else
+ * is refused here, before any call.
  */
-export function addressKind(text: string, certificateFile?: string, trusted = false): AddressKind {
+export function addressKind(text: string, certificateFile?: string): AddressKind {
   const value = text.trim();
   if (!value) return { ok: false, hint: HINT.empty };
   let url: URL;
@@ -108,8 +82,7 @@ export function addressKind(text: string, certificateFile?: string, trusted = fa
     return { ok: true, mode: "remote", hint: HINT.remoteWithCertificate };
   if (onThisComputer) return { ok: true, mode: "local", hint: HINT.local };
   if (url.protocol === "https:") return { ok: true, mode: "remote", hint: HINT.remote };
-  if (isTailscale(url.hostname)) return { ok: true, mode: "remote", hint: HINT.tailscale };
-  return { ok: trusted, mode: "remote", hint: HINT.plainHttp, needsTrust: true };
+  return { ok: true, mode: "remote", hint: HINT.plainHttp };
 }
 
 // ---- what the native side says when something went wrong ------------------------------------------
@@ -156,10 +129,10 @@ export function plainReason(error: string | undefined, certificateFile?: string)
   if (error.startsWith(prefix)) {
     const rest = error.slice(prefix.length);
     const at = rest.lastIndexOf(": ");
-    if (at > 0) return `The certificate file ${rest.slice(0, at)} could not be read.`;
+    if (at > 0) return `The certificate authority file ${rest.slice(0, at)} could not be read.`;
   }
   if (certificateFile && error.startsWith(`${certificateFile}: `))
-    return `The certificate file ${certificateFile} could not be read.`;
+    return `The certificate authority file ${certificateFile} could not be read.`;
   return undefined;
 }
 
@@ -423,7 +396,7 @@ export const WHERE = {
   runsLocal: "It runs on its own; the app only connects to it.",
   runsRemote: "Over https.",
   runsRemoteWithCertificate: "Over https, trusting your certificate authority file.",
-  runsTailscale: "Over Tailscale, which encrypts the connection.",
+  runsTailscale: "Only over Tailscale, which encrypts the connection.",
   runsPlainHttp: "Over plain http, on a network you said you trust.",
   signOut: "Sign out",
   switchHere: "Switch to this computer",
@@ -446,9 +419,8 @@ export function whoRuns(c: Connection): string | undefined {
   if (c.mode === "managed") return WHERE.runsManaged;
   if (c.mode === "local") return WHERE.runsLocal;
   if (c.mode === "remote") {
-    const link = linkOf(c.target ?? c.url);
-    if (link === "tailscale") return WHERE.runsTailscale;
-    if (link === "plain") return WHERE.runsPlainHttp;
+    if (c.link === "tailscale") return WHERE.runsTailscale;
+    if (c.link === "plain") return WHERE.runsPlainHttp;
     return c.ca_file ? WHERE.runsRemoteWithCertificate : WHERE.runsRemote;
   }
   return undefined;

@@ -80,6 +80,7 @@ pub mod savefile;
 #[cfg_attr(not(native_stack), allow(dead_code))]
 pub mod spawn;
 mod startup;
+mod tailnet;
 pub mod trust;
 #[cfg(feature = "native-test")]
 mod update_native;
@@ -177,7 +178,7 @@ struct App {
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
     /// A key typed for an address whose pluxy has not refused it, for the next try there.
-    held_key: Mutex<Option<conn::HeldKey>>,
+    held_key: conn::Held,
     rotation_open: AtomicBool,
     /// The app's own update (`updater/`).
     updater: updater::State,
@@ -656,6 +657,8 @@ fn usable_tray(app: &AppHandle) -> Result<(), String> {
 
 /// Closes the window to the tray: the window and its webviews are destroyed, not hidden.
 fn close_to_tray(app: &AppHandle) {
+    // A key held for the next try is not kept while the app sits in the tray.
+    app.state::<App>().held_key.drop_key();
     remember_window(app);
     if let Some(w) = app.get_window(WINDOW) {
         let _ = w.destroy();
@@ -987,6 +990,7 @@ async fn connection_set(webview: Webview, change: Change) -> Result<View, String
     if app.state::<App>().key_entry_open.load(Ordering::SeqCst) {
         return Err("finish native key entry first".into());
     }
+    app.state::<App>().held_key.drop_key();
     with_conn(&webview, move |c| c.change(change)).await
 }
 
@@ -1041,20 +1045,23 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
         let _pending = Pending(app.clone());
         let st = app.state::<App>();
         // The address, its certificate and whether its pluxy takes a key from here are checked
-        // before the key window opens; a key typed for an address and not refused there is
-        // used again on the next try (`conn::enter_key`).
-        let (entry, mut connection) = conn::enter_key(&st.conn, &st.held_key, change, |summary| {
-            if let Some(after) = *st.key_entry_after.lock().unwrap() {
-                std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
-            }
-            // Run off the main thread so the app keeps handling IPC and window close while the dialog is open.
-            let input = key_entry::request(&app, summary).map_err(String::from)?;
-            if input.is_none() {
-                *st.key_entry_after.lock().unwrap() =
-                    Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
-            }
-            Ok(input.map(|i| (i.key.as_str().to_owned(), i.remember)))
-        });
+        // before the key window opens, at the one address its name resolved to; the window asks
+        // whether the person trusts the network where plain http needs it; a key typed for an
+        // address and not refused there is used again on the next try (`conn::enter_key`).
+        let route = conn::KeyTarget::route;
+        let (entry, mut connection) =
+            conn::enter_key(&st.conn, &st.held_key, change, route, |summary, trust| {
+                if let Some(after) = *st.key_entry_after.lock().unwrap() {
+                    std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
+                }
+                // Run off the main thread so the app keeps handling IPC and window close while the dialog is open.
+                let input = key_entry::request(&app, summary, trust).map_err(String::from)?;
+                if input.is_none() {
+                    *st.key_entry_after.lock().unwrap() =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+                }
+                Ok(input.map(|i| (i.key.as_str().to_owned(), i.remember)))
+            });
         let status = match entry {
             conn::Entry::SignedIn => "signed_in",
             conn::Entry::Cancelled => "cancelled",
@@ -1108,6 +1115,8 @@ async fn certificate_choose(webview: Webview) -> Result<Option<String>, String> 
 
 #[tauri::command]
 async fn sign_out(webview: Webview) -> Result<View, String> {
+    trusted(&webview)?;
+    webview.app_handle().state::<App>().held_key.drop_key();
     with_conn(&webview, |c| c.sign_out()).await
 }
 
@@ -2914,6 +2923,7 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
                     "The secret to keep in this device's vault as \"{label}\". Native tools get it only after you confirm each use."
                 ),
                 false,
+                false,
             );
             drop(open);
             match input {
@@ -3585,7 +3595,7 @@ pub fn run() {
                 quitting: AtomicBool::new(false),
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
-                held_key: Mutex::new(None),
+                held_key: conn::Held::default(),
                 rotation_open: AtomicBool::new(false),
                 updater: updater::State::new(updater_plugin.clone()),
             });

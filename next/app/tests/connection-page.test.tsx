@@ -175,36 +175,24 @@ test("the address decides the mode the native side holds it to, and anything it 
   expect(kind("https://127.0.0.1:8317", "/etc/ca.pem")).toEqual([true, "remote"]);
   expect(kind("https://pluxy.example")).toEqual([true, "remote"]);
   expect(kind("https://pluxy.example", "/etc/ca.pem")).toEqual([true, "remote"]);
-  // Plain http to another computer: over Tailscale as it is, elsewhere only once trusted.
-  for (const tailscale of [
-    "http://100.64.0.1:8317",
-    "http://100.101.102.103:8317",
-    "http://100.127.255.254",
-    "http://[fd7a:115c:a1e0::1]:8317",
-    "http://home-server.tail1234.ts.net:8317",
-    "http://Home-Server.Tail1234.TS.NET.:8317",
-  ]) {
-    expect(kind(tailscale)).toEqual([true, "remote"]);
-    expect(addressKind(tailscale).hint).toBe(
-      "On another computer, over Tailscale, which encrypts the connection.",
-    );
-    expect(addressKind(tailscale).needsTrust).toBeUndefined();
-  }
+  // Plain http to another computer, whatever its shape: the key window finds out whether
+  // Tailscale carries it, and asks about the network when it does not.
   for (const elsewhere of [
     "http://pluxy.example",
     "http://10.0.0.5:8317",
-    "http://192.168.1.20:8317",
-    "http://100.63.255.255:8317",
-    "http://100.128.0.1:8317",
-    "http://[fd7a:115c:a1e1::1]:8317",
-    "http://home-server.ts.net.example:8317",
-    "http://home-server:8317",
+    "http://100.101.102.103:8317",
+    "http://[fd7a:115c:a1e0::1]:8317",
+    "http://home-server.tail1234.ts.net:8317",
+    "http://.ts.net:8317",
   ]) {
-    expect(kind(elsewhere)).toEqual([false, "remote"]);
-    expect(addressKind(elsewhere).needsTrust).toBe(true);
-    expect(addressKind(elsewhere, undefined, true).ok).toBe(true);
-    expect(addressKind(elsewhere).hint).toBe("On another computer, over plain http.");
+    expect(kind(elsewhere)).toEqual([true, "remote"]);
+    expect(addressKind(elsewhere).hint).toBe(
+      "On another computer, over plain http. Unless Tailscale carries it, the key window warns that others on the network could read what is sent, and asks whether you trust this network.",
+    );
   }
+  // This computer, also written with a trailing dot.
+  expect(kind("http://localhost.:8317")).toEqual([true, "local"]);
+  expect(kind("http://LOCALHOST..:8317")).toEqual([true, "local"]);
   expect(kind("ftp://pluxy.example")).toEqual([false, undefined]);
   expect(kind("pluxy.example")).toEqual([false, undefined]);
   expect(kind("")).toEqual([false, undefined]);
@@ -233,8 +221,7 @@ test("Connect shows the form under its title, with the hint following what is ty
   expect(m.text()).toContain("It uses a certificate I made myself");
   expect(m.text()).toContain("Next, a small window asks for its management key.");
   await m.input("Address", "http://pluxy.example");
-  expect(m.text()).toContain("Plain http is not encrypted");
-  expect((m.button("Continue") as FakeNode).disabled).toBe(true);
+  expect(m.text()).toContain("On another computer, over plain http.");
   await m.click("Back");
   expect(m.text()).toContain("Where should pluxy run?");
   expect(m.labels().length).toBe(2);
@@ -242,7 +229,7 @@ test("Connect shows the form under its title, with the hint following what is ty
 
 test("an address the native side would refuse is refused before any call is made", async () => {
   const { m } = await connectStep({ key_entry: never });
-  await m.input("Address", "http://pluxy.example");
+  await m.input("Address", "ftp://pluxy.example");
   await m.submit();
   await m.input("Address", "not an address");
   await m.submit();
@@ -286,7 +273,7 @@ test("a refused key or an unreachable address says why above the buttons and kee
     }),
   };
   await m.submit();
-  expect(m.text()).toContain("The certificate file /etc/pluxy/ca.pem could not be read.");
+  expect(m.text()).toContain("The certificate authority file /etc/pluxy/ca.pem could not be read.");
   // A key window that was closed says nothing, and nothing the person typed is gone.
   result = { status: "cancelled", connection: view() };
   await m.submit();
@@ -310,42 +297,29 @@ test("an accepted key hands the new connection over; while the key window is ope
   expect(changed).toEqual([connection]);
 });
 
-test("plain http to another computer says who could read it and goes only once the network is trusted; Tailscale goes as it is", async () => {
+test("plain http to another computer goes to the key window with no trust from the page, so none carries over to another address", async () => {
   const { m } = await connectStep({
     key_entry: (): KeyEntryResult => ({ status: "cancelled", connection: view() }),
   });
+  const box = () => all(m.root, "input").some((i) => m.attr(i, "type") === "checkbox");
   await m.input("Address", "http://10.0.0.2:37575");
   expect(m.text()).toContain("On another computer, over plain http.");
-  expect(m.text()).toContain(
-    "Plain http is not encrypted: anyone on that network could read pluxy's management key and everything the app and your tools send it, such as account keys and prompts.",
-  );
-  const trust = () =>
-    need(
-      all(m.root, "input").find((i) => m.attr(i, "type") === "checkbox"),
-      "no trust box",
-    );
-  expect(trust().checked).toBe(false);
-  expect(m.text()).toContain("I trust this network");
-  expect((m.button("Continue") as FakeNode).disabled).toBe(true);
-  await m.submit();
-  expect(m.commands("key_entry")).toEqual([]);
-  trust().checked = true;
-  await m.fire(trust(), "change");
+  expect(m.text()).not.toContain("encrypts");
+  expect(box()).toBe(false);
   expect((m.button("Continue") as FakeNode).disabled).toBe(false);
   await m.submit();
-  expect(m.commands("key_entry")).toEqual([
-    { change: { mode: "remote", url: "http://10.0.0.2:37575", trust_network: true } },
-  ]);
-  // Over Tailscale: no warning, nothing to tick, and no trust is sent.
-  await m.input("Address", "http://home-server.tail1234.ts.net:8317");
-  expect(m.text()).toContain("over Tailscale, which encrypts the connection.");
-  expect(m.text()).not.toContain("Plain http is not encrypted");
-  expect(all(m.root, "input").some((i) => m.attr(i, "type") === "checkbox")).toBe(false);
+  await m.input("Address", "http://192.168.1.20:8317");
+  expect(box()).toBe(false);
   await m.submit();
-  expect(m.commands("key_entry")[1]).toEqual({
-    change: { mode: "remote", url: "http://home-server.tail1234.ts.net:8317" },
-  });
-  expect(m.commands("key_entry")[1]?.change).not.toHaveProperty("trust_network", true);
+  // A Tailscale-shaped address is not said to be encrypted: only the native side can tell.
+  await m.input("Address", "http://100.101.102.103:8317");
+  expect(m.text()).not.toContain("encrypts");
+  await m.submit();
+  expect(m.commands("key_entry")).toEqual([
+    { change: { mode: "remote", url: "http://10.0.0.2:37575" } },
+    { change: { mode: "remote", url: "http://192.168.1.20:8317" } },
+    { change: { mode: "remote", url: "http://100.101.102.103:8317" } },
+  ]);
 });
 
 test("the certificate box asks for the certificate authority's file, says which file that is, and Choose fills it in", async () => {
@@ -413,6 +387,7 @@ test("once connected, the form says Connected and asks for nothing until another
     url: "http://10.0.0.2:37575",
     target: "http://10.0.0.2:37575",
     signed_in: true,
+    link: "plain",
   });
   const m = await mount(page(connected), settings({ key_entry: never }));
   expect(m.text()).toContain("Connected to 10.0.0.2:37575");
@@ -421,8 +396,6 @@ test("once connected, the form says Connected and asks for nothing until another
   expect((m.button("Connected") as FakeNode).disabled).toBe(true);
   expect(m.labels()).not.toContain("Connect");
   expect(m.text()).not.toContain("Next, a small window asks for its management key.");
-  // The trust given for that address shows as given.
-  expect(all(m.root, "input").find((i) => m.attr(i, "type") === "checkbox")?.checked).toBe(true);
   await m.submit();
   expect(m.commands("key_entry")).toEqual([]);
   // Another address: Connect again, with the note.
@@ -433,18 +406,24 @@ test("once connected, the form says Connected and asks for nothing until another
   // Signed out of the same address: Connect, to sign in again.
   const out = await mount(page({ ...connected, signed_in: false }), settings({ key_entry: never }));
   expect(out.labels()).toContain("Connect");
-  const tailscale = await mount(
-    page(
-      view({
-        mode: "remote",
-        url: "http://100.101.102.103:8317",
-        target: "http://100.101.102.103:8317",
-        signed_in: true,
-      }),
-    ),
-    settings(),
-  );
-  expect(tailscale.text()).toContain("Over Tailscale, which encrypts the connection.");
+  // How it travels is as the native side found it, never from the address's shape.
+  const at = (link: Connection["link"]) =>
+    mount(
+      page(
+        view({
+          mode: "remote",
+          url: "http://100.101.102.103:8317",
+          target: "http://100.101.102.103:8317",
+          signed_in: true,
+          link,
+        }),
+      ),
+      settings(),
+    );
+  expect((await at("tailscale")).text()).toContain("Only over Tailscale, which encrypts the connection.");
+  const plain = await at("plain");
+  expect(plain.text()).toContain("Over plain http, on a network you said you trust.");
+  expect(plain.text()).not.toContain("Tailscale, which encrypts");
 });
 
 // ---- not running ------------------------------------------------------------------------------------------
