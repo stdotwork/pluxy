@@ -176,7 +176,7 @@ for (const theme of THEMES) {
           ".accounts-group-count",
           ".account-name",
           ".account-word",
-          '.accounts-group:not([data-group="needs"]) .account-week',
+          ".account-week",
           ".pool-name",
           ".pool-window",
           ".pool-foot",
@@ -243,6 +243,51 @@ for (const theme of THEMES) {
       const offSeg = unread.find((s) => s.group === "off");
       const uncheckedSeg = unread.find((s) => s.group === "unchecked");
       expect(uncheckedSeg?.kind).not.toBe(offSeg?.kind);
+    });
+
+    test(`Needs you rows stay at 4.5:1 in both List and Cards views: ${name}`, async ({ page }) => {
+      await page.route("**/v0/management/accounts", async (route) => {
+        if (route.request().method() !== "GET") return route.continue();
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ accounts: SAMPLE_ACCOUNTS }),
+        });
+      });
+      await page.route("**/v0/management/usage*", async (route) => {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(SAMPLE_USAGE),
+        });
+      });
+
+      await openAccounts(page, theme, appearance);
+      const selector = [
+        '.accounts-group[data-group="needs"] .accounts-group-head',
+        '.accounts-group[data-group="needs"] .accounts-group-count',
+        '.accounts-group[data-group="needs"] .account-name',
+        '.accounts-group[data-group="needs"] .account-word',
+        '.accounts-group[data-group="needs"] .account-reason',
+        '.accounts-group[data-group="needs"] .account-week',
+      ].join(", ");
+      const viewSwitch = page.getByRole("group", { name: "Account view" });
+
+      for (const mode of ["list", "cards"] as const) {
+        await viewSwitch
+          .getByRole("button", { name: mode === "list" ? "List" : "Cards", exact: true })
+          .click();
+        await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", mode);
+        const parts = page.locator(selector);
+        const measured = await measureContrast(parts);
+        const texts = await parts.allTextContents();
+        expect(measured.length).toBeGreaterThanOrEqual(6);
+        const low = measured
+          .map((m, i) => ({ text: texts[i]?.trim().slice(0, 30), ...m }))
+          .filter((m) => m.ratio < AA)
+          .map((m) => `${mode} "${m.text}": ${m.ratio.toFixed(2)}:1 (${m.fg} on ${m.bg})`);
+        expect(low).toEqual([]);
+      }
     });
   }
 }

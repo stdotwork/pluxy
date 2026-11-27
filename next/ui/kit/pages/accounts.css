@@ -333,8 +333,15 @@
     background: color-mix(in srgb, var(--px-color-error) 5%, transparent);
   }
 
-  .accounts-page[data-view="list"] .accounts-group[data-group="needs"] .account-reason {
+  /* On the tinted Needs you ground, muted text falls below 4.5:1 on Paper light: draw secondary
+     lines (reason, week count, metadata) in primary text ink in both List and Cards views. */
+  .accounts-group[data-group="needs"] .account-reason,
+  .accounts-group[data-group="needs"] .account-week,
+  .accounts-group[data-group="needs"] .account-meta {
     color: var(--px-color-text);
+  }
+
+  .accounts-page[data-view="list"] .accounts-group[data-group="needs"] .account-reason {
     white-space: normal;
   }
 
