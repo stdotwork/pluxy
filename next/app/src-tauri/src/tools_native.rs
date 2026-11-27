@@ -7,15 +7,15 @@
 //!
 //! - open: Tools lists no Beginner Mode and no Manage Clients, and their old addresses go to Setup
 //!   and to Tools; Claude Code's row offers Install add-on, nothing else;
-//! - clients: Install add-on installs pluxy/claude-code from the curated registry, asking nothing,
-//!   and the row then offers Turn on add-on;
-//! - native: Turn on add-on opens the native confirmation, which says "full access to your user
-//!   account"; while it shows, the row says to answer it and offers no live control, and the
-//!   package stays not enabled however long the window waits; the dialog's own Cancel, pressed
-//!   natively, leaves it off and the row says nothing of a failure; its Confirm, pressed natively,
-//!   enables it and the row offers Set up;
-//! - apply: Set up opens Claude Code's own page, with no way back to setup (it was opened from
-//!   Tools); on a selected file holding the person's settings, a cancelled apply leaves the file
+//! - clients: Install add-on installs pluxy/claude-code from the curated registry, asking nothing
+//!   for the install, and goes on to turn it on: the one native confirmation it opens says first
+//!   "Turn on the" add-on, with "full access to your user account"; while it shows, the row says
+//!   to answer it and offers no live control, and the package stays installed and not enabled
+//!   however long the window waits; the dialog's own Cancel, pressed natively, leaves it off, the
+//!   row says nothing of a failure and offers Turn on add-on;
+//! - native: Turn on add-on opens the same confirmation; its Confirm, pressed natively, enables
+//!   it and opens Claude Code's own page, with no way back to setup (it was opened from Tools);
+//! - apply: on a selected file holding the person's settings, a cancelled apply leaves the file
 //!   byte for byte as it was; a confirmed one, naming the file and the key's label and never the
 //!   key, writes core's address, the key and the default model mapping and keeps the person's own
 //!   setting;
@@ -270,38 +270,22 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
         })(),
     )?;
 
-    // ---- clients: install asks nothing, and the row then offers to turn the add-on on
+    // ---- clients: Install add-on installs, asking nothing for that, then asks to turn it on
     step(
         "clients",
         (|| {
             wait_step(main, "install")?;
-            let (r, asked) = super::transactions::unasked(|| -> Result<(), String> {
-                click(main, ADDON, "Install add-on")?;
-                wait_step(main, "enable")
-            });
-            r?;
+            click(main, ADDON, "Install add-on")?;
+            // The one confirmation the press opens is the turn-on's, which says so first.
+            let t = confirmation(c, &[PACKAGE, FULL_ACCESS])?;
             require(
-                !asked,
-                "installing from the row asked a native confirmation",
+                t.starts_with("Turn on the "),
+                format!("the confirmation Install add-on opened: {t}"),
             )?;
-            wait_row(main, &["Turn on add-on"], &[])?;
             let p = package(main, PACKAGE)?;
             require(
                 p["enabled"] == false && p["source"]["name"] == "curated",
                 format!("installed from the row: {p}"),
-            )
-        })(),
-    )?;
-
-    // ---- native: the row cannot answer the confirmation
-    step(
-        "native",
-        (|| {
-            click(main, ADDON, "Turn on add-on")?;
-            let t = confirmation(c, &[PACKAGE, FULL_ACCESS])?;
-            require(
-                t.contains(FULL_ACCESS),
-                format!("the turn-on confirmation: {t}"),
             )?;
             // While it shows: the row says to answer it, every control of the row is disabled and
             // clicks nothing through, and the package stays off.
@@ -328,41 +312,57 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             )?;
             std::thread::sleep(Duration::from_millis(1500));
             require(
-                step_of(main).as_deref() == Some("enable")
-                    && package(main, PACKAGE)?["enabled"] == false,
-                format!(
-                    "the row shows {:?} and the package is on while the confirmation is open",
-                    step_of(main)
-                ),
+                package(main, PACKAGE)?["enabled"] == false,
+                "the package is on while the confirmation is open",
             )?;
             let still = dialog_with(c.app, &[PACKAGE, FULL_ACCESS])?;
             require(!still.is_empty(), "the confirmation closed by itself")?;
             press("alt+c")?;
-            wait_for("the row to settle the cancelled turn-on", || {
-                js(
-                    main,
-                    &format!(
-                        "return [...({}?.querySelectorAll('button') ?? [])].some((b) => b.textContent.trim() === 'Turn on add-on' && !b.disabled);",
-                        within(ADDON)
-                    ),
-                )
-                .filter(|v| v == true)
-            })?;
-            // A cancel is not a failure: the row says nothing of one.
+            wait_step(main, "enable")?;
+            wait_row(main, &["Turn on add-on"], &[])?;
+            // A cancel is not a failure: the row says nothing of one, and nothing opened.
             let said = js(
                 main,
                 &format!("return {ROW}?.textContent.includes('Could not') ?? null;"),
             );
             require(
-                said == Some(json!(false)) && package(main, PACKAGE)?["enabled"] == false,
-                format!("a cancelled turn-on turned the add-on on or said it failed ({said:?})"),
-            )?;
-            // Positive control: the dialog's own Confirm turns it on, and the row offers Set up.
+                said == Some(json!(false))
+                    && package(main, PACKAGE)?["enabled"] == false
+                    && js(main, "return location.hash;") == Some(json!("#/tools")),
+                format!("a cancelled turn-on turned the add-on on, said it failed or left Tools ({said:?})"),
+            )
+        })(),
+    )?;
+
+    // ---- native: Turn on add-on asks the same; its Confirm turns it on and opens the page
+    step(
+        "native",
+        (|| {
             click(main, ADDON, "Turn on add-on")?;
-            confirmation(c, &[PACKAGE, FULL_ACCESS])?;
+            let t = confirmation(c, &[PACKAGE, FULL_ACCESS])?;
+            require(
+                t.starts_with("Turn on the "),
+                format!("the turn-on confirmation: {t}"),
+            )?;
             std::thread::sleep(SETTLE);
             press("alt+o")?;
-            wait_row(main, &[], &[("Set up", "#/claude-code")])?;
+            until(
+                main,
+                "Claude Code's page",
+                &format!(
+                    "return location.hash === '#/claude-code' && {} !== null && document.querySelector('[data-part=page-title]')?.textContent === 'Claude Code';",
+                    within(PAGE)
+                ),
+            )?;
+            // It was opened from Tools, so no way back to setup.
+            let back = js(
+                main,
+                "return document.querySelector('[data-part=setup-return]') !== null;",
+            );
+            require(
+                back == Some(json!(false)),
+                "a page opened from Tools shows the way back to setup",
+            )?;
             let p = package(main, PACKAGE)?;
             require(
                 p["enabled"] == true && p["authorized"] == true,
@@ -376,30 +376,6 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
     step(
         "apply",
         (|| {
-            // The row's Set up opens the page; it was opened from Tools, so no way back to setup.
-            until(
-                main,
-                "Set up on Claude Code's row",
-                &format!(
-                    "const a = {ROW}?.querySelector('a[data-row=claude-code]'); if (!a) return false; a.click(); return true;"
-                ),
-            )?;
-            until(
-                main,
-                "Claude Code's page",
-                &format!(
-                    "return location.hash === '#/claude-code' && {} !== null && document.querySelector('[data-part=page-title]')?.textContent === 'Claude Code';",
-                    within(page)
-                ),
-            )?;
-            let back = js(
-                main,
-                "return document.querySelector('[data-part=setup-return]') !== null;",
-            );
-            require(
-                back == Some(json!(false)),
-                "a page opened from Tools shows the way back to setup",
-            )?;
             // The page reads Claude Code's own file as it opens; the check names another one under
             // "Settings file, key and backups" and reads that.
             choose(main, page, "file")?;

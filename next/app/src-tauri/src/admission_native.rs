@@ -428,13 +428,16 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         format!("the native confirmation shows: {text}"),
     )?;
     // What will happen in plain words first, the exact record below it (on Linux under a
-    // Details heading; Windows and macOS show it in the scrolled area below the words).
+    // Details heading; Windows and macOS show it in the scrolled area below the words). Each
+    // system's text lists the dialog's texts top down, so the words must open it.
+    let details = text.find(if cfg!(target_os = "linux") {
+        "\nDetails\n{"
+    } else {
+        "\n{"
+    });
     require(
-        if cfg!(target_os = "linux") {
-            text.starts_with("Turn on the ") && text.contains("\nDetails\n{")
-        } else {
-            text.contains("Turn on the ")
-        },
+        text.starts_with("Turn on the ")
+            && details.is_some_and(|at| text[..at].contains(FULL_ACCESS)),
         format!("the native confirmation does not say first what it turns on: {text}"),
     )?;
     out["dialog"] = json!(text.lines().next().unwrap_or_default());

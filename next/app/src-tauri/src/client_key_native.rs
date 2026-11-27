@@ -421,7 +421,17 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 json!({"package": AGENT, "op": "serve",
                     "input": {"key": first.0, "base": base, "out": file}}),
             )?;
-            dialog_with(app, &["pluxy/agent serve", &format!("\"{LABEL}\"")])?;
+            let t = dialog_with(app, &["pluxy/agent serve", &format!("\"{LABEL}\"")])?;
+            // The app's own words first, from the operation's effect (a read): the add-on's
+            // description only after them, quoted as its own.
+            let first = t.lines().next().unwrap_or_default();
+            let quoted = t.find("The add-on says: \u{201c}Ask core with a client key\u{201d}");
+            require(
+                first.starts_with("The ")
+                    && first.ends_with(" add-on will read from this computer.")
+                    && quoted.is_some_and(|at| at > first.len()),
+                format!("the serve's confirmation does not say first, in the app's words, what it does: {t}"),
+            )?;
             press("alt+c")?;
             let r = settle(main, &slot)?;
             require(

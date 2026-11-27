@@ -81,25 +81,10 @@ fn unasked(main: &Webview, slot: &str) -> Result<Value, String> {
 
 /// The text of the host's launch notice once it contains every one of needles.
 fn notice(app: &AppHandle, needles: &[&str]) -> Result<String, String> {
-    use gtk::prelude::*;
     let mut last = String::new();
     let found = wait_for(&format!("a launch notice naming {needles:?}"), || {
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.run_on_main_thread(move || {
-            let mut text = String::new();
-            for w in gtk::Window::list_toplevels() {
-                if let Some(w) = w.downcast_ref::<gtk::Window>() {
-                    if w.is_visible() && w.title().as_deref() == Some(NOTICE) {
-                        if let Some(l) = w.child().and_then(|c| c.downcast::<gtk::Label>().ok()) {
-                            text.push_str(&l.text());
-                        }
-                    }
-                }
-            }
-            let _ = tx.send(text);
-        })
-        .ok()?;
-        let t = rx.recv_timeout(Duration::from_secs(5)).ok()?;
+        // Every label of the visible notice, wherever its layout puts it.
+        let t = crate::native_test::ui::texts(app, NOTICE).ok()?.join("\n");
         last.clone_from(&t);
         needles.iter().all(|n| t.contains(n)).then_some(t)
     });
