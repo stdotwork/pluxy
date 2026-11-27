@@ -397,6 +397,7 @@ export const WHERE = {
   runsRemote: "Over https.",
   runsRemoteWithCertificate: "Over https, trusting your certificate authority file.",
   runsTailscale: "Only over Tailscale, which encrypts the connection.",
+  runsTailscaleOff: "Only over Tailscale: nothing is sent unless Tailscale is on and reaches it.",
   runsPlainHttp: "Over plain http, on a network you said you trust.",
   signOut: "Sign out",
   switchHere: "Switch to this computer",
@@ -420,6 +421,7 @@ export function whoRuns(c: Connection): string | undefined {
   if (c.mode === "local") return WHERE.runsLocal;
   if (c.mode === "remote") {
     if (c.link === "tailscale") return WHERE.runsTailscale;
+    if (c.link === "tailscale_off") return WHERE.runsTailscaleOff;
     if (c.link === "plain") return WHERE.runsPlainHttp;
     return c.ca_file ? WHERE.runsRemoteWithCertificate : WHERE.runsRemote;
   }

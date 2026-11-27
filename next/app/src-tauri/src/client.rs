@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use ureq::tls::{Certificate, RootCerts, TlsConfig};
 
@@ -52,6 +52,11 @@ pub struct Client {
     agent: ureq::Agent,
     /// Nothing is sent unless Tailscale carries the connection (`Route::tailscale_only`).
     tailscale_only: bool,
+    /// The address every connection is pinned to (`Route::pin`), when there is one.
+    pin: Option<std::net::SocketAddr>,
+    /// With `tailscale_only` and no pin: the address the name last resolved to, which the next
+    /// check of the interfaces says whether Tailscale carries (`Client::peer`).
+    seen: Arc<Mutex<Option<std::net::IpAddr>>>,
 }
 
 /// Where a client's connections go (`Client::routed`).
@@ -83,7 +88,7 @@ impl std::error::Error for NotOverTailscale {}
 /// The resolver of a routed client: the pinned address, or what the name resolves to, and with
 /// `tailscale_only` only the addresses Tailscale carries now.
 #[derive(Debug)]
-struct Routed(Route);
+struct Routed(Route, Arc<Mutex<Option<std::net::IpAddr>>>);
 
 impl ureq::unversioned::resolver::Resolver for Routed {
     fn resolve(
@@ -110,6 +115,11 @@ impl ureq::unversioned::resolver::Resolver for Routed {
             if crate::tailnet::carries_with(addr.ip(), &locals) {
                 carried.push(*addr);
             }
+        }
+        // What the status line is told about this link: the address Tailscale carries, or else
+        // the first one found, which the interfaces then say it does not.
+        if let Ok(mut seen) = self.1.lock() {
+            *seen = carried.iter().chain(found.iter()).next().map(|a| a.ip());
         }
         if carried.is_empty() {
             return Err(ureq::Error::Io(std::io::Error::other(NotOverTailscale)));
@@ -483,6 +493,8 @@ impl Client {
                 DefaultResolver::default(),
             ),
             tailscale_only: false,
+            pin: None,
+            seen: Arc::default(),
         }
     }
 
@@ -499,14 +511,17 @@ impl Client {
             // The proxy's address is resolved, not the core's.
             route.pin = None;
         }
+        let seen = Arc::new(Mutex::new(None));
         Client {
             base: base.trim_end_matches('/').to_string(),
             agent: ureq::Agent::with_parts(
                 Client::config(base, certs),
                 ureq::unversioned::transport::DefaultConnector::default(),
-                Routed(route),
+                Routed(route, seen.clone()),
             ),
             tailscale_only: route.tailscale_only,
+            pin: route.pin,
+            seen,
         }
     }
 
@@ -515,6 +530,8 @@ impl Client {
             base: base.trim_end_matches('/').to_string(),
             agent: Client::config(base, certs).into(),
             tailscale_only: false,
+            pin: None,
+            seen: Arc::default(),
         }
     }
 
@@ -547,6 +564,14 @@ impl Client {
     /// Whether this client sends only where Tailscale carries the connection (`Route`).
     pub fn tailscale_only(&self) -> bool {
         self.tailscale_only
+    }
+
+    /// The address the client's connections go to: its pin, or else the address its name last
+    /// resolved to when a connection was last made (none before that).
+    pub fn peer(&self) -> Option<std::net::IpAddr> {
+        self.pin
+            .map(|p| p.ip())
+            .or_else(|| self.seen.lock().ok().and_then(|s| *s))
     }
 
     /// Calls `method` on path (under `/v0/management`) with key; with an empty key, with no

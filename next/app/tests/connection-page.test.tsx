@@ -421,6 +421,10 @@ test("once connected, the form says Connected and asks for nothing until another
       settings(),
     );
   expect((await at("tailscale")).text()).toContain("Only over Tailscale, which encrypts the connection.");
+  // Not carried now, or not looked up yet since the app started: never said to be encrypted.
+  const off = await at("tailscale_off");
+  expect(off.text()).toContain("Only over Tailscale: nothing is sent unless Tailscale is on and reaches it.");
+  expect(off.text()).not.toContain("Tailscale, which encrypts");
   const plain = await at("plain");
   expect(plain.text()).toContain("Over plain http, on a network you said you trust.");
   expect(plain.text()).not.toContain("Tailscale, which encrypts");

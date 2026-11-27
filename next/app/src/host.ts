@@ -37,9 +37,10 @@ export interface Connection {
   /** Why the app is not connected, when it is not. */
   error?: string;
   /** How what the app sends reaches the core it is connected to: over https, to this computer,
-   * only over Tailscale (which this computer carries; nothing is sent when it does not), or over
-   * plain http on a network the person said in the key window that they trust. */
-  link?: "https" | "here" | "tailscale" | "plain";
+   * only over Tailscale (which this computer carries; nothing is sent when it does not), only
+   * over Tailscale but not known to carry it now (nothing is sent until it does), or over plain
+   * http on a network the person said in the key window that they trust. */
+  link?: "https" | "here" | "tailscale" | "tailscale_off" | "plain";
 }
 
 /** What the person sets on the Connection page. */

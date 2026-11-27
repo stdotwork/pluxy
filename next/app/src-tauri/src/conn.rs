@@ -380,21 +380,45 @@ pub enum Link {
     /// Over plain http that Tailscale carries from this computer, which encrypts it; nothing is
     /// sent at a moment it does not (`client::Route::tailscale_only`).
     Tailscale,
+    /// Plain http to another computer that goes only over Tailscale, and the interfaces of this
+    /// computer do not say Tailscale carries it now (or the address has not been looked up yet):
+    /// nothing is sent until it does.
+    TailscaleOff,
     /// Over plain http that can be read on the networks in between: only once the person said
     /// they trust the network.
     Plain,
 }
 
 impl Link {
-    /// How a client's calls go.
+    /// How a client's calls go, with this computer's interfaces as they are now.
     fn of(client: &Client) -> Option<Link> {
+        let locals = if client.tailscale_only() {
+            crate::tailnet::local_addresses().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        Link::of_with(client, &locals)
+    }
+
+    /// How a client's calls go, with locals as this computer's interfaces that are up. A client
+    /// that sends only over Tailscale is over Tailscale only when the address its calls go to
+    /// (`Client::peer`) is one that the interfaces say Tailscale carries (`tailnet::carries_with`,
+    /// the check its connections make); a saved connection, before its first call, has none.
+    fn of_with(client: &Client, locals: &[IpAddr]) -> Option<Link> {
         let u = Url::parse(client.base()).ok()?;
         Some(if is_loopback(&u) {
             Link::Here
         } else if u.scheme() == "https" {
             Link::Https
         } else if client.tailscale_only() {
-            Link::Tailscale
+            if client
+                .peer()
+                .is_some_and(|ip| crate::tailnet::carries_with(ip, locals))
+            {
+                Link::Tailscale
+            } else {
+                Link::TailscaleOff
+            }
         } else {
             Link::Plain
         })
@@ -510,7 +534,7 @@ impl KeyTarget {
                 tailscale_only: tailscale,
             },
         );
-        self.link = Link::of(&self.client);
+        self.link = Link::of_with(&self.client, locals);
         self
     }
 
@@ -1442,7 +1466,7 @@ impl Connection {
         let client = Client::routed(&base, certs.clone(), unresolved_route(&base, trust_network));
         Ok(KeyTarget {
             // Not checked yet: never said to be over Tailscale before `route_at` checked it.
-            link: Link::of(&client).filter(|l| *l != Link::Tailscale),
+            link: Link::of(&client).filter(|l| *l != Link::TailscaleOff),
             client,
             revision: self.revision,
             certs,
@@ -2706,6 +2730,64 @@ mod tests {
         fs::remove_dir_all(dir).ok();
     }
 
+    /// The status line says "over Tailscale" only when the interfaces of this computer say
+    /// Tailscale carries the address the client goes to: a saved connection after a restart, and
+    /// a new address, have no address checked yet, and Tailscale being off is read as it is.
+    #[test]
+    fn the_status_line_says_over_tailscale_only_when_the_interfaces_say_it_is() {
+        let peer: SocketAddr = "100.92.228.112:8317".parse().unwrap();
+        let client = Client::routed(
+            "http://100.92.228.112:8317",
+            None,
+            Route {
+                pin: Some(peer),
+                tailscale_only: true,
+            },
+        );
+        assert_eq!(Link::of_with(&client, &tailnet()), Some(Link::Tailscale));
+        assert_eq!(Link::of_with(&client, &lan()), Some(Link::TailscaleOff));
+        assert_eq!(Link::of_with(&client, &[]), Some(Link::TailscaleOff));
+        // After a restart: a saved connection with no trust has looked up no address yet.
+        let (dir, conn) = unchosen();
+        let dirs = conn.lock().unwrap().dirs.clone();
+        Settings {
+            mode: Some(Mode::Remote),
+            url: Some("http://100.92.228.112:8317".into()),
+            key: Some(crate::managed::random_key()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        let mut reopened = Connection::open(dirs, None);
+        assert!(reopened.client.as_ref().unwrap().tailscale_only());
+        assert_eq!(reopened.view().link, Some(Link::TailscaleOff));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// A client that goes by a name, with no pin, keeps the address a connection resolved it to,
+    /// which the status line checks against the interfaces (`Client::peer`).
+    #[test]
+    fn a_client_keeps_the_address_its_name_resolved_to() {
+        use std::sync::atomic::AtomicBool;
+        let (base, _) = status_pluxy(std::sync::Arc::new(AtomicBool::new(true)), |_| "ok");
+        let port = base.rsplit(':').next().unwrap();
+        let client = Client::routed(
+            &format!("http://localhost:{port}"),
+            None,
+            Route {
+                pin: None,
+                tailscale_only: true,
+            },
+        );
+        assert_eq!(client.peer(), None);
+        client.call("a key", "GET", "/status", None);
+        assert!(
+            client.peer().is_some_and(|ip| ip.is_loopback()),
+            "no address kept: {:?}",
+            client.peer()
+        );
+    }
+
     /// A client that sends only over Tailscale sends nothing when Tailscale does not carry the
     /// address, checked at each connection: the call fails, and says so.
     #[test]
@@ -2766,6 +2848,44 @@ mod tests {
             "the check and the key did not both reach the address resolved"
         );
         assert!(at_elsewhere.lock().unwrap().is_empty());
+        fs::remove_dir_all(dir).ok();
+        // The route the app takes (`KeyTarget::route`) resolves the name itself and pins what it
+        // found: here `localhost`, which a stand-in that listens on 127.0.0.1 answers at.
+        let key = crate::managed::random_key();
+        let right = key.clone();
+        let remote = std::sync::Arc::new(AtomicBool::new(true));
+        let (stand_in, at_stand_in) =
+            status_pluxy(remote, move |k| if k == right { "ok" } else { "wrong" });
+        let addr: SocketAddr = stand_in.trim_start_matches("http://").parse().unwrap();
+        let (dir, conn) = unchosen();
+        let held = Held::default();
+        let pinned_to = std::cell::Cell::new(None);
+        let (entry, _) = enter_key(
+            &conn,
+            &held,
+            Some(Change {
+                mode: Some(Mode::Local),
+                url: Some(format!("http://localhost:{}", addr.port())),
+                ..Change::default()
+            }),
+            |t| {
+                let t = t.route()?;
+                pinned_to.set(t.client.peer());
+                Ok(t)
+            },
+            |_, _| Ok(Some((key.clone(), false))),
+        );
+        assert_eq!(entry, Entry::SignedIn);
+        assert_eq!(
+            pinned_to.get(),
+            Some(addr.ip()),
+            "the route did not pin the address its name resolved to"
+        );
+        // The first is `peer_of` finding which address takes a connection: it sends nothing.
+        assert_eq!(
+            *at_stand_in.lock().unwrap(),
+            [None, None, Some(format!("Bearer {key}"))]
+        );
         fs::remove_dir_all(dir).ok();
     }
 
@@ -2854,7 +2974,8 @@ mod tests {
         })
         .unwrap();
         assert!(!Settings::load(&path).unwrap().trust_network);
-        assert_eq!(c.view().link, Some(Link::Tailscale));
+        // Not looked up yet: not said to be over Tailscale.
+        assert_eq!(c.view().link, Some(Link::TailscaleOff));
         drop(c);
         // Kept across a restart only with its own address.
         enter_key(
