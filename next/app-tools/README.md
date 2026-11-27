@@ -58,19 +58,21 @@ same checks, and `cargo build --release` uses the workspace profile (size-optimi
 
 ## Platforms
 
-- **Linux:** `next-app.yml` builds and tests the workspace and runs every tool but `wsl` in the
-  app's native test. No job runs the `linux/arm64` programs.
+- **Linux:** the app supports Linux x86_64 only. `next-app.yml` builds and tests this workspace and
+  runs the tools in the app's native test. No job runs the `linux/arm64` programs.
 - **Windows and macOS:** `next-app-tools-platforms.yml` runs clippy and the unit tests of the whole
-  workspace on `windows-latest` and `macos-latest`. `next-app-platforms.yml` runs the app's native
-  test shards there (`platform`, `package`, `tools`, `open`, `update`); the `tools` and `open` shards
-  build and start the `execution` program and test tools. `next-app-tools-pack.yml` builds every
-  tool but `usage-fixture` on a runner of each platform (`linux/amd64`, `linux/arm64`, `darwin/amd64`,
-  `darwin/arm64`, `windows/amd64`) and packs the archives. The desktop app itself supports Linux only for now (`../app/README.md`, "Platforms"),
-  so the tools run there in test builds.
+  workspace on `windows-latest` and `macos-latest`. `next-app-platforms.yml` runs the desktop app
+  there against a fixture add-on (native test shards `platform`, `package`, `tools`, `open` and
+  `update`; the `tools` and `open` shards also build and start the `execution` program). The
+  coding-tool tools and the usage parsers run there only in their own unit tests.
+  `next-app-tools-pack.yml` builds every tool but `usage-fixture` on a runner of each platform
+  (`linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64`) and packs the
+  archives.
 - **WSL:** `wsl` is a Windows tool; on any other system every operation answers `unsupported`. The
   WSL jobs of `next-app-tools-platforms.yml` run it, `lib/program`, `lib/transactions`, `claude-code`
   and the app's program host and spawn service against real WSL 2 and WSL 1 distributions. Only
-  `claude-code` declares `"environments": ["wsl"]`.
+  `claude-code` declares `"environments": ["wsl"]`; Claude Code in WSL is tested on Windows at the
+  app host's level only.
 - **Where a client keeps its files** is per tool below. On Windows the tools read `LOCALAPPDATA`
   where a client keeps files there; the app passes `LOCALAPPDATA` and `APPDATA` with `HOME`.
 - The usage parsers and the other tools read from the `HOME` the app gives them.
