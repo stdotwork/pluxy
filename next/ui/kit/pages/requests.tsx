@@ -39,6 +39,7 @@ import {
   whyOf,
 } from "./activity";
 import { RecordOff, recordOffReason } from "./activityParts";
+import { NoServeHelp } from "./requestNoServe";
 
 const t = strings("requests", {
   title: "Requests",
@@ -78,7 +79,6 @@ const t = strings("requests", {
   saveFailed: "Could not read the requests to save. Try again.",
   openAccount: "Open {account}",
   openLog: "Open its log",
-  accounts: "Accounts",
   notTried: "pluxy did not try:",
   order: "Order & fallback",
 });
@@ -90,6 +90,7 @@ function Story(props: {
   event: UsageEvent;
   name: (account: string) => string;
   idOf: (account: string) => string;
+  editable: (account: string) => boolean;
 }) {
   const e = props.event;
   const s = whyOf(e, props.name);
@@ -97,16 +98,11 @@ function Story(props: {
   return (
     <>
       {s.lines.map((line) => (
-        <p key={line}>
-          {line}
-          {s.noServe && line === s.lines[s.lines.length - 1] && (
-            <>
-              {" "}
-              <a href="#/accounts">{t("accounts")}</a>
-            </>
-          )}
-        </p>
+        <p key={line}>{line}</p>
       ))}
+      {s.noServe && (
+        <NoServeHelp model={e.model} name={props.name} idOf={props.idOf} editable={props.editable} />
+      )}
       {s.leftOut.length > 0 && (e.tried?.length ?? 0) > 0 && <p>{t("notTried")}</p>}
       {s.leftOut.length > 0 && (
         <ul class="request-left-out">
@@ -372,6 +368,9 @@ export function RequestsPage() {
   const lost = (summary.data?.dropped ?? 0) + (summary.data?.write_errors ?? 0);
   const idOf = (account: string) =>
     accounts.data?.accounts.find((a) => a.id === account || a.public_id === account)?.id ?? account;
+  // An account set in the settings file has its model aliases there, not in the account's form.
+  const editable = (account: string) =>
+    accounts.data?.accounts.find((a) => a.id === account || a.public_id === account)?.source !== "config";
   const last = shown?.rows[shown.rows.length - 1];
   const oldest = summary.data?.oldest ? Date.parse(summary.data.oldest) : Number.NaN;
   const usageOlder = !!last && !Number.isNaN(oldest) && oldest < Date.parse(last.timestamp);
@@ -436,7 +435,11 @@ export function RequestsPage() {
                     name={naming.byId}
                     keys={keys.data?.keys}
                     note={story.note}
-                    story={open === e.seq ? <Story event={e} name={naming.byId} idOf={idOf} /> : undefined}
+                    story={
+                      open === e.seq ? (
+                        <Story event={e} name={naming.byId} idOf={idOf} editable={editable} />
+                      ) : undefined
+                    }
                     trace={traceMode(e, requestLog)}
                     open={open === e.seq}
                     onToggle={(now) => setOpen(now ? e.seq : undefined)}

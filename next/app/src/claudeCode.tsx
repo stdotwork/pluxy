@@ -7,7 +7,7 @@
 // Code is set up and started: every call to the add-on and the launch then go to that environment
 // (environmentBlock.tsx).
 
-import { useId, useState } from "preact/hooks";
+import { useEffect, useId, useState } from "preact/hooks";
 import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { strings } from "../../ui/kit/strings";
 import { PageHead, Switch } from "../../ui/kit/ui";
@@ -26,6 +26,7 @@ import {
   settingsNote,
   WINDOW_1M,
   WINDOW_DEFAULT,
+  withServedModels,
 } from "./claudeCodeForm";
 import {
   FileChoice,
@@ -58,6 +59,8 @@ const t = strings("claudeCode", {
   rootHint: "A full path; the folder may be a link (as chezmoi can make).",
   inRoot: "File in the folder",
   models: "Models",
+  preselected:
+    "Claude Code's own model names are not served by your accounts, so these start with {model}, one your accounts serve.",
   roleNote: "The model Claude Code uses for {role}.",
   fableNote: "Empty: the same as Sonnet.",
   oneM: "1M context",
@@ -119,6 +122,18 @@ export function ClaudeCodePage() {
   const shown = useShown();
   const listId = useId();
   const served = servedNames(s);
+  // A file pluxy has not set up starts with models pluxy serves when Claude Code's own are not.
+  const [preselected, setPreselected] = useState<string>();
+  const servedKey = served ? [...served].join("\n") : "";
+  useEffect(() => {
+    if (!served || s.settings?.state !== "not-configured") return;
+    const next = withServedModels(form, [...served]);
+    // Only a form the person has not edited: what they typed is theirs.
+    if (next === form || JSON.stringify(form) !== JSON.stringify(read)) return;
+    setForm(next);
+    setRead(next);
+    setPreselected(next.models.opus);
+  }, [servedKey, s.settings?.state, read]);
   const edit = (patch: Partial<Form>) => {
     s.setDone(false);
     setForm((f) => ({ ...f, ...patch }));
@@ -171,6 +186,9 @@ export function ClaudeCodePage() {
       {s.addon === "on" && s.settings && !refused && (
         <Section title={t("models")} aside={<SaveButton s={s} dirty={dirty} form={input} held={held} />}>
           <ModelList id={listId} s={s} />
+          {preselected !== undefined && form.models.opus === preselected && (
+            <p class="muted">{t("preselected", { model: preselected })}</p>
+          )}
           {(["opus", "sonnet", "haiku", "fable"] as const).map((role) => (
             <SettingRow
               key={role}

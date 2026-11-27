@@ -15,13 +15,20 @@ Every block below has two placeholders:
   `config.json`; `pluxy key add` makes another and prints it once. `pluxy key list` shows the
   keys masked, with their IDs, and `pluxy client show <tool> --key-id <id>` names the key to use
   in the output (still masked: pluxy never prints a stored key).
-- `<model-id>` is a model name from `pluxy model list`.
+- `<model-id>` is a model name from `pluxy model list`. A coding tool asks for a model of its own
+  unless it is told which one, and your accounts may not serve that one, so each block names the
+  model the tool starts with. When pluxy serves models, `pluxy client show <tool>` fills in the
+  best match for the tool (a Claude model for Claude Code, a `codex` or `gpt-` one for Codex, else
+  the first chat model) and `pluxy client show <tool> --model <name>` names another. The blocks
+  below show `<model-id>` because they were printed on a pluxy with no account.
 
 The address in the blocks, `http://127.0.0.1:8317`, is pluxy's default. Your output has the
 address your core listens on.
 
 The settings are shown as the whole file for a client with no config yet. If the file exists, add
-these keys to it; do not replace it.
+these keys to it; do not replace it. In Codex's `config.toml`, keep `model_provider` and `model`
+above the first `[table]` of the file: TOML puts a key written below a table line inside that
+table.
 
 ## Claude Code
 
@@ -36,9 +43,13 @@ Address: http://127.0.0.1:8317
   "env": {
     "ANTHROPIC_AUTH_TOKEN": "<client-key>",
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "<model-id>",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "<model-id>",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "<model-id>",
     "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1"
-  }
+  },
+  "model": "<model-id>"
 }
 ```
 
@@ -52,12 +63,15 @@ Address: http://127.0.0.1:8317
 
 ~/.codex/config.toml:
 model_provider = "pluxy"
+model = "<model-id>"
 
 [model_providers.pluxy]
 name = "pluxy"
 base_url = "http://127.0.0.1:8317/v1"
 wire_api = "responses"
 experimental_bearer_token = "<client-key>"
+
+If config.toml already has tables (lines such as [name]), put its first two lines, model_provider and model, above the first table: a key written below a table line belongs to that table, not to the file. The [model_providers.pluxy] block can go after them.
 ```
 
 ## OpenCode
@@ -155,6 +169,6 @@ for.
 ## Keeping this page current
 
 Each tool's block is the unedited output of `pluxy client show <tool>` on a core listening on
-`127.0.0.1:8317`. When that output changes, run the command for each of `claude-code`, `codex`,
+`127.0.0.1:8317` that serves no model yet. When that output changes, run the command for each of `claude-code`, `codex`,
 `opencode`, `pi` and `omp` and paste the result over the block. `pluxy client show` with an
 unknown tool name lists the tools it knows.
