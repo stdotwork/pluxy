@@ -75,7 +75,7 @@ func (m *meter) attempt(a route.Attempt, trace string) {
 	if m == nil {
 		return
 	}
-	m.ev.ID, m.ev.Provider, m.ev.Account, m.ev.ChainStep = trace, a.Extension, a.Account, a.Step
+	m.ev.ID, m.ev.Provider, m.ev.Account, m.ev.ChainStep, m.ev.Why = trace, a.Extension, a.Account, a.Step, a.Why
 	m.ev.UpstreamModel = ""
 	if a.Model != m.ev.Model {
 		m.ev.UpstreamModel = a.Model

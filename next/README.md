@@ -2745,8 +2745,8 @@ and are not recorded. An event holds the request's trace ID (`id`, the `X-CPA-TR
 when it arrived, the `endpoint`, whether it streamed, the `model` the client asked for (without a
 thinking suffix), the account's own name for it when that differs (`upstream_model`: an alias
 or prefix resolved) and the model the upstream reply says served it when the reply names one
-(`served_model`), the `provider` (extension) and `account` its last attempt went to, the
-client key's `key_id` (the `id` `GET /client-keys` lists it under, never the key) and its `label` at that time (absent when it had none), the
+(`served_model`), the `provider` (extension) and `account` its last attempt went to, `why`
+routing chose that account (below), the client key's `key_id` (the `id` `GET /client-keys` lists it under, never the key) and its `label` at that time (absent when it had none), the
 `client_ip` it came from (the connection's peer, or the client a trusted proxy names; see
 `trusted_proxies`), whether it `failed` with which `error_code`, the HTTP `status` of the reply, `latency_ms`, and the `tokens`
 the upstream reported: `input_tokens` (cached ones included), `output_tokens` (reasoning
@@ -2758,6 +2758,17 @@ recorded before its last message (`response.completed` or `response.incomplete`)
 a client that has that message finds the turn in the record; a client that goes away while it
 is written leaves the turn recorded as finished, with the tokens the upstream reported. For a
 reply core translates, that holds for the `.done` messages written just before it too.
+
+`why` says why routing chose the last attempt's account over the other accounts that serve the
+model (at that step of a fallback chain): `pinned` (the request named it in `X-Pluxy-Account`),
+`session` (it served the session's last request, by `session_affinity`), `only` (no other account
+serves the model), `first` (it is the only account of the highest `priority` among them),
+`only-free` (it shares the highest `priority` with others, and none of them could take the request
+then: tried already, busy or blocked), `backup` (no account of a higher `priority` could take it),
+or, when it was one of several of the highest `priority` that could, the `strategy` that chose it
+(`round-robin`, `weighted`, `fill-first`, `least-active` or `soonest-reset`). It is absent for a
+request that reached no account and in events recorded before core kept it. A request that fell
+back has `tried` too, which says what the accounts before it came to.
 
 The recent window lives in an in-memory ring holding the last `max_events` requests
 (default 10000, at most 200000) and none recorded (when the request ended) longer ago than

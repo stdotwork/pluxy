@@ -786,7 +786,7 @@ var commands = []command{
 					x.printf("no matching events\n")
 					return
 				}
-				rows := [][]string{{"SEQ", "TIME", "MODEL", "ACCOUNT", "KEY", "STATUS", "TRIES", "LATENCY", "TOKENS"}}
+				rows := [][]string{{"SEQ", "TIME", "MODEL", "ACCOUNT", "KEY", "STATUS", "TRIES", "WHY", "LATENCY", "TOKENS"}}
 				for _, ev := range r.Events {
 					status := strconv.Itoa(ev.Status)
 					if ev.Status == 0 {
@@ -816,6 +816,7 @@ var commands = []command{
 						dash(ev.KeyID),
 						status,
 						tries,
+						dash(ev.Why),
 						fmt.Sprintf("%dms", ev.LatencyMS),
 						tokens,
 					})

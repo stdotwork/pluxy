@@ -216,7 +216,7 @@ func TestUsageEventsTerminalEscaping(t *testing.T) {
 	tsStr := ts.Local().Format(time.DateTime)
 	body := `{"enabled":true,"events":[` +
 		`{"seq":1,"timestamp":"2026-11-20T01:02:03Z","model":"m\u001b]0;title\u0007\u001b[2J` + "\xc2\x9b" + `\n\t\r\u007fé","account":"acc\u001b[31m\t\n","key_id":"k\u001b[1m\t1","failed":true,"status":502,"error_code":"err\u001b[2J\ncode","latency_ms":42,"tokens":{"total_tokens":10}},` +
-		`{"seq":2,"timestamp":"2026-11-20T01:02:03Z","model":"gpt-4o","account":"acc-2","key_id":"k2","failed":false,"status":200,"attempts":2,"latency_ms":7,"tokens":{"total_tokens":3}}` +
+		`{"seq":2,"timestamp":"2026-11-20T01:02:03Z","model":"gpt-4o","account":"acc-2","key_id":"k2","failed":false,"status":200,"attempts":2,"why":"backup","latency_ms":7,"tokens":{"total_tokens":3}}` +
 		`],"next":2,"more":false,"lost":false}` + "\n"
 	var queries []url.Values
 	srv := usageServer(map[string]string{"": body}, &queries)
@@ -229,21 +229,21 @@ func TestUsageEventsTerminalEscaping(t *testing.T) {
 	escKey := `k\x1b[1m\x091`
 	escStatus := `502 (err\x1b[2J\x0acode)`
 	wantTerminal := "" +
-		"SEQ  TIME                 MODEL                                            ACCOUNT              KEY            STATUS                    TRIES  LATENCY  TOKENS\n" +
-		"1    " + tsStr + "  " + escModel + "  " + escAccount + "  " + escKey + "  " + escStatus + "  -      42ms     10\n" +
-		"2    " + tsStr + "  gpt-4o                                           acc-2                k2             200                       2      7ms      3\n"
+		"SEQ  TIME                 MODEL                                            ACCOUNT              KEY            STATUS                    TRIES  WHY     LATENCY  TOKENS\n" +
+		"1    " + tsStr + "  " + escModel + "  " + escAccount + "  " + escKey + "  " + escStatus + "  -      -       42ms     10\n" +
+		"2    " + tsStr + "  gpt-4o                                           acc-2                k2             200                       2      backup  7ms      3\n"
 	if out, errOut, code := runLogs(srv, true, "usage", "events"); code != 0 || errOut != "" || out != wantTerminal {
 		t.Errorf("usage events on a terminal: code=%d err=%q\n got:\n%q\nwant:\n%q", code, errOut, out, wantTerminal)
 	}
 
 	// Piped: exact unescaped bytes as tabwriter produces them.
 	wantPiped := "" +
-		"SEQ    TIME                 MODEL  ACCOUNT  KEY  STATUS  TRIES  LATENCY  TOKENS\n" +
+		"SEQ    TIME                 MODEL  ACCOUNT  KEY  STATUS  TRIES  WHY  LATENCY  TOKENS\n" +
 		"1      " + tsStr + "  m\x1b]0;title\x07\x1b[2J\xc2\x9b\n" +
 		"       \r\x7fé                  acc\x1b[31m  \n" +
 		"       k\x1b[1m                1         502 (err\x1b[2J\n" +
-		"code)  -                    42ms      10\n" +
-		"2      " + tsStr + "  gpt-4o    acc-2  k2  200  2  7ms  3\n"
+		"code)  -                    -         42ms   10\n" +
+		"2      " + tsStr + "  gpt-4o    acc-2  k2  200  2  backup  7ms  3\n"
 	if out, errOut, code := runLogs(srv, false, "usage", "events"); code != 0 || errOut != "" || out != wantPiped {
 		t.Errorf("usage events piped: code=%d err=%q\n got:\n%q\nwant:\n%q", code, errOut, out, wantPiped)
 	}
