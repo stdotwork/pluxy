@@ -274,7 +274,10 @@ test.describe("a core with accounts and requests", () => {
     await expect(page.getByRole("heading", { name: "Latest requests" })).toHaveCount(0);
     await expect(page.locator(".home-counts")).not.toContainText("requests in 7 days");
     await page.getByRole("link", { name: "Turn it on in Config", exact: true }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Config Panel" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Config" })).toBeVisible();
+    await expect(
+      page.getByRole("switch", { name: "Keep a record of requests", exact: true }),
+    ).toBeInViewport();
   });
 
   test("with no requests in 7 days it says so and names the coding tool state", async ({ page }) => {

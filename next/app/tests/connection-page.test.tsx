@@ -248,7 +248,7 @@ test("a refused key or an unreachable address says why above the buttons and kee
   await m.input("Certificate file", "/etc/pluxy/ca.pem");
   await m.submit();
   expect(m.text()).toContain("That pluxy refused the key. Check it and try again.");
-  result = { status: "error", connection: view({ error: "the connection to core timed out" }) };
+  result = { status: "error", connection: view({ error: "The connection to pluxy timed out." }) };
   await m.submit();
   expect(m.text()).toContain("It did not answer in time.");
   expect(m.text()).not.toContain("That pluxy refused the key");
@@ -387,12 +387,12 @@ const cases: Case[] = [
       mode: "remote",
       url: "https://pluxy.example",
       target: "https://pluxy.example",
-      error: "core refused this key",
+      error: "This management key was not accepted.",
     }),
     heading: "Not signed in to pluxy at pluxy.example",
     buttons: ["Enter management key", "Change where pluxy runs"],
     says: ["That pluxy refused the key. Check it and try again."],
-    not: ["core refused this key"],
+    not: ["This management key was not accepted."],
   },
   {
     name: "remote, not answering",
@@ -400,12 +400,12 @@ const cases: Case[] = [
       mode: "remote",
       url: "https://pluxy.example",
       target: "https://pluxy.example",
-      error: "the connection to core timed out",
+      error: "The connection to pluxy timed out.",
     }),
     heading: "pluxy at pluxy.example is not answering",
     buttons: ["Enter management key", "Change where pluxy runs"],
     says: ["https://pluxy.example", "It did not answer in time."],
-    not: ["the connection to core timed out"],
+    not: ["The connection to pluxy timed out."],
   },
   {
     name: "this computer, not answering",
@@ -413,7 +413,7 @@ const cases: Case[] = [
       mode: "local",
       url: "http://127.0.0.1:8317",
       target: "http://127.0.0.1:8317",
-      error: "core could not be reached or its reply could not be read",
+      error: "Could not reach pluxy, or could not read its reply.",
     }),
     heading: "pluxy on this computer is not answering",
     buttons: ["Enter management key", "Change where pluxy runs"],
@@ -424,7 +424,7 @@ const cases: Case[] = [
     connection: view({
       mode: "remote",
       url: "https://pluxy.example",
-      error: "core's host name could not be resolved",
+      error: "The host name could not be resolved.",
     }),
     heading: "Cannot connect to pluxy at pluxy.example",
     buttons: ["Change where pluxy runs"],

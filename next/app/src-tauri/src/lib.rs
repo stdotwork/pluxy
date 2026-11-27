@@ -1068,7 +1068,7 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
                     conn::finish_key_unlocked(&st.conn, target, &input.key, input.remember);
                 let status = match result {
                     Ok(()) => "signed_in",
-                    Err(e) if e == "core refused this key" => {
+                    Err(e) if e == "This management key was not accepted." => {
                         error = Some(e);
                         "wrong_key"
                     }
@@ -1116,7 +1116,7 @@ async fn core_call(
         return Ok(client::Reply::failed(
             403,
             "native_only",
-            "the management key is rotated only by the app itself: use Rotate on the Config page",
+            "the management key is rotated only by the app itself: use Replace key on the Config page",
         ));
     }
     let caller = state.conn.lock().unwrap().caller();
@@ -1171,7 +1171,12 @@ fn rotate(app: &AppHandle) -> client::Reply {
         Ok(target) => target,
         Err(reply) => return reply,
     };
-    match confirmation::confirm_app(app, target.summary.clone(), target.revision()) {
+    match confirmation::confirm_app_as(
+        app,
+        target.summary.clone(),
+        target.revision(),
+        confirmation::text::REPLACE_KEY,
+    ) {
         Ok(true) => {}
         Ok(false) => {
             return client::Reply {

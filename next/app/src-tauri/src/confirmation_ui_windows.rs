@@ -38,6 +38,7 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
         summary,
         page,
         own,
+        confirm,
     } = begin(app, &id)?;
     let handle = app.clone();
     app.run_on_main_thread(move || {
@@ -59,10 +60,7 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
         );
         spec.review = Some(review);
         spec.check = remember;
-        spec.buttons = vec![
-            (CANCEL, text::CANCEL.into()),
-            (CONFIRM, text::CONFIRM.into()),
-        ];
+        spec.buttons = vec![(CANCEL, text::CANCEL.into()), (CONFIRM, confirm.into())];
         spec.default = Some(CANCEL);
         spec.cancel = Some(CANCEL);
         spec.area = (640.0, 320.0);

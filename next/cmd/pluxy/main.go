@@ -164,8 +164,13 @@ func firstStart(configPath string, inHome, inherited bool) error {
 	if errors.Is(err, fs.ErrExist) {
 		return nil // another first start wrote it in the meantime: core reads that one
 	}
-	if err != nil {
-		return fmt.Errorf("no config at %s, and a first one could not be written: %w", configPath, err)
+	show := stderrShows(os.Stderr)
+	var refused *home.Refusal
+	if errors.As(err, &refused) {
+		return errors.New(refused.Text(show)) // it says what is wrong and what to do
+	}
+	if err != nil { // it names the path, which a terminal shows escaped
+		return fmt.Errorf("no config at %s, and a first one could not be written: %s", show(configPath), show(err.Error()))
 	}
 	if inherited {
 		log.Printf("first start: wrote a new config, %s, serving on the inherited socket; its client key and management key are in that file", fc.Path)
@@ -248,6 +253,11 @@ func initConfig(args []string, stdout, stderr io.Writer, getenv func(string) str
 	}
 	fc, err := core.WriteFirstConfig(path, portVal)
 	if err != nil {
+		var refused *home.Refusal
+		if errors.As(err, &refused) {
+			fmt.Fprintf(stderr, "pluxy: %s\n", refused.Text(stderrShows(stderr)))
+			return exitFailed
+		}
 		if errors.Is(err, os.ErrExist) {
 			var pe *os.PathError
 			if errors.As(err, &pe) && pe.Path != "" {
@@ -260,7 +270,7 @@ func initConfig(args []string, stdout, stderr io.Writer, getenv func(string) str
 			fmt.Fprintf(stderr, "pluxy: %s already exists. Start core with: pluxy serve -config %s, or pick another file with -config.\n", path, path)
 			return exitFailed
 		}
-		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		printError(stderr, false, err) // it names the path, which a terminal shows escaped
 		return exitFailed
 	}
 	fmt.Fprintf(stdout, "wrote %s: core listens on %s; its client key and management key are in that file\n", fc.Path, fc.Listen)

@@ -169,18 +169,20 @@ test("an account from the settings file leads to it; a signed-in one renews and 
   await expect(page).toHaveURL(/#\/accounts\/tools-oauth$/);
 });
 
-test("Open the settings file opens the Source tab with the account's ID selected", async ({ page }) => {
+test("Open the settings file opens the Settings file tab with the account's ID selected", async ({
+  page,
+}) => {
   await openPanel(page, core);
   await signIn(page, core);
   await openAccount(page, "alpha-2");
   await page.getByRole("link", { name: "Open the settings file" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Config Panel" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Source", exact: true })).toHaveAttribute(
+  await expect(page.getByRole("heading", { level: 1, name: "Config" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Settings file", exact: true })).toHaveAttribute(
     "aria-selected",
     "true",
   );
   await expect(page).toHaveURL(/#\/config\/source\?account=alpha-2$/);
-  const editor = page.getByRole("textbox", { name: "Configuration source", exact: true });
+  const editor = page.getByRole("textbox", { name: "Settings file", exact: true });
   await expect(editor).not.toHaveValue("");
   const value = await editor.inputValue();
   const start = value.indexOf('"alpha-2"') + 1;
@@ -212,12 +214,14 @@ test("Open the settings file still opens Source when the file does not hold the 
   await signIn(page, core);
   await openAccount(page, "alpha-2");
   await page.getByRole("link", { name: "Open the settings file" }).click();
-  await expect(page.getByRole("tab", { name: "Source", exact: true })).toHaveAttribute(
+  await expect(page.getByRole("tab", { name: "Settings file", exact: true })).toHaveAttribute(
     "aria-selected",
     "true",
   );
-  await expect(page.getByRole("textbox", { name: "Configuration source", exact: true })).not.toHaveValue("");
-  await expect(page.getByText(/No entry matches alpha-2/)).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Settings file", exact: true })).not.toHaveValue("");
+  await expect(
+    page.getByText("No entry matches this account. Look for it by its provider's name.", { exact: true }),
+  ).toBeVisible();
 });
 
 test("an address of an account pluxy does not have says so and leads back", async ({ page }) => {

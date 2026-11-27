@@ -24,7 +24,6 @@ const BASELINE: { file: string; key: string; banned: string }[] = [
     key: "accountSettings.proxyUrlHint",
     banned: "Credentials",
   },
-  { file: "ui/kit/pages/configStrings.tsx", key: "config.maxCredentials", banned: "Credentials" },
   { file: "ui/kit/pages/themes.tsx", key: "themes.notRead", banned: "Load" },
 ];
 
