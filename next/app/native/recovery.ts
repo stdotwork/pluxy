@@ -6,7 +6,7 @@ interface Snapshot {
   app_pid: number;
   window: boolean;
   webviews: number;
-  view: { mode: string; core?: { state: string; pid?: number; detail?: string } };
+  view: { mode: string; core?: { state: string; pid?: number; detail?: string; stop_reason?: string } };
 }
 
 export interface RecoveryResult {
@@ -14,11 +14,11 @@ export interface RecoveryResult {
   core_pid?: number;
 }
 
-const LABELS = ["Start core", "Stop core", "Restart core"] as const;
+const LABELS = ["Start pluxy", "Stop pluxy", "Restart pluxy"] as const;
 const IDS: Record<(typeof LABELS)[number], string> = {
-  "Start core": "core-start",
-  "Stop core": "core-stop",
-  "Restart core": "core-restart",
+  "Start pluxy": "core-start",
+  "Stop pluxy": "core-stop",
+  "Restart pluxy": "core-restart",
 };
 // Start, Stop, Restart enabled, as in the old app: Restart only while running.
 const RUNNING = [false, true, true];
@@ -171,8 +171,22 @@ export async function checkRecovery(
   };
   const running = (s: Snapshot) => s.view.core?.state === "running" && !!s.view.core.pid;
 
+  /** The tray's status line and Quit: Quit says it stops pluxy only where the app runs it. */
+  const words = async (what: string, status: (label: string) => boolean, quit: string) => {
+    let labels: string[] = [];
+    await until(() => {
+      labels = [...menu().keys()];
+      return (labels.some(status) && labels.includes(quit)) || undefined;
+    }, 5_000);
+    soft(
+      labels.some(status) && labels.includes(quit) && !labels.some((l) => /core/i.test(l)),
+      `tray words while ${what}: ${JSON.stringify(labels)}`,
+    );
+  };
+
   if (first.view.mode !== "managed") {
     const mode = first.view.mode;
+    await words(mode, (l) => l.startsWith("pluxy: Connected to "), "Quit");
     await flags(mode, OFF);
     for (const label of LABELS) await refused(label, mode, "disabled");
     await Bun.sleep(500);
@@ -182,35 +196,41 @@ export async function checkRecovery(
   }
 
   const initial = first.view.core?.pid;
+  await words("running", (l) => l === "pluxy: Running", "Quit (stops pluxy)");
   await flags("running", RUNNING);
   // Positive control for the refusals: a click on a disabled item reaches the handler.
-  await refused("Start core", "managed", "disabled");
-  soft(read().view.core?.pid === initial, "a click on the disabled Start core changed the core");
-  await click("Stop core");
+  await refused("Start pluxy", "managed", "disabled");
+  soft(read().view.core?.pid === initial, "a click on the disabled Start pluxy changed the core");
+  await click("Stop pluxy");
   await wait("tray Stop", (s) => s.view.core?.state === "stopped");
   assert(initial && !alive(initial), "tray Stop left the owned core alive");
+  soft(
+    read().view.core?.stop_reason === "stopped_by_user",
+    `after the tray's Stop the core does not say the person stopped it: ${JSON.stringify(read().view.core)}`,
+  );
+  await words("stopped", (l) => l === "pluxy: Stopped", "Quit (stops pluxy)");
   await flags("stopped", STOPPED);
-  await refused("Restart core", "managed", "disabled");
-  soft(read().view.core?.state === "stopped", "a click on the disabled Restart core started a core");
+  await refused("Restart pluxy", "managed", "disabled");
+  soft(read().view.core?.state === "stopped", "a click on the disabled Restart pluxy started a core");
 
   // While an action runs, the tray shows it is working and refuses another click.
   writeFileSync(hold, "");
   let from = lines.length;
-  tray("Start core");
+  tray("Start pluxy");
   const held = await until(() => events("tray-held", from)[0]);
   soft(held, "the tray Start never reached the busy hold");
   if (held) {
     await flags("busy", OFF);
-    soft(menu().has("Core working…"), "the tray does not say the core is working");
+    soft(menu().has("pluxy: Working…"), "the tray does not say pluxy is working");
     // The busy refusal comes before the handler reads the connection, which the held action
     // may be about to lock, so it carries no mode.
-    await refused("Stop core", null, "busy");
+    await refused("Stop pluxy", null, "busy");
   }
   rmSync(hold, { force: true });
   let s = await wait("tray Start", running);
   await flags("running", RUNNING);
   const started = s.view.core?.pid;
-  await click("Restart core");
+  await click("Restart pluxy");
   s = await wait("tray Restart", (v) => running(v) && v.view.core?.pid !== started);
   assert(started && !alive(started), "Restart left the old owned core alive");
 
@@ -218,7 +238,7 @@ export async function checkRecovery(
   let old = crash(s);
   await wait("scheduled recovery", (v) => v.view.core?.state === "recovering");
   await flags("recovering", RECOVERING);
-  await click("Stop core");
+  await click("Stop pluxy");
   await wait("manual Stop cancels scheduled recovery", (v) => v.view.core?.state === "stopped");
   await Bun.sleep(2500);
   assert(read().view.core?.state === "stopped", "scheduled recovery undid manual Stop");
@@ -227,7 +247,7 @@ export async function checkRecovery(
   assert(early.length === 0, `recovery ran between the crash and the manual Stop: ${JSON.stringify(early)}`);
   console.log("native-recovery: pending recovery cannot undo manual tray Stop; no attempt ran before it");
 
-  await click("Start core");
+  await click("Start pluxy");
   s = await wait("tray Start after cancellation", running);
   from = lines.length;
   old = crash(s);
@@ -242,7 +262,7 @@ export async function checkRecovery(
   crash(s);
   s = await wait("crash-loop cutoff", (v) => v.view.core?.state === "paused");
   assert(s.view.core?.detail, "paused state has no reason");
-  assert(tray("inspect").includes("Core recovery paused"), "tray hides paused state");
+  assert(tray("inspect").includes("pluxy: Stopped restarting"), "tray hides paused state");
   await flags("paused", PAUSED);
   await Bun.sleep(16_000);
   assert(read().view.core?.state === "paused", "crash loop resumed after its retry cutoff");
@@ -251,7 +271,7 @@ export async function checkRecovery(
   );
 
   // An explicit Start clears the budget: the next crash is recovered again.
-  await click("Start core");
+  await click("Start pluxy");
   s = await wait("resume paused core", running);
   old = crash(s);
   s = await wait("recovery after manual Start", (v) => running(v) && v.view.core?.pid !== old);

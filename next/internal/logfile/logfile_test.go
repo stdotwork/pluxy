@@ -65,6 +65,21 @@ func TestWriteFormatsLinesOnlyWhileOn(t *testing.T) {
 	}
 }
 
+func TestErrorLinesAreWrittenAsErrors(t *testing.T) {
+	l, _ := newFiles(t)
+	if err := l.Configure(true, 0); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprint(l, "pluxy: error: config revision 2 (reload) not applied\nwarning: a client request failed\nnot error: in the middle\n")
+	b, _ := os.ReadFile(filepath.Join(l.Dir(), Main))
+	want := "[2026-11-09 12:00:00.000] [error] error: config revision 2 (reload) not applied\n" +
+		"[2026-11-09 12:00:00.000] [warn ] warning: a client request failed\n" +
+		"[2026-11-09 12:00:00.000] [info ] not error: in the middle\n"
+	if string(b) != want {
+		t.Fatalf("main.log:\n%s\nwant\n%s", b, want)
+	}
+}
+
 func TestRotateAndTrim(t *testing.T) {
 	l, c := newFiles(t)
 	if err := l.Configure(true, 0); err != nil {

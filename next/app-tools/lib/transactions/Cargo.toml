@@ -24,18 +24,19 @@ yaml-edit = { version = "0.3.6", default-features = false, optional = true }
 [features]
 toml = ["dep:toml_edit"]
 yaml = ["dep:saphyr", "dep:yaml-edit"]
+# Tests of the tools that use the library: a hook at each step of a folder operation (`hook`), to
+# act there as another program would or stop there as a crash would. Never in a shipped program.
+test-hooks = []
 
 # Unix: the data folder's owner check (`geteuid`).
 [target.'cfg(unix)'.dependencies]
 libc = "=0.2.191"
 
 # Windows: a file's identity from its handle (volume serial number and file index), which cap-std
-# keeps in cap-primitives' metadata there.
+# keeps in cap-primitives' metadata there; and the access rights a folder is opened with to rename
+# it through its own handle (and the tests open files with to change their access lists).
 [target.'cfg(windows)'.dependencies]
 cap-primitives = "=4.0.3"
-
-# Windows: the access rights the tests open files with to change their access lists.
-[target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [[example]]

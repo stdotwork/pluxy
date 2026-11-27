@@ -3,15 +3,22 @@
 //!
 //! - `first`: the default size; resizing and moving; a pending login polls while the window
 //!   shows, not while it is minimized (unmapped, as a window manager iconifies it), and again
-//!   once it is restored, and its "Open link" opens the sign-in page in the browser, no window
-//!   of the app's own; closing with Ask every time asks, Cancel keeps the window, Minimize to
-//!   Tray closes it and leaves no webview or web process; the real tray item reopens it at the
-//!   size and place it had; Remember this choice keeps Minimize to tray, which then closes
-//!   without asking; Exit app, chosen in the settings, quits.
+//!   once it is restored, and its "Open sign-in page" opens the sign-in page in the browser, no window
+//!   of the app's own; the default, Keep in the tray, closes the window without asking; with
+//!   Ask saved, closing asks, Cancel keeps the window, Keep in the tray closes it and
+//!   leaves no webview or web process; the real tray item reopens it at the size and place it
+//!   had; Remember this choice keeps Keep in the tray, which then closes without asking; Quit,
+//!   chosen in the settings, quits.
 //! - `second`: the next launch opens at the size and place the window last had and shows the
-//!   remembered choice; Ask every time, saved, asks again; Exit app with Remember quits.
-//! - `third`: the remembered Exit app quits without asking.
-//! - `no-tray`: in a session with no tray watcher, closing quits, whatever the saved choice.
+//!   remembered choice; Ask, saved, asks again; Quit with Remember quits.
+//! - `third`: the remembered Quit quits without asking.
+//! - `no-tray-ask`: in a session with no tray watcher, with the default preferences, closing
+//!   asks first (`__pluxyClosePrompt("no-tray")`), since quitting stops the app's own pluxy; a
+//!   page that does not answer leaves the window open and pluxy running; the window's own prompt
+//!   says "Close and stop pluxy?", and its Keep open keeps the window with pluxy running; Close
+//!   and stop pluxy with "Don't ask again" quits.
+//! - `no-tray`: in a session with no tray watcher and "Don't ask again" saved, closing quits
+//!   without asking, whatever the saved choice.
 //!
 //! Every check prints `native-test: window_check {"ok":...,"what":...}`. Before its last close,
 //! a stage prints `native-test: window_report {...}`; window.ts checks what the app leaves.
@@ -280,14 +287,13 @@ fn shown_choice(app: &AppHandle) -> Option<String> {
     .and_then(|v| v.as_str().map(String::from))
 }
 
-/// Picks choice in the settings and saves it; whether the app then keeps it.
+/// Picks choice in the settings, which save when changed; whether the app then keeps it.
 fn save_choice(app: &AppHandle, choice: &str) -> bool {
     goto(app, "connection", "[data-part=window-preferences]")
         && click(
             app,
             &format!("[data-part=window-preferences] input[type=radio][value={choice}]"),
         )
-        && click(app, "[data-part=window-preferences] button[type=submit]")
         && within(5, || {
             (saved_choice(app).as_deref() == Some(choice)).then_some(())
         })
@@ -338,30 +344,32 @@ fn browser_log() -> Vec<String> {
         .collect()
 }
 
-/// A pending login polls while the window shows, not while it is minimized, and its "Open link"
-/// goes to the person's browser, never to a window of the app's own.
+/// A pending login polls while the window shows, not while it is minimized, and its "Open sign-in
+/// page" goes to the person's browser, never to a window of the app's own.
 fn polling(c: &mut Checks, app: &AppHandle) {
     // The page draws every method from one reply, so once one shows, test/alpha's shows too, if
     // core runs test/alpha. A failure names the step that did not happen.
+    // The address test/alpha's browser sign-in gives the person (next/e2e/testext/main.go).
+    const SIGN_IN_URL: &str = "https://login.example.test/authorize";
     let tile = "[...document.querySelectorAll('[data-part=method]')].find((t) => t.closest('[data-extension]')?.dataset.extension === 'test/alpha' && t.textContent.includes('Test browser'))";
     let missing = if !goto(app, "add-account", "[data-part=method]") {
-        Some("Add account shows no sign-in method within 10 s")
+        Some("Add an account shows no sign-in method within 10 s")
     } else if main_eval(
         app,
-        &format!("(() => {{ const b = [...({tile})?.querySelectorAll('button') ?? []].find((b) => b.textContent.trim() === 'Test browser'); if (!b || b.disabled) return false; b.click(); return true; }})()"),
+        &format!("(() => {{ const b = [...({tile})?.querySelectorAll('button') ?? []].find((b) => b.textContent.trim() === 'Start'); if (!b || b.disabled) return false; b.click(); return true; }})()"),
     ) != Some(json!(true))
     {
-        Some("Add account has no enabled Test browser button from test/alpha")
+        Some("Add an account has no enabled Start button for test/alpha's Test browser")
     } else if within(10, || {
         (main_eval(
             app,
-            "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Open link')",
+            "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Open sign-in page')",
         ) == Some(json!(true)))
         .then_some(())
     })
     .is_none()
     {
-        Some("no Open link button within 10 s of clicking Test browser")
+        Some("no Open sign-in page button within 10 s of pressing Start on Test browser")
     } else {
         None
     };
@@ -372,18 +380,14 @@ fn polling(c: &mut Checks, app: &AppHandle) {
     ) {
         return;
     }
-    // Open link: the sign-in page's own address reaches the browser, and the window opens
+    // Open sign-in page: the sign-in page's own address reaches the browser, and the window opens
     // nothing of its own.
-    let link = main_eval(
-        app,
-        "document.querySelector('[data-part=flow] a[target=_blank]')?.href ?? null",
-    )
-    .and_then(|v| v.as_str().map(String::from));
+    let link = Some(SIGN_IN_URL.to_string());
     let opened_before = browser_log().len();
     let webviews = app.webviews().len();
     let clicked = main_eval(
         app,
-        "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Open link'); if (!b) return false; b.click(); return true; })()",
+        "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Open sign-in page'); if (!b) return false; b.click(); return true; })()",
     );
     let opened = within(10, || {
         let l = browser_log();
@@ -395,13 +399,13 @@ fn polling(c: &mut Checks, app: &AppHandle) {
             && opened
                 .as_ref()
                 .is_some_and(|l| l.last().is_some_and(|last| Some(last) == link.as_ref())),
-        format!("Open link opens the sign-in page in the browser: {link:?} as {opened:?}"),
+        format!("Open sign-in page opens the sign-in page in the browser: {link:?} as {opened:?}"),
     );
     sleep(1000);
     let own = app.webviews().len() - webviews;
     c.check(
         own == 0,
-        format!("Open link opens no window of the app's own ({own} webviews more)"),
+        format!("Open sign-in page opens no window of the app's own ({own} webviews more)"),
     );
     let before = LOGIN_READS.load(SeqCst);
     sleep(5000);
@@ -485,9 +489,9 @@ fn first(c: &mut Checks, app: &AppHandle) {
     );
     c.check(
         goto(app, "connection", "[data-part=window-preferences]")
-            && within(5, || shown_choice(app)).as_deref() == Some("ask"),
+            && within(5, || shown_choice(app)).as_deref() == Some("minimize-to-tray"),
         format!(
-            "Close behavior is Ask every time at first: {:?}",
+            "the close choice is Keep in the tray at first: {:?}",
             shown_choice(app)
         ),
     );
@@ -497,8 +501,27 @@ fn first(c: &mut Checks, app: &AppHandle) {
     );
     polling(c, app);
 
-    // Ask every time: Cancel keeps the window.
+    // The default keeps the app in the tray without asking.
     ensure_open(c, app);
+    let prompts = PROMPTS.load(SeqCst);
+    request_close(app);
+    c.check(
+        closed(app),
+        "the default Keep in the tray closes the window",
+    );
+    c.check(
+        PROMPTS.load(SeqCst) == prompts,
+        "the default Keep in the tray does not ask",
+    );
+    no_web_processes(c, "the default Keep in the tray");
+    reopen(c, app);
+
+    // Ask, saved in the settings: Cancel keeps the window.
+    ensure_open(c, app);
+    c.check(
+        save_choice(app, "ask"),
+        format!("Ask is saved in the settings: {:?}", saved_choice(app)),
+    );
     let asked = request_close(app) && within(5, || prompt_open(app).then_some(())).is_some();
     c.check(asked, "closing the window asks what to do");
     if asked {
@@ -513,11 +536,11 @@ fn first(c: &mut Checks, app: &AppHandle) {
         );
     }
 
-    // Minimize to tray, not remembered.
+    // Keep in the tray, not remembered.
     ensure_open(c, app);
     let asked = answer(app, "minimize-to-tray", false);
-    c.check(asked, "closing asks again, and Minimize to tray is chosen");
-    c.check(closed(app), "Minimize to tray closes the window");
+    c.check(asked, "closing asks again, and Keep in the tray is chosen");
+    c.check(closed(app), "Keep in the tray closes the window");
     c.check(
         app.webviews().is_empty(),
         format!(
@@ -525,13 +548,10 @@ fn first(c: &mut Checks, app: &AppHandle) {
             app.webviews().keys().collect::<Vec<_>>()
         ),
     );
-    no_web_processes(c, "Minimize to tray");
+    no_web_processes(c, "Keep in the tray");
     c.check(
         saved_choice(app).as_deref() == Some("ask"),
-        format!(
-            "a choice not remembered keeps Ask every time: {:?}",
-            saved_choice(app)
-        ),
+        format!("a choice not remembered keeps Ask: {:?}", saved_choice(app)),
     );
     let item = tray("inspect");
     c.check(
@@ -554,21 +574,21 @@ fn first(c: &mut Checks, app: &AppHandle) {
         );
     }
 
-    // Minimize to tray, remembered: the next close does not ask.
+    // Keep in the tray, remembered: the next close does not ask.
     ensure_open(c, app);
     c.check(
         answer(app, "minimize-to-tray", true),
-        "closing asks, and Minimize to tray is chosen with Remember this choice",
+        "closing asks, and Keep in the tray is chosen with Remember this choice",
     );
-    c.check(closed(app), "Minimize to tray closes the window");
-    no_web_processes(c, "Minimize to tray");
+    c.check(closed(app), "Keep in the tray closes the window");
+    no_web_processes(c, "Keep in the tray");
     c.check(
         within(5, || {
             (saved_choice(app).as_deref() == Some("minimize-to-tray")).then_some(())
         })
         .is_some(),
         format!(
-            "Remember this choice keeps Minimize to tray: {:?}",
+            "Remember this choice keeps Keep in the tray: {:?}",
             saved_choice(app)
         ),
     );
@@ -577,11 +597,11 @@ fn first(c: &mut Checks, app: &AppHandle) {
     request_close(app);
     c.check(
         closed(app),
-        "the remembered Minimize to tray closes the window",
+        "the remembered Keep in the tray closes the window",
     );
     c.check(
         PROMPTS.load(SeqCst) == prompts,
-        "the remembered Minimize to tray does not ask",
+        "the remembered Keep in the tray does not ask",
     );
     c.check(
         app.state::<App>()
@@ -589,13 +609,13 @@ fn first(c: &mut Checks, app: &AppHandle) {
             .load(std::sync::atomic::Ordering::SeqCst),
         "the app is still in the tray",
     );
-    no_web_processes(c, "the remembered Minimize to tray");
+    no_web_processes(c, "the remembered Keep in the tray");
 
-    // Exit app, chosen in the settings, quits; the window's size and place are kept.
+    // Quit, chosen in the settings, quits; the window's size and place are kept.
     ensure_open(c, app);
     c.check(
         save_choice(app, "exit"),
-        format!("Exit app is saved in the settings: {:?}", saved_choice(app)),
+        format!("Quit is saved in the settings: {:?}", saved_choice(app)),
     );
     c.check(
         place(app, MOVED_AGAIN),
@@ -617,16 +637,13 @@ fn second(c: &mut Checks, app: &AppHandle) {
         goto(app, "connection", "[data-part=window-preferences]")
             && within(5, || shown_choice(app)).as_deref() == Some("exit"),
         format!(
-            "the settings show the remembered Exit app: {:?}",
+            "the settings show the remembered Quit: {:?}",
             shown_choice(app)
         ),
     );
     c.check(
         save_choice(app, "ask"),
-        format!(
-            "Ask every time is saved in the settings: {:?}",
-            saved_choice(app)
-        ),
+        format!("Ask is saved in the settings: {:?}", saved_choice(app)),
     );
     last_close(c, app, "second", || answer(app, "exit", true));
 }
@@ -636,14 +653,112 @@ fn third(c: &mut Checks, app: &AppHandle) {
     last_close(c, app, "third", || request_close(app));
 }
 
+/// What the open close prompt shows: its kind, title, buttons and switch; None when none is open.
+fn prompt_shown(app: &AppHandle) -> Option<Value> {
+    main_eval(
+        app,
+        "(() => { const d = document.querySelector('dialog[data-part=close-prompt]'); if (!d?.open) return null; return { kind: d.dataset.kind ?? null, title: d.querySelector('h2')?.textContent ?? null, buttons: [...d.querySelectorAll('button')].map((b) => b.textContent.trim()), switch: d.querySelector('label')?.textContent?.trim() ?? null }; })()",
+    )
+    .filter(|v| !v.is_null())
+}
+
+/// Clicks the open close prompt's button whose text is text, only when a person could: it is laid
+/// out on the page and enabled.
+fn click_shown(app: &AppHandle, text: &str) -> bool {
+    main_eval(
+        app,
+        &format!(
+            "(() => {{ const d = document.querySelector('dialog[data-part=close-prompt]'); if (!d?.open) return false; const b = [...d.querySelectorAll('button')].find((b) => b.textContent.trim() === {}); if (!b || b.disabled || b.getClientRects().length === 0) return false; b.click(); return true; }})()",
+            json!(text)
+        ),
+    ) == Some(json!(true))
+}
+
+fn no_tray_ask(c: &mut Checks, app: &AppHandle) {
+    c.check(shell_ready(app, 60), "the window shows the app's shell");
+    let core = || app.state::<App>().conn.lock().unwrap().core_pid();
+    let pid = core();
+    // A page that does not take the question (its prompt not in place, as while it loads): the
+    // window stays open, and pluxy keeps running.
+    let held = main_eval(
+        app,
+        "(() => { if (typeof window.__pluxyClosePrompt !== 'function') return false; window.__pluxyHeldPrompt = window.__pluxyClosePrompt; delete window.__pluxyClosePrompt; return true; })()",
+    ) == Some(json!(true));
+    let prompts = PROMPTS.load(SeqCst);
+    request_close(app);
+    sleep(5000);
+    c.check(
+        held && PROMPTS.load(SeqCst) == prompts + 1,
+        format!(
+            "with no tray, closing asks the window first ({} asks)",
+            PROMPTS.load(SeqCst) - prompts
+        ),
+    );
+    c.check(
+        app.get_window(WINDOW).is_some() && shell_ready(app, 5) && pid.is_some() && core() == pid,
+        format!(
+            "a no-tray prompt the window does not answer keeps the window open and pluxy running ({pid:?}, now {:?})",
+            core()
+        ),
+    );
+    let restored = main_eval(
+        app,
+        "(() => { window.__pluxyClosePrompt = window.__pluxyHeldPrompt; return typeof window.__pluxyClosePrompt === 'function'; })()",
+    ) == Some(json!(true));
+    c.check(restored, "the window's own close prompt is back in place");
+
+    // The window's own prompt: its words, and Keep open keeps the window with pluxy running.
+    let prompts = PROMPTS.load(SeqCst);
+    request_close(app);
+    let shown = within(5, || prompt_shown(app));
+    let want = json!({
+        "kind": "no-tray",
+        "title": "Close and stop pluxy?",
+        "buttons": ["Keep open", "Close and stop pluxy"],
+        "switch": "Don't ask again",
+    });
+    c.check(
+        PROMPTS.load(SeqCst) == prompts + 1 && shown.as_ref() == Some(&want),
+        format!("with no tray, closing shows Close and stop pluxy? with Keep open: {shown:?}"),
+    );
+    c.check(
+        click_shown(app, "Keep open"),
+        "the prompt's Keep open is shown and clicked",
+    );
+    // Longer than the three seconds an unanswered prompt is waited for.
+    sleep(4000);
+    c.check(
+        prompt_shown(app).is_none()
+            && app.get_window(WINDOW).is_some()
+            && shell_ready(app, 5)
+            && pid.is_some()
+            && core() == pid,
+        format!(
+            "Keep open closes the prompt, and the window stays open with pluxy running ({pid:?}, now {:?})",
+            core()
+        ),
+    );
+    // Close and stop pluxy, with Don't ask again: it quits, and window.ts checks what it kept.
+    last_close(c, app, "no-tray-ask", || {
+        request_close(app);
+        within(5, || prompt_shown(app)).is_some_and(|p| p == want)
+            && click(app, "dialog[data-part=close-prompt] input[role=switch]")
+            && click_shown(app, "Close and stop pluxy")
+    });
+}
+
 fn no_tray(c: &mut Checks, app: &AppHandle) {
     c.check(shell_ready(app, 60), "the window shows the app's shell");
     c.check(
-        goto(
-            app,
-            "connection",
-            "[data-part=window-preferences] [data-part=no-tray]",
-        ),
+        goto(app, "connection", "[data-part=window-preferences]")
+            && within(5, || {
+                (main_eval(
+                    app,
+                    "document.querySelector('[data-part=window-preferences]')?.innerText.includes('This desktop has no tray') === true",
+                ) == Some(json!(true)))
+                .then_some(())
+            })
+            .is_some(),
         "the settings say that with no system tray closing the window quits",
     );
     last_close(c, app, "no-tray", || request_close(app));
@@ -655,6 +770,7 @@ pub fn run(app: &AppHandle, stage: &str) -> Result<(), String> {
         "first" => first(&mut c, app),
         "second" => second(&mut c, app),
         "third" => third(&mut c, app),
+        "no-tray-ask" => no_tray_ask(&mut c, app),
         "no-tray" => no_tray(&mut c, app),
         _ => return Err(format!("no window stage {stage}")),
     }

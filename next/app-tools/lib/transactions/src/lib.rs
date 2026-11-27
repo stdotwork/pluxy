@@ -21,11 +21,19 @@
 //! looks at the disk: a write that finished is committed, anything else is rolled back from the
 //! backups, never written again, and never over a competing edit.
 //!
+//! A folder the tool owns inside a selected root, known by a marker file in it (a plugin it
+//! carries), is put in place, replaced and removed the same way ([`Folder`],
+//! [`Transactions::put_folder`], [`Transactions::remove_folder`]): through a handle on the root
+//! opened when the folder was pinned, checked before and after each move and before each removal
+//! (a hidden copy only by the identity the operation recorded), under a journal that
+//! [`Transactions::reconcile`] settles from disk.
+//!
 //! Other programs do not share these checks: a write between the last check and the rename, or
 //! after the final one, is not seen. Several files are journalled, not written atomically.
 
 mod b64;
 mod backups;
+mod folder;
 mod merge;
 mod target;
 #[cfg(feature = "toml")]
@@ -41,6 +49,9 @@ mod toml_tests;
 mod yaml_tests;
 
 pub use backups::{backup_call, backup_operations, json_leaves, Leaves, KEEP_BACKUPS};
+pub use folder::Folder;
+#[cfg(any(test, feature = "test-hooks"))]
+pub use folder::{hook, Step};
 pub use merge::{merge_value, Json, Merge};
 pub use target::{
     pin_schema, sha256, sha256_of, Failed, Id, Mode, Pin, Selection, Target, WriteMode, MAX_FILE,
@@ -837,6 +848,15 @@ impl<'a> Transactions<'a> {
             }
             let set = intent["set"].as_str().unwrap_or_default();
             let mut state = self.load()?;
+            // A folder's journal (`put_folder`, `remove_folder`): reconciled from its root.
+            if intent.get("folder").is_some() {
+                let (outcome, restored, conflicts) = self.reconcile_folder(intent)?;
+                let report = json!({"journal": id, "op": intent["op"], "set": set,
+                    "outcome": outcome, "restored": restored, "conflicts": conflicts});
+                self.end_reconciled(&mut state, &id, outcome, report.clone())?;
+                reports.push(report);
+                continue;
+            }
             let (mut restored, mut conflicts) = (Vec::new(), Vec::new());
             let committed = state["committed"]
                 .as_array()
@@ -917,20 +937,33 @@ impl<'a> Transactions<'a> {
             };
             let report = json!({"journal": id, "op": intent["op"], "set": set,
                 "outcome": outcome, "restored": restored, "conflicts": conflicts});
-            for key in ["recovered", "open"] {
-                if let Some(a) = state[key].as_array_mut() {
-                    a.retain(|r| r["journal"] != id);
-                }
-            }
-            remember(&mut state, "recovered", report.clone());
-            self.save(&state)?;
-            self.vault.vault(
-                "journal.end",
-                fields(json!({"journal": id, "outcome": outcome})),
-            )?;
+            self.end_reconciled(&mut state, &id, outcome, report.clone())?;
             reports.push(report);
         }
         Ok(reports)
+    }
+
+    /// Records a reconciled journal's report in state (which `status` shows), saves it and ends
+    /// the journal with its outcome.
+    fn end_reconciled(
+        &self,
+        state: &mut Value,
+        id: &Value,
+        outcome: &str,
+        report: Value,
+    ) -> Result<(), Error> {
+        for key in ["recovered", "open"] {
+            if let Some(a) = state[key].as_array_mut() {
+                a.retain(|r| r["journal"] != *id);
+            }
+        }
+        remember(state, "recovered", report);
+        self.save(state)?;
+        self.vault.vault(
+            "journal.end",
+            fields(json!({"journal": id, "outcome": outcome})),
+        )?;
+        Ok(())
     }
 
     /// The sets applied now (each with its targets), the originals kept for restore and the

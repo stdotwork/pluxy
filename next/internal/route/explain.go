@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -16,7 +17,9 @@ import (
 // or comes from the name of an old core's auth file, which holds an email address; it must not
 // travel in a reply to a client. A reply names an account by its public ID instead: a keyed
 // digest of the ID, so it is short, stable across restarts (the key is kept with core's state)
-// and says nothing about the account to anyone without the key.
+// and says nothing about the account to anyone without the key. An ID core made itself (for an
+// account added without one) already has a public ID's shape and holds nothing but random
+// digits, so it is its own public ID: such an account has one ID everywhere.
 
 // PublicKeyLen is the length in bytes of the key public IDs are made with.
 const PublicKeyLen = 32
@@ -36,13 +39,31 @@ func (s *State) SetPublicKey(key []byte) {
 	s.pubKey = slices.Clone(key)
 }
 
-// PublicID returns the public ID of account id: "acc_" and 8 hex digits.
+// PublicID returns the public ID of account id: "acc_" and 8 hex digits. An id of that shape
+// (lower-case digits, as core makes them) is returned as it is.
 func (s *State) PublicID(id string) string {
+	if isPublicID(id) {
+		return id
+	}
 	s.keyMu.RLock()
 	m := hmac.New(sha256.New, s.pubKey)
 	s.keyMu.RUnlock()
 	m.Write([]byte(id))
 	return "acc_" + hex.EncodeToString(m.Sum(nil)[:4])
+}
+
+// isPublicID reports whether id has a public ID's shape: "acc_" and 8 lower-case hex digits.
+func isPublicID(id string) bool {
+	hexDigits, ok := strings.CutPrefix(id, "acc_")
+	if !ok || len(hexDigits) != 8 {
+		return false
+	}
+	for _, c := range hexDigits {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // Config.Explain: whether replies name the account and errors say what was tried.

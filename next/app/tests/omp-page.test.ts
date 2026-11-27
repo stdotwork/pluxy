@@ -10,8 +10,21 @@ describe("model", () => {
     expect(modelOf({ state: "refused", reason: "not YAML" })).toBe("");
   });
 
-  test("takes one model ID, never a list, a role or spaces", () => {
-    for (const ok of ["gpt-6.1-sol", "qwen3:8b", "openrouter/x"]) expect(validModel(ok)).toBe(true);
-    for (const bad of ["", "a,b", "a b", "@slow", "*", "x\n"]) expect(validModel(bad)).toBe(false);
+  test("takes one model ID, never a list, a role, spaces or control characters", () => {
+    for (const ok of ["gpt-6.1-sol", "qwen3:8b", "openrouter/x", "x".repeat(240), "é".repeat(240)])
+      expect(validModel(ok)).toBe(true);
+    for (const bad of [
+      "",
+      "a,b",
+      "a b",
+      "@slow",
+      "*",
+      "x\n",
+      "a\u0000b",
+      "a\u0007b",
+      "a\u0085b",
+      "x".repeat(241),
+    ])
+      expect(validModel(bad)).toBe(false);
   });
 });

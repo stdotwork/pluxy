@@ -10,7 +10,7 @@ theme can change three things:
 2. **Layout options:** choices the UI implements, such as where the navigation sits or whether
    lists show as a table or as cards.
 3. **Custom CSS:** a stylesheet applied on top, for anything tokens and layout options do not
-   cover. Safe mode turns it off.
+   cover. The Custom CSS switch on the Themes page turns it off.
 
 Tokens and layout options are the stable part of the contract: a theme that only uses them keeps
 working as the UI changes. Custom CSS can only rely on the hooks listed under
@@ -103,25 +103,27 @@ anything.
 | `color.warn` | Degraded states | `#8f5600` / `#e5b866` |
 | `color.danger` | Errors, destructive actions | `#b3261e` / `#ff8f80` |
 | `color.focus` | Keyboard focus ring | `#1b1a17` / `#eceae3` |
-| `color.meter-track` | Unused part of a quota meter | `var(--px-color-surface-raised)` |
-| `color.meter-fill` | Used share of a quota meter | `var(--px-color-accent)` |
-| `color.chart-success` | Successful requests in the Dashboard's traffic chart | `var(--px-color-ok)` |
-| `color.chart-failure` | Failed requests in the Dashboard's traffic chart | `var(--px-color-danger)` |
+| `color.meter-track` | The empty part of a limit's gauge | `var(--px-color-surface-raised)` |
+| `color.meter-fill` | What is left of a limit, on its gauge | `var(--px-color-accent)` |
+| `color.chart-success` | Successful requests in Home's chart of the last 7 days | `var(--px-color-text)` |
+| `color.chart-failure` | Failed requests in Home's chart of the last 7 days | `var(--px-color-danger)` |
 | `color.diff-add` | Added lines in a diff | `#1f7a43` / `#86d3a0` |
 | `color.diff-remove` | Removed lines in a diff | `#b3261e` / `#ff8f80` |
 | `color.nav` | Navigation background | `color-mix(in srgb, var(--px-color-surface) 97%, black)` / `color-mix(in srgb, var(--px-color-surface) 80%, black)` |
 | `color.nav-text` | The product name in the navigation, and a hovered entry's text | `var(--px-color-text)` |
 | `color.nav-muted` | Navigation entries, and the status block's second line | `var(--px-color-text-muted)` |
 | `color.nav-hover` | Background of a hovered navigation entry | `var(--px-color-surface-raised)` |
-| `color.nav-selected` | Background of the current navigation entry; its text is `color.accent` | `color-mix(in srgb, var(--px-color-accent) 14%, transparent)` |
+| `color.nav-selected` | Background of the current navigation entry, which also has a 2px bar in `color.accent` and its text in `color.accent` | `color-mix(in srgb, var(--px-color-accent) 7%, transparent)` / `color-mix(in srgb, var(--px-color-accent) 9%, transparent)` |
 | `color.nav-border` | The navigation's border, and the line over its status block | `var(--px-color-border)` |
 | `color.overlay` | Dialog background | `var(--px-color-surface)` |
+| `color.card` | Background of a card and of the detail pane. `transparent` draws a card as a section: its heading, a hairline and its content | `transparent` |
+| `color.card-border` | Border of a card and of the detail pane (the detail pane always has a `color.border` line on the list's side) | `transparent` |
 | `color.input-border` | Border of text inputs, selects and text areas | `color-mix(in srgb, var(--px-color-text-muted) 70%, var(--px-color-surface))` |
 | `color.placeholder` | Placeholder text in an empty input | `var(--px-color-text-muted)` |
 | `color.selected` | Background of a selected table row and of the selected tab | `var(--px-color-surface-raised)` |
 | `color.selected-text` | Text of a selected list item | `var(--px-color-text)` |
-| `color.danger-surface` | Background of an error notice | `color-mix(in srgb, var(--px-color-danger) 8%, transparent)` |
-| `color.warn-surface` | Background of a warning notice | `color-mix(in srgb, var(--px-color-warn) 8%, transparent)` |
+| `color.danger-surface` | Background of an error notice, which has a 3px bar in `color.danger` at its start | `transparent` |
+| `color.warn-surface` | Background of a warning notice, which has a 3px bar in `color.warn` at its start | `transparent` |
 | `color.code-bg` | Background of the configuration source editor, log views and diffs | `var(--px-color-surface-raised)` |
 | `color.code-text` | Their text | `var(--px-color-text)` |
 
@@ -171,10 +173,15 @@ in a column line up.
 | `size.width-wide` | Content width for the `wide` width option | `1200px` |
 | `size.width-narrow` | Content width for the `narrow` width option | `760px` |
 | `size.detail` | Width of the detail pane beside a list | `360px` |
+| `size.card-padding` | Room inside a card's border. With `color.card` and `color.card-border` it draws cards as boxes, as Paper does | `0px` |
 
 `density` does not change the four heights (`size.row`, `size.row-tall`, `size.control` and
-`size.control-main`): a theme that wants shorter rows sets them. The kit's lists and controls do not
-read them yet; a theme can set them now, and they take effect as the controls move to them.
+`size.control-main`): a theme that wants shorter rows sets them. Buttons, inputs, selects, a
+`Choices` group, topics and the header strip's buttons are `size.control` high; the page's main
+action in the header strip and the navigation's destinations are `size.control-main`. A table row is
+`size.row` high, and its cells' top and bottom padding is half the difference between `size.row-tall`
+and `size.row`, so a row whose text takes two lines comes out at about `size.row-tall`. Every
+control stays at least 24 pixels to hit, whatever these are set to.
 
 ### Shape
 
@@ -251,14 +258,16 @@ What custom CSS cannot do:
 
 ### Hooks you can rely on
 
-These stay stable within a theme contract version:
+Until pluxy's first release the contract stays at version 0, and these hooks can still change
+under it when a page is rebuilt: the Setup page's hooks were replaced this way. From the first
+release on, they stay stable within a theme contract version:
 
 | Hook | Where |
 | --- | --- |
 | `data-appearance="light"` or `"dark"` | Root element |
 | `class="dark"` | Root element, while the appearance is dark |
 | `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `routing`, `quota`, `logs`, `usage`, `setup`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `account` (one account's page), `add-account`, `routing`, `logs`, `usage` (Requests), `activity/usage` (Usage), `setup`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root. Signed in, `data-frame` says how the navigation is drawn: `sidebar`, `rail` or `top` (the `nav` option), or `bar` in a very narrow window; `data-narrow` is set while the window is under 820 pixels wide |
 | `data-part="nav"` | The navigation |
 | `data-part="nav-idle"` | The navigation drawn where nothing in it can be chosen yet: the desktop app before it is connected. It has the same content and the same `data-slot` |
@@ -272,21 +281,22 @@ These stay stable within a theme contract version:
 | `data-part="header-tabs"` | A destination's tabs in the header strip |
 | `data-part="header-tab"` | One of them; the current one has `aria-current="page"` |
 | `data-part="header-actions"` | The page's main actions, at the header strip's end |
-| `data-part="privacy-toggle"` | The header strip's privacy mode switch; `aria-pressed="true"` while it masks account e-mail addresses and identifiers, and the root then has `data-privacy="on"`. |
-| `data-part="sign-out"` | The header strip's sign-out button |
+| `data-part="privacy-toggle"` | The header strip's Names hidden button, drawn only while names are hidden (the Hide names setting in General turns that on); `aria-pressed="true"`, and the root then has `data-privacy="on"`. |
 | `data-part="topics"` | The list of a destination's topics beside the page |
 | `data-part="nav-group"` | A group of topics under its label; `data-group` is `core`, `device` or `extensions` (the extensions' pages) |
 | `data-part="topic"` | One topic; the current one has `aria-current="page"` |
 | `data-part="topics-select"` | The select that replaces a list beside the page in a narrow window |
 | `data-part="main"` | The page area, the one part that scrolls |
 | `data-part="list"` | A list of items, whichever `list` layout it uses |
+| `data-part="list-frame"` | The box a `table` list scrolls in. When the table is wider than the box, `data-more` is `start`, `end` or `both`: the sides with columns out of view, which fade out |
 | `data-part="item"` | One item in a list; a selected one has `aria-current="true"` |
 | `data-part="detail"` | The detail pane |
 | `data-part="card"` | A card or panel grouping related content |
-| `data-part="button"` | A button; `data-variant` is `primary`, `quiet` or `danger` |
+| `data-part="settings-section"` | A section of the Themes page: its heading, a hairline and what it holds. Always a hairline section, never a box |
+| `data-part="button"` | A button; `data-variant` is `primary` (a view's main action, filled), `quiet` (the ordinary button, outlined), `ghost` (no border until hovered) or `danger` (outlined, in the danger colour) |
 | `data-part="badge"` | A state badge; `data-tone` is `ok`, `warn`, `danger` or `muted` |
 | `data-part="field"` | A labelled form control |
-| `data-part="meter"` | A quota usage meter; `data-tone` is `ok`, `warn` or `danger`. Its child is the fill; warning and danger use the matching state colour. |
+| `data-part="meter"` | A limit's gauge of what is left, beside "{n}% left": full is plenty. `data-mode` is `left`; `data-tone` is `ok`, `warn` (10% left or less) or `danger` (used up). Its child is the fill; warning and danger use the matching state colour. |
 | `data-part="tabs"` | A group of tabs |
 | `data-part="tab"` | One tab |
 | `data-part="tab-panel"` | The panel shown by the selected tab |
@@ -296,28 +306,22 @@ These stay stable within a theme contract version:
 | `data-part="dialog"` | A dialog window |
 | `data-part="log"` | A core log or request log text view |
 | `data-part="log-line"` | One core log line; `data-level` is `info`, `warn` or empty for a line without a level |
-| `data-part="toolbar"` | A page's search, filters and actions |
-| `data-part="pager"` | Page size and previous/next controls |
 | `data-part="select"` | An item's batch selection checkbox |
-| `data-part="batch"` | Batch selection and account actions |
-| `data-part="account-meta"` | Account totals, active accounts and problems |
-| `data-part="upload-results"` | The result of each auth file uploaded on Accounts: the account it became, or why it was not imported |
+| `data-part="batch"` | All accounts' bar of actions for the selected accounts, while Select is on |
+| `data-part="upload-results"` | The result of each CLIProxyAPI auth file imported on Add an account: the account it became, or why it was not added |
 | `data-part="key-notice"` | A notice revealing a newly generated key until closed or its tab is left |
 | `data-part="key-value"` | The selectable value of a newly generated key inside its notice |
-| `data-part="method"` | A sign-in method tile with its label, kind caption and selected flow. |
+| `data-part="method"` | One way to sign in on Add an account: its name, how it signs in and Start; its sign-in shows under it once started. |
 | `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
 | `data-part="device-code"` | The user code to enter on a device sign-in page. |
-| `data-part="tier"` | A Routing priority tier, containing its heading and account list. |
+| `data-part="tier"` | One group of a provider's accounts on Order & fallback (First, Backup 1…), with its name, its priority and its accounts; `data-priority` is its priority |
+| `data-part="order-row"` | One account in a group on Order & fallback: its handle, mark, name, condition, weight and arrows; `data-condition` is its condition, as on its Accounts row |
+| `data-part="fallback"` | One fallback on Order & fallback: the model a tool asks for, its steps in order, Edit and Remove; `data-open` while the editor shows it |
+| `data-part="fallback-editor"` | The form that makes or changes a fallback, under the list of fallbacks |
 | `data-part="tile"` | One fact on the System page's about card: a label, its value and a note. |
 | `data-part="model-group"` | The models of one extension on the System page, under the extension's name and their count. |
-| `data-part="stat"` | A figure with its label and hint on the Dashboard (requests handled, success rate, credentials); `data-tone` is `ok`, `warn` or `danger` when the figure has a verdict. |
-| `data-part="chart"` | The Dashboard's traffic chart (an SVG). Each bar carries `data-outcome`, `success` or `failure`. |
-| `data-part="account-tools"` | Account detail health and tools. |
-| `data-part="account-check"` | Account check and recent request health. |
-| `data-part="account-cooldowns"` | Account routing cooldown list. |
-| `data-part="account-cooldown-confirm"` | Explanation of the local cooldown reset. |
-| `data-part="account-tool-actions"` | Account tool buttons. |
-| `data-part="account-config-link"` | Link to edit a config account. |
+| `data-part="days"` | Home's chart of the last 7 days: seven day bars, each with its succeeded part and its failed part on top. |
+| `data-part="account-tools"` | An account's models, test request and Renew sign-in now, under its page's "Settings, models and a test request". |
 | `data-part="account-test-hint"` | Account test cost and behavior. |
 | `data-part="account-models"` | Supported models and test model choice. |
 | `data-part="account-test-result"` | The last explicit account test result. |
@@ -327,11 +331,35 @@ These stay stable within a theme contract version:
 | `data-part="account-edit"` | The Edit form of an account added by login. |
 | `data-part="account-edit-row"` | One model or model alias row in the Edit form. |
 | `data-part="account-edit-discard"` | The Edit form's question before unsaved changes are discarded. |
-| `data-part="subscription-end"` | The Quota card's line with the day a subscription ends. |
-| `data-part="setup-found"` | The Setup page's list of what core found on its machine; `aria-busy="true"` while core looks again. |
-| `data-part="setup-pick"` | One provider on the Setup page's checklist; `data-state` is `offered`, `installed` or `failed`. |
-| `data-part="setup-client"` | One client on the Setup page; `data-state` is `not-configured`, `configured`, `needs-update`, `refused` or `not-found`. |
-| `data-part="setup-paste"` | The text to paste into a client's settings files, open under its client. |
+| `data-part="setup-step"` | One of the Setup page's three steps; `data-state` is `open`, `done` or `todo`. |
+| `data-part="setup-import"` | The line above the Setup steps when a CLIProxyAPI setup was found; `data-state` is `found`, `preview`, `done` or `imported`. |
+| `data-part="setup-report"` | What importing that setup would do, or did, in three folded lists; `data-state` is `preview` or `done`. |
+| `data-part="setup-pick"` | One kind of account in Setup's step 1; `data-state` is `offered`, `ticked`, `added`, `stopped` or `failed`. |
+| `data-part="setup-test"` | The passed test request in Setup's step 3; `data-state` is `passed`. |
+| `data-part="account-page"` | One account's own page; `data-group` is its group, as on its row |
+| `data-part="account-opening"` | The top of an account's page: its provider and plan, its condition and why, and its one fix |
+| `data-part="account-more"` | An account's "Settings, models and a test request" disclosure |
+| `data-part="auth-import"` | Add an account's "Have auth files from CLIProxyAPI?" line and its results |
+| `data-part="round-notice"` | The notice above a page's lists when a round of reads did not all work: what could not be read, and Try again |
+| `data-part="method-group"` | One provider on Add an account, under its name: its ways to sign in, each a row with Start |
+| `data-part="more-options"` | A sign-in's optional inputs, folded under More options |
+| `data-part="login-details"` | The Details fold of a sign-in that ended with a message from pluxy, such as signing in to a different account |
+| `data-part="account-added"` | What Add an account shows once the sign-in is done: Added, the optional Name, Save name, Open account and Add another |
+| `data-part="account-row"` | One account on one line, the same on every page: its group's mark, name, provider, plan and limits, and why and its fix when it needs the person or waits. `data-group` is `needs`, `waiting`, `serving` or `off`; `data-condition` is `serving`, `cooling`, `exhausted`, `needs_login`, `banned`, `broken`, `no_provider` or `off`, or `unchecked` when the status that says whether its provider runs could not be read (its mark then has `data-group="unchecked"`); `data-tall` is set on a row that says why under the name; `data-wide` on the Accounts list's wider row |
+| `data-part="request-row"` | One request on one line: its time, model, account, key, tokens, time taken and result. `data-failed` is set on a failed one; `data-open` while it shows its details; `data-compact` on Home's shorter row, a link to the request |
+| `data-part="setting-row"` | One setting: its name and what it does beside its control. `data-disabled` is set while the control cannot be used |
+| `data-part="tool-row"` | One coding tool: its name, version, state and settings file. `data-state` is `configured`, `not-configured`, `needs-update`, `refused`, `not_installed` or `unchecked` |
+| `data-part="state-pane"` | What a whole pane shows while it loads, when it is empty, or when it could not be read; `data-kind` is `loading`, `empty` or `failed` |
+| `data-part="plan-pill"` | An account's plan as a word; `data-plan-tier` is `top` (the largest plans), `mid` or `free`. The default theme sets the tiers apart by ink weight only, never colour |
+| `data-part="limits"` | An account's limits on its row; `data-state` is `read`, `reading`, `none` or `failed` |
+| `data-part="activity"` | The body of the Requests and Usage tabs |
+| `data-part="activity-filters"` | The Requests tab's filter row: All or Failed, then the lists of providers, accounts, models and keys |
+| `data-part="usage-chart"` | The Usage tab's chart of requests, a bar per hour or per day; its bars carry `data-outcome` (`success` or `failure`) |
+| `data-part="usage-chip"` | The one filter a breakdown click set on the Usage tab, a button that removes it |
+| `data-part="usage-numbers"` | The table behind the Usage chart, shown on request |
+| `data-part="usage-breakdown"` | The Usage tab's breakdown table by provider, model, account or key |
+| `data-part="tool-steps"` | The numbered steps under a coding tool's row on the Tools page: make a key, put the text in the settings file, start the tool again |
+| `data-part="tool-key"` | One key on the Tools page: its name, its use this week, Rename and Delete |
 
 Some parts also carry the `data-slot` name that [T3 Code](https://github.com/pingdotgg/t3code)
 gives the same part, and the root's `dark` class is the one T3 Code uses. They exist so that the
@@ -360,7 +388,7 @@ On the Themes page:
 
 - **Add a theme** takes a theme file, or JSON pasted into the box. The UI checks it first: a file
   it refuses is not stored, and the page says why. A theme that is added is turned on at once.
-- **Export** saves the file of the theme that is on as `<name>.json`, a built-in theme's too. The
+- **Save theme file** saves the file of the theme that is on as `<name>.json`, a built-in theme's too. The
   file holds the JSON that was added; its spacing and the order of its fields can differ. The
   panel downloads it; the desktop app saves it in your Downloads folder and says where. To add a
   built-in theme's file back as a theme of your own, change its `id` first: the page refuses a
@@ -371,7 +399,7 @@ A window follows a change made in another window or with `pluxy theme` when it n
 or shows again.
 
 Each device keeps its own appearance (system, light or dark), layout and density choices, the
-person's own CSS and safe mode. It also keeps a copy of the theme last applied, so a window opens
+person's own CSS and whether custom CSS is on. It also keeps a copy of the theme last applied, so a window opens
 in that theme before core answers and on the sign-in page.
 
 ### The `pluxy theme` commands
@@ -402,16 +430,17 @@ that is on stays on, except an ID whose publisher is `pluxy`: a newer panel or d
 a built-in theme this core does not list, so core accepts it, and a window that does not hold that
 theme shows the default.
 
-## Safe mode
+## Turning custom CSS off
 
-Safe mode turns off all custom CSS: the theme's and the person's own. Tokens and layout options
-keep working. Use it when custom CSS has hidden or broken the UI. It is kept on each device, not by
-core.
+With the Custom CSS switch off, all custom CSS is off: the theme's and the person's own. Tokens and
+layout options keep working. Use it when custom CSS has hidden or broken the UI. It is kept on each
+device, not by core. (The page does not call it safe mode: that is pluxy's own mode with no
+extensions, shown on System.)
 
-- On the Themes page: the "Safe mode" switch.
+- On the Themes page: the "Custom CSS" switch.
 - If custom CSS hides that switch: open the panel with `?safe` in the address, for example
-  `http://127.0.0.1:8400/panel/?safe`. Safe mode then stays on, also after reloading, until it is
-  turned off on the Themes page. The panel's sign-in page says so too, with `safeAddress` set on
+  `http://127.0.0.1:8400/panel/?safe`. Custom CSS then stays off, also after reloading, until the
+  switch on the Themes page is turned on. The panel's sign-in page says so too, with `safeAddress` set on
   the shell: a host whose address cannot take `?safe`, such as the desktop app, leaves it out.
 
 ## Changes to this contract

@@ -39,6 +39,9 @@ pub struct Store {
     #[cfg_attr(windows, allow(dead_code))]
     base: PathBuf,
     identifier: String,
+    /// Whether this build offers Open at sign-in. A local build (package.ts local) does not: it
+    /// opens only through its `start`, which sets its HOME and add-on trust (`local-start.sh`).
+    sign_in: bool,
     /// The registry keys the Run entry is in (the user's own, outside tests).
     #[cfg(windows)]
     keys: registry::Keys,
@@ -53,6 +56,7 @@ impl Store {
             config,
             base,
             identifier,
+            sign_in: true,
             #[cfg(windows)]
             keys: registry::Keys::user(),
             #[cfg(test)]
@@ -60,6 +64,14 @@ impl Store {
             #[cfg(test)]
             read_fault: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+    /// The same store for a build that offers no Open at sign-in: it reads and changes no login
+    /// item, reports Open at sign-in and Start in the tray as off, and refuses to turn the first on.
+    /// A login item an earlier build left is not shown as on and stays as it is (`lib.rs` `run`
+    /// ends a launch it starts).
+    pub fn without_sign_in(mut self) -> Self {
+        self.sign_in = false;
+        self
     }
     fn file(&self) -> PathBuf {
         self.config.join("startup.json")
@@ -106,12 +118,23 @@ impl Store {
         }
     }
     pub fn view(&self, mut preferences: Preferences) -> Result<View, String> {
+        if !self.sign_in {
+            preferences.autostart_enabled = false;
+            preferences.silent_start_enabled = false;
+            return Ok(View {
+                preferences,
+                registration_owned: false,
+                registration_conflict: false,
+                sign_in: false,
+            });
+        }
         let entry = self.registration()?;
         preferences.autostart_enabled = entry.enabled;
         Ok(View {
             preferences,
             registration_owned: entry.owned,
             registration_conflict: entry.exists && !entry.owned,
+            sign_in: true,
         })
     }
     #[cfg(not(windows))]
@@ -216,6 +239,17 @@ impl Store {
         mut prefs: Preferences,
         executable: impl FnOnce() -> Result<PathBuf, String>,
     ) -> Result<View, String> {
+        if !self.sign_in {
+            if prefs.autostart_enabled {
+                return Err(NO_SIGN_IN.into());
+            }
+            prefs.silent_start_enabled = false;
+            fs::create_dir_all(&self.config).map_err(|e| e.to_string())?;
+            let bytes = serde_json::to_vec_pretty(&prefs).expect("startup preferences are JSON");
+            write_private(&self.file(), &bytes)
+                .map_err(|e| format!("saving startup preferences: {e}"))?;
+            return self.view(prefs);
+        }
         fs::create_dir_all(&self.config).map_err(|e| e.to_string())?;
         let registration = self.registration()?;
         let changed = registration.enabled != prefs.autostart_enabled;
@@ -279,6 +313,18 @@ pub struct View {
     pub preferences: Preferences,
     pub registration_owned: bool,
     pub registration_conflict: bool,
+    /// Whether this build offers Open at sign-in (`Store::without_sign_in`).
+    pub sign_in: bool,
+}
+
+/// What a build without Open at sign-in answers when asked to turn it on.
+pub const NO_SIGN_IN: &str = "A local build opens with its start command, not at sign-in";
+
+/// Whether a launch with these arguments ends at once: a login launch (`--autostart`) of a build
+/// that offers no Open at sign-in, which only an earlier build's login item can start. Such a
+/// launch would bypass that build's `start` and run without its HOME and add-on trust.
+pub fn refused_launch(sign_in: bool, mut args: impl Iterator<Item = std::ffi::OsString>) -> bool {
+    !sign_in && args.any(|a| a == "--autostart")
 }
 
 /// Commands require all choices; stored preferences allow older/newer schemas.
@@ -353,7 +399,7 @@ fn render_entry(executable: &Path, identifier: &str) -> Result<Vec<u8>, String> 
     #[cfg(target_os = "linux")]
     {
         let _ = identifier;
-        desktop_entry(executable).map(String::into_bytes)
+        desktop_entry(executable, crate::DISPLAY_NAME).map(String::into_bytes)
     }
     #[cfg(target_os = "macos")]
     {
@@ -362,7 +408,7 @@ fn render_entry(executable: &Path, identifier: &str) -> Result<Vec<u8>, String> 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (executable, identifier);
-        Err("Launch at startup is supported on Linux, macOS and Windows only".into())
+        Err("Open at sign-in is supported on Linux, macOS and Windows only".into())
     }
 }
 
@@ -466,8 +512,9 @@ fn parse_launch_agent(bytes: &[u8], identifier: &str) -> Registration {
     }
 }
 
+/// The desktop entry that starts `executable` at login, named `name` (the app's display name).
 #[cfg(target_os = "linux")]
-fn desktop_entry(executable: &Path) -> Result<String, String> {
+fn desktop_entry(executable: &Path, name: &str) -> Result<String, String> {
     validate_executable(executable)?;
     let path = executable.to_str().ok_or("the app path is not UTF-8")?;
     // Exec quoting, then Desktop Entry string escaping.
@@ -479,7 +526,7 @@ fn desktop_entry(executable: &Path) -> Result<String, String> {
         quoted.push(c);
     }
     let quoted = quoted.replace('\\', "\\\\");
-    Ok(format!("[Desktop Entry]\nType=Application\nName=pluxy\nExec=\"{quoted}\" --autostart\nTerminal=false\nX-Pluxy-Autostart=true\n"))
+    Ok(format!("[Desktop Entry]\nType=Application\nName={name}\nExec=\"{quoted}\" --autostart\nTerminal=false\nX-Pluxy-Autostart=true\n"))
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -657,9 +704,9 @@ mod tests {
             if name != "missing" {
                 fs::write(&path, b"fixture").unwrap();
             }
-            assert!(desktop_entry(&path).is_err(), "{name}");
+            assert!(desktop_entry(&path, "pluxy").is_err(), "{name}");
         }
-        assert!(desktop_entry(&s.base).is_err());
+        assert!(desktop_entry(&s.base, "pluxy").is_err());
         fs::remove_dir_all(&s.base).unwrap();
     }
 
@@ -668,10 +715,94 @@ mod tests {
         let s = store();
         let path = s.base.join("space quote\" dollar$ tick` ;&=");
         fs::write(&path, b"fixture").unwrap();
-        let text = desktop_entry(&path).unwrap();
+        let text = desktop_entry(&path, "pluxy").unwrap();
         let expected = format!("[Desktop Entry]\nType=Application\nName=pluxy\nExec=\"{}/space quote\\\\\" dollar\\\\$ tick\\\\` ;&=\" --autostart\nTerminal=false\nX-Pluxy-Autostart=true\n", s.base.display());
         assert_eq!(text, expected);
         fs::remove_dir_all(&s.base).unwrap();
+    }
+
+    #[test]
+    fn a_local_builds_login_item_is_named_as_its_window() {
+        let s = store();
+        let path = s.base.join("pluxy-app-local");
+        fs::write(&path, b"fixture").unwrap();
+        let text = desktop_entry(&path, crate::display_name(true)).unwrap();
+        assert_eq!(text, format!("[Desktop Entry]\nType=Application\nName=pluxy (local build)\nExec=\"{}/pluxy-app-local\" --autostart\nTerminal=false\nX-Pluxy-Autostart=true\n", s.base.display()));
+        fs::remove_dir_all(&s.base).unwrap();
+    }
+
+    #[test]
+    fn a_build_without_sign_in_never_registers_and_ignores_an_earlier_builds_entry() {
+        let earlier = store();
+        let s = Store::new(
+            earlier.config.clone(),
+            earlier.base.clone(),
+            earlier.identifier.clone(),
+        )
+        .without_sign_in();
+        let on = Preferences {
+            autostart_enabled: true,
+            silent_start_enabled: true,
+            start_core_on_launch: true,
+        };
+        let refused = s.save(on, || {
+            panic!("a refused save must not resolve the executable")
+        });
+        assert_eq!(refused.err().as_deref(), Some(NO_SIGN_IN));
+        assert!(!s.entry().exists(), "it registered a login item");
+        assert!(!s.file().exists(), "a refused save wrote the settings");
+        // An entry an earlier build wrote, pluxy's own and turned on, is neither shown nor changed.
+        earlier.save(on, || Ok(s.base.join("pluxy app"))).unwrap();
+        assert!(earlier.view(on).unwrap().preferences.autostart_enabled);
+        let entry = fs::read(s.entry()).unwrap();
+        let view = s.view(on).unwrap();
+        assert!(!view.sign_in);
+        assert!(!view.preferences.autostart_enabled);
+        assert!(!view.preferences.silent_start_enabled);
+        assert!(!view.registration_owned && !view.registration_conflict);
+        let off = Preferences {
+            autostart_enabled: false,
+            silent_start_enabled: true,
+            start_core_on_launch: false,
+        };
+        let saved = s
+            .save(off, || panic!("no executable is needed"))
+            .unwrap()
+            .preferences;
+        assert_eq!(
+            saved,
+            Preferences {
+                silent_start_enabled: false,
+                ..off
+            }
+        );
+        assert_eq!(s.load(), saved);
+        assert_eq!(
+            fs::read(s.entry()).unwrap(),
+            entry,
+            "it changed the earlier entry"
+        );
+        assert!(earlier.view(on).unwrap().sign_in);
+        fs::remove_dir_all(&s.base).unwrap();
+    }
+
+    #[test]
+    fn only_a_login_launch_of_a_build_without_sign_in_is_refused() {
+        let args = |a: &[&str]| {
+            a.iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+                .into_iter()
+        };
+        assert!(refused_launch(
+            false,
+            args(&["pluxy-app-local", "--autostart"])
+        ));
+        assert!(!refused_launch(
+            false,
+            args(&["pluxy-app-local", "--safe-mode"])
+        ));
+        assert!(!refused_launch(true, args(&["pluxy-app", "--autostart"])));
     }
 }
 

@@ -5,6 +5,7 @@
 import type { Host, Reply } from "../host";
 import { strings } from "../strings";
 import { accountsApi } from "./accounts";
+import { chainsApi } from "./chains";
 import { configApi } from "./config";
 import { extensionsApi } from "./extensions";
 import { loginsApi } from "./logins";
@@ -20,6 +21,7 @@ import { usageApi } from "./usage";
 import { usageEventsApi } from "./usageEvents";
 
 export * from "./accounts";
+export * from "./chains";
 export * from "./config";
 export * from "./extensions";
 export * from "./logins";
@@ -39,6 +41,7 @@ export const api = (host: Host) => ({
   ...configApi(host),
   ...statusApi(host),
   ...accountsApi(host),
+  ...chainsApi(host),
   ...packagesApi(host),
   ...quotaApi(host),
   ...extensionsApi(host),
@@ -55,8 +58,8 @@ export type Api = ReturnType<typeof api>;
 
 const t = strings("api", {
   // One sentence with no full stop: pages put it after their own words ("Not saved: ...").
-  unreachable: "cannot reach core; check that pluxy is running and the address is right, then try again",
-  answered: "core returned HTTP {status}; check Logs Viewer and try again",
+  unreachable: "cannot reach pluxy; check that it is running and the address is right, then try again",
+  answered: "pluxy returned HTTP {status}; check Logs and try again",
 });
 
 /** A reply's error as one line for people. */

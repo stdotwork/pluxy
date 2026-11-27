@@ -8,11 +8,12 @@
 @import "./fonts.css";
 @import "./ui.css";
 @import "./shell.css";
+@import "./parts/parts.css";
 @import "./pages/themes.css";
 @import "./extensions/page.css";
-@import "./pages/quota.css";
-@import "./pages/status.css";
-@import "./pages/usage.css";
+@import "./pages/extensions.css";
+@import "./pages/home.css";
+@import "./pages/activity.css";
 
 @import "./pages/config.css";
 
@@ -24,3 +25,4 @@
 @import "./pages/accountTools.css";
 @import "./pages/accountSettings.css";
 @import "./pages/setup.css";
+@import "./pages/tools.css";

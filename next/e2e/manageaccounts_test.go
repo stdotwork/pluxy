@@ -5,11 +5,15 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -600,6 +604,189 @@ func TestManageAccountQuota(t *testing.T) {
 	}
 }
 
+// countQuotaCalls puts a proxy in front of the fake provider that counts the quota reads it
+// gets, and returns its URL (the accounts' base_url) and the count.
+func countQuotaCalls(t *testing.T, srv *oauthtest.Server) (string, *atomic.Int64) {
+	t.Helper()
+	target, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := &atomic.Int64{}
+	rp := httputil.NewSingleHostReverseProxy(target)
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/quota") {
+			calls.Add(1)
+		}
+		rp.ServeHTTP(w, r)
+	}))
+	t.Cleanup(front.Close)
+	return front.URL, calls
+}
+
+// accountQuotaView is an account of GET /accounts with its last quota reply.
+type accountQuotaView struct {
+	ID    string
+	Quota *struct {
+		FetchedAt time.Time `json:"fetched_at"`
+		Quota     struct {
+			Plan   string
+			Limits []struct {
+				ID          string
+				UsedPercent *float64 `json:"used_percent"`
+				ResetsAt    int64    `json:"resets_at"`
+			}
+		}
+	}
+}
+
+func listQuotas(t *testing.T, base string) map[string]accountQuotaView {
+	t.Helper()
+	var list struct{ Accounts []accountQuotaView }
+	if code := manage(t, base, "GET", "/accounts", nil, &list); code != http.StatusOK {
+		t.Fatalf("GET /accounts: %d", code)
+	}
+	out := map[string]accountQuotaView{}
+	for _, a := range list.Accounts {
+		out[a.ID] = a
+	}
+	return out
+}
+
+// GET /accounts shows each account's last quota reply with when it was read, and reads nothing
+// from the provider itself; an account never read, or with no reading, has none; removing an
+// account forgets its reply.
+func TestManageAccountsListLastQuota(t *testing.T) {
+	srv := oauthtest.New(t)
+	front, calls := countQuotaCalls(t, srv)
+	settings := map[string]string{"base_url": front}
+	base := runCore(t, map[string]any{
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "oauth", "pluxy-extension.json"),
+			"accounts": []any{
+				map[string]any{"id": "fine", "settings": settings, "credential": map[string]any{"kind": "oauth", "access_token": srv.IssueToken("text")}},
+				map[string]any{"id": "full", "settings": settings, "credential": map[string]any{"kind": "oauth", "access_token": srv.IssueToken("rate_limited")}},
+				map[string]any{"id": "key", "settings": settings, "credential": map[string]any{"kind": "api_key", "api_key": "k-e2e"}},
+			},
+		},
+	})
+	for _, a := range listQuotas(t, base) {
+		if a.Quota != nil {
+			t.Fatalf("account %s has a quota before anything read one: %+v", a.ID, a.Quota)
+		}
+	}
+
+	var read struct {
+		FetchedAt time.Time `json:"fetched_at"`
+	}
+	if code := manage(t, base, "GET", "/accounts/fine/quota", nil, &read); code != http.StatusOK {
+		t.Fatalf("quota of fine: %d", code)
+	}
+	if code := manage(t, base, "GET", "/accounts/key/quota", nil, nil); code != http.StatusUnprocessableEntity {
+		t.Fatalf("quota of the API key account: %d, want 422", code)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("the provider saw %d quota calls after one read, want 1", got)
+	}
+
+	for range 2 {
+		list := listQuotas(t, base)
+		q := list["fine"].Quota
+		if q == nil || !q.FetchedAt.Equal(read.FetchedAt) || q.Quota.Plan != "test" || len(q.Quota.Limits) != 1 ||
+			q.Quota.Limits[0].UsedPercent == nil || *q.Quota.Limits[0].UsedPercent != 25 || q.Quota.Limits[0].ResetsAt != oauthtest.QuotaResetsAt {
+			t.Fatalf("fine in GET /accounts: %+v, want the reply read at %v", q, read.FetchedAt)
+		}
+		if list["full"].Quota != nil || list["key"].Quota != nil {
+			t.Fatalf("an account nobody read, or with no reading, has a quota: full %+v, key %+v", list["full"].Quota, list["key"].Quota)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("the provider saw %d quota calls after GET /accounts, want still 1", got)
+	}
+
+	// A new read replaces the reply.
+	time.Sleep(10 * time.Millisecond)
+	var again struct {
+		FetchedAt time.Time `json:"fetched_at"`
+	}
+	manage(t, base, "GET", "/accounts/fine/quota", nil, &again)
+	if q := listQuotas(t, base)["fine"].Quota; q == nil || !q.FetchedAt.Equal(again.FetchedAt) || !again.FetchedAt.After(read.FetchedAt) {
+		t.Fatalf("fine after a second read: %+v, want fetched_at %v", q, again.FetchedAt)
+	}
+
+	// Removing an account forgets its reply: added again under the same ID, it has none.
+	id := addByDevice(t, base, srv, map[string]any{"id": "gone"})
+	if code := manage(t, base, "GET", "/accounts/"+id+"/quota", nil, nil); code != http.StatusOK {
+		t.Fatalf("quota of %s: %d", id, code)
+	}
+	if listQuotas(t, base)[id].Quota == nil {
+		t.Fatalf("%s has no quota after a read", id)
+	}
+	if code := manage(t, base, "DELETE", "/accounts/"+id, nil, nil); code != http.StatusNoContent {
+		t.Fatalf("removing %s: %d", id, code)
+	}
+	id = addByDevice(t, base, srv, map[string]any{"id": id})
+	if q := listQuotas(t, base)[id].Quota; q != nil {
+		t.Fatalf("%s added again after its removal still has the old quota: %+v", id, q)
+	}
+}
+
+// With soonest-reset, core reads each account's usage for routing; GET /accounts then shows
+// those readings, though nobody asked the quota call and the list reads nothing.
+func TestManageAccountsListRoutingsQuota(t *testing.T) {
+	// The readings' loop ticks every 100 ms; the first refresh is due at its first tick.
+	t.Setenv("PLUXY_TEST_CHECK_INTERVAL_MS", "1500")
+	srv := oauthtest.New(t)
+	front, calls := countQuotaCalls(t, srv)
+	settings := map[string]string{"base_url": front}
+	base := runCore(t, map[string]any{
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
+		"routing":         map[string]any{"strategy": "soonest-reset"},
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "oauth", "pluxy-extension.json"),
+			"accounts": []any{
+				map[string]any{"id": "fine", "settings": settings, "credential": map[string]any{"kind": "oauth", "access_token": srv.IssueToken("text")}},
+				map[string]any{"id": "full", "settings": settings, "credential": map[string]any{"kind": "oauth", "access_token": srv.IssueToken("rate_limited")}},
+			},
+		},
+	})
+	var list map[string]accountQuotaView
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		list = listQuotas(t, base)
+		if list["fine"].Quota != nil && list["full"].Quota != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no routing readings in GET /accounts after 30 s: %+v", list)
+		}
+	}
+	for id, want := range map[string]float64{"fine": 25, "full": 100} {
+		q := list[id].Quota
+		if q.FetchedAt.IsZero() || time.Since(q.FetchedAt) > time.Minute || q.Quota.Plan != "test" || len(q.Quota.Limits) != 1 ||
+			q.Quota.Limits[0].UsedPercent == nil || *q.Quota.Limits[0].UsedPercent != want {
+			t.Fatalf("%s in GET /accounts: %+v, want plan test with %v%% used", id, q, want)
+		}
+	}
+	// Only routing's readings reached the provider, and listing adds none.
+	before := calls.Load()
+	if before == 0 {
+		t.Fatal("the provider saw no quota call, yet the list has quotas")
+	}
+	for range 3 {
+		listQuotas(t, base)
+	}
+	if got := calls.Load(); got != before {
+		t.Fatalf("GET /accounts made quota calls: %d before, %d after", before, got)
+	}
+}
+
 // reauthDevice signs in to existing account id again by device login and returns how the login
 // ended.
 func reauthDevice(t *testing.T, base string, srv *oauthtest.Server, id string) loginReply {
@@ -658,5 +845,156 @@ func TestReloginIdentityCheck(t *testing.T) {
 	manage(t, base, "GET", "/accounts", nil, &list)
 	if list.Accounts[0].Version == version || list.Accounts[0].Label != "USER@example.test" {
 		t.Fatalf("the accepted login did not replace the credential: %+v", list.Accounts)
+	}
+}
+
+// addByDevice starts a device login with body, approves its code at the fake provider, waits for
+// it to end done and returns the ID of the account it added, as the login names it.
+func addByDevice(t *testing.T, base string, srv *oauthtest.Server, body map[string]any) string {
+	t.Helper()
+	var l struct {
+		Login struct {
+			ID, Account, State string
+			Prompt             *struct {
+				UserCode string `json:"user_code"`
+			}
+			Error *struct{ Code, Message string }
+		}
+	}
+	body["method"], body["settings"] = "device", map[string]string{"base_url": srv.URL}
+	if code := manage(t, base, "POST", "/accounts", body, &l); code != http.StatusAccepted || l.Login.Prompt == nil {
+		t.Fatalf("starting the login with %v: status %d, %+v", body, code, l.Login)
+	}
+	srv.ApproveDevice(l.Login.Prompt.UserCode)
+	for deadline := time.Now().Add(15 * time.Second); l.Login.State == "pending"; {
+		if time.Now().After(deadline) {
+			t.Fatal("the login did not finish")
+		}
+		time.Sleep(100 * time.Millisecond)
+		manage(t, base, "GET", "/logins/"+l.Login.ID, nil, &l)
+	}
+	if l.Login.State != "done" {
+		t.Fatalf("login ended %s: %+v", l.Login.State, l.Login.Error)
+	}
+	return l.Login.Account
+}
+
+type labelledAccount struct {
+	ID       string
+	PublicID string `json:"public_id"`
+	Label    string
+}
+
+func labelOf(t *testing.T, base, id string) labelledAccount {
+	t.Helper()
+	var list struct{ Accounts []labelledAccount }
+	manage(t, base, "GET", "/accounts", nil, &list)
+	for _, a := range list.Accounts {
+		if a.ID == id {
+			return a
+		}
+	}
+	t.Fatalf("no account %q in %+v", id, list.Accounts)
+	return labelledAccount{}
+}
+
+// An account added without an ID gets one core makes, acc_ and 8 hex digits, which is also its
+// public ID: the ID client replies name it by. A label the person sent is kept over the
+// provider's (the fake provider labels every sign-in with its e-mail address), stays through a
+// new sign-in to the account, and PATCH changes it; "" or null takes the person's label away,
+// leaving the provider's. A label longer than 64 characters or of more than one line is refused,
+// and an account set in the config takes no label.
+func TestManageAccountIDAndLabel(t *testing.T) {
+	srv := oauthtest.New(t)
+	base := startAccountsCore(t, srv)
+
+	id := addByDevice(t, base, srv, map[string]any{"label": "  Work laptop  "})
+	if !regexp.MustCompile(`^acc_[0-9a-f]{8}$`).MatchString(id) {
+		t.Fatalf("an account added without an ID has ID %q, want acc_ and 8 hex digits", id)
+	}
+	if a := labelOf(t, base, id); a.PublicID != id || a.Label != "Work laptop" {
+		t.Fatalf("listed as %+v, want public ID %q and label %q", a, id, "Work laptop")
+	}
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/chat/completions", strings.NewReader(`{"model":"m1","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer "+clientKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Pluxy-Account", id)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("X-Pluxy-Account") != id {
+		t.Fatalf("a request pinned to %s: %d, reply names account %q", id, resp.StatusCode, resp.Header.Get("X-Pluxy-Account"))
+	}
+
+	// Without a label, the provider's is the account's, as before.
+	plain := addByDevice(t, base, srv, map[string]any{})
+	if plain == id || labelOf(t, base, plain).Label != "user@example.test" {
+		t.Fatalf("a second account without ID or label: %q, %+v", plain, labelOf(t, base, plain))
+	}
+
+	if l := reauthDevice(t, base, srv, id); l.Login.State != "done" {
+		t.Fatalf("signing in again to the labelled account ended %s with %+v", l.Login.State, l.Login.Error)
+	}
+	if a := labelOf(t, base, id); a.Label != "Work laptop" {
+		t.Fatalf("after signing in again the label is %q, want %q", a.Label, "Work laptop")
+	}
+
+	var reply struct{ Account labelledAccount }
+	if code := manage(t, base, "PATCH", "/accounts/"+id, map[string]any{"label": " Personal "}, &reply); code != http.StatusOK || reply.Account.Label != "Personal" {
+		t.Fatalf("PATCH label: %d, %+v", code, reply.Account)
+	}
+	if a := labelOf(t, base, id); a.Label != "Personal" {
+		t.Fatalf("listed after PATCH: %+v", a)
+	}
+	long := strings.Repeat("é", 64)
+	if code := manage(t, base, "PATCH", "/accounts/"+id, map[string]any{"label": long}, &reply); code != http.StatusOK || reply.Account.Label != long {
+		t.Fatalf("PATCH a label of 64 characters: %d, %+v", code, reply.Account)
+	}
+	for _, clear := range []any{"", nil} {
+		manage(t, base, "PATCH", "/accounts/"+id, map[string]any{"label": "Personal"}, nil)
+		if code := manage(t, base, "PATCH", "/accounts/"+id, map[string]any{"label": clear}, &reply); code != http.StatusOK || reply.Account.Label != "user@example.test" {
+			t.Fatalf("PATCH label %#v: %d, %+v, want the provider's label back", clear, code, reply.Account)
+		}
+	}
+	if l := reauthDevice(t, base, srv, id); l.Login.State != "done" || labelOf(t, base, id).Label != "user@example.test" {
+		t.Fatalf("signing in again after the label was cleared ended %s, label %q", l.Login.State, labelOf(t, base, id).Label)
+	}
+
+	manage(t, base, "PATCH", "/accounts/"+id, map[string]any{"label": "Personal"}, nil)
+	for _, bad := range []any{strings.Repeat("x", 65), "two\nlines", "a\rb", 7} {
+		if code := manage(t, base, "PATCH", "/accounts/"+id, map[string]any{"label": bad, "priority": 5}, nil); code != http.StatusBadRequest {
+			t.Errorf("PATCH label %q: %d, want 400", bad, code)
+		}
+		if code := manage(t, base, "POST", "/accounts", map[string]any{"label": bad, "method": "device", "settings": map[string]string{"base_url": srv.URL}}, nil); code != http.StatusBadRequest {
+			t.Errorf("POST /accounts with label %q: %d, want 400", bad, code)
+		}
+	}
+	if a := getAccount(t, base, id); a.Priority != 0 || labelOf(t, base, id).Label != "Personal" {
+		t.Fatalf("a refused PATCH changed the account: %+v, label %q", a, labelOf(t, base, id).Label)
+	}
+
+	var e struct {
+		Error struct{ Code, Message string }
+	}
+	if code := manage(t, base, "PATCH", "/accounts/fine", map[string]any{"label": "Mine"}, &e); code != http.StatusConflict ||
+		!strings.Contains(e.Error.Message, "set in core's config; change it there") {
+		t.Fatalf("PATCH label of a config account: %d, %+v", code, e)
+	}
+
+	// An ID of the shape core makes is its own public ID, so one that is another account's public
+	// ID, stored or in the config, is refused.
+	named := addByDevice(t, base, srv, map[string]any{"id": "named-one"})
+	for _, other := range []string{named, "fine"} {
+		pub := labelOf(t, base, other).PublicID
+		body := map[string]any{"id": pub, "method": "device", "settings": map[string]string{"base_url": srv.URL}}
+		var e struct {
+			Error struct{ Code, Message string }
+		}
+		if code := manage(t, base, "POST", "/accounts", body, &e); code != http.StatusConflict || !strings.Contains(e.Error.Message, "public ID") {
+			t.Fatalf("POST /accounts with id %s, account %s's public ID: %d, %+v; want 409", pub, other, code, e)
+		}
 	}
 }

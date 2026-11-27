@@ -162,6 +162,9 @@ type State struct {
 	// refreshed is when Router.Refresh last began reading.
 	usage     map[string]usageReading
 	refreshed time.Time
+	// quotas holds, per account ID, the last quota reply read for it, for GET /accounts (see
+	// NoteQuota). It is kept until the account is removed, not until it leaves routing.
+	quotas map[string]QuotaReading
 }
 
 type banState struct {
@@ -306,7 +309,7 @@ func NewState() *State {
 	return &State{scopes: map[scopeKey]*scopeState{}, active: map[string]int{}, affinity: newAffinity(), rotation: newRotation(),
 		since: map[scopeKey]uint64{}, revs: map[string]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64,
 		bans: map[string]banState{}, unbannedSeq: map[string]uint64{}, usage: map[string]usageReading{},
-		checkEvery: defaultCheckEvery, changes: make(chan struct{}, 1), pubKey: NewPublicKey()}
+		quotas: map[string]QuotaReading{}, checkEvery: defaultCheckEvery, changes: make(chan struct{}, 1), pubKey: NewPublicKey()}
 }
 
 // RetainBans drops bans for accounts that known reports no longer exist (deleted accounts),
@@ -637,7 +640,7 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 		}
 		s.notify()
 		s.mu.Unlock()
-		log.Printf("routing: account %q banned: %s", a.ID, singleLine(why))
+		log.Printf("error: routing: account %q banned: %s", a.ID, singleLine(why))
 		return
 	}
 	kind, scope, fixed, base, max := classify(e)

@@ -1,9 +1,12 @@
 package server
 
 import (
+	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -489,5 +492,52 @@ func TestConfigJSONErrorsInTheFilesTerms(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A client key's label that is a client key or the management key is refused when the file loads, in
+// both layouts: a label is listed and recorded in usage events.
+func TestParseConfigRefusesKeyAsLabel(t *testing.T) {
+	for _, secret := range []string{"key-a", "key-m", "  key-b "} {
+		json := `{"listen": ":1", "management_key": "key-m", "client_keys": ["key-a", "key-b"], "client_key_labels": {"id-a": "` + secret + `"}}`
+		yaml := "server: {host: 127.0.0.1, port: 9100}\naccess:\n  api-keys: [key-a, key-b]\nmanagement: {secret-key: key-m}\nclient_key_labels: {id-a: '" + secret + "'}\n"
+		for name, tc := range map[string]struct{ src, path string }{"json": {json, "/srv/config.json"}, "yaml": {yaml, "/srv/config.yaml"}} {
+			_, err := ParseConfig([]byte(tc.src), tc.path)
+			if !errors.Is(err, ErrLabelIsKey) {
+				t.Errorf("%s: label %q: err = %v, want ErrLabelIsKey", name, secret, err)
+			} else if strings.Contains(err.Error(), "key-") {
+				t.Errorf("%s: the error shows a key: %v", name, err)
+			}
+		}
+	}
+}
+
+// Client keys can have names, kept apart from the keys in client_key_labels, in both layouts; a
+// config without them loads as before, and a label that is not one line of at most 64 characters
+// is refused.
+func TestParseConfigClientKeyLabels(t *testing.T) {
+	json := `{"listen": ":1", "management_key": "m", "client_keys": ["a", "b"], "client_key_labels": {"id-a": "  Claude Code ", "id-b": "  "}}`
+	yaml := "server: {host: 127.0.0.1, port: 9100}\naccess:\n  api-keys: [a, b]\nmanagement: {secret-key: m}\nclient_key_labels: {id-a: '  Claude Code ', id-b: ''}\n"
+	for name, tc := range map[string]struct{ src, path string }{"json": {json, "/srv/config.json"}, "yaml": {yaml, "/srv/config.yaml"}} {
+		c, err := ParseConfig([]byte(tc.src), tc.path)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if want := map[string]string{"id-a": "Claude Code"}; !maps.Equal(c.ClientKeyLabels, want) || !slices.Equal(c.ClientKeys, []string{"a", "b"}) {
+			t.Errorf("%s: labels %q, keys %q; want %q and the plain keys", name, c.ClientKeyLabels, c.ClientKeys, want)
+		}
+		if len(c.Notices) != 0 {
+			t.Errorf("%s: notices %q", name, c.Notices)
+		}
+	}
+	c, err := ParseConfig([]byte(`{"listen": ":1", "management_key": "m", "client_keys": ["a"]}`), "/srv/config.json")
+	if err != nil || len(c.ClientKeyLabels) != 0 {
+		t.Errorf("a config without labels: %v, %q", err, c.ClientKeyLabels)
+	}
+	for _, label := range []string{strings.Repeat("x", 65), "a\\nb", "a\\u2028b"} {
+		_, err := ParseConfig([]byte(`{"listen": ":1", "management_key": "m", "client_keys": ["a"], "client_key_labels": {"id-a": "`+label+`"}}`), "/srv/config.json")
+		if err == nil || !strings.Contains(err.Error(), "client_key_labels") {
+			t.Errorf("label %q: err = %v", label, err)
+		}
 	}
 }

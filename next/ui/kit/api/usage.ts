@@ -3,6 +3,16 @@
 
 import type { Host } from "../host";
 
+/** Tokens the requests reported, added up; a request that reported none adds nothing. */
+export interface UsageTokenTotals {
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  cached_tokens: number;
+  cache_creation_tokens: number;
+  total_tokens: number;
+}
+
 export interface UsageGroup {
   /** The model, extension, account or client key ID the requests share. */
   name: string;
@@ -13,6 +23,10 @@ export interface UsageGroup {
   failure_count: number;
   /** 0 to 1. */
   success_rate: number;
+  /** The mean time a request took, in milliseconds; 0 with no requests. Absent from an older core. */
+  average_latency_ms?: number;
+  /** Absent from an older core. */
+  tokens?: UsageTokenTotals;
 }
 
 /** The requests that arrived within one step of the series. */
@@ -37,6 +51,16 @@ export interface UsageSummary extends Omit<UsageGroup, "name" | "provider"> {
    * cannot open). They stay in the record core keeps in memory. Absent from a core that predates it.
    */
   write_errors?: number;
+  /**
+   * The requests core dropped since it started because its disk writer's queue was full. They stay
+   * in the record core keeps in memory. Absent from a core that predates it.
+   */
+  dropped?: number;
+  /**
+   * When the oldest request core keeps arrived, matching the filter or not, the day files
+   * included; absent when it keeps none.
+   */
+  oldest?: string;
 }
 
 export const usageApi = (host: Host) => ({

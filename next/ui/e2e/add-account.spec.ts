@@ -1,22 +1,172 @@
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+// Add an account: choosing a provider's way to sign in, signing in (a browser address, a device code
+// or an API key), cancelling back to the ways, and naming the account once it is added. No account
+// ID is asked for or sent: core makes it.
 import { expect, type Page, test } from "@playwright/test";
 import type { LoginMethodsExtension } from "../kit/api/logins";
-import { goTo, goToId, openPanel, signIn, useCore } from "./support";
+import { accountRow, goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
+async function openAddAccount(page: Page) {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Add an account");
+}
+
+/** One of the test provider's ways to sign in, by its own label. */
+const way = (page: Page, label: string) =>
+  page.locator('[data-extension="test/alpha"] [data-part="method"]').filter({ hasText: label });
+
+const start = (page: Page, label: string) => way(page, label).getByRole("button", { name: "Start" });
+
 async function startBrowser(page: Page) {
   await openAddAccount(page);
-  await page
-    .locator('[data-extension="test/alpha"] [data-part="method"]')
-    .getByRole("button", { name: "Test browser", exact: true })
-    .click();
+  await start(page, "Test browser").click();
   await expect(page.getByLabel("Address the browser ended on")).toBeVisible();
 }
 
-for (const action of ["Submit", "Cancel"]) {
-  test(`action error survives a following poll: ${action}`, async ({ page }) => {
+const loginRequests = (page: Page) => {
+  const seen = { cancels: [] as string[], reads: 0 };
+  page.on("request", (r) => {
+    if (!r.url().includes("/management/logins/")) return;
+    if (r.method() === "DELETE") seen.cancels.push(r.url());
+    if (r.method() === "GET") seen.reads++;
+  });
+  return seen;
+};
+
+test("Add an account asks for no ID: each way to sign in is a row under its provider, with how it signs in", async ({
+  page,
+}) => {
+  await openAddAccount(page);
+  await expect(page.getByRole("heading", { level: 1, name: "Add an account" })).toBeVisible();
+  await expect(page.getByText("Choose how to add it.")).toBeVisible();
+  await expect(page.getByLabel("Account ID")).toHaveCount(0);
+  await expect(page.getByRole("main").locator("input:not([type=file])")).toHaveCount(0);
+  await expect(
+    page.locator('[data-extension="test/alpha"]').getByRole("heading", { name: "Alpha" }),
+  ).toBeVisible();
+  await expect(way(page, "Test browser")).toContainText("Opens your browser");
+  await expect(way(page, "Test device")).toContainText("Shows a code to enter");
+  await expect(way(page, "Test API key")).toContainText("Uses an API key");
+  await expect(page.getByRole("main")).not.toContainText("test/alpha");
+  await expect(page.getByText("Have auth files from CLIProxyAPI?")).toBeVisible();
+});
+
+test("an API-key account is added with no ID, named with Save name, and the name shows on the list", async ({
+  page,
+}) => {
+  await openAddAccount(page);
+  const started = page.waitForRequest(
+    (r) => r.method() === "POST" && r.url().endsWith("/v0/management/accounts"),
+  );
+  await start(page, "Test API key").click();
+  const key = page.getByLabel("API key", { exact: true });
+  await expect(key).toBeFocused();
+  await expect(key).toHaveAttribute("type", "password");
+  await expect(key).toHaveAttribute("autocomplete", "new-password");
+  const chosen = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Load from file" }).click();
+  await (await chosen).setFiles({
+    name: "key.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("test-good-key"),
+  });
+  await expect(key).toHaveValue("test-good-key");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  const body = (await started).postDataJSON();
+  expect(body).toEqual({ extension: "test/alpha", method: "api_key", input: { api_key: "test-good-key" } });
+  expect(body).not.toHaveProperty("id");
+
+  // Added, under the name the provider gave it, ready to be renamed.
+  await expect(page.getByRole("status").filter({ hasText: "Added Test account." })).toBeVisible();
+  const name = page.getByLabel("Name", { exact: true });
+  await expect(name).toHaveValue("Test account");
+  await expect(page.getByRole("button", { name: "Save name" })).toBeDisabled();
+  await name.fill("My work key");
+  await page.getByRole("button", { name: "Save name" }).click();
+  await expect(page.getByText("Saved.", { exact: true })).toBeVisible();
+
+  // Core made the account's ID, and holds the name.
+  const listed = await core.mgmt<{ accounts: { id: string; label?: string; kind?: string }[] }>(
+    "GET",
+    "/accounts",
+  );
+  const added = listed.body.accounts.find((a) => a.label === "My work key");
+  expect(added).toMatchObject({ kind: "api_key" });
+  expect(added?.id).toMatch(/^acc_[0-9a-f]{8}$/);
+  const storage = await page.evaluate(() =>
+    JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage)]),
+  );
+  expect(storage).not.toContain("test-good-key");
+
+  // The list shows the name, not the ID, and Open account leads to its page.
+  await page.getByRole("link", { name: "Open account" }).click();
+  await expect(page).toHaveURL(new RegExp(`#/accounts/${added?.id}$`));
+  await expect(page.getByRole("heading", { level: 1, name: "My work key" })).toBeVisible();
+  await goTo(page, "Accounts");
+  await expect(accountRow(page, added?.id ?? "")).toContainText("My work key");
+});
+
+test("a key the provider refuses is said, and Try again goes back to the ways", async ({ page }) => {
+  await openAddAccount(page);
+  await start(page, "Test API key").click();
+  await page.getByLabel("API key", { exact: true }).fill("bad");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Sign-in did not finish: the test provider refused this key",
+  );
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByText("Choose how to add it.")).toBeVisible();
+  await expect(start(page, "Test API key")).toBeFocused();
+});
+
+test("a browser sign-in takes the address and says why the provider refused it", async ({ page }) => {
+  await startBrowser(page);
+  await expect(page.getByRole("button", { name: "Open sign-in page" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy link" })).toBeVisible();
+  await expect(page.getByText(/^Time left: \d+:\d{2}$/)).toBeVisible();
+  await page
+    .getByLabel("Address the browser ended on")
+    .fill("http://localhost:1455/auth/callback?code=bad&state=bad");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("the test provider refused this sign-in");
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(start(page, "Test browser")).toBeVisible();
+
+  await start(page, "Test browser").click();
+  await page
+    .getByLabel("Address the browser ended on")
+    .fill("http://localhost:1455/auth/callback?code=ok&state=ok");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: /^Added / })).toBeVisible();
+  await page.getByRole("button", { name: "Add another" }).click();
+  await expect(page.getByText("Choose how to add it.")).toBeVisible();
+});
+
+test("Cancel stops a browser sign-in and goes back to the ways to sign in", async ({ page }) => {
+  await openAddAccount(page);
+  const started = page.waitForResponse(
+    (r) => r.url().includes("/v0/management/accounts") && r.request().method() === "POST",
+  );
+  await start(page, "Test browser").click();
+  await expect(page.getByLabel("Address the browser ended on")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  // Back on the ways, with the one just left ready to start again: no dead end between.
+  await expect(page.getByText("Choose how to add it.")).toBeVisible();
+  await expect(start(page, "Test browser")).toBeFocused();
+  await expect(page.getByText("Sign-in cancelled.")).toHaveCount(0);
+  const login = ((await (await started).json()) as { login: { id: string } }).login;
+  await expect
+    .poll(
+      async () =>
+        (await core.mgmt<{ login: { state: string } }>("GET", `/logins/${login.id}`)).body.login.state,
+    )
+    .toBe("cancelled");
+});
+
+for (const action of ["Continue", "Cancel"]) {
+  test(`a refused ${action} says why, and the next poll does not clear it`, async ({ page }) => {
     await startBrowser(page);
     await page.route("**/v0/management/logins/**", async (route) => {
       if (route.request().method() === "GET") return route.continue();
@@ -25,7 +175,7 @@ for (const action of ["Submit", "Cancel"]) {
         json: { error: { code: "invalid_request", message: "Action refused" } },
       });
     });
-    if (action === "Submit") await page.getByLabel("Address the browser ended on").fill("invalid-callback");
+    if (action === "Continue") await page.getByLabel("Address the browser ended on").fill("invalid-callback");
     await page.getByRole("button", { name: action, exact: true }).click();
     await expect(page.getByRole("alert")).toHaveText("Action refused");
     await page.waitForResponse((r) => r.request().method() === "GET" && /\/logins\/[^/]+$/.test(r.url()));
@@ -34,7 +184,7 @@ for (const action of ["Submit", "Cancel"]) {
 }
 
 for (const status of [404, 503]) {
-  test(`poll failure offers Start over: ${status}`, async ({ page }) => {
+  test(`a poll failure ${status} stops the polling and offers Try again`, async ({ page }) => {
     await startBrowser(page);
     let reads = 0;
     await page.route("**/v0/management/logins/*", async (route) => {
@@ -42,9 +192,14 @@ for (const status of [404, 503]) {
       reads++;
       await route.fulfill({ status, json: { error: { code: "unavailable", message: "Login unavailable" } } });
     });
-    await expect(page.getByRole("button", { name: "Start over" })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible({ timeout: 20_000 });
     expect(reads).toBe(status === 404 ? 1 : 3);
-    await expect(page.getByRole("button", { name: "Start over" })).toBeFocused();
+    await expect(page.getByRole("button", { name: "Try again" })).toBeFocused();
+    await expect(page.getByRole("alert")).toContainText(
+      status === 404
+        ? "Sign-in did not finish: Login unavailable"
+        : "Could not check the sign-in three times in a row. Login unavailable",
+    );
     const stopped = reads;
     await page.waitForTimeout(2500);
     expect(reads).toBe(stopped);
@@ -57,45 +212,47 @@ test("the paste field takes its words from the provider's prompt and names no ad
   await expect(field).toHaveAttribute("type", "text");
   expect((await field.getAttribute("placeholder")) ?? "").not.toMatch(/localhost|1455|auth\/callback/);
   await expect(page.getByText("Callback URL")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Submit", exact: true })).toBeVisible();
+  // The provider's sign-in address is not printed or linked: it is only opened or copied.
+  await expect(page.getByText("login.example.test")).toHaveCount(0);
+  await expect(page.locator('a[href*="login.example.test"]')).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Continue", exact: true })).toBeVisible();
 });
 
 test("leaving a pending login cancels it and stops polling", async ({ page }) => {
   await startBrowser(page);
-  const cancels: string[] = [];
-  let reads = 0;
-  page.on("request", (r) => {
-    if (!r.url().includes("/management/logins/")) return;
-    if (r.method() === "DELETE") cancels.push(r.url());
-    if (r.method() === "GET") reads++;
-  });
+  const seen = loginRequests(page);
   await goTo(page, "Accounts");
-  await expect.poll(() => cancels.length).toBe(1);
+  await expect.poll(() => seen.cancels.length).toBe(1);
   await page.waitForTimeout(4500);
-  expect(reads).toBe(0);
-  expect(cancels.length).toBe(1);
+  expect(seen.reads).toBe(0);
+  expect(seen.cancels.length).toBe(1);
 });
 
 test("closing the page cancels a pending login once", async ({ page }) => {
   await startBrowser(page);
-  const cancels: string[] = [];
-  page.on("request", (r) => {
-    if (r.method() === "DELETE" && r.url().includes("/management/logins/")) cancels.push(r.url());
-  });
+  const seen = loginRequests(page);
   await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
-  await expect.poll(() => cancels.length).toBe(1);
+  await expect.poll(() => seen.cancels.length).toBe(1);
   await goTo(page, "Accounts");
   await page.waitForTimeout(500);
-  expect(cancels.length).toBe(1);
+  expect(seen.cancels.length).toBe(1);
 });
 
-test("a sign-in that already finished is not cancelled when the page is left", async ({ page }) => {
+test("a device sign-in shows its code, adds the account, and is not cancelled when the page is left", async ({
+  page,
+}) => {
   await openAddAccount(page);
-  await page
-    .locator('[data-extension="test/alpha"] [data-part="method"]')
-    .getByRole("button", { name: "Test device", exact: true })
-    .click();
-  await expect(page.getByRole("status")).toContainText("Signed in.", { timeout: 15_000 });
+  await start(page, "Test device").click();
+  await expect(page.locator('[data-part="device-code"]')).toHaveText("TEST-1234");
+  await expect(page.locator('[data-part="device-code"]')).toHaveAttribute("aria-live", "polite");
+  await expect(page.getByRole("button", { name: "Copy code" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open sign-in page" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+  await expect(page.getByText(/^Time left: \d+:\d{2}$/)).toBeVisible();
+  await expect(page.getByText("Waiting for sign-in…", { exact: true })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "Added Test account." })).toBeVisible({
+    timeout: 15_000,
+  });
   const cancels: string[] = [];
   page.on("request", (r) => {
     if (r.method() === "DELETE") cancels.push(r.url());
@@ -106,40 +263,13 @@ test("a sign-in that already finished is not cancelled when the page is left", a
   expect(cancels).toEqual([]);
 });
 
-test("an Account ID whose sign-in still runs is said so in plain words", async ({ page }) => {
-  const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
-    id: "still-running",
-    extension: "test/alpha",
-    method: "browser",
-  });
-  expect(started.status).toBeLessThan(300);
-  try {
-    await openAddAccount(page);
-    await page.getByLabel("Account ID", { exact: true }).fill("still-running");
-    await page
-      .locator('[data-extension="test/alpha"] [data-part="method"]')
-      .getByRole("button", { name: "Test browser", exact: true })
-      .click();
-    await expect(page.getByRole("alert")).toContainText(
-      "A sign-in for this account ID is already running. Use another ID, or wait and start over.",
-    );
-    await expect(page.getByRole("alert")).not.toContainText("conflict");
-    await expect(page.getByRole("button", { name: "Start over" })).toBeVisible();
-  } finally {
-    await core.mgmt("DELETE", `/logins/${started.body.login.id}`);
-  }
-});
-
-test("double click starts one login and successful submit clears the redirect", async ({ page }) => {
+test("a second tap on a way starts one login, and a good address is cleared once sent", async ({ page }) => {
   await openAddAccount(page);
   let starts = 0;
   page.on("request", (r) => {
     if (r.method() === "POST" && r.url().endsWith("/management/accounts")) starts++;
   });
-  const button = page
-    .locator('[data-extension="test/alpha"] [data-part="method"]')
-    .getByRole("button", { name: "Test browser", exact: true });
-  await button.evaluate((element) => {
+  await start(page, "Test browser").evaluate((element) => {
     (element as HTMLButtonElement).click();
     (element as HTMLButtonElement).click();
   });
@@ -148,218 +278,43 @@ test("double click starts one login and successful submit clears the redirect", 
   expect(starts).toBe(1);
   await page.route("**/v0/management/logins/*/input", (route) => route.fulfill({ status: 204 }));
   await callback.fill("http://localhost/callback?code=ok");
-  await page.getByRole("button", { name: "Submit" }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(callback).toHaveValue("");
 });
 
-test("invalid account IDs explain disabled methods and typed IDs survive restart", async ({ page }) => {
-  await openAddAccount(page);
-  const id = page.getByLabel("Account ID", { exact: true });
-  await id.fill("typed.");
-  await expect(id).toHaveAttribute("aria-invalid", "true");
-  await expect(id).toHaveAccessibleDescription(/must not end with/);
-  await id.fill("typed-account");
-  await page
-    .locator('[data-extension="test/alpha"] [data-part="method"]')
-    .getByRole("button", { name: "Test browser", exact: true })
-    .click();
-  await expect(page.getByLabel("Address the browser ended on")).toBeFocused();
-  await page.getByRole("button", { name: "Cancel", exact: true }).click();
-  await page.getByRole("button", { name: "Start over" }).click();
-  await expect(id).toHaveValue("typed-account");
-});
-
-test("secret file selection clears the file control and refuses files over one MiB", async ({ page }) => {
-  await openAddAccount(page);
-  await page
-    .locator('[data-extension="test/alpha"] [data-part="method"]')
-    .getByRole("button", { name: "Test API key", exact: true })
-    .click();
-  const secret = page.getByLabel("API key", { exact: true });
-  await expect(secret).toBeFocused();
-  await expect(secret).toHaveAttribute("autocomplete", "new-password");
-  const file = page.locator('input[type="file"]');
-  await file.setInputFiles({ name: "key.txt", mimeType: "text/plain", buffer: Buffer.from("file-key") });
-  await expect(secret).toHaveValue("file-key");
-  await expect(file).toHaveValue("");
-  await file.setInputFiles({
-    name: "large.txt",
-    mimeType: "text/plain",
-    buffer: Buffer.alloc(1024 * 1024 + 1, "x"),
+test("signing in again while a sign-in for that account runs says so in plain words", async ({ page }) => {
+  const made = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
+    id: "again-running",
+    extension: "test/alpha",
+    method: "api_key",
+    input: { api_key: "ak-again-running" },
   });
-  await expect(page.getByRole("alert")).toHaveText("Could not read the file. Choose it again.");
-  await expect(secret).toHaveValue("file-key");
-  await expect(file).toHaveValue("");
-});
-
-async function captureSignInStates(page: Page) {
-  const dir = process.env.ADD_ACCOUNT_SHOTS;
-  if (!dir) return;
-  mkdirSync(dir, { recursive: true });
-  for (const theme of ["default", "terminal", "paper"]) {
-    await openPanel(page, core);
-    await goToId(page, "themes");
-    await page
-      .getByRole("radiogroup", { name: "Theme" })
-      .getByRole("radio", { name: theme, exact: false })
-      .check();
-    await goToId(page, "add-account");
-    await expect(page.getByRole("heading", { level: 1, name: "Add Account" })).toBeVisible();
-    const shot = (state: string) =>
-      page.screenshot({ path: join(dir, theme.concat("-", state, ".png")), fullPage: true });
-    const tile = (method: string) =>
-      page.locator('[data-extension="test/alpha"] [data-part="method"]').filter({ hasText: method });
-    await expect(tile("Test browser")).toBeVisible();
-    await shot("tiles");
-    await tile("Test API key").getByRole("button", { name: "Test API key" }).click();
-    await shot("inputs");
-    await page.getByRole("button", { name: "Cancel", exact: true }).click();
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await page.route("**/v0/management/accounts", async (route) => {
-      if (route.request().method() !== "POST") return route.continue();
-      const response = await route.fetch();
-      await gate;
-      await route.fulfill({ response });
-    });
-    await tile("Test browser").getByRole("button", { name: "Test browser" }).click();
-    await expect(page.getByText("Generating sign-in link…", { exact: true })).toBeVisible();
-    await shot("generating");
-    release?.();
-    await expect(page.getByLabel("Address the browser ended on")).toBeVisible();
-    await page.unroute("**/v0/management/accounts");
-    await shot("browser-waiting");
-    await page
-      .getByLabel("Address the browser ended on")
-      .fill("http://localhost:1455/auth/callback?code=bad&state=bad");
-    await page.getByRole("button", { name: "Submit" }).click();
-    await expect(page.getByRole("alert")).toContainText("the test provider refused this sign-in");
-    await shot("failed");
-    await page.getByRole("button", { name: "Start over" }).click();
-    await tile("Test browser").getByRole("button", { name: "Test browser" }).click();
-    await expect(page.getByLabel("Address the browser ended on")).toBeVisible();
-    await page.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Sign-in cancelled.");
-    await shot("cancelled");
-    await page.getByRole("button", { name: "Start over" }).click();
-    await tile("Test device").getByRole("button", { name: "Test device" }).click();
-    await expect(page.locator('[data-part="device-code"]')).toHaveText("TEST-1234");
-    await shot("device-code");
-    await expect(page.getByRole("status")).toHaveText("Signed in.", { timeout: 15_000 });
-    await shot("success");
-  }
-}
-
-async function openAddAccount(page: import("@playwright/test").Page) {
-  await openPanel(page, core);
-  await signIn(page, core);
-  await goTo(page, "Add Account");
-}
-
-test("device sign-in shows its code and adds the account", async ({ page }) => {
-  await openAddAccount(page);
-  await page.getByLabel("Account ID", { exact: true }).fill("device-added");
-  const tile = page
-    .locator('[data-extension="test/alpha"] [data-part="method"]')
-    .filter({ hasText: "Test device" });
-  await tile.getByRole("button", { name: "Test device" }).click();
-  await expect(page.locator('[data-part="device-code"]')).toHaveText("TEST-1234");
-  await expect(page.locator('[data-part="device-code"]')).toHaveAttribute("aria-live", "polite");
-  await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
-  await expect(page.getByText(/^Time left: \d+:\d{2}$/)).toBeVisible();
-  await expect(page.getByText("Waiting for sign-in…", { exact: true })).toBeVisible();
-  await expect(page.getByRole("status")).toContainText("Signed in.", { timeout: 15_000 });
-  await expect(page.getByRole("button", { name: "View accounts" })).toBeFocused();
-  await page.getByRole("button", { name: "View accounts" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "device-added", exact: true })).toBeVisible();
-});
-
-test("browser sign-in accepts a callback and reports provider failures", async ({ page }) => {
-  await openAddAccount(page);
-  const tile = page
-    .locator('[data-extension="test/alpha"] [data-part="method"]')
-    .filter({ hasText: "Test browser" });
-  await tile.getByRole("button", { name: "Test browser" }).click();
-  await expect(page.getByRole("button", { name: "Open link" })).toBeVisible();
-  await page
-    .getByLabel("Address the browser ended on")
-    .fill("http://localhost:1455/auth/callback?code=ok&state=ok");
-  await page.getByRole("button", { name: "Submit" }).click();
-  await expect(page.getByRole("status")).toContainText("Signed in.");
-
-  await page.getByRole("button", { name: "Sign in to another account" }).click();
-  await tile.getByRole("button", { name: "Test browser" }).click();
-  await page
-    .getByLabel("Address the browser ended on")
-    .fill("http://localhost:1455/auth/callback?code=bad&state=bad");
-  await page.getByRole("button", { name: "Submit" }).click();
-  await expect(page.getByRole("alert")).toContainText("the test provider refused this sign-in");
-  await captureSignInStates(page);
-});
-
-test("api key adds an account and rejects a bad key", async ({ page }) => {
-  await openAddAccount(page);
-  await page.getByLabel("Account ID", { exact: true }).fill("panel-api-key");
-  const tile = page
-    .locator('[data-extension="test/alpha"] [data-part="method"]')
-    .filter({ hasText: "Test API key" });
-  await tile.getByRole("button", { name: "Test API key" }).click();
-  await expect(tile.getByLabel("API key", { exact: true })).toHaveAttribute("type", "password");
-  const chosen = page.waitForEvent("filechooser");
-  await tile.getByRole("button", { name: "Choose file" }).click();
-  await (await chosen).setFiles({
-    name: "key.txt",
-    mimeType: "text/plain",
-    buffer: Buffer.from("test-good-key"),
-  });
-  await expect(tile.getByLabel("API key", { exact: true })).toHaveValue("test-good-key");
-  await tile.getByRole("button", { name: "Add account" }).click();
-  await expect(page.getByRole("status")).toContainText("Signed in.");
-  const accounts = await core.mgmt<{ accounts: { id: string; extension: string; kind: string }[] }>(
-    "GET",
-    "/accounts",
-  );
-  expect(accounts.body.accounts).toContainEqual(
-    expect.objectContaining({ id: "panel-api-key", extension: "test/alpha", kind: "api_key" }),
-  );
-  const storage = await page.evaluate(() =>
-    JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage)]),
-  );
-  expect(storage).not.toContain("test-good-key");
-
-  await page.getByRole("button", { name: "Sign in to another account" }).click();
-  await tile.getByRole("button", { name: "Test API key" }).click();
-  await tile.getByLabel("API key", { exact: true }).fill("bad");
-  await tile.getByRole("button", { name: "Add account" }).click();
-  await expect(page.getByRole("alert")).toContainText("the test provider refused this key");
-});
-
-test("cancel cancels a pending login", async ({ page }) => {
-  await openAddAccount(page);
-  const tile = page
-    .locator('[data-extension="test/alpha"] [data-part="method"]')
-    .filter({ hasText: "Test browser" });
-  const response = page.waitForResponse(
-    (r) => r.url().includes("/v0/management/accounts") && r.request().method() === "POST",
-  );
-  await tile.getByRole("button", { name: "Test browser" }).click();
-  await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
-  await page.getByRole("button", { name: "Cancel" }).click();
-  const started = await response;
-  const body = (await started.json()) as { login: { id: string } };
+  expect(made.status).toBe(202);
   await expect
     .poll(
       async () =>
-        (await core.mgmt<{ login: { state: string } }>("GET", `/logins/${body.login.id}`)).body.login.state,
+        (await core.mgmt<{ login: { state: string } }>("GET", `/logins/${made.body.login.id}`)).body.login
+          .state,
     )
-    .toBe("cancelled");
-  await expect(page.getByRole("status")).toHaveText("Sign-in cancelled.");
+    .toBe("done");
+  const running = await core.mgmt<{ login: { id: string } }>("POST", "/accounts/again-running/login", {
+    method: "browser",
+  });
+  expect(running.status).toBeLessThan(300);
+  try {
+    await openPanel(page, core);
+    await signIn(page, core);
+    await page.goto(`${core.base}/panel/#/accounts/again-running/sign-in`);
+    await page.getByRole("button", { name: "Test browser", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("A sign-in for this account is already running.");
+    await expect(page.getByRole("alert")).not.toContainText("conflict");
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  } finally {
+    await core.mgmt("DELETE", `/logins/${running.body.login.id}`);
+  }
 });
 
-test("method inputs follow metadata, including optional non-secret fields", async ({ page }) => {
+test("an optional input sits under More options, and what is typed there is sent", async ({ page }) => {
   await page.route("**/v0/management/login-methods", async (route) => {
     const response = await route.fetch();
     const body = (await response.json()) as { extensions: LoginMethodsExtension[] };
@@ -371,27 +326,57 @@ test("method inputs follow metadata, including optional non-secret fields", asyn
     await route.fulfill({ response, json: body });
   });
   await openAddAccount(page);
-  const tile = page
-    .locator('[data-extension="test/alpha"] [data-part="method"]')
-    .filter({ hasText: "Test API key" });
-  await tile.getByRole("button", { name: "Test API key" }).click();
-  const region = tile.getByRole("textbox", { name: "Region (optional)", exact: true });
+  await start(page, "Test API key").click();
+  const more = page.locator('[data-part="more-options"]');
+  await expect(more.locator("summary")).toHaveText("More options");
+  await expect(page.getByRole("textbox", { name: "Region", exact: true })).toBeHidden();
+  await more.locator("summary").click();
+  const region = page.getByRole("textbox", { name: "Region", exact: true });
   await expect(region).not.toHaveAttribute("required");
-  await expect(tile.getByText("Region (optional)", { exact: true })).toBeVisible();
   await region.fill("test-region");
-  await tile.getByLabel("API key", { exact: true }).fill("test-metadata-key");
+  await page.getByLabel("API key", { exact: true }).fill("test-metadata-key");
   const request = page.waitForRequest(
-    (request) => request.method() === "POST" && request.url().endsWith("/v0/management/accounts"),
+    (r) => r.method() === "POST" && r.url().endsWith("/v0/management/accounts"),
   );
-  await tile.getByRole("button", { name: "Add account" }).click();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
   expect((await request).postDataJSON().input).toEqual({
     api_key: "test-metadata-key",
     region: "test-region",
   });
-  await expect(page.getByRole("status")).toHaveText("Signed in.");
+  await expect(page.getByRole("status").filter({ hasText: /^Added / })).toBeVisible();
 });
 
-test("pending login polls every two seconds only while visible, and stops after cancel", async ({ page }) => {
+test("a secret file clears the file control and a file over one MiB is refused", async ({ page }) => {
+  await openAddAccount(page);
+  await start(page, "Test API key").click();
+  const secret = page.getByLabel("API key", { exact: true });
+  await expect(secret).toBeFocused();
+  const file = page.getByLabel("Load from file", { exact: true });
+  await file.setInputFiles({ name: "key.txt", mimeType: "text/plain", buffer: Buffer.from("file-key") });
+  await expect(secret).toHaveValue("file-key");
+  await expect(file).toHaveValue("");
+  await file.setInputFiles({
+    name: "large.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.alloc(1024 * 1024 + 1, "x"),
+  });
+  await expect(page.getByRole("alert")).toHaveText("Could not read the file. Choose it again.");
+  await expect(secret).toHaveValue("file-key");
+  await expect(file).toHaveValue("");
+  // A file that is not text (here a PNG header) is refused before it reaches the field.
+  await file.setInputFiles({
+    name: "picture.png",
+    mimeType: "image/png",
+    buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe]),
+  });
+  await expect(page.getByRole("alert")).toHaveText("That file is not text. Choose a text file.");
+  await expect(secret).toHaveValue("file-key");
+  await expect(file).toHaveValue("");
+});
+
+test("a pending login is polled every two seconds only while visible, and not after Cancel", async ({
+  page,
+}) => {
   await openAddAccount(page);
   await page.clock.install();
   const reads: string[] = [];
@@ -399,17 +384,16 @@ test("pending login polls every two seconds only while visible, and stops after 
     if (request.method() === "GET" && /\/v0\/management\/logins\/[^/]+$/.test(request.url()))
       reads.push(request.url());
   });
-  const tile = page
-    .locator('[data-extension="test/alpha"] [data-part="method"]')
-    .filter({ hasText: "Test browser" });
-  await tile.getByRole("button", { name: "Test browser" }).click();
-  await expect(page.getByRole("button", { name: "Open link" })).toBeVisible();
+  await start(page, "Test browser").click();
+  await expect(page.getByRole("button", { name: "Open sign-in page" })).toBeVisible();
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 100));
   await page.clock.runFor(100); // Flush Preact's after-paint effects before checking the poll interval.
   expect(reads).toHaveLength(0);
-  const initialPoll = page.waitForResponse(
-    (response) => /\/logins\/[^/]+$/.test(response.url()) && response.request().method() === "GET",
-  );
+  const poll = () =>
+    page.waitForResponse(
+      (response) => /\/logins\/[^/]+$/.test(response.url()) && response.request().method() === "GET",
+    );
+  const initialPoll = poll();
   await page.evaluate(() => {
     document.dispatchEvent(new Event("visibilitychange"));
   });
@@ -418,9 +402,7 @@ test("pending login polls every two seconds only while visible, and stops after 
   expect(reads).toHaveLength(1);
   await page.clock.runFor(1999);
   expect(reads).toHaveLength(1);
-  const firstPoll = page.waitForResponse(
-    (response) => /\/logins\/[^/]+$/.test(response.url()) && response.request().method() === "GET",
-  );
+  const firstPoll = poll();
   await page.clock.runFor(1);
   await firstPoll;
   expect(reads).toHaveLength(2);
@@ -430,28 +412,21 @@ test("pending login polls every two seconds only while visible, and stops after 
   });
   await page.clock.runFor(6000);
   expect(reads).toHaveLength(2);
-  const visiblePoll = page.waitForResponse(
-    (response) => /\/logins\/[^/]+$/.test(response.url()) && response.request().method() === "GET",
-  );
+  const visiblePoll = poll();
   await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await visiblePoll;
   expect(reads).toHaveLength(3);
-  await page.getByRole("button", { name: "Cancel" }).click();
-  const cancelledPoll = page.waitForResponse(
-    (response) => /\/logins\/[^/]+$/.test(response.url()) && response.request().method() === "GET",
-  );
-  await page.clock.runFor(2000);
-  await cancelledPoll;
-  await expect(page.getByRole("status")).toHaveText("Sign-in cancelled.");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByText("Choose how to add it.")).toBeVisible();
   const count = reads.length;
   await page.clock.runFor(6000);
   expect(reads).toHaveLength(count);
 });
 
-test("two providers' sign-in ways sit under each provider's own heading", async ({ page }) => {
+test("two providers' ways to sign in sit under each provider's own name", async ({ page }) => {
   const apiKey = { method: "api_key", kind: "api_key", label: "API key", inputs: [] };
   await page.route("**/v0/management/login-methods", (route) =>
     route.fulfill({
@@ -466,22 +441,22 @@ test("two providers' sign-in ways sit under each provider's own heading", async 
       },
     }),
   );
-  await page.route("**/v0/management/setup", async (route) => {
-    const response = await route.fetch();
-    const body = (await response.json()) as { picks: { id: string; title: string }[] };
-    body.picks = [
-      { id: "pluxy/claude", title: "Claude" },
-      { id: "pluxy/gemini", title: "Gemini" },
-    ] as never;
-    await route.fulfill({ response, json: body });
-  });
   await openAddAccount(page);
   const groups = page.locator('[data-part="method-group"]');
   await expect(groups).toHaveCount(2);
   await expect(groups.nth(0).getByRole("heading", { name: "Claude" })).toBeVisible();
   await expect(groups.nth(1).getByRole("heading", { name: "Gemini" })).toBeVisible();
-  await expect(groups.nth(0).getByRole("button")).toHaveText(["Claude subscription", "API key"]);
-  await expect(groups.nth(1).getByRole("button")).toHaveText(["API key"]);
-  await expect(groups.nth(1)).toContainText("pluxy/gemini");
-  await expect(page.locator('[data-part="method"]').filter({ hasText: "pluxy/" })).toHaveCount(0);
+  await expect(groups.nth(0).locator("strong")).toHaveText(["Claude subscription", "API key"]);
+  await expect(groups.nth(1).locator("strong")).toHaveText(["API key"]);
+  await expect(page.getByRole("main")).not.toContainText("pluxy/");
+});
+
+test("with no provider, Add an account says so and Open Extensions leads on", async ({ page }) => {
+  await page.route("**/v0/management/login-methods", (route) => route.fulfill({ json: { extensions: [] } }));
+  await openAddAccount(page);
+  const pane = page.locator('main [data-part="state-pane"]');
+  await expect(pane).toContainText("There is no provider to sign in with yet.");
+  await expect(pane).toContainText("A provider is what pluxy talks to, such as Claude or ChatGPT.");
+  await pane.getByRole("link", { name: "Open Extensions", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Extensions" })).toBeVisible();
 });

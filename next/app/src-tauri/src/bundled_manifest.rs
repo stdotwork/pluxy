@@ -173,3 +173,14 @@ impl Manifest {
         .expect("JSON")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_local_builds_version_is_a_manifest_version() {
+        // package.ts local: <core version>+local.<12 hex digits>.
+        assert!(version_ok("0.1.0+local.0123456789ab"));
+    }
+}

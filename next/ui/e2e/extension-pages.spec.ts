@@ -73,7 +73,7 @@ async function signIn(page: Page, remember = false) {
   await page.getByLabel("Management key").fill(key);
   if (remember) await page.getByLabel("Remember on this device").check();
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
 }
 
 /** Saves a screenshot when PANEL_SHOTS_DIR is set, as e2e/panel.spec.ts does. */
@@ -305,22 +305,25 @@ test("the panel draws an extension's settings form from its schema, and saves th
   await signIn(page);
   await goTo(page, "Extensions");
   await expect(page.getByRole("heading", { level: 1, name: "Extensions" })).toBeVisible();
-  await page.getByRole("row", { name: /test\/alpha/ }).click();
+  await page.getByRole("button", { name: /test\/alpha/ }).click();
   const form = page.getByRole("form", { name: "Settings of test/alpha" });
   await expect(form).toBeVisible();
+  const greeting = form.getByRole("textbox", { name: "Greeting" });
+  const interval = form.getByRole("spinbutton", { name: "Interval (seconds)" });
+  const token = form.locator('input[type="password"]');
   const before = (await mgmt("GET", "/extensions/test/alpha/config")).body;
 
   // Core checks the values against the schema: refused, nothing changes.
-  await form.getByLabel("Greeting").fill("from the form");
-  await form.getByLabel("Interval (seconds)").fill("5000");
+  await greeting.fill("from the form");
+  await interval.fill("5000");
   await form.getByRole("button", { name: "Save" }).click();
   await expect(form.getByText(/interval.*at most 3600/)).toBeVisible();
   expect((await mgmt("GET", "/extensions/test/alpha/config")).body).toEqual(before);
 
-  await form.getByLabel("Interval (seconds)").fill("120");
-  await form.getByLabel("Unit").selectOption("requests");
-  await form.getByLabel("Detailed view").check();
-  await form.getByLabel("Export token", { exact: true }).fill("fake-export-token");
+  await interval.fill("120");
+  await form.getByRole("combobox", { name: "Unit" }).selectOption("requests");
+  await form.getByRole("switch", { name: "Detailed view" }).check();
+  await token.fill("fake-export-token");
   await form.getByRole("button", { name: "Save" }).click();
   await expect(form.getByText("Saved.")).toBeVisible();
   const saved = (await mgmt("GET", "/extensions/test/alpha/config")).body;
@@ -335,12 +338,12 @@ test("the panel draws an extension's settings form from its schema, and saves th
 
   // Read back after a reload: the form shows what core keeps, never the secret.
   await page.reload();
-  await page.getByRole("row", { name: /test\/alpha/ }).click();
-  await expect(form.getByLabel("Greeting")).toHaveValue("from the form");
-  await expect(form.getByLabel("Interval (seconds)")).toHaveValue("120");
-  await expect(form.getByLabel("Unit")).toHaveValue("requests");
-  await expect(form.getByLabel("Detailed view")).toBeChecked();
-  await expect(form.getByLabel("Export token", { exact: true })).toHaveValue("");
+  await page.getByRole("button", { name: /test\/alpha/ }).click();
+  await expect(greeting).toHaveValue("from the form");
+  await expect(interval).toHaveValue("120");
+  await expect(form.getByRole("combobox", { name: "Unit" })).toHaveValue("requests");
+  await expect(form.getByRole("switch", { name: "Detailed view" })).toBeChecked();
+  await expect(token).toHaveValue("");
   await expect(form.getByText("A value is set.")).toBeVisible();
   await shot(page, "extension-settings.png");
 
@@ -349,4 +352,71 @@ test("the panel draws an extension's settings form from its schema, and saves th
   await form.getByRole("button", { name: "Save" }).click();
   await expect(form.getByText("Saved.")).toBeVisible();
   expect((await mgmt("GET", "/extensions/test/alpha/config")).body.set).toEqual([]);
+});
+
+/** The state core reports for an installed package, or undefined when it is not installed. */
+async function packageState(id: string) {
+  const r = await mgmt("GET", "/packages");
+  return (r.body.packages as { id: string; state: string; enabled: boolean }[]).find((p) => p.id === id);
+}
+
+test("a person turns an extension on and off, removes it, and installs it again", async ({ page }) => {
+  await signIn(page);
+  await goTo(page, "Extensions");
+  const installed = page.getByRole("region", { name: "Installed", exact: true });
+  const offers = page.getByRole("region", { name: "Available to install", exact: true });
+  const row = installed.getByRole("button", { name: /test\/beta/ });
+  await expect(row).toContainText("Turned off");
+  // Everything on offer is installed.
+  await expect(offers.getByText("Every extension on offer is installed.")).toBeVisible();
+
+  await row.click();
+  const detail = page.getByRole("complementary", { name: "Details: test/beta" });
+  await expect(detail.getByText("Installed from")).toBeVisible();
+  await expect(detail.getByText("Checksum")).toBeVisible();
+  await detail.getByRole("button", { name: "Turn on", exact: true }).click();
+  await expect(row).toContainText("Running");
+  expect((await packageState("test/beta"))?.enabled).toBe(true);
+  await expect(
+    detail.getByText("Its accounts stop taking requests until you turn it on again."),
+  ).toBeVisible();
+  await expect(detail.getByText("Requests now")).toBeVisible();
+
+  await detail.getByRole("button", { name: "Turn off", exact: true }).click();
+  await expect(row).toContainText("Turned off");
+  expect((await packageState("test/beta"))?.enabled).toBe(false);
+
+  // Remove asks first, and nothing goes until the answer is yes.
+  await detail.getByRole("button", { name: "Remove", exact: true }).click();
+  await detail.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(await packageState("test/beta")).toBeDefined();
+  await detail.getByRole("button", { name: "Remove", exact: true }).click();
+  await detail.getByRole("button", { name: "Yes, remove", exact: true }).click();
+  await expect(row).toHaveCount(0);
+  await expect(detail).toHaveCount(0);
+  expect(await packageState("test/beta")).toBeUndefined();
+
+  // It is on offer again, and installing it brings it back, running.
+  const offer = offers.getByRole("button", { name: "Install test/beta" });
+  await expect(offer).toBeVisible();
+  await offer.click();
+  await expect(installed.getByRole("button", { name: /test\/beta/ })).toContainText("Running");
+  expect((await packageState("test/beta"))?.enabled).toBe(true);
+  await shot(page, "extensions.png");
+});
+
+test("with no list to install from, the page says why and leads to the settings file", async ({ page }) => {
+  await page.route("**/v0/management/registries", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({ json: { registries: [] } });
+  });
+  await signIn(page);
+  await goTo(page, "Extensions");
+  const offers = page.getByRole("region", { name: "Available to install", exact: true });
+  await expect(offers).toContainText("This pluxy has no list to install extensions from.");
+  await expect(offers).toContainText(
+    "A pluxy built from source has none until one is added to its settings file.",
+  );
+  await offers.getByRole("link", { name: "Open the settings file" }).click();
+  await expect(page).toHaveURL(/#\/config\/source/);
 });

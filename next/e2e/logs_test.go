@@ -33,7 +33,7 @@ func (c *mcore) logs(t *testing.T, query string) logLines {
 
 func (c *mcore) logsDir() string { return filepath.Join(filepath.Dir(c.path), "logs") }
 
-var logLine = regexp.MustCompile(`^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}\] \[(info |warn )\] `)
+var logLine = regexp.MustCompile(`^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}\] \[(info |warn |error)\] `)
 
 func TestLogFiles(t *testing.T) {
 	for _, f := range formats() {
@@ -144,6 +144,33 @@ func waitLog(t *testing.T, c *mcore, query, s string) logLines {
 			t.Fatalf("no line with %q in %v", s, l.Lines)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A reload of a config that cannot be applied is something the person must fix: its line
+// reads [error], and the active revision stays.
+func TestBrokenReloadWritesErrorLine(t *testing.T) {
+	t.Parallel()
+	c := startManaged(t, false)
+	c.expect(t, http.StatusOK, http.MethodPatch, "/settings", `{"observability": {"logs": {"logging-to-file": true}}}`)
+	if err := os.WriteFile(c.path, []byte("{ this is not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := c.call(t, http.MethodPost, "/reload", nil); code == http.StatusOK {
+		t.Fatalf("reload of a broken config: %d", code)
+	}
+	l := waitLog(t, c, "", "not applied")
+	var found bool
+	for _, line := range l.Lines {
+		if strings.Contains(line, "not applied") {
+			found = true
+			if !strings.Contains(line, "] [error] error: config revision") {
+				t.Errorf("the line is not an error line: %q", line)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no line about the reload: %v", l.Lines)
 	}
 }
 

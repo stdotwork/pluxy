@@ -50,7 +50,8 @@ export interface Login {
 
 export const loginsApi = (host: Host) => ({
   loginMethods: () => host.call<{ extensions: LoginMethodsExtension[] }>("GET", "/login-methods"),
-  startLogin: (request: { id: string; extension: string; method: string; input?: Record<string, string> }) =>
+  /** Starts a sign-in that adds an account; core makes the account's ID (the page never sends one). */
+  startLogin: (request: { extension: string; method: string; input?: Record<string, string> }) =>
     host.call<{ login: Login }>("POST", "/accounts", request),
   signInAgain: (id: string, method: string, input?: Record<string, string>) =>
     host.call<{ login: Login }>("POST", `/accounts/${one(id)}/login`, { method, input }),

@@ -83,7 +83,8 @@ the **Needs** list named, once:
 ```
 
 `./pluxy account list` shows every account with the provider it needs in the `EXTENSION` column.
-The panel's **Set up pluxy** page at `/panel/` installs providers too.
+The panel's **Set up pluxy** page at `/panel/` adds providers too: its first step, "Your AI
+accounts", adds the kinds of account you tick.
 
 Antigravity is the exception. pluxy does not ship that provider, so no registry offers it, and
 `pluxy ext install pluxy/antigravity` finds nothing until you have built it yourself: the steps
@@ -169,7 +170,7 @@ with its reason, in the **Changed** or **Not brought** list.
 | `secret-key` under `remote-management` or `management` | pluxy's own management key (`management_key`); the import does not bring CPA's. Change it with `POST /v0/management/management-key/rotate` |
 | The panel at `/management.html`, downloaded on first use | The panel at `/panel/`, built in |
 | A provider or channel (`codex`, `claude`, ...) built into the program | A provider extension, installed as a package (`pluxy/codex`, `pluxy/claude`, ...); `pluxy ext list` |
-| Login flags (`--codex-login`, `--claude-login`, ...) | `pluxy account add <provider>`, or the panel's **Add Account** page |
+| Login flags (`--codex-login`, `--claude-login`, ...) | `pluxy account add <provider>`, or the panel's **Add an account** page |
 | Several models pooled under one alias in an `openai-compatibility` entry | A fallback chain; `pluxy chain list` |
 | `weighted-round-robin` | `weighted` (CPA's name still works in a `config.yaml`) |
 | Cooling, `disable-cooling` | Cooldown; `pluxy account list` shows what is blocked, until when and why, and `pluxy account clear <id>` ends it |

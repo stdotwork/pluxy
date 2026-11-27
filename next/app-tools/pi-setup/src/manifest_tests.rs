@@ -46,7 +46,7 @@ fn only_apply_receives_the_key_and_writes_ask_each_time() {
 
 #[test]
 fn writes_take_exactly_three_strict_pins() {
-    for id in ["apply", "uninstall", "clear", "restore"] {
+    for id in ["apply", "update", "uninstall", "clear", "restore"] {
         let targets = &operation(id)["input_schema"]["properties"]["targets"];
         assert_eq!(targets["items"], pin_schema(), "{id}");
         assert_eq!(
@@ -71,6 +71,20 @@ fn the_backup_operations_are_the_librarys_standard_ones() {
 fn update_writes_only_the_plugin_folder_and_asks() {
     let o = operation("update");
     assert_eq!(o["effect"], "write");
-    assert_eq!(o["input_schema"]["required"], json!(["folder"]));
-    assert_eq!(o["input_schema"]["additionalProperties"], false);
+    assert_eq!(o["input_schema"]["required"], json!(["targets", "plugin"]));
+}
+
+#[test]
+fn update_and_uninstall_carry_the_plugins_pin() {
+    // Update replaces the copy the preview pinned, so it takes its pin; Uninstall takes it, or null
+    // when the preview found no copy of pluxy's.
+    assert_eq!(
+        operation("update")["input_schema"]["properties"]["plugin"],
+        pin_schema()
+    );
+    let mut nullable = pin_schema();
+    nullable["type"] = json!(["object", "null"]);
+    let o = operation("uninstall");
+    assert_eq!(o["input_schema"]["properties"]["plugin"], nullable);
+    assert_eq!(o["input_schema"]["required"], json!(["targets", "plugin"]));
 }

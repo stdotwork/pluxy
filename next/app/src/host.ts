@@ -30,6 +30,9 @@ export interface Connection {
     version?: string;
     adopt?: string;
     detail?: string;
+    /** Why a `stopped` core with no detail is not running: the person stopped it (the tray's
+     * Stop, or coreStop), or nothing started it yet (it is set not to start with the app). */
+    stop_reason?: "stopped_by_user" | "not_started";
   };
   /** Why the app is not connected, when it is not. */
   error?: string;
@@ -95,6 +98,9 @@ export const coreRollback = (version: string) => invoke<void>("core_rollback", {
 export const coreAdopt = () => invoke<void>("core_adopt");
 /** Starts the app's own core only if it is not running; a running one is left alone. */
 export const coreStart = () => invoke<Connection>("core_start");
+/** Stops the app's own pluxy, as the tray's Stop does; a local or remote one is never stopped
+ * (the connection comes back with error set, unchanged otherwise). */
+export const coreStop = () => invoke<Connection>("core_stop");
 /** The Connection page's core button: Restart while the core runs, Start otherwise. */
 export const coreAction = (c: Connection) => (c.core?.state === "running" ? coreRestart : coreStart);
 
@@ -184,6 +190,8 @@ export interface StartupPreferences {
 export interface StartupView extends StartupPreferences {
   registration_owned: boolean;
   registration_conflict: boolean;
+  /** Whether this build offers Open at sign-in: a local build does not, and opens with its start. */
+  sign_in: boolean;
 }
 export const startupGet = () => invoke<StartupView>("startup_get");
 export const startupSet = (preferences: StartupPreferences) =>
@@ -193,12 +201,22 @@ export const startupSet = (preferences: StartupPreferences) =>
 export type CloseBehavior = "ask" | "exit" | "minimize-to-tray";
 export interface WindowPreferences {
   close_behavior: CloseBehavior;
-  /** Whether the desktop shows the app's tray icon now; without it, closing the window quits. */
+  /** Whether the desktop shows the app's tray icon now; without it, closing the window quits the app
+   * (managed mode asks first, unless ask_without_tray is off; local and remote leave pluxy running). */
   tray: boolean;
+  /** With no tray in managed mode, whether closing asks before it quits and stops pluxy. The no-tray
+   * prompt's remembered answer turns it off; close_behavior stays as it was. */
+  ask_without_tray: boolean;
 }
 export const windowGet = () => invoke<WindowPreferences>("window_get");
 export const windowSet = (closeBehavior: CloseBehavior) =>
   invoke<WindowPreferences>("window_set", { closeBehavior });
-/** The answer to the close prompt. */
-export const windowClose = (action: Exclude<CloseBehavior, "ask">, remember: boolean) =>
-  invoke<void>("window_close", { action, remember });
+/** Which close prompt the window shows: Ask's, or the one asked with no tray in managed mode. */
+export type ClosePromptKind = "ask" | "no-tray";
+/** The answer to the close prompt of that kind. Remembered, Ask's answer becomes the close choice;
+ * the no-tray prompt's only stops that prompt, whether or not a tray shows by then. */
+export const windowClose = (
+  action: Exclude<CloseBehavior, "ask">,
+  remember: boolean,
+  kind: ClosePromptKind,
+) => invoke<void>("window_close", { action, remember, kind });

@@ -28,13 +28,19 @@ var laterCommands = []string{
 	"POST /config/validate", "PUT /config",
 	// pluxy settings set <name> <value>
 	"PATCH /settings",
+	// pluxy key add --label <name>, pluxy key label <id> [name], and the names in pluxy key list
+	"PATCH /client-keys/{id}",
 	// pluxy ext config <id> [name=value]...
 	"GET /extensions/{publisher}/{name}/config", "PATCH /extensions/{publisher}/{name}/config",
 }
 
-// noCommand are the management calls that get no command: they serve the panel's own pages.
+// noCommand are the management calls that get no command: they serve the panel's and the
+// desktop app's own needs.
 var noCommand = []string{
 	"GET /ui", // the extensions' pages and where the panel loads them from
+	// the one-step management key change, which the desktop app and the web panel use;
+	// pluxy key rotate-management changes it in two steps
+	"POST /management-key/rotate",
 }
 
 // Every call core's management API serves has a pluxy command, or is listed above as one a

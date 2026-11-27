@@ -118,7 +118,7 @@ fn release_config_clean_and_contamination_controls() {
         v["plugins"] = json!({"updater":{"pubkey":pluxy_app::artifact::hex(public.as_bytes())}})
     });
     f.refused("production updater trust not configured");
-    for feature in ["native-test", "artifact-test-trust"] {
+    for feature in ["native-test", "artifact-test-trust", "local-build"] {
         fs::write(
             &f.inputs.features,
             serde_json::to_vec(&vec![feature]).unwrap(),
@@ -161,6 +161,10 @@ fn release_config_clean_and_contamination_controls() {
     f.config(|v| v["identifier"] = json!("dev.pluxy.desktop.test"));
     f.refused("identifier/product");
     f.config(|v| v["productName"] = json!("pluxy Test"));
+    f.refused("identifier/product");
+    f.config(|v| v["identifier"] = json!("dev.pluxy.desktop.local"));
+    f.refused("identifier/product");
+    f.config(|v| v["productName"] = json!("pluxy Local"));
     f.refused("identifier/product");
     f.config(|v| v["version"] = json!("0.1.1"));
     f.refused("compiled merged config");

@@ -96,7 +96,8 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   `next/ui/kit/strings.ts`; screen-share masks in `next/ui/kit/privacy.ts`; register a core page in
   `next/ui/kit/pages/core.ts` (`corePages`). Browser host wiring is in
   `next/ui/panel/browserHost.ts` (`browserHost`) and `next/ui/panel/main.tsx`.
-- **Tests** (from `next/ui`): `bun test tests/browserHost.test.ts` and `bun run check`.
+- **Tests** (from `next/ui`): `bun test tests/browserHost.test.ts` and `bun run check`; the Tools page
+  (`next/ui/kit/pages/tools.tsx`, coding tools and client keys) has `next/ui/tests/tools.test.tsx` and `next/ui/e2e/tools.spec.ts`.
 - **Fakes and helpers**: `next/e2e/panelcore/main.go` (starts a real core with fake extensions for
   Playwright and app tests).
 - **Handbook**: `next/ui/README.md` ("How a host build uses the kit", "Adding a page").
@@ -115,8 +116,10 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 
 ### Desktop app behaviour
 - **Entry (UI)**: `next/app/src/main.tsx` mounts the shared kit with `appHost`
-  (`next/app/src/host.ts`), connection UI (`next/app/src/connection.tsx`), and device extensions
-  (`next/app/src/devicePage.tsx`).
+  (`next/app/src/host.ts`), the first launch screen and the not-running pane
+  (`next/app/src/firstLaunch.tsx`, every word of them in `connectionCopy.ts`), the Where pluxy runs
+  page (`next/app/src/connection.tsx`), and the Updates, Add-ons and Launcher pages
+  (`next/app/src/updates.tsx`, `next/app/src/devicePage.tsx`, `next/app/src/launcherPage.tsx`).
 - **Entry (Tauri Rust in `next/app/src-tauri/src`)**:
   - `lib.rs`: Tauri command registration, tray, and window wiring.
   - `conn.rs`, `managed.rs`, `cores.rs`: managed/local/remote connection modes, managed core
@@ -127,7 +130,8 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   - `pages.rs`, `access_broker.rs`: sandboxed extension-page webviews and Unix file-access grants.
   - `vault.rs`, `instance.rs`, `release.rs`: host-private secret/backup vault, single-instance
     profile lock, and signed release feed.
-- **Tests**: from `next/app`, `bun test tests/host.test.ts`; Rust unit tests in
+- **Tests**: from `next/app`, `bun test tests/host.test.ts` (the three pages:
+  `tests/updates-page.test.tsx`, `tests/device.test.tsx`, `tests/launcher-page.test.tsx`); Rust unit tests in
   `next/app/src-tauri` via `cargo test --locked` (see `AGENTS.md`).
 - **Handbook**: `next/app/README.md` ("How the app reaches core", "Commands", "Extensions on this
   device") and `next/app/app-host/README.md`.
@@ -148,7 +152,8 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   `Store.Add`, `Store.Summarize`); daily JSONL files and closed-day summaries in
   `next/internal/usage/disk.go` (`Open`); request metering in `next/internal/server/usage.go`
   (`meter`, `meterStream`); management endpoints in `next/internal/core/manageusage.go`
-  (`Core.handleUsage`); panel view in `next/ui/kit/pages/usage.tsx`.
+  (`Core.handleUsage`); panel views in `next/ui/kit/pages/requests.tsx` (Requests) and `usage.tsx` (Usage), with their
+  shared logic in `activity.ts`.
 - **Tests**: `go test -count=1 -run TestStore ./internal/usage` and
   `go test -count=1 -run TestManageUsageRangesByKeyAndBefore ./internal/core`.
 - **Handbook**: `next/README.md` ("Usage statistics").

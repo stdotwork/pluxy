@@ -207,7 +207,7 @@ func (m *setupManager) listening(listen string, tlsEnable bool) {
 	}
 	m.found = refreshed
 	if err := m.saveLocked(); err != nil {
-		log.Printf("setup: saving %s: %v", m.statePath, err)
+		log.Printf("error: setup: saving %s: %v", m.statePath, err)
 	}
 }
 
@@ -242,7 +242,7 @@ func (m *setupManager) runLoop() {
 		m.scannedAt = &now
 		m.statesFor = coreAddress(listen, tlsEnable)
 		if err := m.saveLocked(); err != nil {
-			log.Printf("setup: saving %s: %v", m.statePath, err)
+			log.Printf("error: setup: saving %s: %v", m.statePath, err)
 		}
 		if !m.rescan {
 			m.scanning = false
@@ -548,17 +548,17 @@ var setupSuggestions = []struct {
 	// config is one its writer refuses.
 	setsUp bool
 }{
-	{pick: "pluxy/claude", client: "claude-code", signIn: "pluxy/claude", because: "Claude Code is installed and signed in on this machine"},
-	{pick: "pluxy/claude", client: "claude-code", because: "Claude Code is installed on this machine"},
-	{pick: "pluxy/claude", signIn: "pluxy/claude", because: "Claude Code is signed in on this machine"},
-	{pick: "pluxy/claude-code", client: "claude-code", because: "Claude Code is installed on this machine", setsUp: true},
-	{pick: "pluxy/codex", client: "codex", signIn: "pluxy/codex", because: "Codex CLI is installed and Codex is signed in on this machine"},
-	{pick: "pluxy/codex", client: "codex", because: "Codex CLI is installed on this machine"},
-	{pick: "pluxy/codex", signIn: "pluxy/codex", because: "Codex is signed in on this machine"},
-	{pick: "pluxy/codex-setup", client: "codex", because: "Codex CLI is installed on this machine", setsUp: true},
-	{pick: "pluxy/opencode", client: "opencode", because: "OpenCode is installed on this machine", setsUp: true},
-	{pick: "pluxy/pi-setup", client: "pi", because: "Pi is installed on this machine", setsUp: true},
-	{pick: "pluxy/omp-setup", client: "omp", because: "Oh My Pi is installed on this machine", setsUp: true},
+	{pick: "pluxy/claude", client: "claude-code", signIn: "pluxy/claude", because: "Claude Code is installed and signed in on this computer"},
+	{pick: "pluxy/claude", client: "claude-code", because: "Claude Code is installed on this computer"},
+	{pick: "pluxy/claude", signIn: "pluxy/claude", because: "Claude Code is signed in on this computer"},
+	{pick: "pluxy/claude-code", client: "claude-code", because: "Claude Code is installed on this computer", setsUp: true},
+	{pick: "pluxy/codex", client: "codex", signIn: "pluxy/codex", because: "Codex CLI is installed and Codex is signed in on this computer"},
+	{pick: "pluxy/codex", client: "codex", because: "Codex CLI is installed on this computer"},
+	{pick: "pluxy/codex", signIn: "pluxy/codex", because: "Codex is signed in on this computer"},
+	{pick: "pluxy/codex-setup", client: "codex", because: "Codex CLI is installed on this computer", setsUp: true},
+	{pick: "pluxy/opencode", client: "opencode", because: "OpenCode is installed on this computer", setsUp: true},
+	{pick: "pluxy/pi-setup", client: "pi", because: "Pi is installed on this computer", setsUp: true},
+	{pick: "pluxy/omp-setup", client: "omp", because: "Oh My Pi is installed on this computer", setsUp: true},
 }
 
 // suggestPick says whether pick id is suggested and why. clients holds the client tools found
@@ -643,7 +643,13 @@ type clientProbeSpec struct {
 	name    string
 	program string
 	paths   func(home string) []string
-	inspect func(home, coreURL string) (cfg string, state string)
+	// apps are application folders (a macOS bundle) that count as the tool being installed when
+	// none of paths is found; nil for a tool with none.
+	apps func(home string) []string
+	// noVersion marks a tool core never runs: a desktop app starts its window, so the scan only
+	// looks for it.
+	noVersion bool
+	inspect   func(home, coreURL string) (cfg string, state string)
 }
 
 var clientSpecs = []clientProbeSpec{
@@ -709,6 +715,103 @@ var clientSpecs = []clientProbeSpec{
 		},
 		inspect: inspectOMP,
 	},
+	{
+		id:        "claude-desktop",
+		name:      "Claude Desktop",
+		program:   "claude-desktop",
+		paths:     func(string) []string { return nil },
+		apps:      func(home string) []string { return claudeDesktopApps(runtime.GOOS, home) },
+		noVersion: true,
+		inspect:   unreadConfig(claudeDesktopConfigDisplay(runtime.GOOS)),
+	},
+	{
+		id:      "grok-build",
+		name:    "Grok Build",
+		program: "grok",
+		paths:   func(home string) []string { return grokPaths(runtime.GOOS, home) },
+		inspect: unreadConfig("~/.grok/config.toml"),
+	},
+	{
+		id:      "hermes",
+		name:    "Hermes Agent",
+		program: "hermes",
+		paths:   func(home string) []string { return hermesPaths(runtime.GOOS, home, os.Getenv("LOCALAPPDATA")) },
+		inspect: unreadConfig(hermesConfigDisplay(runtime.GOOS)),
+	},
+}
+
+// The three tools below are found where the desktop app finds them (the recipe of each tool's
+// native program in next/app-tools: claude-desktop, grok-setup and hermes-setup).
+
+// claudeDesktopApps are where Claude Desktop's application bundle is on macOS: the system's
+// applications folder, then the home folder's. On Linux it is the program `claude-desktop` on
+// the PATH. On Windows no program or app ID is known for its installer, so nothing is looked for.
+func claudeDesktopApps(goos, home string) []string {
+	if goos != "darwin" || home == "" {
+		return nil
+	}
+	return []string{
+		filepath.Join("/Applications", "Claude.app"),
+		filepath.Join(home, "Applications", "Claude.app"),
+	}
+}
+
+// claudeDesktopConfigDisplay is where Claude Desktop keeps its third-party configuration file.
+func claudeDesktopConfigDisplay(goos string) string {
+	switch goos {
+	case "darwin":
+		return "~/Library/Application Support/Claude-3p/claude_desktop_config.json"
+	case "windows":
+		return `%LOCALAPPDATA%\Claude-3p\claude_desktop_config.json`
+	}
+	return "~/.config/Claude-3p/claude_desktop_config.json"
+}
+
+// grokPaths is the copy Grok Build's install script puts in ~/.grok/bin.
+func grokPaths(goos, home string) []string {
+	if home == "" {
+		return nil
+	}
+	name := "grok"
+	if goos == "windows" {
+		name += ".exe"
+	}
+	return []string{filepath.Join(home, ".grok", "bin", name)}
+}
+
+// hermesPaths is the copy Hermes Agent's installer puts in ~/.local/bin, or in the bin folder of
+// its home on Windows: `hermes` in %LOCALAPPDATA% (stripped of blanks, and only a full path), or
+// in AppData\Local in the home folder when that is not set or not a full path.
+func hermesPaths(goos, home, localAppData string) []string {
+	if goos != "windows" {
+		if home == "" {
+			return nil
+		}
+		return []string{filepath.Join(home, ".local", "bin", "hermes")}
+	}
+	local := strings.TrimSpace(localAppData)
+	if !filepath.IsAbs(local) {
+		if home == "" {
+			return nil
+		}
+		local = filepath.Join(home, "AppData", "Local")
+	}
+	return []string{filepath.Join(local, "hermes", "bin", "hermes.exe")}
+}
+
+// hermesConfigDisplay is where Hermes Agent keeps its settings with no profile chosen.
+func hermesConfigDisplay(goos string) string {
+	if goos == "windows" {
+		return `%LOCALAPPDATA%\hermes\config.yaml`
+	}
+	return "~/.hermes/config.yaml"
+}
+
+// unreadConfig is the inspect of a tool whose settings core does not read: it names the file and
+// says unchecked, which claims nothing about the file. The desktop app's page for the tool
+// reads the file with the tool's own writer.
+func unreadConfig(display string) func(home, coreURL string) (string, string) {
+	return func(string, string) (string, string) { return display, stateUnchecked }
 }
 
 func exeName(name string) string {
@@ -732,7 +835,11 @@ func scanMachine(ctx context.Context, scratch, listen string, tlsEnable bool, ti
 			var version string
 			if prog := findProgram(spec.program, spec.paths(home)); prog != "" {
 				installed = true
-				version = probeVersion(ctx, prog, scratch, timeout)
+				if !spec.noVersion {
+					version = probeVersion(ctx, prog, scratch, timeout)
+				}
+			} else if spec.apps != nil {
+				installed = slices.ContainsFunc(spec.apps(home), isDir)
 			}
 			cfg, state := spec.inspect(home, coreURL)
 			clients[i] = management.SetupClient{
@@ -765,6 +872,11 @@ func findProgram(name string, knownPaths []string) string {
 		}
 	}
 	return ""
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func isExecutableFile(path string) bool {
@@ -878,13 +990,13 @@ func scanSignIns(home string) []management.SetupSignIn {
 			path:     filepath.Join(home, ".codex", "auth.json"),
 			provider: "pluxy/codex",
 			from:     "codex",
-			label:    "Codex is signed in on this machine",
+			label:    "Codex is signed in on this computer",
 		},
 		{
 			path:     filepath.Join(home, ".claude", ".credentials.json"),
 			provider: "pluxy/claude",
 			from:     "claude-code",
-			label:    "Claude Code is signed in on this machine",
+			label:    "Claude Code is signed in on this computer",
 		},
 	}
 	for _, c := range checks {

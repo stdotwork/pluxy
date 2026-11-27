@@ -3,17 +3,19 @@
 //! a first run: the session's core has nothing installed and no accounts, its bundled registry
 //! offers `pluxy/claude` as a pick, and a stand-in `claude` that prints `2.4.1 (Claude Code)`
 //! comes first on the PATH core inherits from the app. A curated device registry offers
-//! `pluxy/claude-code`, the Claude Code page's package, so the app offers its "Set up" button.
+//! `pluxy/claude-code`, the Claude Code page's package, so the app offers its "Set up" link.
 //! The bundled test packages are not installed (`native_test.rs`).
 //!
-//! - `first`: the window opens on Setup by itself (`#/setup`, "Set up pluxy"); "Found on this
-//!   machine" names Claude Code 2.4.1; the Claude pick is ticked, saying why; the Claude Code
-//!   client row has "Set up" beside "Show what to paste"; Start installs the pick (its badge says
-//!   Installed, and `GET /packages` through the app's host lists it enabled); Finish lands on the
-//!   Dashboard and `GET /setup` has `first_run` false.
-//! - `second`: the next launch opens on the Dashboard, not Setup; Setup, opened, says "Setup is
-//!   finished." and has no Finish button; the stage stays on it, then switches GTK to its dark
-//!   variant and stays again, so the session's last screenshot shows it dark.
+//! - `first`: the window opens on Setup by itself (`#/setup`, "Set up pluxy") with step 1, "Your AI
+//!   accounts", open; the Claude kind is ticked, saying Claude Code is installed on this computer;
+//!   "Add Claude" adds it (its row says Added, and `GET /packages` through the app's host lists it
+//!   enabled); step 2, opened, has the app's own "Set up" link to `#/claude-code` on Claude Code's
+//!   row, and pressing it opens the app's Claude Code page; back on `#/setup`, "Leave setup for
+//!   now" lands on Home and `GET /setup` has `first_run` false.
+//! - `second`: the next launch opens on Home, not Setup; Setup, opened, is titled "Setup" with
+//!   every step folded and no "Leave setup for now"; step 1, opened, says Claude is added; the stage
+//!   stays on it, then switches GTK to its dark variant and stays again, so the session's last
+//!   screenshot shows it dark.
 //!
 //! Every check prints `native-test: setup_check {"ok":...,"what":...}`; after holding a screen for
 //! a screenshot it prints `native-test: setup_shot {"name":...}`; a stage ends with
@@ -25,8 +27,6 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
-/// What `GET /setup` names the stand-in's find, as the Found card shows it.
-const FOUND: &str = "Claude Code 2.4.1";
 const PICK: &str = "pluxy/claude";
 /// session.ts captures the screen every 8 seconds: a screen held this long is in a capture.
 const HOLD: Duration = Duration::from_secs(12);
@@ -102,28 +102,43 @@ fn page(app: &AppHandle) -> Value {
     .unwrap_or(Value::Null)
 }
 
-/// An expression for the client row of Claude Code.
-const CLIENT: &str = "[...document.querySelectorAll('[data-part=setup-client]')].find((e) => e.querySelector('strong')?.textContent.startsWith('Claude Code'))";
-/// An expression for the Claude pick's row.
+/// An expression for Claude Code's row in step 2.
+const TOOL_ROW: &str = "[...document.querySelectorAll('[data-part=tool-row]')].find((e) => e.textContent.includes('Claude Code'))";
+/// An expression for the Claude kind's row in step 1.
 const PICK_ROW: &str = "[...document.querySelectorAll('[data-part=setup-pick]')].find((e) => e.querySelector('strong')?.textContent === 'Claude')";
+/// An expression for the open step's title, or null.
+const OPEN_STEP: &str =
+    "document.querySelector('[data-part=setup-step][data-state=open] h2')?.textContent ?? null";
 
-/// The text of the buttons in the Claude Code client row, in order.
-fn client_buttons(app: &AppHandle) -> Value {
+/// Claude Code's row in step 2: each link's text and address, and each button's text.
+fn tool_row(app: &AppHandle) -> Value {
     main_eval(
         app,
-        &format!("(() => {{ const row = {CLIENT}; return row ? [...row.querySelectorAll('.actions button')].map((b) => b.textContent.trim()) : null; }})()"),
+        &format!("(() => {{ const row = {TOOL_ROW}; return row ? {{ links: [...row.querySelectorAll('a')].map((a) => [a.textContent.trim(), a.getAttribute('href')]), buttons: [...row.querySelectorAll('button')].map((b) => b.textContent.trim()) }} : null; }})()"),
     )
     .unwrap_or(Value::Null)
 }
 
-/// Presses the button whose text is label inside the card titled card.
-fn press(app: &AppHandle, card: &str, label: &str) -> bool {
+/// Presses the button whose text is label inside the step whose title starts with step.
+fn press(app: &AppHandle, step: &str, label: &str) -> bool {
     until(
         app,
         10,
         &format!(
-            "(() => {{ const b = [...document.querySelectorAll('section[aria-label=' + JSON.stringify({card}) + '] button')].find((b) => b.textContent.trim() === {label}); if (!b || b.disabled) return false; b.click(); return true; }})()",
-            card = json!(card),
+            "(() => {{ const s = [...document.querySelectorAll('[data-part=setup-step]')].find((s) => s.querySelector('h2')?.textContent.startsWith({step})); const b = s && [...s.querySelectorAll('button')].find((b) => b.textContent.trim() === {label}); if (!b || b.disabled) return false; b.click(); return true; }})()",
+            step = json!(step),
+            label = json!(label),
+        ),
+    )
+}
+
+/// Presses the page's button whose text is label, wherever it is.
+fn press_any(app: &AppHandle, label: &str) -> bool {
+    until(
+        app,
+        10,
+        &format!(
+            "(() => {{ const b = [...document.querySelectorAll('main button')].find((b) => b.textContent.trim() === {label}); if (!b || b.disabled) return false; b.click(); return true; }})()",
             label = json!(label),
         ),
     )
@@ -167,61 +182,40 @@ fn first(c: &mut Checks, app: &AppHandle) {
                 .is_some_and(|p| p.is_empty()),
         format!("GET /packages through the app's host lists nothing installed at first ({r})"),
     );
-    let found = until(
-        app,
-        30,
-        &format!(
-            "[...document.querySelectorAll('section[aria-label=\"Found on this machine\"] [data-part=setup-found] strong')].some((e) => e.textContent === {})",
-            json!(FOUND)
-        ),
-    );
-    let shown = main_eval(
-        app,
-        "document.querySelector('section[aria-label=\"Found on this machine\"]')?.innerText ?? null",
-    )
-    .unwrap_or(Value::Null);
+    let open = until(app, 15, &format!("({OPEN_STEP}) === 'Your AI accounts'"));
     c.check(
-        found,
-        format!("\"Found on this machine\" names {FOUND} ({shown})"),
+        open,
+        format!(
+            "step 1, \"Your AI accounts\", is open ({})",
+            main_eval(app, OPEN_STEP).unwrap_or(Value::Null)
+        ),
     );
     let ticked = until(
         app,
-        15,
+        30,
         &format!("{PICK_ROW}?.querySelector('input[type=checkbox]')?.checked === true"),
     );
-    c.check(ticked, "the Claude pick is ticked");
+    c.check(ticked, "the Claude kind is ticked");
     c.check(
         until(
             app,
             5,
-            &format!("{PICK_ROW}?.textContent.includes('Claude Code is installed on this machine') === true"),
+            &format!("{PICK_ROW}?.textContent.includes('Claude Code is installed on this computer') === true"),
         ),
-        "the Claude pick says Claude Code is installed on this machine",
-    );
-    // The Set up button comes once the device's catalog and the registries' offers have loaded.
-    let buttons = within(20, || {
-        let b = client_buttons(app);
-        (b == json!(["Set up", "Show what to paste"])).then_some(b)
-    })
-    .unwrap_or_else(|| client_buttons(app));
-    c.check(
-        buttons == json!(["Set up", "Show what to paste"]),
-        format!(
-            "the Claude Code client row has \"Set up\" beside \"Show what to paste\" ({buttons})"
-        ),
+        "the Claude kind says Claude Code is installed on this computer",
     );
     shot("found");
 
     if !c.check(
-        press(app, "Start", "Start"),
-        "Start is there, enabled, and pressed",
+        press(app, "Your AI accounts", "Add Claude"),
+        "\"Add Claude\" is there, enabled, and pressed",
     ) {
         return;
     }
-    let installed = until(
+    let added = until(
         app,
         90,
-        &format!("{PICK_ROW}?.querySelector('[data-part=badge]')?.textContent === 'Installed'"),
+        "document.body.innerText.includes('Added: Claude.')",
     );
     let notices = main_eval(
         app,
@@ -229,8 +223,8 @@ fn first(c: &mut Checks, app: &AppHandle) {
     )
     .unwrap_or(Value::Null);
     c.check(
-        installed,
-        format!("after Start the Claude pick says Installed (notices: {notices})"),
+        added,
+        format!("after Add, step 1 says \"Added: Claude.\" (notices: {notices})"),
     );
     let r = core(app, "GET", "/packages");
     let listed = r["body"]["packages"]
@@ -240,11 +234,59 @@ fn first(c: &mut Checks, app: &AppHandle) {
         r["status"] == 200 && listed,
         format!("GET /packages through the app's host lists {PICK}, enabled ({r})"),
     );
-    shot("started");
+    shot("added");
 
     if !c.check(
-        press(app, "Finish", "Finish"),
-        "Finish is there, enabled, and pressed",
+        press(app, "Your coding tool", "Open"),
+        "step 2's Open is there and pressed",
+    ) {
+        return;
+    }
+    // The Set up link comes once the device's catalog and the registries' offers have loaded.
+    let want = json!({ "links": [["Set up", "#/claude-code"]], "buttons": [] });
+    let row = within(20, || {
+        let r = tool_row(app);
+        (r == want).then_some(r)
+    })
+    .unwrap_or_else(|| tool_row(app));
+    c.check(
+        row == want,
+        format!("Claude Code's row in step 2 has the app's \"Set up\" link to #/claude-code and no other control ({row})"),
+    );
+    shot("tool");
+
+    // The link goes to the app's own page for the tool.
+    let followed = until(
+        app,
+        10,
+        &format!("(() => {{ const a = {TOOL_ROW}?.querySelector('a[href=\"#/claude-code\"]'); if (!a) return false; a.click(); return true; }})()"),
+    );
+    let tool_page = followed
+        && until(
+            app,
+            30,
+            "location.hash === '#/claude-code' && document.querySelector('[data-tool=claude-code]') !== null && document.querySelector('[data-part=page-title]')?.textContent === 'Claude Code'",
+        );
+    c.check(
+        tool_page,
+        format!(
+            "pressing \"Set up\" opens the Claude Code page ({})",
+            page(app)
+        ),
+    );
+    let _ = main_eval(app, "(location.hash = '#/setup', true)");
+    c.check(
+        until(
+            app,
+            30,
+            "location.hash === '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Set up pluxy'",
+        ),
+        format!("back on #/setup, Setup is still \"Set up pluxy\" ({})", page(app)),
+    );
+
+    if !c.check(
+        press_any(app, "Leave setup for now"),
+        "\"Leave setup for now\" is there, enabled, and pressed",
     ) {
         return;
     }
@@ -252,9 +294,9 @@ fn first(c: &mut Checks, app: &AppHandle) {
         until(
             app,
             30,
-            "location.hash !== '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Dashboard'",
+            "location.hash !== '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Home'",
         ),
-        format!("Finish lands on the Dashboard ({})", page(app)),
+        format!("Leave setup for now lands on Home ({})", page(app)),
     );
     let r = core(app, "GET", "/setup");
     c.check(
@@ -282,19 +324,16 @@ fn second(c: &mut Checks, app: &AppHandle) {
     let dashboard = until(
         app,
         30,
-        "document.querySelector('[data-part=page-title]')?.textContent === 'Dashboard'",
+        "document.querySelector('[data-part=page-title]')?.textContent === 'Home'",
     );
     std::thread::sleep(Duration::from_secs(3));
     let stayed = main_eval(
         app,
-        "location.hash !== '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Dashboard'",
+        "location.hash !== '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Home'",
     ) == Some(json!(true));
     c.check(
         dashboard && stayed,
-        format!(
-            "the next launch opens on the Dashboard, not Setup ({})",
-            page(app)
-        ),
+        format!("the next launch opens on Home, not Setup ({})", page(app)),
     );
 
     let _ = main_eval(app, "(location.hash = '#/setup', true)");
@@ -302,27 +341,39 @@ fn second(c: &mut Checks, app: &AppHandle) {
         until(
             app,
             30,
-            "document.querySelector('[data-part=page-title]')?.textContent === 'Set up pluxy' && document.body.innerText.includes('Setup is finished.')",
+            "document.querySelector('[data-part=page-title]')?.textContent === 'Setup' && document.body.innerText.includes('Review or change your accounts and coding tools.')",
         ),
-        format!("Setup, opened, says \"Setup is finished.\" ({})", page(app)),
+        format!("Setup, opened, is titled \"Setup\" and reads as a summary ({})", page(app)),
     );
-    c.check(
-        until(
-            app,
-            15,
-            &format!("{PICK_ROW}?.querySelector('[data-part=badge]')?.textContent === 'Installed'"),
-        ),
-        "Setup lists the Claude pick as Installed",
-    );
-    let finish = main_eval(
+    let steps = main_eval(
         app,
-        "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Finish')",
+        "[...document.querySelectorAll('[data-part=setup-step]')].map((s) => s.getAttribute('data-state'))",
+    )
+    .unwrap_or(Value::Null);
+    c.check(
+        steps
+            .as_array()
+            .is_some_and(|s| s.len() == 3 && !s.contains(&json!("open"))),
+        format!("Setup has three steps, every one folded ({steps})"),
+    );
+    let later = main_eval(
+        app,
+        "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Leave setup for now')",
     );
     c.check(
-        finish == Some(json!(false)),
-        format!("Setup has no Finish button ({finish:?})"),
+        later == Some(json!(false)),
+        format!("Setup has no \"Leave setup for now\" button ({later:?})"),
     );
     shot("finished");
+    c.check(
+        press(app, "Your AI accounts", "Open")
+            && until(
+                app,
+                15,
+                "document.body.innerText.includes('Added: Claude.')",
+            ),
+        "step 1, opened, says \"Added: Claude.\"",
+    );
 
     // The same page in GTK's dark variant, which WebKitGTK reports as prefers-color-scheme: dark
     // and the window's theme state follows.

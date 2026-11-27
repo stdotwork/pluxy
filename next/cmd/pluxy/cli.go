@@ -331,8 +331,8 @@ var commands = []command{
 		}},
 	{words: "key management", local: true, summary: "where the management key the pluxy commands use is kept; --show-key prints the key itself",
 		flags: showKeyFlag, run: runKeyManagement},
-	{words: "key rotate-management", routes: []string{"GET /config", "POST /management-key/rotate", "GET /status"},
-		summary: "replace the management key with a new one, which core writes to its config file; --show-key prints it",
+	{words: "key rotate-management", routes: []string{"POST /management-key/rotate/stage", "POST /management-key/rotate/commit", "GET /status"},
+		summary: "replace the management key with a new one, which pluxy writes to its config file; --show-key prints it",
 		flags: func(fs *flag.FlagSet, o *opts) {
 			showKeyFlag(fs, o)
 			fs.BoolVar(&o.yes, "yes", false, "rotate without asking")

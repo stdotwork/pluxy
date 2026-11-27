@@ -8,7 +8,8 @@ import (
 )
 
 // A new login to an account must sign in to the same upstream account: every field of the stored
-// identity must match (letter case aside); without a stored identity the labels are compared.
+// identity must match (letter case aside); without a stored identity the labels are compared: the
+// provider's label when the record keeps one apart from a label a person gave, else the label.
 func TestSameIdentity(t *testing.T) {
 	id := func(kv ...string) map[string]string {
 		m := map[string]string{}
@@ -32,6 +33,9 @@ func TestSameIdentity(t *testing.T) {
 		{"labels only, other", Record{Label: "a@x.test"}, protocol.Grant{Label: "b@x.test"}, false},
 		{"stored label only, grant without one", Record{Label: "a@x.test"}, protocol.Grant{}, true},
 		{"nothing stored", Record{}, protocol.Grant{Identity: id("email", "b@x.test"), Label: "b@x.test"}, true},
+		{"person's label, provider's same", Record{Label: "Work", ProviderLabel: "a@x.test"}, protocol.Grant{Label: "A@x.test"}, true},
+		{"person's label, provider's other", Record{Label: "Work", ProviderLabel: "a@x.test"}, protocol.Grant{Label: "b@x.test"}, false},
+		{"person's label, provider's none", Record{Label: "Work", ProviderLabel: "a@x.test"}, protocol.Grant{}, true},
 	} {
 		err := sameIdentity(tc.cur, &tc.grant)
 		if (err == nil) != tc.ok || err != nil && !errors.Is(err, ErrIdentity) {

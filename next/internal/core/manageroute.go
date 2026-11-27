@@ -31,7 +31,7 @@ func (c *Core) loadPublicKey() {
 	}
 	key := route.NewPublicKey()
 	if err := writePrivate(path, []byte(hex.EncodeToString(key)+"\n")); err != nil {
-		log.Printf("routing: saving %s failed, so accounts' public IDs change at the next start: %v", path, err)
+		log.Printf("error: routing: saving %s failed, so accounts' public IDs change at the next start: %v", path, err)
 	}
 	c.state.SetPublicKey(key)
 }

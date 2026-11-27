@@ -19,8 +19,8 @@
 //!   the adapter folder holds exactly the bundle, and the preview reads the config back as
 //!   configured;
 //! - plugin_update: an installed adapter of an older version, with a file the bundle does not have,
-//!   is updated by a confirmed update of the agent folder; the folder is exact again and no
-//!   temporary entry is left beside it;
+//!   is updated by a confirmed update of the copy the preview pinned; the folder is exact again
+//!   and no temporary entry is left beside it;
 //! - plugin_uninstall: a confirmed uninstall removes pluxy's entry and the adapter folder, and
 //!   leaves the cliproxyapi file as it was;
 //! - restore: after the person's edit, Restore Backup puts the three originals back, the cache too;
@@ -517,12 +517,13 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     && v["pi"]["adapter"]["update"] == true,
                 format!("the stale adapter's preview: {v}"),
             )?;
+            // The preview's pins: its three files and pluxy's copy of the plugin.
             written(
                 app,
                 main,
                 &seen,
                 "update",
-                json!({"folder": txt(&agent)}),
+                json!({"targets": v["targets"], "plugin": v["pi"]["adapter"]["pin"]}),
                 &[&txt(&agent)],
                 &hidden,
             )?;
@@ -560,7 +561,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 main,
                 &seen,
                 "uninstall",
-                json!({"targets": v["targets"]}),
+                json!({"targets": v["targets"], "plugin": v["pi"]["adapter"]["pin"]}),
                 &[],
                 &hidden,
             )?;
@@ -731,15 +732,11 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     format!("the {pair} preview: {v}"),
                 )?;
                 for op in ["clear", "uninstall"] {
-                    let r = confirmed(
-                        app,
-                        main,
-                        &seen,
-                        op,
-                        json!({"targets": v["targets"]}),
-                        &[&txt(file)],
-                        &hidden,
-                    )?;
+                    let mut input = json!({"targets": v["targets"]});
+                    if op == "uninstall" {
+                        input["plugin"] = c["adapter"]["pin"].clone();
+                    }
+                    let r = confirmed(app, main, &seen, op, input, &[&txt(file)], &hidden)?;
                     require(
                         r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains(says)),
                         format!("a {op} of the {pair} files should be refused: {r}"),

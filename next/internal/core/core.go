@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -120,6 +121,9 @@ type Core struct {
 	catalogue    *catalogue.Catalogue // the models.dev snapshot and refresh
 	catalogueNow func() time.Time     // tests can move the refresh clock
 
+	staged stagedKey        // the management key a two-step change made, until it is put into use
+	keyNow func() time.Time // tests can move the staged key's clock
+
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
 	bgWG     sync.WaitGroup
@@ -154,7 +158,7 @@ func Start(opts Options) (*Core, error) {
 	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), requests: server.NewRequests(), checks: newChecks(), ignition: ignite.NewPlanner(),
-		bgCtx: bgCtx, bgCancel: bgCancel, catalogueNow: time.Now}
+		bgCtx: bgCtx, bgCancel: bgCancel, catalogueNow: time.Now, keyNow: time.Now}
 	c.loadPublicKey()
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {
@@ -442,7 +446,7 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 		c.mu.Lock()
 		c.desired = seen
 		c.mu.Unlock()
-		log.Printf("config change (%s) refused; the config file and the active revision stay: %s", why, c.scrub(err.Error(), orig, b))
+		log.Printf("error: config change (%s) refused; the config file and the active revision stay: %s", why, c.scrub(err.Error(), orig, b))
 		return err
 	}
 	if err != nil {
@@ -453,7 +457,7 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 		c.desired.Error = err.Error()
 		c.mu.Unlock()
 		if prev != nil {
-			log.Printf("config revision %d (%s) not applied; revision %d stays active: %v", rev, why, prev.revision, err)
+			log.Printf("error: config revision %d (%s) not applied; revision %d stays active: %v", rev, why, prev.revision, err)
 		}
 		return err
 	}
@@ -621,7 +625,8 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 			c.discard(next, prev)
 			return nil, err
 		}
-		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved, OnReauth: func(id string) { c.state.Unban(id) }, OnRemove: func(id string) { c.state.Unban(id) }})
+		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved, PublicID: c.state.PublicID, Taken: c.takenByConfig,
+			OnReauth: func(id string) { c.state.Unban(id) }, OnRemove: func(id string) { c.state.Unban(id); c.state.ForgetQuota(id) }})
 	}
 	router.UseCredentials(c.creds)
 	router.UseReadings(readings{c})
@@ -692,7 +697,9 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	if prev != nil {
 		next.Router.CarryLists(prev.Router, sameAccountAndCred)
 		c.state.Retain(prev.Router, next.Router, sameAccount)
-		c.state.RetainBans(func(id string) bool { _, ok := c.account(next, id); return ok })
+		known := func(id string) bool { _, ok := c.account(next, id); return ok }
+		c.state.RetainBans(known)
+		c.state.RetainQuotas(known)
 	}
 	for id, g := range next.exts {
 		g.SetPolicy(policy(c.extensionConfig(next, id)))
@@ -830,6 +837,15 @@ func (c *Core) accountsChanged() {
 func (c *Core) reserved(id string) bool {
 	s := c.cur.Load()
 	return s != nil && slices.ContainsFunc(s.Config.Accounts(), func(a route.Account) bool { return a.ID == id })
+}
+
+// takenByConfig reports whether an account the active config sets has id as its ID or its public
+// ID, which a new account's ID and its public ID may then not be.
+func (c *Core) takenByConfig(id string) bool {
+	s := c.cur.Load()
+	return s != nil && slices.ContainsFunc(s.Config.Accounts(), func(a route.Account) bool {
+		return strings.EqualFold(a.ID, id) || c.state.PublicID(a.ID) == id
+	})
 }
 
 // sameAccount reports whether an account with one ID is the same upstream account in two

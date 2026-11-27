@@ -1,952 +1,178 @@
-// Setup: what a new install shows first. One page, read from top to bottom: what core found on
-// its machine, the providers it offers, Start, an account, the clients, Finish. Each part shows
-// its state, and a part whose work is done says so in one line. Opened again later, it is a
-// status of the same things.
+// Setup: one short guided setup in three steps, one open at a time: the person's AI accounts (which
+// kinds, then signing in), their coding tool, and one test request that proves an account answers.
+// What pluxy found on this computer shows in the step that uses it; a CLIProxyAPI setup to import
+// is one line above the steps (setupImport.tsx). Every step can be skipped, and every way to end
+// setup is the one finish. The panel and the desktop app show this page; the app adds its own
+// tool buttons through SetupOptions.
 
 import type { ComponentChildren } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
-import {
-  type ImportReport,
-  type ImportRow,
-  type Package,
-  problem,
-  type Setup,
-  type SetupClient,
-  type SetupImport,
-  type SetupLastImport,
-  type SetupPick,
-} from "../api";
-import type { Reply } from "../host";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { type ImportReport, problem, runningExtensions, type SetupClient } from "../api";
+import { Icon } from "../icons";
+import { refreshWord, StatePane, tryAgainWord } from "../parts";
 import type { PageDef } from "../shell";
-import { rich, strings } from "../strings";
-import {
-  Badge,
-  Button,
-  Card,
-  Empty,
-  Notice,
-  PageHead,
-  useAction,
-  useCopy,
-  useKit,
-  useLoad,
-  when,
-} from "../ui";
-import { AddAccountPage } from "./addAccount";
-import { KeyNotice } from "./configKeys";
+import { strings } from "../strings";
+import { Button, Notice, PageHead, useKit, useLoad } from "../ui";
 import {
   type Choices,
-  hasProvider,
-  installedStatus,
-  isInstalled,
-  isTicked,
+  canServe,
+  connectedTools,
+  joinNames,
   onThisMachine,
-  type PickStatus,
-  type PickWithStatus,
-  pickStatuses,
-  providerPicks,
   type Results,
-  scanState,
-  signInsToName,
-  splitClients,
   start,
-  startInstalls,
   toInstall,
-  withKey,
 } from "./setup.helpers";
+import { AccountsStep, accountsSummary } from "./setupAccounts";
+import { CheckStep, checkSummary, type TestOutcome } from "./setupCheck";
+import { ImportLine } from "./setupImport";
+import { ToolListView, type ToolsOptions, useMadeKeys, useToolsState } from "./tools";
+import { toolName } from "./tools.helpers";
 
 const t = strings("setup", {
   title: "Set up pluxy",
-  tip: "What pluxy found, and what is still missing",
-  introFirst: "pluxy looks at this machine and offers what fits.",
-  introUntilStart: "Nothing is installed until you press Start, and nothing on this page is required.",
-  introOptional: "Nothing on this page is required.",
-  introLater: "Setup is finished. This page shows the same things as they are now.",
-  loading: "Loading…",
-  retry: "Retry",
-
-  found: "Found on this machine",
-  foundRemote: "Found on the machine pluxy runs on",
-  lookAgain: "Refresh",
-  looking: "Refreshing…",
-  lookingFirst: "pluxy is looking at this machine. This takes a few seconds.",
-  neverLooked: "Not scanned yet. Press Refresh to scan this machine.",
-  nothingFound: "Found no clients, sign-ins, or CLIProxyAPI setups.",
-  clientFound: "{name} {version}",
-  signInHint: "pluxy read nothing from this sign-in. It only saw that it is there.",
-  importFound: {
-    one: "A CLIProxyAPI setup with {count} account",
-    other: "A CLIProxyAPI setup with {count} accounts",
-  },
-  importWhere:
-    "Found at {config}. pluxy previews settings, client keys, and accounts and writes nothing until you confirm.",
-  importOld: "It is at {config}. To bring it across, run this where pluxy is installed:",
-  importCommand: "Or use the command",
-  importCommandHow:
-    "Run this where pluxy is installed. It does the same, and with --dry-run only reports what it would do.",
-  importDone: "Brought across",
-  importDoneWhere: "It is at {config}, and was brought across {when}.",
-  importDoneCounts: "Of its settings and auth files: {counts}.",
-  "importDone.brought": "{count} brought across",
-  "importDone.changed": "{count} different in pluxy",
-  "importDone.not_brought": "{count} not brought across",
-  importAgain: "Bring it across again",
-  importAgainHow:
-    "Run this where pluxy is installed to overwrite changed settings and add missing keys, accounts, and chains. Use --dry-run to preview.",
-  bring: "Bring it across",
-  bringChecking: "Checking…",
-  bringNow: "Bring it across now",
-  bringing: "Bringing it across…",
-  bringCancel: "Cancel",
-  bringClose: "Close",
-  bringDry: "Nothing is written yet. This is what bringing it across would do:",
-  bringDone: "Done. This is what was brought across:",
-  "list.brought.dry": "Comes across ({count})",
-  "list.brought.done": "Brought across ({count})",
-  "list.changed": "Different in pluxy ({count})",
-  "list.not_brought.dry": "Does not come across ({count})",
-  "list.not_brought.done": "Not brought across ({count})",
-  rowAs: "Becomes",
-  rowFrom: "Was",
-  rowTo: "In pluxy",
-  rowWhy: "Why",
-  rowKeep: "To keep it",
-  needPick: "{title} is not installed, and {why}.",
-  needLater: "You can install it once the setup is across.",
-  needTicked: "It is ticked under Providers: press {button} to install it.",
-  needElsewhere: "Install it on the Extensions page.",
-  "refused.400":
-    "Could not read the CLIProxyAPI setup: {message}. Check the file and permissions, then press {look}. Nothing changed.",
-  "refused.422": "Cannot import this setup: {message}. Fix it in CLIProxyAPI and try again. Nothing changed.",
-  "refused.409":
-    "pluxy uses config.yaml, while import writes JSON config. Run the command below, start pluxy on it, and import again. Nothing changed.",
-  "refused.404": "This pluxy is an older one that cannot bring a setup across from this page.",
-  "refused.0.dry":
-    "pluxy did not answer, so nothing was read or changed. Check that it is running, then try again.",
-  "refused.0.real":
-    "pluxy did not reply, so the import status is unknown. Check that pluxy is running, then press {button} again.",
-  refusedOther: "pluxy could not bring the setup across: {message}.",
-  listens: "pluxy listens on {address}.",
-  reachable: "Other machines on the network can reach pluxy at this address.",
-  lookedAt: "Looked {when}.",
-
-  providers: "Providers",
-  providersHint: "An extension lets pluxy use one kind of account, such as a Claude subscription.",
-  tickHint: "Tick the ones you have an account for.",
-  noPicks: "No extensions to offer here. Check the Extensions page to install one.",
-  noRegistry:
-    "This build has no extension registry. Run go run ./cmd/pluxy-pack -out <dir> from next/, then put bundled beside pluxy or start core with -bundled <dir>/bundled/index.json.",
-  installed: "Installed",
-  installedNotRunning: "Installed, not running",
-  installedFailed: "Installed {title}, but it failed to start: {error}",
-  installedDisabled: "{title} is installed but turned off.",
-  installedStopped: "{title} is installed but is not running.",
-  installedFailedWhere: "Look at it on the Extensions page.",
-  failed: "Could not install {title}: {error}",
-  failedRetry: "Press {button} to try again.",
-
-  startTitle: "Start",
-  start: "Start",
-  install: "Install",
-  startWithout: "Start without a provider",
-  willInstall: "{button} installs: {names}.",
-  willInstallLater: "This installs {names}.",
-  installing: "Installing…",
-  nothingTicked:
-    "Nothing is ticked, so pluxy will run with no provider. You can add one later on the Extensions page.",
-  nothingTickedNoRegistry: "This build has no extension registry, so pluxy will run with no provider.",
-  noneRunning:
-    "{names}: installed but not running, so pluxy has no active provider. Enable or inspect on {extensions}.",
-  nothingMore: "Nothing more to install.",
-  stillLooking: "pluxy is still looking at this machine. What it suggests shows here in a few seconds.",
-  allInstalled: "Every provider on the list is installed.",
-
-  account: "Connect an account",
-  accountHint: "An account is your sign-in with a provider. pluxy sends requests through it.",
-  accountAfter: "This comes after {button}: an account signs in through a provider.",
-  accountTick: "This comes after a provider: tick one above and press {button}.",
-  accountStopped:
-    "This comes after a provider, and the one installed is not running. Look at it on the {extensions} page.",
-  accountNoProvider:
-    "This comes after a provider, and pluxy runs none yet. Install one on the {extensions} page.",
-  accountNoRegistry:
-    "This comes after a provider, and this build has no extension registry to install one from.",
-  extensions: "Extensions",
-  accountsConnected: { one: "{count} account connected.", other: "{count} accounts connected." },
-  accountsLink: "See them on Accounts",
-  accountSkip: "You can skip this and add an account later on the Add Account page.",
-  signInFound: "{label}. You can sign in to the same account here.",
-
-  clients: "Point a client at pluxy",
-  clientsHint:
-    "A client is a coding tool like Claude Code. This page only shows config text for you to paste.",
-  noClients: "Found no clients on this machine. Open Other clients below to set one up.",
-  "state.configured": "Points at this pluxy",
-  "state.not-configured": "Does not point at pluxy yet",
-  "state.needs-update": "Its settings need an update to work with this pluxy",
-  "state.refused":
-    "pluxy would not change {config}: it holds something pluxy does not expect. That is fine here, because you paste the text yourself.",
-  notFound: "Not found on this machine",
-  showPaste: "Show what to paste",
-  hidePaste: "Hide",
-  otherClients: { one: "Other clients ({count})", other: "Other clients ({count})" },
-  pasteLoading: "Loading the text…",
-  pasteInto: "Put this in {path}:",
-  pasteAddress: "The text uses {address}, the address of pluxy on its own machine.",
-  pasteModel:
-    "Replace {placeholder} with a model your accounts serve. Check Show models on Accounts or run {command}.",
-  copy: "Copy",
-  copied: "Copied",
-  copyFailed: "Could not copy. Select the text and copy it yourself.",
-  keyWhere: "Replace {placeholder} with a client key. Create one here or use an existing key.",
-  makeKey: "Create client key",
-  newKey: "New client key",
-  keyInText:
-    "The new key is in the text above, where {placeholder} stood. Copy the text while this notice is open.",
-
-  finishTitle: "Finish",
-  finish: "Finish",
-  finishHint:
-    "This ends setup and opens the Dashboard. You can come back to this page at any time: it stays under Settings.",
+  titleLater: "Setup",
+  tip: "The guided setup",
+  introFirst:
+    "pluxy lets your coding tools use your AI accounts. Three short steps set it up, and you can skip any of them.",
+  introLater: "Review or change your accounts and coding tools.",
+  loading: "Checking what pluxy already has…",
+  failed: "Could not read setup.",
+  scanning: "Looking at this computer… This takes a few seconds.",
+  steps: "Setup steps",
+  step1: "Your AI accounts",
+  step2: "Your coding tool",
+  step3: "Check it works",
+  open: "Open",
+  continue: "Continue",
+  skip: "Skip",
+  done: "Done",
+  toolsUse: { one: "{tools} uses pluxy.", other: "{tools} use pluxy." },
+  noTool: "No tool connected yet.",
+  here: "Detected on this computer.",
+  network: "Other computers on your network can reach pluxy.",
+  scanFailed: "Could not look at this computer: {error}.",
+  finishLater: "Leave setup for now",
+  staysUnder: "It won't open by itself again; it stays under Settings.",
+  backHome: "Back to Home",
+  finishFailed: "Could not finish setup: {error}.",
 });
 
-/** A button that copies text, and says so. */
-function Copy(props: { value: string }) {
-  const { state, copy } = useCopy(props.value);
-  return (
-    <>
-      <Button onClick={copy}>{state === "copied" ? t("copied") : t("copy")}</Button>
-      {state === "failed" && <Notice tone="danger">{t("copyFailed")}</Notice>}
-    </>
-  );
-}
-
-/** Text to copy, in the kit's code style, with its Copy button. */
-function Code(props: { value: string }) {
-  return (
-    <div class="setup-code">
-      <pre>{props.value}</pre>
-      <div class="actions">
-        <Copy value={props.value} />
-      </div>
-    </div>
-  );
-}
-
-/** The command that does what the row's button does. */
-export function importCommand(found: SetupImport): string {
-  return `pluxy import cpa ${found.config}${authDir(found) ? ` --auth-dir ${authDir(found)}` : ""}`;
-}
-
-/**
- * The auth folder to name in an import: the one the scan counted accounts in. With none counted
- * the import reads the folder the config names, and says so when it is not there.
- */
-function authDir(found: SetupImport): string | undefined {
-  return found.accounts > 0 ? found.auth_dir : undefined;
-}
-
-/** Where bringing a found CLIProxyAPI setup across stands. */
-export interface ImportState {
-  /** The config of the setup this is about. */
-  config: string;
-  busy?: "checking" | "importing";
-  /** The dry run's report, or once done the import's. */
-  report?: ImportReport;
-  done?: boolean;
-  /** Why core refused, in words. */
-  problem?: string;
-  /** What the refusal's words point to: the import command, or the one that makes a JSON config. */
-  show?: "command" | "init";
-}
-
-/** A refused import in words a person can act on; nothing for a reply that is no refusal. */
-export function importProblem(reply: Reply<unknown>, dryRun: boolean): Pick<ImportState, "problem" | "show"> {
-  if (reply.status >= 200 && reply.status < 300) return {};
-  const message = (reply.error?.message ?? problem(reply) ?? "").replace(/\.$/, "");
-  switch (reply.status) {
-    case 0:
-      return { problem: t(dryRun ? "refused.0.dry" : "refused.0.real", { button: t("bring") }) };
-    case 400:
-      return { problem: t("refused.400", { message, look: t("lookAgain") }) };
-    case 404:
-      return { problem: t("refused.404"), show: "command" };
-    case 409:
-      return { problem: t("refused.409"), show: "init" };
-    case 422:
-      return { problem: t("refused.422", { message }) };
-    default:
-      return { problem: t("refusedOther", { message }) };
-  }
-}
-
-/** The provider picks a report says the imported accounts need, as the page can tick them. */
-export function neededPicks(setup: Setup, report: ImportReport): Choices {
-  const offered = new Set(providerPicks(setup).map((pick) => pick.id));
-  return Object.fromEntries(
-    report.needs.filter((need) => offered.has(need.pick)).map((need) => [need.pick, true]),
-  );
-}
-
-function ReportList(props: { title: string; rows: ImportRow[] }) {
-  if (props.rows.length === 0) return null;
-  const line = (label: string, value?: string) =>
-    value && (
-      <span>
-        <span class="muted">{label}:</span> {value}
-      </span>
-    );
-  return (
-    <details open>
-      <summary>{props.title}</summary>
-      <ul class="setup-report-rows">
-        {props.rows.map((row) => (
-          <li key={`${row.what}/${row.name ?? ""}`}>
-            <strong class="mono">{[row.what, row.name].filter(Boolean).join(" ")}</strong>
-            {line(t("rowAs"), row.as)}
-            {line(t("rowFrom"), row.from)}
-            {line(t("rowTo"), row.to)}
-            {line(t("rowWhy"), row.why)}
-            {line(t("rowKeep"), row.keep_with)}
-          </li>
-        ))}
-      </ul>
-    </details>
-  );
-}
-
-/** An import report in its own three lists, and what the imported accounts still need. */
-function Report(props: { setup: Setup; report: ImportReport; done?: boolean }) {
-  const { report, setup } = props;
-  const when = props.done ? "done" : "dry";
-  const button = setup.first_run ? t("start") : t("install");
-  return (
-    <div class="setup-report stack" data-part="setup-report" data-state={when}>
-      <span role="status">{props.done ? t("bringDone") : t("bringDry")}</span>
-      <ReportList title={t(`list.brought.${when}`, { count: report.brought.length })} rows={report.brought} />
-      <ReportList title={t("list.changed", { count: report.changed.length })} rows={report.changed} />
-      <ReportList
-        title={t(`list.not_brought.${when}`, { count: report.not_brought.length })}
-        rows={report.not_brought}
-      />
-      {report.needs.map((need) => {
-        const pick = providerPicks(setup).find((p) => p.id === need.pick);
-        return (
-          <Notice key={need.pick} tone="warn">
-            {t("needPick", { title: pick?.title || need.pick, why: need.why })}{" "}
-            {!props.done ? t("needLater") : pick ? t("needTicked", { button }) : t("needElsewhere")}
-          </Notice>
-        );
-      })}
-    </div>
-  );
-}
-
-/** What core kept of a setup's import, in words: each list's count, a list with no row left out. */
-function importCounts(last: SetupLastImport): string {
-  return (["brought", "changed", "not_brought"] as const)
-    .filter((list) => list === "brought" || last[list] > 0)
-    .map((list) => t(`importDone.${list}`, { count: last[list] }))
-    .join(", ");
-}
-
-/**
- * A found CLIProxyAPI setup: where it is, and bringing it across in two steps. Once core has a
- * record of its import the row says so and offers no button: the command can still run it again.
- */
-function FoundImport(props: {
-  setup: Setup;
-  found: SetupImport;
-  state?: ImportState;
-  onBring?: (found: SetupImport, dryRun: boolean) => void;
-  onClose?: () => void;
-}) {
-  const { found, state } = props;
-  const old = state?.show === "command";
-  // What this page is in the middle of comes first: its report stays until it is closed.
-  const last = state ? undefined : found.last_import;
-  const where = <span class="mono">{found.config}</span>;
-  return (
-    <li
-      data-part="setup-import"
-      data-state={state?.done ? "done" : state?.report ? "report" : last ? "brought" : "found"}
-    >
-      <div class="setup-row-head">
-        <span class="setup-pick-text">
-          <strong>{t("importFound", { count: found.accounts })}</strong>
-          {last ? (
-            <span class="muted">
-              {rich(t("importDoneWhere"), { config: where, when: when(last.at) ?? last.at })}{" "}
-              {t("importDoneCounts", { counts: importCounts(last) })}
-            </span>
-          ) : (
-            <span class="muted">
-              {rich(t(old || !props.onBring ? "importOld" : "importWhere"), { config: where })}
-            </span>
-          )}
-        </span>
-        {last && <Badge tone="ok">{t("importDone")}</Badge>}
-        {!last && props.onBring && !old && !state?.report && (
-          <div class="actions">
-            <Button disabled={state?.busy !== undefined} onClick={() => props.onBring?.(found, true)}>
-              {state?.busy ? t("bringChecking") : t("bring")}
-            </Button>
-          </div>
-        )}
-      </div>
-      {state?.problem && <Notice tone="danger">{state.problem}</Notice>}
-      {state?.show === "init" && <Code value="pluxy init" />}
-      {state?.report && <Report setup={props.setup} report={state.report} done={state.done} />}
-      {state?.report && !state.done && (
-        <div class="actions">
-          <Button disabled={state.busy !== undefined} onClick={() => props.onBring?.(found, false)}>
-            {state.busy ? t("bringing") : t("bringNow")}
-          </Button>
-          <Button variant="quiet" disabled={state.busy !== undefined} onClick={props.onClose}>
-            {t("bringCancel")}
-          </Button>
-        </div>
-      )}
-      {state?.done && (
-        <div class="actions">
-          <Button onClick={props.onClose}>{t("bringClose")}</Button>
-        </div>
-      )}
-      {!last && (old || !props.onBring) ? (
-        <Code value={importCommand(found)} />
-      ) : (
-        !state?.report && (
-          <details class="setup-others">
-            <summary>{t(last ? "importAgain" : "importCommand")}</summary>
-            <div class="setup-code-how stack">
-              <span class="muted">{t(last ? "importAgainHow" : "importCommandHow")}</span>
-              <Code value={importCommand(found)} />
-            </div>
-          </details>
-        )
-      )}
-    </li>
-  );
-}
-
-/** What the Found part needs to bring a CLIProxyAPI setup across. */
-export interface ImportProps {
-  state?: ImportState;
-  onBring: (found: SetupImport, dryRun: boolean) => void;
-  onClose: () => void;
-}
-
-/** What core found: clients, sign-ins, an earlier setup, and where core listens. */
-export function Found(props: {
-  setup: Setup;
-  remote: boolean;
-  busy?: boolean;
-  error?: string;
-  bring?: ImportProps;
-  onLook: () => void;
-}) {
-  const { setup } = props;
-  const state = scanState(setup);
-  const clients = splitClients(setup).found;
-  const nothing = clients.length + setup.found.sign_ins.length + setup.found.imports.length === 0;
-  const looking = state === "first" || state === "again";
-  return (
-    <Card
-      title={props.remote ? t("foundRemote") : t("found")}
-      actions={
-        <Button onClick={props.onLook} disabled={looking || props.busy}>
-          {looking ? t("looking") : t("lookAgain")}
-        </Button>
-      }
-    >
-      {props.error && <Notice tone="danger">{props.error}</Notice>}
-      {state === "first" ? (
-        <Notice tone="muted">{t("lookingFirst")}</Notice>
-      ) : (
-        <ul class="setup-rows" data-part="setup-found" aria-busy={looking}>
-          {clients.map((client) => (
-            <li key={`client/${client.id}`}>
-              <strong>{t("clientFound", { name: client.name, version: client.version ?? "" }).trim()}</strong>
-              <span class="muted">{clientWords(client)}</span>
-            </li>
-          ))}
-          {setup.found.sign_ins.map((signIn) => (
-            <li key={`sign-in/${signIn.provider}/${signIn.from}`}>
-              <strong>{signIn.label}</strong>
-              <span class="muted">{t("signInHint")}</span>
-            </li>
-          ))}
-          {setup.found.imports.map((found) => (
-            <FoundImport
-              key={`import/${found.config}`}
-              setup={setup}
-              found={found}
-              state={props.bring?.state?.config === found.config ? props.bring.state : undefined}
-              onBring={props.bring?.onBring}
-              onClose={props.bring?.onClose}
-            />
-          ))}
-          {nothing && <li class="muted">{state === "never" ? t("neverLooked") : t("nothingFound")}</li>}
-          {setup.found.core.listen && (
-            <li>
-              <span>
-                {rich(t("listens"), { address: <span class="mono">{setup.found.core.listen}</span> })}
-                {setup.found.core.reachable_from_network && ` ${t("reachable")}`}
-              </span>
-            </li>
-          )}
-        </ul>
-      )}
-      {setup.scanned_at && state !== "first" && (
-        <small class="hint">
-          {rich(t("lookedAt"), { when: when(setup.scanned_at) ?? setup.scanned_at })}
-        </small>
-      )}
-    </Card>
-  );
-}
-
-/** A client's state in words. */
-function clientWords(client: SetupClient): string {
-  if (client.state === "refused") return t("state.refused", { config: client.config });
-  return t(`state.${client.state}`);
-}
-
-/** The provider picks as a checklist, each with its outcome beside it. */
-export function Providers(props: {
-  setup: Setup;
-  choices: Choices;
-  results: Results;
-  /** The provider picks with what each is: the page's one answer to whether it runs. */
-  statuses: PickWithStatus[];
-  busy?: boolean;
-  onTick: (id: string, ticked: boolean) => void;
-}) {
-  const { statuses } = props;
-  const button = props.setup.first_run ? t("start") : t("install");
-  return (
-    <Card title={t("providers")}>
-      {statuses.length === 0 ? (
-        props.setup.registries === 0 ? (
-          <Notice tone="warn">{t("noRegistry")}</Notice>
-        ) : (
-          <Empty>{t("noPicks")}</Empty>
-        )
-      ) : (
-        <>
-          <p class="muted setup-hint">
-            {t("providersHint")}{" "}
-            {statuses.every(({ status }) => installedStatus(status)) ? t("allInstalled") : t("tickHint")}
-          </p>
-          <ul class="setup-rows">
-            {statuses.map(({ pick, status }) => (
-              <PickRow
-                key={pick.id}
-                pick={pick}
-                status={status}
-                button={button}
-                choices={props.choices}
-                results={props.results}
-                busy={props.busy}
-                onTick={props.onTick}
-              />
-            ))}
-          </ul>
-        </>
-      )}
-    </Card>
-  );
-}
-
-function PickRow(props: {
-  pick: SetupPick;
-  status: PickStatus;
-  button: string;
-  choices: Choices;
-  results: Results;
-  busy?: boolean;
-  onTick: (id: string, ticked: boolean) => void;
-}) {
-  const { pick, status } = props;
-  // Core keeps a package whose program did not start, and one that was turned off or has failed
-  // since: an installed pick can be one that does not run.
-  const installed = installedStatus(status);
-  const title = pick.title || pick.id;
-  return (
-    <li
-      data-part="setup-pick"
-      data-state={installed ? "installed" : status.state === "install-failed" ? "failed" : "offered"}
-    >
-      <div class="setup-row-head">
-        <label class="check">
-          <input
-            type="checkbox"
-            checked={installed || isTicked(pick, props.choices, props.results)}
-            disabled={installed || props.busy}
-            onChange={(e) => props.onTick(pick.id, e.currentTarget.checked)}
-          />
-          <span class="setup-pick-text">
-            <strong>{pick.title || pick.id}</strong>
-            {pick.summary && <span class="muted">{pick.summary}</span>}
-            {pick.because && !installed && <small class="hint">{pick.because}</small>}
-          </span>
-        </label>
-        {status.state === "running" && <Badge tone="ok">{t("installed")}</Badge>}
-        {status.state === "stopped" && <Badge tone="warn">{t("installedNotRunning")}</Badge>}
-      </div>
-      {status.state === "stopped" && (
-        <Notice tone="danger">
-          {status.why === "disabled"
-            ? t("installedDisabled", { title })
-            : status.why === "failed" && !status.error
-              ? t("installedStopped", { title })
-              : t("installedFailed", { title, error: status.error ?? "" })}
-          <br />
-          {t("installedFailedWhere")}
-        </Notice>
-      )}
-      {status.state === "install-failed" && (
-        <Notice tone="danger">
-          {t("failed", { title, error: status.error ?? "" })}
-          <br />
-          {t("failedRetry", { button: props.button })}
-        </Notice>
-      )}
-    </li>
-  );
-}
-
-/** The one primary button: it installs what is ticked, or starts with nothing. */
-export function Start(props: {
-  setup: Setup;
-  choices: Choices;
-  results: Results;
-  busy?: boolean;
-  error?: string;
-  provider: boolean;
-  /** The provider picks with what each is: the page's one answer to whether it runs. */
-  statuses: PickWithStatus[];
-  onStart: () => void;
-  onFinish: () => void;
-}) {
-  const { setup } = props;
-  const picks = providerPicks(setup);
-  const ids = toInstall(setup, props.choices, props.results);
-  const names = picks.filter((pick) => ids.includes(pick.id)).map((pick) => pick.title || pick.id);
-  const button = setup.first_run ? t("start") : t("install");
-  let line: ComponentChildren;
-  let action: ComponentChildren = null;
-  if (ids.length > 0) {
-    const list = names.join(", ");
-    line = props.busy
-      ? t("installing")
-      : setup.first_run
-        ? t("willInstall", { button, names: list })
-        : t("willInstallLater", { names: list });
-    action = (
-      <Button variant="primary" disabled={props.busy} onClick={props.onStart}>
-        {button}
-      </Button>
-    );
-  } else if (!props.provider && setup.first_run && scanState(setup) === "first") {
-    // What to tick comes with the first scan's end: until then an empty list is not a choice.
-    line = t("stillLooking");
-  } else if (!props.provider && setup.first_run) {
-    // With every pick installed there is nothing to tick: what holds pluxy back is on Extensions.
-    const down = props.statuses
-      .filter(({ status }) => status.state === "stopped")
-      .map(({ pick }) => pick.title || pick.id);
-    line =
-      setup.registries === 0
-        ? t("nothingTickedNoRegistry")
-        : down.length > 0 && props.statuses.every(({ status }) => installedStatus(status))
-          ? rich(t("noneRunning"), {
-              names: down.join(", "),
-              extensions: <a href="#/extensions">{t("extensions")}</a>,
-            })
-          : t("nothingTicked");
-    action = (
-      <Button variant="primary" disabled={props.busy} onClick={props.onFinish}>
-        {t("startWithout")}
-      </Button>
-    );
-  } else if (props.error) {
-    line = t("nothingMore");
-  } else {
-    // With nothing left to install the part has nothing to say: the picks say "Installed", and
-    // after setup it comes back when a provider is ticked.
-    return null;
-  }
-  return (
-    <Card title={setup.first_run ? t("startTitle") : t("install")}>
-      {props.error && <Notice tone="danger">{props.error}</Notice>}
-      <div class="setup-line">
-        <span role="status">{line}</span>
-        {action}
-      </div>
-    </Card>
-  );
-}
-
-/** The Add Account page's sign-in, once a provider is installed and core has no account. */
-export function Account(props: {
-  setup: Setup;
-  choices: Choices;
-  results: Results;
-  count?: number;
-  provider: boolean;
-  error?: string;
-  onAdded: () => void;
-}) {
-  const { setup } = props;
-  const button = setup.first_run ? t("start") : t("install");
-  // What leads to an account while core runs no provider: the button, when it would install one;
-  // a tick first, when a provider is left to tick; another page, when the installed ones do not
-  // run or none is offered.
-  const picks = providerPicks(setup);
-  const extensions = <a href="#/extensions">{t("extensions")}</a>;
-  const before =
-    toInstall(setup, props.choices, props.results).length > 0
-      ? t("accountAfter", { button })
-      : picks.some((pick) => !isInstalled(pick, props.results))
-        ? t("accountTick", { button })
-        : picks.length > 0
-          ? rich(t("accountStopped"), { extensions })
-          : setup.registries === 0
-            ? t("accountNoRegistry")
-            : rich(t("accountNoProvider"), { extensions });
-  return (
-    <Card title={t("account")}>
-      {props.error && <Notice tone="danger">{props.error}</Notice>}
-      {props.count === undefined ? null : props.count > 0 ? (
-        <p class="setup-done">
-          {t("accountsConnected", { count: props.count })} <a href="#/accounts">{t("accountsLink")}</a>.
-        </p>
-      ) : !props.provider ? (
-        <p class="muted setup-hint">
-          {t("accountHint")} {before}
-        </p>
-      ) : (
-        <>
-          <p class="muted setup-hint">
-            {t("accountHint")} {t("accountSkip")}
-          </p>
-          {signInsToName(setup, props.results).map((signIn) => (
-            <Notice key={`${signIn.provider}/${signIn.from}`} tone="muted">
-              {t("signInFound", { label: signIn.label })}
-            </Notice>
-          ))}
-          <AddAccountPage embedded onSuccess={props.onAdded} />
-        </>
-      )}
-    </Card>
-  );
-}
-
-/** What a host adds to a client's row: a button that opens one of the host's own pages. */
-export interface ClientAction {
-  label: string;
-  /** The ID of the page the button opens. */
-  page: string;
-}
-
-/**
- * What the build that shows the page adds to it. The panel adds nothing; the desktop app offers
- * to set a client up on its own computer.
- */
+/** What a host adds to the Setup page; the panel adds nothing. */
 export interface SetupOptions {
-  /**
-   * The action for a client found installed, by its ID in core's scan; nothing for no action. The
-   * page asks for none for a client whose settings file was refused: there only the paste text works.
-   */
-  clientAction?: (client: string) => ClientAction | undefined;
-  /** One sentence under the clients' heading, shown while a client has an action: what it does. */
-  clientActionHint?: string;
+  /** The host's own button at the end of a tool's row in step 2 (see ToolsOptions.toolAction). */
+  toolAction?: ToolsOptions["toolAction"];
+  /** Tools the host reads itself, shown as ordinary rows in step 2. */
+  extraTools?: SetupClient[];
+  /** Overrides the page's own answer to whether pluxy runs on another computer. */
+  isRemote?: boolean;
+  /** Links to the host's own pages for tools on this computer, shown when pluxy is elsewhere. */
+  localPages?: ToolsOptions["localPages"];
+  /** Runs on step 2's Refresh, so the host can read its own tools again. */
+  onRefresh?: () => void;
+  /** Called after setup is finished, before the page goes to Home. */
+  onFinish?: () => void;
 }
 
-/** What core's paste text holds where a model's name goes (next/internal/core/setup_clients.go). */
-const MODEL_PLACEHOLDER = "<model-id>";
+type StepNo = 1 | 2 | 3;
 
-/** The files to paste for one client, and a button that makes the client key they need. */
-function PasteText(props: { client: SetupClient }) {
-  const { api, unauthorized } = useKit();
-  const paste = useLoad(() => api.clientPaste(props.client.id));
-  const [key, setKey] = useState<string>();
-  const [making, setMaking] = useState(false);
-  const [error, setError] = useState<string>();
-  const make = async () => {
-    setMaking(true);
-    setError(undefined);
-    const reply = await api.addClientKey();
-    setMaking(false);
-    if (reply.status === 401) return unauthorized();
-    setError(problem(reply));
-    if (reply.body) setKey(reply.body.value);
-  };
-  const data = paste.data;
+function Step(props: {
+  n: StepNo;
+  title: string;
+  summary: ComponentChildren;
+  done: boolean;
+  open: boolean;
+  onOpen: () => void;
+  heading: (node: HTMLHeadingElement | null) => void;
+  children: ComponentChildren;
+}) {
+  const id = `setup-step-${props.n}`;
   return (
-    <div class="setup-paste stack" data-part="setup-paste">
-      {paste.error && (
-        <>
-          <Notice tone="danger">{paste.error}</Notice>
-          <div>
-            <Button onClick={paste.reload}>{t("retry")}</Button>
-          </div>
-        </>
-      )}
-      {paste.loading && !data && <Notice tone="muted">{t("pasteLoading")}</Notice>}
-      {data && (
-        <>
-          {data.note && <p class="setup-hint">{data.note}</p>}
-          {data.files.map((file) => (
-            <div key={file.path} class="setup-file">
-              <span>{rich(t("pasteInto"), { path: <span class="mono">{file.path}</span> })}</span>
-              <Code value={withKey(file.content, data.key, key)} />
-            </div>
-          ))}
-          <small class="hint">
-            {rich(t("pasteAddress"), { address: <span class="mono">{data.base_url}</span> })}
-          </small>
-          {data.files.some((file) => file.content.includes(MODEL_PLACEHOLDER)) && (
-            <small class="hint">
-              {rich(t("pasteModel"), {
-                placeholder: <span class="mono">{MODEL_PLACEHOLDER}</span>,
-                command: <span class="mono">pluxy model list</span>,
-              })}
-            </small>
-          )}
-          {error && <Notice tone="danger">{error}</Notice>}
-          {key ? (
-            <>
-              <p class="setup-hint">
-                {rich(t("keyInText"), { placeholder: <span class="mono">{data.key}</span> })}
-              </p>
-              <KeyNotice title={t("newKey")} value={key} close={() => setKey(undefined)} seen={() => {}} />
-            </>
-          ) : (
-            <div class="setup-line">
-              <span class="muted">
-                {rich(t("keyWhere"), { placeholder: <span class="mono">{data.key}</span> })}
-              </span>
-              <Button disabled={making} onClick={make}>
-                {t("makeKey")}
-              </Button>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-function ClientRow(props: { client: SetupClient; action?: ClientAction }) {
-  const { client, action } = props;
-  const [open, setOpen] = useState(false);
-  return (
-    <li data-part="setup-client" data-state={client.installed ? client.state : "not-found"}>
-      <div class="setup-row-head">
-        <span class="setup-pick-text">
-          <strong>
-            {client.name}
-            {client.version && <span class="mono muted"> {client.version}</span>}
-          </strong>
-          {!client.installed ? (
-            <span class="muted">{t("notFound")}</span>
-          ) : client.state === "configured" ? (
-            <span>
-              <Badge tone="ok">{clientWords(client)}</Badge>
-            </span>
-          ) : (
-            <span class="muted">{clientWords(client)}</span>
-          )}
-        </span>
-        <div class="actions">
-          {action && (
-            <Button
-              onClick={() => {
-                location.hash = `#/${action.page}`;
-              }}
-            >
-              {action.label}
+    <li
+      class="setup-step"
+      data-part="setup-step"
+      data-state={props.open ? "open" : props.done ? "done" : "todo"}
+    >
+      <span class="setup-step-mark" aria-hidden="true">
+        {props.done ? <Icon name="check" /> : props.n}
+      </span>
+      <section class="setup-step-body" aria-labelledby={id}>
+        <div class="setup-step-head">
+          <h2 id={id} ref={props.heading} tabIndex={-1}>
+            {props.title}
+            {props.done && <span class="sr-only"> ({t("done")})</span>}
+          </h2>
+          {!props.open && (
+            <Button onClick={props.onOpen} describedBy={id}>
+              {t("open")}
             </Button>
           )}
-          <Button onClick={() => setOpen(!open)}>{open ? t("hidePaste") : t("showPaste")}</Button>
         </div>
-      </div>
-      {open && <PasteText client={client} />}
+        {props.open ? (
+          <div class="setup-step-open">{props.children}</div>
+        ) : (
+          <p class="setup-step-summary">{props.summary}</p>
+        )}
+      </section>
     </li>
   );
 }
 
-/** Each client with its state and the text that points it at core. */
-export function Clients(props: { setup: Setup; options?: SetupOptions }) {
-  const { found, others } = splitClients(props.setup);
-  const scanning = scanState(props.setup) === "first";
-  // A refused file is one the host's own page would not write either, so its button would lead nowhere.
-  const actions = new Map(
-    found.map((client) => [
-      client.id,
-      client.state === "refused" ? undefined : props.options?.clientAction?.(client.id),
-    ]),
-  );
-  const hint = props.options?.clientActionHint;
+/**
+ * Step 2's list of tools. It holds the keys made in it, so a key's value is gone once the step
+ * folds, as it is when the Tools page's key notice closes.
+ */
+function ToolsStep(props: Omit<Parameters<typeof ToolListView>[0], "made">) {
+  const made = useMadeKeys();
+  return <ToolListView {...props} made={made} />;
+}
+
+/** Continue once the step is done, else Skip; both open the next step. */
+function Next(props: { done: boolean; onNext: () => void; children?: ComponentChildren }) {
   return (
-    <Card title={t("clients")}>
-      <p class="muted setup-hint">{t("clientsHint")}</p>
-      {hint && found.some((client) => actions.get(client.id)) && <p class="muted setup-hint">{hint}</p>}
-      {found.length > 0 ? (
-        <ul class="setup-rows">
-          {found.map((client) => (
-            <ClientRow key={client.id} client={client} action={actions.get(client.id)} />
-          ))}
-        </ul>
-      ) : (
-        !scanning && <p class="setup-hint">{t("noClients")}</p>
-      )}
-      {others.length > 0 && (
-        <details class="setup-others">
-          <summary>{t("otherClients", { count: others.length })}</summary>
-          <ul class="setup-rows">
-            {others.map((client) => (
-              <ClientRow key={client.id} client={client} />
-            ))}
-          </ul>
-        </details>
-      )}
-    </Card>
+    <div class="actions setup-next">
+      <Button variant={props.done ? "primary" : "quiet"} onClick={props.onNext}>
+        {props.done ? t("continue") : t("skip")}
+      </Button>
+      {props.children}
+    </div>
   );
 }
 
 export function SetupPage(props: { options?: SetupOptions }) {
   const { api, host, unauthorized, extensionsChanged } = useKit();
-  const loaded = useLoad(api.setup);
-  const accounts = useLoad(api.accounts);
+  const options = props.options;
+  const tools = useToolsState();
+  const { setup: loaded, accounts } = tools;
   const packages = useLoad(api.packages);
+  const status = useLoad(api.status);
   const setup = loaded.data;
+  const accountList = accounts.data?.accounts;
+  const running = useMemo(() => runningExtensions(status.data), [status.data]);
   const [choices, setChoices] = useState<Choices>({});
   const [results, setResults] = useState<Results>({});
-  const [applying, setApplying] = useState(false);
-  const [applyError, setApplyError] = useState<string>();
-  const [bringing, setBringing] = useState<ImportState>();
-  // Look again also reads the accounts again: a sign-in left running (a device code, a browser
-  // tab) can finish while this page stays in view, with no focus change to say so.
-  // It reads the packages again too: a provider turned on or off elsewhere changes whether an
-  // installed pick runs.
-  const look = useAction(() => {
-    accounts.reload();
-    loaded.reload();
-    packages.reload();
-  });
-  const finish = useAction(() => {
-    loaded.reload();
-    location.hash = "#/";
-  });
+  const [needed, setNeeded] = useState<Record<string, string>>({});
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string>();
+  const [signedIn, setSignedIn] = useState<string>();
+  const [outcome, setOutcome] = useState<TestOutcome>();
+  const [finishing, setFinishing] = useState(false);
+  const [finishError, setFinishError] = useState<string>();
+  // null until the person opens a step: the page then shows the step it opened with.
+  const [moved, setOpen] = useState<StepNo | null>(null);
+  const headings = useRef<Record<number, HTMLHeadingElement | null>>({});
+  const focusNext = useRef(false);
+  const started = useRef<{ hadAccounts: boolean; open?: StepNo }>(undefined);
+  const remote = options?.isRemote ?? !onThisMachine(host.address);
 
-  // A sign-in can finish somewhere else (a browser tab, another window): the accounts are read
+  // A sign-in can finish somewhere else (a browser tab, a device code): the accounts are read
   // again when this page is looked at again.
+  // Which accounts can take requests depends on the extensions core runs: those are read again too.
   useEffect(() => {
     const again = () => {
-      if (document.visibilityState === "visible") accounts.reload();
+      if (document.visibilityState !== "visible") return;
+      accounts.reload();
+      status.reload();
     };
     window.addEventListener("focus", again);
     document.addEventListener("visibilitychange", again);
@@ -954,211 +180,207 @@ export function SetupPage(props: { options?: SetupOptions }) {
       window.removeEventListener("focus", again);
       document.removeEventListener("visibilitychange", again);
     };
-  }, [accounts.reload]);
+  }, [accounts.reload, status.reload]);
 
-  // While core scans, read its answer again every second, as long as the page is visible.
-  const scanning = setup?.scanning === true;
-  useEffect(() => {
-    if (!scanning || loaded.loading) return;
-    const timer = setTimeout(() => {
-      if (document.visibilityState === "visible") loaded.reload();
-    }, 1000);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") loaded.reload();
+  const tools2 = connectedTools(setup, options?.extraTools);
+  const done: Record<StepNo, boolean> = {
+    1: (accountList ?? []).some((a) => canServe(a, running)),
+    2: tools2.length > 0,
+    3: outcome?.kind === "passed",
+  };
+
+  // Which step is open is decided once, when the page has what it needs: on a first run the first
+  // step not done, afterwards none. After that only the person moves it.
+  // It waits for the extensions core runs too: an account whose provider is stopped is not done.
+  if (!started.current && setup && accountList && (status.data || status.phase === "failed")) {
+    started.current = {
+      hadAccounts: accountList.length > 0,
+      open: setup.first_run ? (!done[1] ? 1 : !done[2] ? 2 : 3) : undefined,
     };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [scanning, loaded.loading, loaded.reload]);
-
-  // A core that never looked (an install from before setup existed) looks once when the page opens.
-  const asked = useRef(false);
-  const never = setup !== undefined && scanState(setup) === "never";
+  }
+  const open = moved ?? started.current?.open;
+  const go = (n: StepNo) => {
+    focusNext.current = true;
+    setOpen(n);
+  };
   useEffect(() => {
-    if (!never || asked.current) return;
-    asked.current = true;
-    look.run(api.scanSetup);
-  }, [never]);
+    if (!focusNext.current || !open) return;
+    focusNext.current = false;
+    headings.current[open]?.focus();
+  }, [open]);
 
-  const onStart = async () => {
-    if (!setup || applying) return;
-    setApplying(true);
-    setApplyError(undefined);
-    const done = await start(api, setup, choices, results);
-    setApplying(false);
-    if (done.reply.status === 401) return unauthorized();
-    setApplyError(problem(done.reply));
-    setResults(done.results);
+  const add = async () => {
+    if (!setup || adding) return;
+    const ids = toInstall(setup, choices, results);
+    if (ids.length === 0) return;
+    setAdding(true);
+    setAddError(undefined);
+    const out = await start(api, ids, results);
+    setAdding(false);
+    if (out.reply.status === 401) return unauthorized();
+    if (!out.reply.body) setAddError(problem(out.reply));
+    setResults(out.results);
     loaded.reload();
     packages.reload();
+    status.reload();
     extensionsChanged();
   };
 
-  // A dry run first, whose report the page shows; then, when the person confirms, the import.
-  const onBring = async (found: SetupImport, dryRun: boolean) => {
-    if (!setup || bringing?.busy) return;
-    if (!dryRun && !bringing?.report) return;
-    const config = found.config;
-    setBringing((s) => ({
-      config,
-      report: s?.config === config ? s.report : undefined,
-      busy: dryRun ? "checking" : "importing",
-    }));
-    const reply = await api.importSetup(config, authDir(found), dryRun);
-    if (reply.status === 401) return unauthorized();
-    const report = reply.body;
-    if (!report || reply.status >= 300) {
-      // The report goes too: what a later try would do is for a new dry run to say.
-      return setBringing({ config, ...importProblem(reply, dryRun) });
-    }
-    if (dryRun) return setBringing({ config, report });
-    setBringing({ config, report, done: true });
-    setChoices((c) => ({ ...c, ...neededPicks(setup, report) }));
+  const imported = (report: ImportReport) => {
+    const offered = new Set(setup?.picks.filter((p) => p.kind === "provider").map((p) => p.id));
+    const needs = report.needs.filter((need) => offered.has(need.pick));
+    setChoices((c) => ({ ...c, ...Object.fromEntries(needs.map((need) => [need.pick, true])) }));
+    setNeeded((n) => ({ ...n, ...Object.fromEntries(needs.map((need) => [need.pick, need.why])) }));
     loaded.reload();
     accounts.reload();
     packages.reload();
   };
 
-  if (!setup) {
+  const finish = async () => {
+    if (finishing) return;
+    setFinishing(true);
+    setFinishError(undefined);
+    const r = await api.finishSetup();
+    setFinishing(false);
+    if (r.status === 401) return unauthorized();
+    const why = problem(r);
+    if (why !== undefined) return setFinishError(why.replace(/\.$/, ""));
+    options?.onFinish?.();
+    location.hash = "#/";
+  };
+
+  const refresh = async () => {
+    accounts.reload();
+    await tools.scan();
+    options?.onRefresh?.();
+  };
+
+  if (!setup || !accountList) {
+    const failed = (loaded.phase === "failed" && !setup) || (accounts.phase === "failed" && !accountList);
     return (
       <>
         <PageHead title={t("title")} />
-        {loaded.error ? (
-          <>
-            <Notice tone="danger">{loaded.error}</Notice>
-            <Button onClick={loaded.reload}>{t("retry")}</Button>
-          </>
+        {failed ? (
+          <StatePane
+            kind="failed"
+            title={t("failed")}
+            details={loaded.error ?? accounts.error}
+            primary={{
+              label: tryAgainWord(),
+              onClick: () => {
+                loaded.reload();
+                accounts.reload();
+              },
+            }}
+          />
         ) : (
-          <Notice tone="muted">{t("loading")}</Notice>
+          <StatePane kind="loading" title={t("loading")} />
         )}
       </>
     );
   }
-  return (
-    <SetupView
-      setup={setup}
-      options={props.options}
-      remote={!onThisMachine(host.address)}
-      choices={choices}
-      results={results}
-      packages={packages.data?.packages}
-      accounts={accounts.data?.accounts.length}
-      applying={applying}
-      finishing={finish.busy}
-      looking={look.busy}
-      errors={{
-        look: look.error ?? (loaded.loading ? undefined : loaded.error),
-        apply: applyError,
-        accounts: accounts.error,
-        finish: finish.error,
-      }}
-      bring={{
-        state: bringing,
-        onBring,
-        onClose: () => setBringing(undefined),
-      }}
-      onLook={() => look.run(api.scanSetup)}
-      onTick={(id, ticked) => setChoices((c) => ({ ...c, [id]: ticked }))}
-      onStart={onStart}
-      onAdded={accounts.reload}
-      onFinish={() => finish.run(api.finishSetup)}
-    />
-  );
-}
 
-/** The page's parts, top to bottom, from what the page holds. */
-export function SetupView(props: {
-  setup: Setup;
-  /** What the build adds to the page. */
-  options?: SetupOptions;
-  /** Core runs on another machine than the one showing the page. */
-  remote: boolean;
-  choices: Choices;
-  results: Results;
-  /** Core's installed packages, once it has listed them: they say which installed pick does not run. */
-  packages?: Package[];
-  /** How many accounts core has; undefined until it has said. */
-  accounts?: number;
-  applying?: boolean;
-  finishing?: boolean;
-  looking?: boolean;
-  errors?: { look?: string; apply?: string; accounts?: string; finish?: string };
-  /** Bringing a found CLIProxyAPI setup across; without it the row names only the command. */
-  bring?: ImportProps;
-  onLook: () => void;
-  onTick: (id: string, ticked: boolean) => void;
-  onStart: () => void;
-  onAdded: () => void;
-  onFinish: () => void;
-}) {
-  const { setup, choices, results, errors } = props;
-  // One primary button at a time: Finish takes it once Start has nothing left to do.
-  const provider = hasProvider(setup, results, props.packages);
-  const statuses = pickStatuses(setup, results, props.packages);
-  const finishNext = toInstall(setup, choices, results).length === 0 && provider;
+  const first = setup.first_run;
+  const names = tools2.map(toolName);
+  const stepProps = (n: StepNo) => ({
+    n,
+    done: done[n],
+    open: open === n,
+    onOpen: () => go(n),
+    heading: (node: HTMLHeadingElement | null) => {
+      headings.current[n] = node;
+    },
+  });
   return (
     <>
-      <PageHead title={t("title")} />
+      <PageHead title={first ? t("title") : t("titleLater")} />
       <div class="setup stack">
-        <p class="muted setup-hint">
-          {!setup.first_run
-            ? t("introLater")
-            : `${t("introFirst")} ${t(startInstalls(setup, results) ? "introUntilStart" : "introOptional")}`}
-        </p>
-        <Found
-          setup={setup}
-          remote={props.remote}
-          busy={props.looking}
-          error={errors?.look}
-          bring={props.bring}
-          onLook={props.onLook}
-        />
-        <Providers
-          setup={setup}
-          choices={choices}
-          results={results}
-          statuses={statuses}
-          busy={props.applying}
-          onTick={props.onTick}
-        />
-        <Start
-          setup={setup}
-          choices={choices}
-          results={results}
-          busy={props.applying || props.finishing}
-          error={errors?.apply}
-          provider={provider}
-          statuses={statuses}
-          onStart={props.onStart}
-          onFinish={props.onFinish}
-        />
-        <Account
-          setup={setup}
-          choices={choices}
-          results={results}
-          count={props.accounts}
-          provider={provider}
-          error={errors?.accounts}
-          onAdded={props.onAdded}
-        />
-        <Clients setup={setup} options={props.options} />
-        {setup.first_run && (
-          <Card title={t("finishTitle")}>
-            {errors?.finish && <Notice tone="danger">{errors.finish}</Notice>}
-            <div class="setup-line">
-              <span class="muted">{t("finishHint")}</span>
-              <Button
-                variant={finishNext ? "primary" : "quiet"}
-                disabled={props.finishing || props.applying}
-                onClick={props.onFinish}
-              >
-                {t("finish")}
-              </Button>
-            </div>
-          </Card>
+        <p class="setup-intro">{first ? t("introFirst") : t("introLater")}</p>
+        {!setup.scanned_at && (setup.scanning || tools.scanBusy) && (
+          <p class="muted setup-scanning">{t("scanning")}</p>
         )}
+        {!setup.scanned_at && !setup.scanning && !tools.scanBusy && tools.scanError && (
+          <div class="setup-scan-failed">
+            <Notice tone="danger">{t("scanFailed", { error: tools.scanError.replace(/\.$/, "") })}</Notice>
+            <div class="actions">
+              <Button onClick={() => void tools.scan()}>{tryAgainWord()}</Button>
+            </div>
+          </div>
+        )}
+        <ImportLine setup={setup} onImported={imported} onRescan={tools.rescan} />
+        <ol class="setup-steps" aria-label={t("steps")}>
+          <Step {...stepProps(1)} title={t("step1")} summary={accountsSummary(accountList, running)}>
+            <AccountsStep
+              setup={setup}
+              packages={packages.data?.packages}
+              accounts={accountList}
+              running={running}
+              hadAccounts={started.current?.hadAccounts ?? false}
+              choices={choices}
+              results={results}
+              needed={needed}
+              adding={adding}
+              addError={addError}
+              signedIn={signedIn}
+              onTick={(id, on) => setChoices((c) => ({ ...c, [id]: on }))}
+              onAdd={add}
+              onSignedIn={(id) => {
+                setSignedIn(id);
+                accounts.reload();
+              }}
+            />
+            <Next done={done[1]} onNext={() => go(2)} />
+          </Step>
+          <Step
+            {...stepProps(2)}
+            title={t("step2")}
+            summary={
+              names.length > 0 ? t("toolsUse", { count: names.length, tools: joinNames(names) }) : t("noTool")
+            }
+          >
+            {!remote && <p class="muted">{t("here")}</p>}
+            {setup.found.core.reachable_from_network && <p class="muted">{t("network")}</p>}
+            <ToolsStep
+              toolAction={options?.toolAction}
+              extraTools={options?.extraTools}
+              localPages={options?.localPages}
+              remote={remote}
+              state={tools}
+              onAddAccount={() => go(1)}
+            />
+            <Next done={done[2]} onNext={() => go(3)}>
+              <Button onClick={refresh}>{refreshWord()}</Button>
+            </Next>
+          </Step>
+          <Step {...stepProps(3)} title={t("step3")} summary={checkSummary(outcome)}>
+            <CheckStep
+              accounts={accountList}
+              running={running}
+              added={signedIn}
+              outcome={outcome}
+              onOutcome={setOutcome}
+              onAddAccount={() => go(1)}
+              onAccountsChanged={accounts.reload}
+              finishing={finishing}
+              onFinish={finish}
+            />
+          </Step>
+        </ol>
+        {finishError && <Notice tone="danger">{t("finishFailed", { error: finishError })}</Notice>}
+        <p class="setup-later">
+          {first ? (
+            <>
+              <Button disabled={finishing} onClick={finish}>
+                {t("finishLater")}
+              </Button>
+              <span class="muted">{t("staysUnder")}</span>
+            </>
+          ) : (
+            <a class="btn" data-part="button" data-variant="quiet" href="#/">
+              {t("backHome")}
+            </a>
+          )}
+        </p>
       </div>
     </>
   );
@@ -1168,7 +390,7 @@ export const setupPage = (options?: SetupOptions): PageDef => ({
   id: "setup",
   dest: "settings",
   kind: "topic",
-  title: t("title"),
+  title: t("titleLater"),
   tip: t("tip"),
   render: () => <SetupPage options={options} />,
 });

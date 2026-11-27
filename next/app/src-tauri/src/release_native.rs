@@ -1,5 +1,5 @@
-//! The native test's release feed check, in native-test builds only. On Linux it drives Version
-//! Management as the person would (real DOM clicks, real GTK dialogs through X input) against
+//! The native test's release feed check, in native-test builds only. On Linux it drives the
+//! Updates page as the person would (real DOM clicks, real GTK dialogs through X input) against
 //! the runner's fake https feed (`native/run.ts`), and reads what the window, the notes webview,
 //! the files the app keeps and the runner's stand-in browser show. Expected versions come from
 //! the feed fixture (`native/release-feed.json`), not from the app's parser. Its helpers (clicks,
@@ -113,7 +113,7 @@ fn ask_source(app: &AppHandle, main: &Webview, url: &str) -> Result<String, Stri
 
 /// Sets the feed to url through its native confirmation, confirmed.
 pub(crate) fn set_source(app: &AppHandle, main: &Webview, url: &str) -> Result<(), String> {
-    wait_for("the Version Management page", || {
+    wait_for("the Updates page", || {
         eval(
             main,
             "document.querySelector('[data-part=release-source-input]') !== null",
@@ -202,7 +202,7 @@ pub(crate) fn run(
 
     main.eval("location.hash = '#/versions'")
         .map_err(|e| e.to_string())?;
-    wait_for("the Version Management page", || {
+    wait_for("the Updates page", || {
         eval(
             main,
             "document.querySelector('[data-part=release-check]') !== null",
@@ -308,7 +308,7 @@ pub(crate) fn run(
         )
         .filter(|t| {
             t.as_str()
-                .is_some_and(|t| t.contains("Could not change the release feed"))
+                .is_some_and(|t| t.contains("The update source was not changed"))
         })
     })?;
     evidence["voided"] = json!({
@@ -491,42 +491,12 @@ pub(crate) fn run(
         "refused": downloads, "saved": saved, "right_clicks": menus, "menu_shown": menu_shown,
     });
 
-    // Expanded at first, the notes webview over the notes area; Collapse hides the notes and
-    // closes their webview, Expand shows them again in a new one, over the area again.
-    let toggle = "[data-part=release-notes-toggle][data-product=app]";
-    let first = area(main, "app");
-    let first_follows = near(&first, &placed(app, &label)?);
-    click(main, toggle)?;
-    wait_for("Collapse to close the notes webview", || {
-        (app.get_webview(&label).is_none() && attr(main, notes_sel, "label").is_null())
-            .then_some(())
-    })?;
-    click(main, toggle)?;
-    let again = wait_for("Expand to open a notes webview", || {
-        attr(main, notes_sel, "label")
-            .as_str()
-            .filter(|l| l.starts_with("notes-") && *l != label)
-            .and_then(|l| app.get_webview(l).map(|_| l.to_string()))
-    })?;
-    std::thread::sleep(Duration::from_millis(500));
-    evidence["expand"] = json!({
-        "first_follows": first_follows,
-        "collapse_closed": true,
-        "expand_follows": near(&area(main, "app"), &placed(app, &again)?),
-        "area": first,
-    });
-
-    // Scrolled: the notes webview covers only the part of its area that shows, inside the pane
-    // (the one part of the window that scrolls) and so below the header strip, and hides once
-    // none of it does. The pane gets room to scroll; unscrolled, the webview sits over its area
-    // (control). "nav" is the pane's top edge: the strip and anything else above it end there.
-    main.eval("{ const m = document.querySelector('[data-part=main]'); m.style.paddingBottom = '3000px'; m.scrollTo(0, 0); }")
-        .map_err(|e| e.to_string())?;
+    // What the page shows of the notes area, from the page's own numbers: the notes webview covers
+    // only that part, which is all of the area only while the area is wholly in the window.
     let geometry = "(() => { const r = document.querySelector('[data-part=release-notes][data-product=app]').getBoundingClientRect(); \
         const m = document.querySelector('[data-part=main]'); const p = m.getBoundingClientRect(); const v = document.documentElement; \
         return {left: r.left, top: r.top, right: r.right, bottom: r.bottom, nav: p.top, pane_left: p.left, \
         view_width: v.clientWidth, view_height: v.clientHeight, scroll: m.scrollTop}; })()";
-    // What should show of the area, from the page's own numbers.
     let shows = |g: &Value| -> Value {
         let f = |k: &str| g[k].as_f64().unwrap_or(f64::NAN);
         let (x, y) = (f("left").max(f("pane_left")), f("top").max(f("nav")));
@@ -540,6 +510,40 @@ pub(crate) fn run(
             Value::Null
         }
     };
+
+    // Shown at first, the notes webview over the notes area; Hide closes their webview, Show opens
+    // a new one, over what shows of the area again: Hide shortens the page, so the pane's scroll
+    // position can change, and the area can then come back partly below the window's edge.
+    let toggle = "[data-part=release-notes-toggle][data-product=app]";
+    let first = area(main, "app");
+    let first_follows = near(&first, &placed(app, &label)?);
+    click(main, toggle)?;
+    wait_for("Hide to close the notes webview", || {
+        (app.get_webview(&label).is_none() && attr(main, notes_sel, "label").is_null())
+            .then_some(())
+    })?;
+    click(main, toggle)?;
+    let again = wait_for("Show to open a notes webview", || {
+        attr(main, notes_sel, "label")
+            .as_str()
+            .filter(|l| l.starts_with("notes-") && *l != label)
+            .and_then(|l| app.get_webview(l).map(|_| l.to_string()))
+    })?;
+    std::thread::sleep(Duration::from_millis(500));
+    let shown_again = shows(&eval(main, geometry).unwrap_or(Value::Null));
+    evidence["expand"] = json!({
+        "first_follows": first_follows,
+        "collapse_closed": true,
+        "expand_follows": near(&shown_again, &placed(app, &again)?),
+        "area": first,
+    });
+
+    // Scrolled: the notes webview covers only the part of its area that shows, inside the pane
+    // (the one part of the window that scrolls) and so below the header strip, and hides once
+    // none of it does. The pane gets room to scroll; unscrolled, the webview sits over its area
+    // (control). "nav" is the pane's top edge: the strip and anything else above it end there.
+    main.eval("{ const m = document.querySelector('[data-part=main]'); m.style.paddingBottom = '3000px'; m.scrollTo(0, 0); }")
+        .map_err(|e| e.to_string())?;
     // Scrolls the pane to y, then waits until the webview is where the area shows (or hidden).
     let scrolled = |y: f64| -> Result<Value, String> {
         main.eval(format!(

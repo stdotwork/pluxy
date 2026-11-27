@@ -177,11 +177,10 @@ function configs(home: string, login: string, guided: string) {
     root: { link: rootLink, text: chezmoi, file: join(chezmoi, "settings.json") },
     unknown,
     broken,
-    // Beginner Mode's check: its file, and the account its guided sign-in adds with test/alpha's
-    // API-key method.
+    // Beginner Mode's check: its file, and the API key its guided sign-in adds an account with
+    // (test/alpha's API-key method; core makes the account's ID).
     easy: {
       settings: easy,
-      account: "guided-account",
       api_key: guided,
     },
     settings_input: SETTINGS,

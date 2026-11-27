@@ -1,6 +1,7 @@
 package legacy
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -751,5 +753,110 @@ func TestAntigravityWithoutProject(t *testing.T) {
 	files, skipped = read(map[string]any{"type": "antigravity", "project_id": "proj-1"})
 	if len(files) != 0 || !slices.Equal(skipped, []Skipped{{File: "antigravity-a.json", Reason: "it holds no token"}}) {
 		t.Errorf("no token: files %v, skipped %v", files, skipped)
+	}
+}
+
+// signInProvider is an extension that signs every login in at once with grant, for new logins to
+// imported accounts.
+type signInProvider struct{ grant *protocol.Grant }
+
+func (p *signInProvider) Info() protocol.Info {
+	return protocol.Info{ID: Codex, Operations: []string{protocol.OpLogin},
+		LoginMethods: []protocol.LoginMethod{{Method: "device", Kind: protocol.LoginDevice}}}
+}
+
+func (p *signInProvider) Login(context.Context, protocol.Account, protocol.Login) cred.LoginCall {
+	return &signInCall{grant: p.grant}
+}
+
+func (p *signInProvider) Refresh(context.Context, protocol.Account) (*protocol.Credential, *llm.Error) {
+	return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "not used"}
+}
+
+func (p *signInProvider) Provider(string) cred.Provider { return p }
+func (p *signInProvider) Running() []string             { return []string{Codex} }
+
+type signInCall struct {
+	grant *protocol.Grant
+	done  bool
+}
+
+func (c *signInCall) Next() protocol.Reply {
+	if !c.done {
+		c.done = true
+		return protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginDone}, Grant: c.grant}
+	}
+	return protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeCancelled}}}
+}
+func (c *signInCall) Send(map[string]string) error { return nil }
+func (c *signInCall) Close()                       {}
+
+// A credential file's own label is a name a person gave the account; its e-mail (Devin: its user
+// name) is the provider's label. Imported, taking the name away shows the e-mail, or no label
+// when the file has none, and a new sign-in is checked against the e-mail, never the name: the
+// same e-mail (letter case aside) is let in and the name stays, another e-mail is refused. The
+// SIWC account of a Codex file has the file's labels.
+func TestImportedFileLabelIsANameAndEmailTheProviders(t *testing.T) {
+	dir := writeFiles(t, map[string]any{
+		"codex-user.json":     siwcFile(map[string]any{"label": "work", "use_siwc": true}),
+		"codex-nameonly.json": map[string]any{"type": "codex", "access_token": "fake-a", "label": "home"},
+		"codex-plain.json":    map[string]any{"type": "codex", "access_token": "fake-b", "email": "plain@example.com"},
+		"devin-user.json": map[string]any{
+			"type": "devin", "auth_kind": "oauth", "api_key": "fake-devin-token", "session_token": "fake-devin-token",
+			"user_name": "dev-user", "user_id": "u1", "base_url": "http://127.0.0.1:4", "label": "mine",
+		},
+	})
+	files, _, err := ReadAuthDir(dir, DefaultImportOptions, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := cred.Open(cred.FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &signInProvider{}
+	m := cred.NewManager(store, p, cred.Options{})
+	t.Cleanup(m.Close)
+	if imported, skipped, err := Import(m, files, func(string) bool { return false }); err != nil || len(imported) != 5 {
+		t.Fatalf("import: imported %v, skipped %v, %v", imported, skipped, err)
+	}
+	signIn := func(id, email string) cred.LoginView {
+		t.Helper()
+		p.grant = &protocol.Grant{Label: email, Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "fake-new-" + email}}
+		v, err := m.StartLogin(context.Background(), cred.LoginRequest{Account: route.Account{ID: id}, Method: "device", Reauth: true})
+		if err != nil {
+			t.Fatalf("signing in to %s again: %v", id, err)
+		}
+		return v
+	}
+	none := ""
+
+	// Named, signed in again: the e-mail is let in, and the name stays.
+	if v := signIn("codex-user", "someone@example.com"); v.State != cred.LoginFailed {
+		t.Errorf("a new sign-in to codex-user with another e-mail ended %s, want failed", v.State)
+	}
+	if v := signIn("codex-user", "USER@example.com"); v.State != cred.LoginDone {
+		t.Errorf("a new sign-in to codex-user with its file's e-mail ended %s: %+v; want done", v.State, v.Error)
+	}
+	if r, _ := store.Get("codex-user"); r.Label != "work" {
+		t.Errorf("codex-user's label after the new sign-in = %q, want the file's label", r.Label)
+	}
+
+	// The name taken away: the provider's label shows, or none.
+	for id, want := range map[string][2]string{
+		"codex-user-siwc": {"work", "user@example.com"},
+		"codex-nameonly":  {"home", ""},
+		"codex-plain":     {"plain@example.com", "plain@example.com"},
+		"devin-user":      {"mine", "dev-user"},
+	} {
+		if r, _ := store.Get(id); r.Label != want[0] {
+			t.Errorf("%s imported with label %q, want %q", id, r.Label, want[0])
+		}
+		if r, err := m.SetAccount(id, nil, nil, &none); err != nil || r.Label != want[1] {
+			t.Errorf("%s with its name taken away: label %q, %v; want %q", id, r.Label, err, want[1])
+		}
+	}
+	if v := signIn("codex-user-siwc", "User@Example.com"); v.State != cred.LoginDone {
+		t.Errorf("a new sign-in to codex-user-siwc with its file's e-mail ended %s: %+v; want done", v.State, v.Error)
 	}
 }

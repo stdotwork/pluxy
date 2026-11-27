@@ -146,7 +146,7 @@
 // and claude through the launcher with no key in argv or environment; the key and a login canary
 // stay out of every window answer, confirmation and the app's output, and removing the package
 // leaves no process. Then Beginner Mode (easy_mode_native.rs) signs in with test/alpha's API-key
-// method in its Add Account and installs, enables, applies and starts Claude Code through the
+// method in its Add an account and installs, enables, applies and starts Claude Code through the
 // guide; a cancelled apply keeps the file and the guide cannot answer the enable confirmation.
 // The Codex check (codex.ts, codex_native.rs) runs in one more session with that build:
 // pluxy/codex-setup (next/app-tools/codex, built here) with the execution program imports the
@@ -235,9 +235,9 @@
 // The Setup checks (setup.ts, native_setup.rs) run in one more session, on the build with
 // artifact-test-trust, a first run with nothing installed: a core whose bundled registry offers
 // pluxy/claude as a pick (core-steps.ts firstRunSource) and a stand-in claude on its PATH
-// (first-run.ts). The window opens on Setup by itself, shows Claude Code found and the pick
-// ticked, offers Set up for it, Start installs the pick and Finish ends the first run; the next
-// launch opens on the Dashboard, and Setup then says it is finished, light and dark.
+// (first-run.ts). The window opens on Setup by itself with the Claude kind ticked, Add Claude adds
+// it, step 2 offers Set up for Claude Code and Finish later ends the first run; the next launch
+// opens on Home, and Setup then has every step folded, light and dark.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
@@ -668,7 +668,7 @@ async function runApp(
       );
       rmSync(trustHome, { recursive: true, force: true });
     }
-    // The main checks close the window to the tray; the window suite starts with Ask every time.
+    // The main checks close the window to the tray; the window suite starts with Ask.
     if (!suite)
       writeFileSync(
         join(dirs.config, artifact.identifier, "window.json"),
@@ -2062,7 +2062,7 @@ function checkRelease(
   const ex = release.expand ?? {};
   check(
     ex.first_follows === true && ex.collapse_closed === true && ex.expand_follows === true,
-    `Expand/Collapse: ${JSON.stringify(ex)}`,
+    `Show/Hide: ${JSON.stringify(ex)}`,
   );
   const sc = release.scrolled ?? {};
   const g = (step: string) => sc[step]?.geometry ?? {};
@@ -2078,7 +2078,9 @@ function checkRelease(
   );
   const off = release.offline ?? {};
   check(
-    off.kept === true && off.same_time === true && /Could not reach the release feed/.test(off.message ?? ""),
+    off.kept === true &&
+      off.same_time === true &&
+      /Could not reach the update source/.test(off.message ?? ""),
     `offline: ${JSON.stringify(off)}`,
   );
   // The notice moved the notes area (so the check below is not vacuous), and the webview followed.

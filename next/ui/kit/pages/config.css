@@ -11,49 +11,6 @@
     overflow-wrap: anywhere;
     user-select: all;
   }
-  .kit-tabs {
-    display: grid;
-    gap: calc(var(--s) * 4);
-    min-width: 0;
-  }
-  .kit-tabs > [role="tablist"] {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s);
-    border-bottom: var(--px-shape-border) solid var(--px-color-border);
-    padding-bottom: calc(var(--s) * 2);
-  }
-  [data-part="tab"] {
-    border: var(--px-shape-border) solid transparent;
-    border-radius: var(--px-shape-radius);
-    padding: calc(var(--s) * 2) calc(var(--s) * 3);
-    background: transparent;
-    color: var(--px-color-text-muted);
-    font: inherit;
-    cursor: pointer;
-  }
-  [data-part="tab"][aria-selected="true"] {
-    color: var(--px-color-accent);
-    background: var(--px-color-selected);
-    border-color: var(--px-color-border);
-  }
-  [data-part="tab"]:focus-visible {
-    outline: 2px solid var(--px-color-focus);
-    outline-offset: 2px;
-  }
-  .kit-tabs > [role="tabpanel"] {
-    min-width: 0;
-  }
-  .kit-tabs[data-layout="side"] {
-    grid-template-columns: max-content minmax(0, 1fr);
-    align-items: start;
-  }
-  .kit-tabs[data-layout="side"] > [role="tablist"] {
-    flex-direction: column;
-    border-bottom: 0;
-    border-right: var(--px-shape-border) solid var(--px-color-border);
-    padding-right: calc(var(--s) * 3);
-  }
   .config-fields {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
@@ -149,15 +106,5 @@
   .config-diff [data-change="remove"] {
     color: var(--px-color-diff-remove);
     background: color-mix(in srgb, var(--px-color-diff-remove) 10%, transparent);
-  }
-  @media (max-width: 720px) {
-    .kit-tabs[data-layout="side"] {
-      grid-template-columns: minmax(0, 1fr);
-    }
-    .kit-tabs[data-layout="side"] > [role="tablist"] {
-      flex-direction: row;
-      border-right: 0;
-      border-bottom: var(--px-shape-border) solid var(--px-color-border);
-    }
   }
 }

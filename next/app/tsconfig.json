@@ -19,5 +19,5 @@
       "preact/*": ["../ui/node_modules/preact/*"]
     }
   },
-  "include": ["src", "native", "page", "build.ts", "preact.ts"]
+  "include": ["src", "native", "page", "build.ts", "preact.ts", "package.ts"]
 }

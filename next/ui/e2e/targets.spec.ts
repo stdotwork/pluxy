@@ -2,7 +2,7 @@
 // drawn control may be smaller when its hit area reaches past it. The hit area is what a click at
 // a point lands on, found with elementFromPoint, not the size of the drawn box.
 import { expect, type Page, test } from "@playwright/test";
-import { goTo, openPanel, signIn, useCore } from "./support";
+import { accountRow, goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 const MIN = 24;
@@ -13,7 +13,7 @@ test.beforeAll(async () => {
       id,
       extension: "test/alpha",
       method: "api_key",
-      input: { api_key: "ak-targets-test" },
+      input: { api_key: "ak-targets-test", label: id },
     });
     expect(r.status).toBe(202);
     await expect
@@ -98,14 +98,14 @@ async function expectLargeEnough(page: Page) {
 }
 
 const PAGES = [
-  "Dashboard",
+  "Home",
   "Accounts",
-  "Add Account",
-  "Routing",
-  "Quota Management",
-  "Logs Viewer",
+  "Add an account",
+  "Order & fallback",
+  "Logs",
+  "Requests",
   "Usage",
-  "Set up pluxy",
+  "Setup",
   "Config Panel",
   "System",
   "Extensions",
@@ -121,9 +121,12 @@ for (const name of PAGES) {
     await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
     await page.waitForLoadState("networkidle");
     if (name === "Accounts") {
-      await expect(page.getByRole("button", { name: "target-a", exact: true })).toBeVisible();
-      await page.getByRole("button", { name: "target-a", exact: true }).click();
-      await expect(page.getByRole("complementary", { name: "Details: target-a" })).toBeVisible();
+      // The list, then one account's page with its settings, models and test request open.
+      await expect(accountRow(page, "target-a")).toBeVisible();
+      await expectLargeEnough(page);
+      await accountRow(page, "target-a").locator("a.account-name").click();
+      await page.getByText("Settings, models and a test request", { exact: true }).click();
+      await expect(page.getByRole("button", { name: "Send a test request", exact: true })).toBeVisible();
     }
     await expectLargeEnough(page);
     // Each tab of a page with tabs.

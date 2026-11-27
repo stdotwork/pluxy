@@ -1,396 +1,349 @@
-import { useEffect, useRef, useState } from "preact/hooks";
-import { type Account, problem, type UsageEvent, type UsageFilters } from "../api";
-import { csvField } from "../csv";
-import { type Masker, useAccountLabels, usePrivacy } from "../privacy";
-import { useSave } from "../save";
+// Usage: what the requests add up to over 24 hours, 7 days or 30 days, split by provider, model,
+// account or key. The figures, the chart and the breakdown come from one read of GET /usage in
+// hourly steps, added into local days, read again every minute while the tab is on screen.
+
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { problem, type UsageSummary } from "../api";
+import { keyName, Phases, providerName, StatePane, timeTaken, useNaming } from "../parts";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
+import { Button, Choices, type Loaded, PageHead, TableFrame, useKit, useLoad, usePoll } from "../ui";
 import {
-  Badge,
-  Button,
-  Detail,
-  Empty,
-  Facts,
-  List,
-  MasterDetail,
-  Notice,
-  PageHead,
-  TraceId,
-  useKit,
-  useLoad,
-  when,
-  whenText,
-} from "../ui";
+  type Bar,
+  figuresOf,
+  hotspotOf,
+  hourBars,
+  localDays,
+  NO_FILTERS,
+  PICKED,
+  type Picked,
+  queryOf,
+  type Range,
+  rangeDays,
+  shortCount,
+  usageSince,
+  useAddressQuery,
+} from "./activity";
+import { RecordOff } from "./activityParts";
+import { UsageChart } from "./usageChart";
 
 const t = strings("usage", {
   title: "Usage",
-  tip: "Recorded requests",
-  since: "Since",
-  sinceHint: "e.g. 24h or 2026-01-01T00:00:00Z",
-  model: "Model",
-  provider: "Provider",
-  account: "Account",
-  key: "Client key",
-  failed: "Failed",
-  all: "All",
-  yes: "Failed",
-  no: "Succeeded",
+  tip: "What the requests add up to",
   refresh: "Refresh",
-  export: "Export",
-  time: "Time",
-  status: "Status",
-  latency: "Latency",
+  range: "Range",
+  h24: "24 hours",
+  d7: "7 days",
+  d30: "30 days",
+  loading: "Adding up requests…",
+  failed: "Could not add up the requests.",
+  none: "No requests in the last {range}.",
+  starts: "pluxy's record starts {when}.",
+  by: "By",
+  provider: "Provider",
+  model: "Model",
+  account: "Account",
+  key: "Key",
+  requests: "Requests",
+  failedCol: "Failed",
   tokens: "Tokens",
-  trace: "Trace ID",
-  empty: "No requests yet. Send traffic through pluxy, or clear your filters.",
-  setup: "Set up pluxy",
-  loading: "Loading requests…",
-  previous: "Previous",
-  next: "Next",
-  page: "Page {page}",
-  capped: "Export limited to {count} requests.",
-  lost: "Core dropped older requests past its retention limit. Export sooner to keep them.",
-  milliseconds: "{value} ms",
-  missing: "—",
-  exportError: "Could not export requests. Refresh the list and try again.",
-  exportReal:
-    "Privacy mode hides names on this page only. An exported file holds them as core recorded them.",
-  fallbackStep: "Fallback step {step}",
-  fallbackStepTitle: "Ended on step {step} of this model's fallback chain",
-  tries: "{count} tries",
-  triesTitle: "pluxy sent this request {count} times. Open the row to see what each try came to.",
-  request: "Request {time}",
-  triesFact: "Tries",
-  tried: "What pluxy tried",
-  triedHint: "In order. The last line is the try that ended the request.",
-  answered: "answered",
-  failedWith: "failed: {result}",
+  time: "Avg time",
+  showAll: "Show all {count}",
+  showTop: "Show the top 10",
+  seeThem: "See them",
+  seeThese: "See these requests",
+  remove: "Remove this filter",
+  chip: "{kind}: {name}",
+  share: "Share of the busiest",
 });
 
-const initial: UsageFilters = { since: "", model: "", provider: "", account: "", key_id: "", failed: "" };
-const PAGE_SIZE = 50;
-const EXPORT_LIMIT = 10000;
+const TOP = 10;
 
-/** The step of the model's fallback chain the request ended on, when it was not the first. */
-export function fallbackStep(e: UsageEvent) {
-  const step = e.chain_step ?? 0;
-  if (step < 2) return null;
-  return (
-    <span class="usage-mark" title={t("fallbackStepTitle", { step })}>
-      <Badge tone="muted">{t("fallbackStep", { step })}</Badge>
-    </span>
-  );
-}
+type By = "providers" | "models" | "accounts" | "keys";
+const BYS: { value: By; filter: Picked }[] = [
+  { value: "providers", filter: "provider" },
+  { value: "models", filter: "model" },
+  { value: "accounts", filter: "account" },
+  { value: "keys", filter: "key" },
+];
 
-/** How many times the request was sent upstream, when it was more than once. */
-export function tries(e: UsageEvent) {
-  const count = e.attempts ?? 0;
-  if (count < 2) return null;
-  return (
-    <span class="usage-mark" title={t("triesTitle", { count })}>
-      <Badge tone="muted">{t("tries", { count })}</Badge>
-    </span>
-  );
-}
+const rangeWord = (range: Range) => (range === "24h" ? t("h24") : range === "7d" ? t("d7") : t("d30"));
+const kindWord = (filter: Picked) =>
+  filter === "provider"
+    ? t("provider")
+    : filter === "model"
+      ? t("model")
+      : filter === "account"
+        ? t("account")
+        : t("key");
 
-/**
- * One recorded request: what the row shows, and each try in order with its account, provider,
- * model and what it came to. name turns an account's public ID into what the page calls it.
- */
-export function UsageDetail(props: {
-  event: UsageEvent;
-  name: (account: string) => string;
-  mask: Masker;
-  onClose: () => void;
-}) {
-  const { event: e, mask } = props;
-  return (
-    <Detail
-      title={t("request", { time: whenText(e.timestamp, "exact") ?? e.timestamp })}
-      onClose={props.onClose}
-    >
-      <Facts
-        rows={[
-          [t("model"), e.model],
-          [t("account"), mask(e.account)],
-          [
-            t("status"),
-            <>
-              {(e.status ? String(e.status) : t("missing")) + (e.failed ? ` · ${t("yes")}` : "")}{" "}
-              {fallbackStep(e)}
-            </>,
-          ],
-          [t("triesFact"), e.attempts ? String(e.attempts) : undefined],
-          [t("latency"), t("milliseconds", { value: e.latency_ms })],
-          [t("tokens"), e.tokens.total_tokens?.toLocaleString()],
-          [t("trace"), e.id && <TraceId id={e.id} href={`#/logs/${encodeURIComponent(e.id)}`} />],
-        ]}
-      />
-      {e.tried && e.tried.length > 0 && (
-        <section aria-label={t("tried")}>
-          <h3>{t("tried")}</h3>
-          <small class="hint">{t("triedHint")}</small>
-          <ol class="usage-tried">
-            {e.tried.map((a, i) => (
-              <li key={i}>
-                <span class="mono">{mask(props.name(a.account))}</span>
-                <small class="muted">
-                  {" "}
-                  {a.provider}
-                  {a.model ? ` · ${a.model}` : ""}
-                </small>
-                <br />
-                {a.result === "ok" ? t("answered") : t("failedWith", { result: a.result })}
-              </li>
-            ))}
-          </ol>
-        </section>
-      )}
-    </Detail>
-  );
-}
-
-/** Turns an account's public ID into its ID, when core lists the account; else the public ID stays. */
-export function accountNames(accounts: Account[] | undefined): (account: string) => string {
-  const byPublic = new Map((accounts ?? []).flatMap((a) => (a.public_id ? [[a.public_id, a.id]] : [])));
-  return (account) => byPublic.get(account) ?? account;
+/** GET /usage for a query, read again every minute and when the query changes. */
+function useSummary(query: string): Loaded<UsageSummary> {
+  const { api, unauthorized } = useKit();
+  const [state, setState] = useState<{
+    query: string;
+    phase: "ready" | "failed";
+    data?: UsageSummary;
+    error?: string;
+  }>();
+  const [loading, setLoading] = useState(true);
+  const run = useRef(0);
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  const load = useCallback(async () => {
+    const mine = ++run.current;
+    const asked = queryRef.current;
+    setLoading(true);
+    const r = await api.usage(asked);
+    if (mine !== run.current) return;
+    setLoading(false);
+    if (r.status === 401) return unauthorized();
+    const error = problem(r);
+    setState((s) =>
+      error === undefined
+        ? { query: asked, phase: "ready", data: r.body }
+        : { query: asked, phase: "failed", data: s?.query === asked ? s.data : undefined, error },
+    );
+  }, [api, unauthorized]);
+  useEffect(() => {
+    void load();
+    return () => {
+      run.current++;
+    };
+  }, [query]);
+  usePoll(load, 60_000);
+  // Figures of another range or filter are not shown while this one is read.
+  const mine = state && state.query === query ? state : undefined;
+  const reload = useCallback(() => void load(), [load]);
+  if (!mine) return { phase: "loading", loading: true, reload };
+  if (mine.phase === "failed")
+    return { phase: "failed", data: mine.data, error: mine.error ?? "", loading, reload };
+  return { phase: "ready", data: mine.data, loading, reload };
 }
 
 export function UsagePage() {
-  const { api, unauthorized } = useKit();
-  const p = usePrivacy();
-  const [filters, setFilters] = useState<UsageFilters>(initial);
-  const [events, setEvents] = useState<UsageEvent[]>([]);
-  const mask = p.masker(useAccountLabels(events));
-  const [page, setPage] = useState(0);
-  const [selected, setSelected] = useState<string>();
-  // The tries of a request name accounts by public ID: the accounts say which is which.
+  const { api } = useKit();
+  const [address, setAddress] = useAddressQuery();
+  const [range, setRange] = useState<Range>("7d");
+  const [by, setBy] = useState<By>("providers");
+  const [all, setAll] = useState(false);
   const accounts = useLoad(api.accounts);
-  const chosen = events.find((e) => String(e.seq) === selected);
-  const [loading, setLoading] = useState(true);
-  const [exporting, setExporting] = useState(false);
-  const saved = useSave();
-  const [error, setError] = useState<string>();
-  const [lost, setLost] = useState(false);
-  const [capped, setCapped] = useState(false);
-  const [revision, setRevision] = useState(0);
-  const generation = useRef(0);
-  const changeFilters = (next: UsageFilters) => {
-    generation.current++;
-    setLoading(true);
-    setLost(false);
-    setFilters(next);
+  const keys = useLoad(api.clientKeys);
+  const naming = useNaming(accounts.data?.accounts);
+  // The tab holds one filter: the first its address names.
+  const picked = PICKED.find((k) => address.get(k));
+  const value = picked ? (address.get(picked) ?? "") : "";
+  const filterQuery = picked ? `&${picked}=${encodeURIComponent(value)}` : "";
+  const summary = useSummary(`since=${encodeURIComponent(usageSince(range))}&bucket=1h${filterQuery}`);
+  const u = summary.data;
+
+  const nameOf = (filter: Picked, name: string) =>
+    filter === "provider"
+      ? providerName(name)
+      : filter === "account"
+        ? naming.byId(name)
+        : filter === "key"
+          ? (keyName(name, keys.data?.keys) ?? name)
+          : name;
+  const refresh = () => {
+    summary.reload();
+    accounts.reload();
+    keys.reload();
   };
+  const filterTo = (filter: Picked, name: string) => setAddress(queryOf({ ...NO_FILTERS, [filter]: name }));
 
-  useEffect(() => {
-    const current = ++generation.current;
-    setLoading(true);
-    setError(undefined);
-    setCapped(false);
-    setPage(0);
-    const load = async () => {
-      let after = 0;
-      let all: UsageEvent[] = [];
-      let missing = false;
-      for (;;) {
-        const r = await api.usageEvents(filters, after);
-        if (current !== generation.current) return;
-        if (r.status === 401) {
-          unauthorized();
-          return;
-        }
-        const issue = problem(r);
-        if (issue || !r.body) {
-          setError(issue ?? t("exportError"));
-          setEvents([]);
-          setLoading(false);
-          return;
-        }
-        missing ||= r.body.lost;
-        all = all.concat(r.body.events);
-        if (!r.body.more) break;
-        after = r.body.next;
-      }
-      setEvents(all.reverse());
-      setLost(missing);
-      setLoading(false);
-    };
-    const timer = setTimeout(() => void load(), 300);
-    return () => {
-      generation.current++;
-      clearTimeout(timer);
-    };
-  }, [filters, revision]);
+  const bars: Bar[] = u ? (range === "24h" ? hourBars(u.series) : localDays(u.series, rangeDays(range))) : [];
+  const figures = u?.enabled ? figuresOf(u, timeTaken) : "";
+  const oldest = u?.oldest ? new Date(u.oldest) : undefined;
+  const starts = new Date(range === "24h" ? Date.now() - 24 * 3_600_000 : usageSince(range));
+  const record =
+    oldest && !Number.isNaN(oldest.getTime()) && oldest.getTime() > starts.getTime()
+      ? oldest.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })
+      : undefined;
+  const hotspot = u ? hotspotOf(u) : undefined;
 
-  const exportCSV = async () => {
-    setExporting(true);
-    const selected = events.slice(0, EXPORT_LIMIT);
-    setCapped(events.length > EXPORT_LIMIT);
-    const rows: (string | number)[][] = [
-      [
-        t("time"),
-        t("model"),
-        t("provider"),
-        t("account"),
-        t("key"),
-        t("failed"),
-        t("status"),
-        t("latency"),
-        t("tokens"),
-        t("trace"),
-      ],
-      ...selected.map((e) => [
-        e.timestamp,
-        e.model,
-        e.provider ?? "",
-        e.account ?? "",
-        e.key_id ?? "",
-        String(e.failed),
-        e.status ?? "",
-        e.latency_ms,
-        e.tokens.total_tokens ?? "",
-        e.id ?? "",
-      ]),
-    ];
-    await saved.save(
-      "usage.csv",
-      `${rows.map((row) => row.map(csvField).join(",")).join("\r\n")}\r\n`,
-      "text/csv;charset=utf-8",
+  const group = BYS.find((b) => b.value === by) ?? (BYS[0] as (typeof BYS)[number]);
+  const groups = u
+    ? [...u[by]].filter((g) => g.total_requests > 0).sort((a, b) => b.total_requests - a.total_requests)
+    : [];
+  const busiest = Math.max(1, ...groups.map((g) => g.total_requests));
+  const rows = all ? groups : groups.slice(0, TOP);
+
+  if (u && !u.enabled) {
+    return (
+      <div class="activity" data-part="activity">
+        <PageHead
+          title={t("title")}
+          actions={
+            <Button onClick={refresh} disabled={summary.loading}>
+              {t("refresh")}
+            </Button>
+          }
+        />
+        <RecordOff />
+      </div>
     );
-    setExporting(false);
-  };
-  const field = (name: keyof UsageFilters, label: string) => (
-    <label class="field" data-part="field">
-      <span class="label">{label}</span>
-      <input
-        data-slot="input"
-        type="text"
-        placeholder={name === "since" ? t("sinceHint") : undefined}
-        value={filters[name]}
-        onInput={(e) => changeFilters({ ...filters, [name]: e.currentTarget.value })}
-      />
-    </label>
-  );
+  }
   return (
-    <>
+    <div class="activity" data-part="activity">
       <PageHead
         title={t("title")}
         actions={
-          <>
-            <Button onClick={() => setRevision(revision + 1)} disabled={loading}>
-              {t("refresh")}
-            </Button>
-            <Button onClick={exportCSV} disabled={loading || exporting || !!error}>
-              {t("export")}
-            </Button>
-          </>
+          <Button onClick={refresh} disabled={summary.loading}>
+            {t("refresh")}
+          </Button>
         }
       />
-      {p.on && <p class="hint">{t("exportReal")}</p>}
-      <div class="usage-controls">
-        {field("since", t("since"))}
-        {field("model", t("model"))}
-        {field("provider", t("provider"))}
-        {field("account", t("account"))}
-        {field("key_id", t("key"))}
-        <label class="field" data-part="field">
-          <span class="label">{t("failed")}</span>
-          <select
-            data-slot="select-trigger"
-            aria-label={t("failed")}
-            value={filters.failed}
-            onChange={(e) => changeFilters({ ...filters, failed: e.currentTarget.value })}
-          >
-            <option value="">{t("all")}</option>
-            <option value="true">{t("yes")}</option>
-            <option value="false">{t("no")}</option>
-          </select>
-        </label>
-      </div>
-      {saved.notice}
-      {error && <Notice tone="danger">{mask(error)}</Notice>}
-      {lost && <Notice tone="muted">{t("lost")}</Notice>}
-      {capped && <Notice tone="muted">{t("capped", { count: EXPORT_LIMIT })}</Notice>}
-      {loading ? (
-        <Notice tone="muted">{t("loading")}</Notice>
-      ) : events.length === 0 ? (
-        // A load that failed has its notice above: nothing is known to be empty.
-        error ? null : Object.values(filters).some(Boolean) ? (
-          <Empty onClear={() => changeFilters(initial)}>{t("empty")}</Empty>
-        ) : (
-          <Empty action={<a href="#/setup">{t("setup")}</a>}>{t("empty")}</Empty>
-        )
-      ) : (
-        <>
-          <MasterDetail
-            detail={
-              chosen && (
-                <UsageDetail
-                  event={chosen}
-                  name={accountNames(accounts.data?.accounts)}
-                  mask={mask}
-                  onClose={() => setSelected(undefined)}
-                />
-              )
-            }
-            list={
-              <List<UsageEvent>
-                label={t("title")}
-                items={events.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)}
-                id={(e) => String(e.seq)}
-                selected={selected}
-                onSelect={setSelected}
-                columns={[
-                  { label: t("time"), value: (e) => when(e.timestamp, "exact") },
-                  { label: t("model"), value: (e) => e.model },
-                  { label: t("account"), value: (e) => mask(e.account) || t("missing") },
-                  {
-                    label: t("status"),
-                    value: (e) => (
-                      <>
-                        {(e.status ? String(e.status) : t("missing")) + (e.failed ? ` · ${t("yes")}` : "")}{" "}
-                        {fallbackStep(e)} {tries(e)}
-                      </>
-                    ),
-                  },
-                  {
-                    label: t("latency"),
-                    value: (e) => t("milliseconds", { value: e.latency_ms }),
-                    numeric: true,
-                  },
-                  {
-                    label: t("tokens"),
-                    value: (e) => e.tokens.total_tokens?.toLocaleString() ?? t("missing"),
-                    numeric: true,
-                  },
-                  {
-                    label: t("trace"),
-                    value: (e) =>
-                      e.id ? <TraceId id={e.id} href={`#/logs/${encodeURIComponent(e.id)}`} /> : t("missing"),
-                  },
-                ]}
-              />
-            }
+      <div class="usage-top">
+        <p class="usage-figures" aria-live="polite">
+          {figures}
+        </p>
+        <div class="usage-range">
+          <Choices
+            label={t("range")}
+            value={range}
+            choices={[
+              { value: "24h", label: t("h24") },
+              { value: "7d", label: t("d7") },
+              { value: "30d", label: t("d30") },
+            ]}
+            onChange={(v) => setRange(v)}
           />
-          <div class="usage-paging">
-            <Button onClick={() => setPage(page - 1)} disabled={page === 0}>
-              {t("previous")}
-            </Button>
-            <span>{t("page", { page: page + 1 })}</span>
-            <Button onClick={() => setPage(page + 1)} disabled={(page + 1) * PAGE_SIZE >= events.length}>
-              {t("next")}
-            </Button>
-          </div>
-        </>
+        </div>
+      </div>
+      {record && <p class="usage-note">{t("starts", { when: record })}</p>}
+      {picked && (
+        <div class="usage-filter">
+          <button
+            type="button"
+            class="usage-chip"
+            data-part="usage-chip"
+            title={t("remove")}
+            onClick={() => setAddress("")}
+          >
+            {t("chip", { kind: kindWord(picked), name: nameOf(picked, value) })}{" "}
+            <span aria-hidden="true">×</span>
+            <span class="sr-only">{t("remove")}</span>
+          </button>
+          <a href={`#/activity?${queryOf({ ...NO_FILTERS, [picked]: value })}`}>{t("seeThese")}</a>
+        </div>
       )}
-    </>
+      <Phases
+        load={summary}
+        loading={t("loading")}
+        failed={{ title: t("failed") }}
+        isEmpty={(d) => d.total_requests === 0}
+        empty={<StatePane kind="empty" title={t("none", { range: rangeWord(range) })} />}
+      >
+        {() => (
+          <>
+            {hotspot && (
+              <p class="usage-hotspot">
+                {hotspot.text}{" "}
+                <a href={`#/activity?${queryOf({ ...NO_FILTERS, failed: true, model: hotspot.model })}`}>
+                  {t("seeThem")}
+                </a>
+              </p>
+            )}
+            <UsageChart bars={bars} unit={range === "24h" ? "hour" : "day"} range={rangeWord(range)} />
+            <section class="usage-by" aria-label={t("by")}>
+              <Choices
+                label={t("by")}
+                value={by}
+                choices={[
+                  { value: "providers", label: t("provider") },
+                  { value: "models", label: t("model") },
+                  { value: "accounts", label: t("account") },
+                  { value: "keys", label: t("key") },
+                ]}
+                onChange={(v) => {
+                  setBy(v);
+                  setAll(false);
+                }}
+              />
+              <div class="usage-breakdown">
+                <TableFrame>
+                  <table class="table" data-part="usage-breakdown">
+                    <thead>
+                      <tr>
+                        <th scope="col">{kindWord(group.filter)}</th>
+                        <th scope="col" class="num">
+                          {t("requests")}
+                        </th>
+                        <th scope="col" class="usage-bar-col">
+                          <span class="sr-only">{t("share")}</span>
+                        </th>
+                        <th scope="col" class="num">
+                          {t("failedCol")}
+                        </th>
+                        <th scope="col" class="num">
+                          {t("tokens")}
+                        </th>
+                        <th scope="col" class="num">
+                          {t("time")}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((g) => (
+                        <tr key={g.name}>
+                          <th scope="row">
+                            <button
+                              type="button"
+                              class="usage-name"
+                              title={nameOf(group.filter, g.name)}
+                              onClick={() => filterTo(group.filter, g.name)}
+                            >
+                              {nameOf(group.filter, g.name)}
+                            </button>
+                          </th>
+                          <td class="num">{g.total_requests.toLocaleString()}</td>
+                          <td class="usage-bar-col" aria-hidden="true">
+                            <span class="usage-bar">
+                              {g.success_count > 0 && (
+                                <i
+                                  data-outcome="success"
+                                  style={{ width: `${(g.success_count / busiest) * 100}%` }}
+                                />
+                              )}
+                              {g.failure_count > 0 && (
+                                <i
+                                  data-outcome="failure"
+                                  style={{ width: `${(g.failure_count / busiest) * 100}%` }}
+                                />
+                              )}
+                            </span>
+                          </td>
+                          <td class="num">{g.failure_count.toLocaleString()}</td>
+                          <td class="num">
+                            {g.tokens?.total_tokens ? shortCount(g.tokens.total_tokens) : "—"}
+                          </td>
+                          <td class="num">{g.average_latency_ms ? timeTaken(g.average_latency_ms) : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </TableFrame>
+              </div>
+              {groups.length > TOP && (
+                <Button variant="ghost" onClick={() => setAll(!all)}>
+                  {all ? t("showTop") : t("showAll", { count: groups.length })}
+                </Button>
+              )}
+            </section>
+          </>
+        )}
+      </Phases>
+    </div>
   );
 }
 
-export const usagePage = (): PageDef => ({
-  id: "usage",
+export const usageTabPage = (): PageDef => ({
+  id: "activity/usage",
   dest: "activity",
+  kind: "tab",
   title: t("title"),
+  label: t("title"),
   tip: t("tip"),
   render: () => <UsagePage />,
 });

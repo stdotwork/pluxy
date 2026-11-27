@@ -1,51 +1,59 @@
-import type { ComponentChildren } from "preact";
+// System: which pluxy this is, the models its tools can ask for, and the address each kind of
+// program needs.
+
 import type { ServedModel } from "../api";
+import { Phases, providerName, StatePane } from "../parts";
 import { useAccountLabels, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
-import { Button, Card, Empty, List, Notice, PageHead, useKit, useLoad, when } from "../ui";
+import { Button, Card, Facts, List, Notice, PageHead, useKit, useLoad, when } from "../ui";
+import { CopyButton } from "./copyButton";
 
 const t = strings("system", {
   title: "System",
-  tip: "Runtime & diagnostics",
+  tip: "Version, models and addresses",
+  safeMode:
+    "pluxy was started in safe mode, so no extension runs and every request fails. Start pluxy again normally to leave it.",
   about: "About",
-  version: "Core version",
-  commit: "Commit {commit}",
-  buildTime: "Build time",
+  version: "Version",
+  built: "Built",
+  address: "Address",
+  settingsFile: "Settings file",
+  inUse: "In use",
+  notInUse:
+    "pluxy is not using the latest version of its settings file: {error}. It keeps working with the version before.",
   unknown: "Unknown",
-  connection: "Connection status",
-  connecting: "Connecting",
-  connected: "Connected",
-  disconnected: "Disconnected",
-  revision: "Config revision",
-  safeMode: "Safe mode",
-  on: "On",
-  off: "Off",
-  safeModeNotice: "Core runs in safe mode: no extension runs, so client requests fail.",
-  models: "Available models",
-  refresh: "Refresh",
-  loadingModels: "Loading available models…",
-  modelsEmpty: "No models served. Add an account or enable an extension.",
-  modelsCount: { one: "{count} available model", other: "{count} available models" },
-  groupCount: { one: "{count} model", other: "{count} models" },
+  loadingAbout: "Loading version…",
+  aboutFailed: "Could not read pluxy's version",
+  aboutFailedHelp: "Check that pluxy is still running, then try again.",
+  models: "Models your tools can ask for",
+  modelCount: { one: "{count} model", other: "{count} models" },
+  loadingModels: "Loading models…",
+  modelsFailed: "Could not read the models",
+  modelsFailedHelp: "Check that pluxy is still running, then try again.",
+  noModels: "No models yet",
+  noModelsText: "Models appear once an account is added and its provider's extension runs.",
+  openAccounts: "Open Accounts",
+  openExtensions: "Open Extensions",
   model: "Model",
-  aliases: "Aliases",
+  alsoCalled: "Also called",
   accounts: "Accounts",
-  connect: "Connect a client",
-  connectHint: "Point a client at one of these addresses with a client key. Create keys in {config}.",
-  configLink: "Config Panel",
-  noAddress: "This page cannot tell which address clients reach core at; use the address core listens on.",
-  client: "Client",
+  copy: "Copy",
+  copyModel: "Copy {model}",
+  copyUrl: "Copy {url}",
+  refresh: "Refresh",
+  addresses: "Addresses for other programs",
+  addressesText:
+    "Coding tools are set up in {tools}. Other programs take the base URL for the API they speak and a key from Tools.",
+  tools: "Tools",
+  speaks: "What it speaks",
   baseUrl: "Base URL",
-  usedBy: "Used by",
-  openai: "OpenAI",
-  openaiUse: "OpenAI SDKs and OpenAI-compatible tools",
-  claude: "Claude",
-  claudeUse: "Claude Code and the Anthropic SDKs",
-  gemini: "Gemini",
-  geminiUse: "The Gemini SDKs and the Gemini CLI",
-  codex: "Codex",
-  codexUse: "The Codex CLI's base_url; a Codex signed in with ChatGPT takes {chatgpt} as chatgpt_base_url",
+  openai: "OpenAI API",
+  claude: "Anthropic (Claude) API",
+  gemini: "Gemini API",
+  codexKey: "Codex with an API key",
+  codexChatgpt: "Codex signed in with ChatGPT",
+  noAddress: "This page cannot tell pluxy's address. Tools shows the address pluxy listens on.",
 });
 
 /** One model row: a model as one entry of an extension, with the other names it is served under. */
@@ -79,34 +87,20 @@ export function groupModels(models: ServedModel[]): { extension: string; rows: M
     }));
 }
 
-function Tile(props: { label: string; value: ComponentChildren; sub?: ComponentChildren }) {
-  return (
-    <div class="system-tile" data-part="tile">
-      <div class="system-tile-label">{props.label}</div>
-      <div class="system-tile-value">{props.value}</div>
-      {props.sub && <div class="system-tile-sub mono">{props.sub}</div>}
-    </div>
-  );
-}
-
-interface ClientAddress {
+interface ProgramAddress {
   id: string;
   name: string;
   url: string;
-  use: string;
 }
 
-function clientAddresses(origin: string): ClientAddress[] {
+/** The base URL each kind of program takes, by the API it speaks. */
+export function programAddresses(origin: string): ProgramAddress[] {
   return [
-    { id: "openai", name: t("openai"), url: `${origin}/v1`, use: t("openaiUse") },
-    { id: "claude", name: t("claude"), url: origin, use: t("claudeUse") },
-    { id: "gemini", name: t("gemini"), url: origin, use: t("geminiUse") },
-    {
-      id: "codex",
-      name: t("codex"),
-      url: `${origin}/v1`,
-      use: t("codexUse", { chatgpt: `${origin}/backend-api/codex` }),
-    },
+    { id: "openai", name: t("openai"), url: `${origin}/v1` },
+    { id: "claude", name: t("claude"), url: origin },
+    { id: "gemini", name: t("gemini"), url: origin },
+    { id: "codex-key", name: t("codexKey"), url: `${origin}/v1` },
+    { id: "codex-chatgpt", name: t("codexChatgpt"), url: `${origin}/backend-api/codex` },
   ];
 }
 
@@ -117,83 +111,151 @@ export function SystemPage() {
   const models = useLoad(api.servedModels);
   const mask = privacy.masker(useAccountLabels(models.data));
   const s = status.data;
-  // Stale data after a failed read is still data: the connection is what the last read said.
-  const connection =
-    status.phase === "loading"
-      ? t("connecting")
-      : status.phase === "ready"
-        ? t("connected")
-        : t("disconnected");
-  const list = models.data?.models;
-  const groups = list ? groupModels(list) : [];
-
   return (
     <>
-      <PageHead title={t("title")} />
-      {s?.safe_mode && <Notice tone="warn">{t("safeModeNotice")}</Notice>}
+      <PageHead
+        title={t("title")}
+        actions={
+          <Button
+            disabled={status.loading || models.loading}
+            onClick={() => {
+              status.reload();
+              models.reload();
+            }}
+          >
+            {t("refresh")}
+          </Button>
+        }
+      />
       <div class="stack">
+        {s?.safe_mode && <Notice tone="warn">{t("safeMode")}</Notice>}
         <Card title={t("about")}>
-          <div class="system-tiles">
-            <Tile
-              label={t("version")}
-              value={s?.version ?? t("unknown")}
-              sub={s && s.commit !== "unknown" ? t("commit", { commit: s.commit.slice(0, 12) }) : undefined}
-            />
-            <Tile label={t("buildTime")} value={s ? (when(s.built) ?? t("unknown")) : t("unknown")} />
-            <Tile label={t("connection")} value={connection} sub={host.address} />
-            <Tile
-              label={t("revision")}
-              value={s ? <span class="mono">{s.active.revision}</span> : t("unknown")}
-            />
-            <Tile label={t("safeMode")} value={s ? (s.safe_mode ? t("on") : t("off")) : t("unknown")} />
-          </div>
+          <Phases
+            load={status}
+            loading={t("loadingAbout")}
+            failed={{ title: t("aboutFailed"), help: t("aboutFailedHelp") }}
+            isEmpty={() => false}
+            empty={null}
+          >
+            {(d) => (
+              <div class="system-facts">
+                <Facts
+                  rows={[
+                    [
+                      t("version"),
+                      <>
+                        <span class="mono">{d.version}</span>
+                        {d.commit && d.commit !== "unknown" && (
+                          <>
+                            {" "}
+                            <span class="mono muted">{d.commit.slice(0, 12)}</span>
+                          </>
+                        )}
+                      </>,
+                    ],
+                    [t("built"), when(d.built, "exact") ?? t("unknown")],
+                    [
+                      t("address"),
+                      host.address && (
+                        <span class="system-address">
+                          <span class="mono">{host.address}</span>
+                          <CopyButton value={host.address} name={t("copyUrl", { url: host.address })} />
+                        </span>
+                      ),
+                    ],
+                    [
+                      t("settingsFile"),
+                      d.desired.error ? mask(t("notInUse", { error: d.desired.error })) : t("inUse"),
+                    ],
+                  ]}
+                />
+              </div>
+            )}
+          </Phases>
         </Card>
         <Card
           title={t("models")}
           actions={
-            <Button onClick={models.reload} disabled={models.loading}>
-              {t("refresh")}
-            </Button>
+            models.data && models.data.models.length > 0 ? (
+              <span class="muted">{t("modelCount", { count: models.data.models.length })}</span>
+            ) : undefined
           }
         >
-          {models.error && <Notice tone="danger">{mask(models.error)}</Notice>}
-          {models.loading && !list && <Empty>{t("loadingModels")}</Empty>}
-          {list && list.length === 0 && <Empty>{t("modelsEmpty")}</Empty>}
-          {list && list.length > 0 && (
-            <Notice tone="muted">{t("modelsCount", { count: list.length })}</Notice>
-          )}
-          {groups.map((g) => (
-            <section key={g.extension} class="system-group" data-part="model-group" aria-label={g.extension}>
-              <h3>
-                <span class="mono">{g.extension}</span>
-                <span class="system-group-count">{t("groupCount", { count: g.rows.length })}</span>
-              </h3>
-              <List<ModelRow>
-                label={g.extension}
-                items={g.rows}
-                id={(r) => r.id}
-                columns={[
-                  { label: t("model"), value: (r) => r.id, mono: true },
-                  { label: t("aliases"), value: (r) => r.aliases.join(", "), mono: true },
-                  { label: t("accounts"), value: (r) => r.accounts.map(mask).join(", "), mono: true },
-                ]}
-              />
-            </section>
-          ))}
+          <Phases
+            load={models}
+            loading={t("loadingModels")}
+            failed={{ title: t("modelsFailed"), help: t("modelsFailedHelp") }}
+            isEmpty={(d) => d.models.length === 0}
+            empty={
+              <StatePane
+                kind="empty"
+                title={t("noModels")}
+                primary={{ label: t("openAccounts"), href: "#/accounts" }}
+                secondary={{ label: t("openExtensions"), href: "#/extensions" }}
+              >
+                {t("noModelsText")}
+              </StatePane>
+            }
+          >
+            {(d) =>
+              groupModels(d.models).map((g) => (
+                <section
+                  key={g.extension}
+                  class="system-group"
+                  data-part="model-group"
+                  aria-label={providerName(g.extension)}
+                >
+                  <h3>
+                    <span>{providerName(g.extension)}</span>
+                    <span class="system-group-id mono">{g.extension}</span>
+                    <span class="system-group-count">{t("modelCount", { count: g.rows.length })}</span>
+                  </h3>
+                  <List<ModelRow>
+                    label={providerName(g.extension)}
+                    items={g.rows}
+                    id={(r) => r.id}
+                    columns={[
+                      {
+                        label: t("model"),
+                        value: (r) => (
+                          <span class="system-model">
+                            <span class="mono">{r.id}</span>
+                            <CopyButton value={r.id} name={t("copyModel", { model: r.id })} />
+                          </span>
+                        ),
+                      },
+                      { label: t("alsoCalled"), value: (r) => r.aliases.join(", "), mono: true },
+                      { label: t("accounts"), value: (r) => r.accounts.map(mask).join(", "), mono: true },
+                    ]}
+                  />
+                </section>
+              ))
+            }
+          </Phases>
         </Card>
-        <Card title={t("connect")}>
-          <p class="system-hint">
-            {rich(t("connectHint"), { config: <a href="#/config">{t("configLink")}</a> })}
+        <Card title={t("addresses")}>
+          <p class="muted system-hint">
+            {rich(t("addressesText"), { tools: <a href="#/tools">{t("tools")}</a> })}
           </p>
           {host.address ? (
-            <List<ClientAddress>
-              label={t("connect")}
-              items={clientAddresses(host.address)}
-              id={(c) => c.id}
+            <List<ProgramAddress>
+              label={t("addresses")}
+              items={programAddresses(host.address)}
+              id={(a) => a.id}
               columns={[
-                { label: t("client"), value: (c) => c.name },
-                { label: t("baseUrl"), value: (c) => c.url, mono: true },
-                { label: t("usedBy"), value: (c) => c.use },
+                { label: t("speaks"), value: (a) => a.name },
+                {
+                  label: t("baseUrl"),
+                  value: (a) => (
+                    <span class="system-url mono" title={a.url}>
+                      {a.url}
+                    </span>
+                  ),
+                },
+                {
+                  label: t("copy"),
+                  value: (a) => <CopyButton value={a.url} name={t("copyUrl", { url: a.url })} />,
+                },
               ]}
             />
           ) : (

@@ -7,9 +7,9 @@
 //!
 //! - open: the window lists Beginner Mode and shows its two steps, Connect a model first;
 //! - login: before any sign-in the guide counts core's accounts and, with none, keeps Next
-//!   disabled; a sign-in with test/alpha's "Test API key" method in the guide's own Add Account
-//!   adds the account to core (read back with `GET /accounts`), and the guide then counts it and
-//!   enables Next;
+//!   disabled; a sign-in with test/alpha's "Test API key" method in the guide's own Add an account
+//!   (no account ID asked: core makes it) adds an account to core that was not there before (read
+//!   back with `GET /accounts`), and the guide then counts it and enables Next;
 //! - clients: Connect an agent lists Claude Code as offered by a registry (not installed) and
 //!   pluxy/execution as enabled; Install installs pluxy/claude-code from the curated registry,
 //!   asking nothing; Enable opens the native confirmation, which says "full access to your user
@@ -39,6 +39,8 @@ use tauri::{AppHandle, Webview};
 const PACKAGE: &str = "pluxy/claude-code";
 const EXECUTION: &str = "pluxy/execution";
 const LABEL: &str = "fixture Claude Code key";
+/// The page's one-press Connect.
+const CONNECT: &str = "Connect Claude Code";
 const FULL_ACCESS: &str = "full access to your user account";
 /// The guide's own element.
 const ROOT: &str = "[data-part=easy-mode]";
@@ -92,15 +94,17 @@ fn click(main: &Webview, selector: &str, text: &str) -> Result<(), String> {
 }
 
 /// Types value into the field labelled label inside the guide's element selector, as typing does
-/// (the input event a page listens to); waits for the field.
+/// (the input event a page listens to); waits for the field. A field whose row names it (no label of
+/// its own) is found by its accessible name.
 fn fill(main: &Webview, selector: &str, label: &str, value: &str) -> Result<(), String> {
     until(
         main,
         &format!("the field {label:?} in {selector}"),
         &format!(
-            "const s = {}; const l = [...(s?.querySelectorAll('label') ?? [])].find((l) => l.querySelector('.label')?.textContent.trim() === {}); \
-             const i = l?.querySelector('input'); if (!i || i.disabled) return false; \
-             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, {}); \
+            "const s = {0}; const l = [...(s?.querySelectorAll('label') ?? [])].find((l) => l.querySelector('.label')?.textContent.trim() === {1}); \
+             const i = l?.querySelector('input') ?? [...(s?.querySelectorAll('input[aria-label]') ?? [])].find((i) => i.getAttribute('aria-label') === {1}); \
+             if (!i || i.disabled) return false; \
+             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, {2}); \
              i.dispatchEvent(new Event('input', {{ bubbles: true }})); return true;",
             within(selector),
             json!(label),
@@ -216,7 +220,6 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
     let e = &c.x["easy"];
     let settings = p(&e["settings"]);
     let original = s(&c.x["bytes"]["easy"]);
-    let account = s(&e["account"]);
     let records = p(&c.x["records"]);
     let work = std::fs::canonicalize(p(&c.x["work"])).map_err(|e| e.to_string())?;
     let terminal = std::fs::canonicalize(p(&c.x["terminal"])).map_err(|e| e.to_string())?;
@@ -232,14 +235,16 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
         "pluxy/claude-code is still installed before the guide",
     )?;
 
-    // ---- open: listed in the navigation, two steps, the first shown
+    // ---- open: listed among the topics of Tools, two steps, the first shown
     step(
         "open",
         (|| {
+            main.eval("location.hash = '#/tools'")
+                .map_err(|e| e.to_string())?;
             until(
                 main,
-                "Beginner Mode in the navigation",
-                "return [...document.querySelectorAll('[data-part=nav] a')].some((a) => a.getAttribute('href') === '#/easy-mode');",
+                "Beginner Mode among the topics of Tools",
+                "return [...document.querySelectorAll('[data-part=topics] a, [data-part=topics-select] option')].some((a) => (a.getAttribute('href') ?? a.value) === '#/easy-mode');",
             )
             .map_err(|_| "the window lists no Beginner Mode page (#/easy-mode)".to_string())?;
             main.eval("location.hash = '#/easy-mode'")
@@ -256,11 +261,12 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
         })(),
     )?;
 
-    // ---- login: the guide's Add Account signs in with test/alpha's API-key method
+    // ---- login: the guide's Add an account signs in with test/alpha's API-key method
     step(
         "login",
         (|| {
-            let before = accounts(main)?.len();
+            let known = accounts(main)?;
+            let before = known.len();
             let step1 = "[data-part=easy-step][data-step='1']";
             let sources = "[data-part=easy-sources]";
             wait_for("the guide's source count", || {
@@ -285,26 +291,28 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                 next_enabled() == Some(json!(before > 0)),
                 format!("with {before} accounts, Next is {:?}", next_enabled()),
             )?;
-            fill(main, step1, "Account ID", &account)?;
             // test/alpha's API-key method.
             until(
                 main,
                 "test/alpha's Test API key method",
                 &format!(
-                    "const t = [...({}?.querySelectorAll('[data-part=method]') ?? [])].find((t) => t.closest('[data-extension]')?.dataset.extension === 'test/alpha' && [...t.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Test API key')); \
-                     const b = t && [...t.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Test API key'); if (!b || b.disabled) return false; b.click(); return true;",
+                    "const t = [...({}?.querySelectorAll('[data-part=method]') ?? [])].find((t) => t.closest('[data-extension]')?.dataset.extension === 'test/alpha' && t.textContent.includes('Test API key')); \
+                     const b = t && [...t.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Start'); if (!b || b.disabled) return false; b.click(); return true;",
                     within(step1)
                 ),
             )?;
             fill(main, step1, "API key", &s(&e["api_key"]))?;
-            click(main, step1, "Add account")?;
+            click(main, step1, "Continue")?;
             wait_for("the sign-in to succeed", || {
-                text(main, step1).filter(|t| t.contains("Signed in."))
+                text(main, step1).filter(|t| t.contains("Added "))
             })?;
             let listed = accounts(main)?;
             require(
-                listed.iter().any(|a| a["id"] == account.as_str()),
-                format!("core's accounts lack {account}: {listed:?}"),
+                listed.len() == before + 1
+                    && listed
+                        .iter()
+                        .any(|a| !known.iter().any(|k| k["id"] == a["id"])),
+                format!("core's accounts hold no new account: {known:?} then {listed:?}"),
             )?;
             wait_for("the guide to count the new account", || {
                 text(main, sources)
@@ -428,17 +436,20 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                     within(page)
                 ),
             )?;
+            // The page reads Claude Code's own file as it opens; the check names another one under
+            // "Settings file, key and backups" and reads that.
             choose(main, page, "file")?;
             fill(main, page, "File", &txt(&settings))?;
-            click(main, page, "Refresh")?;
+            click(main, page, "Read this file")?;
             wait_for("the page to read the file", || {
-                text(main, &format!("{page} dl.facts dd")).filter(|t| t == "Not configured")
+                text(main, &format!("{page} .tool-facts")).filter(|t| t.contains(&txt(&settings)))
             })
             .map_err(|e| format!("{e}: {:?}", text(main, page)))?;
+            // The key the check entered: Connect then makes none.
             choose(main, page, c.secret)?;
             let needles = [PACKAGE, "apply", &txt(&settings), LABEL];
             // Cancelled: the file stays as it was.
-            click(main, page, "Apply")?;
+            click(main, page, CONNECT)?;
             confirmation(c, &needles)?;
             std::thread::sleep(SETTLE);
             press("alt+c")?;
@@ -446,8 +457,9 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                 js(
                     main,
                     &format!(
-                        "return [...({}?.querySelectorAll('button') ?? [])].some((b) => b.textContent.trim() === 'Apply' && !b.disabled);",
-                        within(page)
+                        "return [...({}?.querySelectorAll('button') ?? [])].some((b) => b.textContent.trim() === {} && !b.disabled);",
+                        within(page),
+                        json!(CONNECT)
                     ),
                 )
                 .filter(|v| v == true)
@@ -459,12 +471,12 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             )?;
             // Confirmed: core's address, the key and the default mapping; the person's own value
             // stays.
-            click(main, page, "Apply")?;
+            click(main, page, CONNECT)?;
             confirmation(c, &needles)?;
             std::thread::sleep(SETTLE);
             press("alt+o")?;
-            wait_for("the page to show the file applied", || {
-                text(main, &format!("{page} dl.facts dd")).filter(|t| t == "Applied")
+            wait_for("the page to show Claude Code connected", || {
+                text(main, &format!("{page} .tool-head .badge")).filter(|t| t == "Connected")
             })
             .map_err(|e| format!("{e}: {:?}", text(main, page)))?;
             let target = s(&ok(main, "connection_get", json!({}))?["target"]);
@@ -498,7 +510,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                     let _ = std::fs::remove_file(records.join(format!("{name}.{x}")));
                 }
             }
-            fill(main, page, "Working folder", &txt(&work))?;
+            fill(main, page, "Folder", &txt(&work))?;
             click(main, page, "Start Claude Code")?;
             confirmation(
                 c,

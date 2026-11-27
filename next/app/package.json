@@ -11,6 +11,7 @@
     "test:native": "bun native/run.ts",
     "test:native:platform": "bun native/platform.ts",
     "package:test": "bun package.ts test",
+    "package:local": "bun package.ts local",
     "package:release": "bun package.ts release",
     "verify": "bun run check && bun run lint && bun run test && bun run build"
   },

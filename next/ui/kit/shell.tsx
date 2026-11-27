@@ -10,7 +10,7 @@ import { ExtensionPage, type ExtensionPageProps } from "./extensions/page";
 import { destinationLabel, Frame, type FrameLink, type FrameStatus } from "./frame";
 import type { Host, Reply } from "./host";
 import { Icon } from "./icons";
-import { PrivacyContext, type PrivacyState, privacyMasks } from "./privacy";
+import { PrivacyContext, type PrivacyState, privacyMasks, usePrivacyOn } from "./privacy";
 import { strings } from "./strings";
 import type { ThemeState } from "./theme/state";
 import { Button, type Kit, KitContext, Notice } from "./ui";
@@ -23,12 +23,9 @@ const t = strings("shell", {
   remember: "Remember on this device",
   signIn: "Sign in",
   refused: "Core refused the management key. Sign in again.",
-  signOut: "Sign out",
   safeAddress: "If custom CSS hides the panel, add ?safe to the URL to disable it.",
-  privacy: "Privacy mode",
-  privacyOn: "Privacy on",
-  privacyEnable: "Turn on privacy mode to hide account emails and identifiers",
-  privacyDisable: "Turn off privacy mode to show full account details",
+  namesHidden: "Names hidden",
+  showNames: "Show names again",
 });
 
 /**
@@ -62,11 +59,42 @@ export function setupGate(
   return { offered: true, open: reply.body?.first_run === true && hash.replace(/^#\/?/, "") === "" };
 }
 
-function currentId(pages: PageDef[]): string {
-  const path = location.hash.replace(/^#\/?/, "");
-  const match = pages.filter((p) => path === p.id || path.startsWith(`${p.id}/`));
-  const longest = match.sort((a, b) => b.id.length - a.id.length)[0];
-  return longest?.id ?? pages[0]?.id ?? "";
+/**
+ * How much of path an address of a page matches, or 0 for none: an ID or an exact address matches
+ * itself and anything under it ("logs" matches "logs/abc"); a prefix ending in "/" matches what
+ * starts with it and has more after it ("accounts/" matches "accounts/acc_1", not "accounts").
+ */
+function matched(path: string, address: string): number {
+  if (address.endsWith("/"))
+    return path.length > address.length && path.startsWith(address) ? address.length : 0;
+  return path === address || path.startsWith(`${address}/`) ? address.length : 0;
+}
+
+/**
+ * The page the address (hash) opens: the page whose ID or one of its addresses (PageDef.addresses)
+ * matches it, the longest match first. What follows a "?" is ignored when matching. An address
+ * whose first part names a destination with no page of that ID (such as #/activity) opens that
+ * destination's first page; any other unknown address opens the first page.
+ */
+export function currentId(pages: PageDef[], hash = location.hash): string {
+  // What follows a ? is the page's own business (its filters), not a page's name.
+  const path = (hash.replace(/^#\/?/, "").split("?")[0] ?? "").replace(/\/$/, "");
+  let best: PageDef | undefined;
+  let length = 0;
+  for (const p of pages) {
+    for (const address of [p.id, ...(p.addresses ?? [])]) {
+      const n = matched(path, address);
+      if (n > length) {
+        best = p;
+        length = n;
+      }
+    }
+  }
+  if (best) return best.id;
+  // An address whose first part names a destination opens that destination's first page.
+  const named = DESTINATIONS.find((d) => d === path.split("/")[0]);
+  const home = named && destinationHome(pages, named);
+  return home?.id ?? pages[0]?.id ?? "";
 }
 
 /** Draws one extension page. The panel's default shows it in a sandboxed frame. */
@@ -154,14 +182,26 @@ function SignIn(props: { host: Host; onDone: () => void; reason?: string; safeAd
   );
 }
 
-/** Privacy mode's state, drawing again when it changes. */
-function usePrivacyOn(privacy: PrivacyState): boolean {
-  const [on, setOn] = useState(privacy.on);
-  useEffect(() => {
-    setOn(privacy.on);
-    return privacy.subscribe(() => setOn(privacy.on));
-  }, [privacy]);
-  return on;
+/**
+ * The header strip's button while names are hidden: it says so, and turns hiding off. While names
+ * show there is no button: turning hiding on is the Hide names setting in General.
+ */
+export function NamesHiddenButton(props: { privacy: PrivacyState }) {
+  const hidden = usePrivacyOn(props.privacy);
+  if (!hidden) return null;
+  return (
+    <button
+      type="button"
+      class="strip-button privacy"
+      data-part="privacy-toggle"
+      aria-pressed="true"
+      title={t("showNames")}
+      onClick={() => props.privacy.set(false)}
+    >
+      <Icon name="eyeOff" />
+      <span>{t("namesHidden")}</span>
+    </button>
+  );
 }
 
 export function Shell(props: {
@@ -186,13 +226,25 @@ export function Shell(props: {
   /** What the status block at the navigation's foot says: where pluxy runs, and its state. */
   status?: FrameStatus;
 }) {
-  const { host, themes, privacy } = props;
+  const { themes, privacy } = props;
   const privacyOn = usePrivacyOn(privacy);
   const masks = useMemo(() => privacyMasks(privacyOn), [privacyOn]);
   useEffect(() => {
     document.documentElement.dataset.privacy = privacyOn ? "on" : "off";
   }, [privacyOn]);
-  const [signedIn, setSignedIn] = useState(host.signedIn());
+  const [signedIn, setSignedIn] = useState(props.host.signedIn());
+  // A page that signs the person out (General's Sign out) calls host.signOut(): the shell then
+  // goes back to the sign-in form, as it does when core refuses the key.
+  const host = useMemo<Host>(
+    () => ({
+      ...props.host,
+      signOut() {
+        props.host.signOut();
+        setSignedIn(false);
+      },
+    }),
+    [props.host],
+  );
   const [reason, setReason] = useState<string>();
   const [uiVersion, setUiVersion] = useState(0);
 
@@ -336,37 +388,7 @@ export function Shell(props: {
           page={page}
           rootRef={rootRef}
           announced={announced}
-          headerEnd={
-            <>
-              <button
-                type="button"
-                class="strip-button privacy"
-                data-part="privacy-toggle"
-                aria-pressed={privacyOn}
-                aria-label={t("privacy")}
-                title={t(privacyOn ? "privacyDisable" : "privacyEnable")}
-                onClick={() => privacy.set(!privacyOn)}
-              >
-                <Icon name={privacyOn ? "eyeOff" : "eye"} />
-                {privacyOn && <span aria-hidden="true">{t("privacyOn")}</span>}
-              </button>
-              {host.features.has("signOut") && (
-                <button
-                  type="button"
-                  class="strip-button signout"
-                  data-part="sign-out"
-                  aria-label={t("signOut")}
-                  title={t("signOut")}
-                  onClick={() => {
-                    host.signOut();
-                    setSignedIn(false);
-                  }}
-                >
-                  <Icon name="signOut" />
-                </button>
-              )}
-            </>
-          }
+          headerEnd={<NamesHiddenButton privacy={privacy} />}
         >
           {active?.render()}
         </Frame>

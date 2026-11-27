@@ -1,15 +1,17 @@
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+// One account's own page (#/accounts/<id>): its opening, the models it serves and a test request,
+// Clear cooldown, renewing and signing in again, and the way to the settings file.
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { goTo, goToId, openPanel, signIn, useCore } from "./support";
+import { accountRow, goTo, openAccount, openPanel, pageTitle, signIn, useCore } from "./support";
 
 const core = useCore();
+
 async function addAccount(id: string, method = "api_key") {
   const r = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
     id,
     extension: "test/alpha",
     method,
-    input: { api_key: "ak-Rm5Tq8Wz3Lc6Vj9" },
+    // Named after its ID: the test provider calls every signed-in account "Test account".
+    input: { api_key: "ak-Rm5Tq8Wz3Lc6Vj9", label: id },
   });
   expect(r.status).toBe(202);
   if (method === "browser") {
@@ -26,12 +28,6 @@ async function addAccount(id: string, method = "api_key") {
         (await core.mgmt<{ login: { state: string } }>("GET", `/logins/${r.body.login.id}`)).body.login.state,
     )
     .toBe("done");
-}
-async function openAccount(page: Page, id: string) {
-  await goToId(page, "accounts");
-  await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
-  await page.getByRole("button", { name: id, exact: true }).click();
-  return page.getByRole("complementary", { name: `Details: ${id}`, exact: true });
 }
 
 async function noSplitWords(part: Locator) {
@@ -52,15 +48,15 @@ async function noSplitWords(part: Locator) {
   expect(split).toEqual([]);
 }
 
-async function settledShot(page: Page, path: string) {
-  await page.evaluate(async () => {
-    await document.fonts.ready;
-    await Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => {})));
-  });
-  await page.screenshot({ path, fullPage: true, animations: "disabled" });
-}
+const opening = (page: Page) => page.locator('[data-part="account-opening"]');
+const more = async (page: Page) => {
+  await page.getByText("Settings, models and a test request", { exact: true }).click();
+  return page.locator('[data-part="account-more"]');
+};
 
-test("account health, cooldown reset, models and a paid test", async ({ page }) => {
+test("an account's page: a model cooling down, the models it serves, a test request and Clear cooldown", async ({
+  page,
+}) => {
   await addAccount("tools-key");
   const request = await fetch(`${core.base}/v1/chat/completions`, {
     method: "POST",
@@ -68,80 +64,87 @@ test("account health, cooldown reset, models and a paid test", async ({ page }) 
     body: JSON.stringify({ model: "rate-limited", messages: [{ role: "user", content: "Hi" }] }),
   });
   expect(request.status).toBe(429);
-  const accounts = await core.mgmt<{ accounts: { id: string; cooldowns?: { model: string }[] }[] }>(
-    "GET",
-    "/accounts",
-  );
-  expect(accounts.body.accounts.find((a) => a.id === "tools-key")?.cooldowns).toEqual(
-    expect.arrayContaining([expect.objectContaining({ model: "rate-limited" })]),
-  );
   await openPanel(page, core);
   await signIn(page, core);
-  let detail = await openAccount(page, "tools-key");
-  await expect(detail.getByText("Cooling down", { exact: true })).toBeVisible();
-  await expect(detail.locator('[data-part="account-cooldowns"]')).toContainText("rate-limited");
-  await expect(detail.locator('[data-part="account-check"]')).toContainText("the test provider answered");
-  await expect(detail.getByRole("button", { name: "Refresh OAuth credential", exact: true })).toHaveCount(0);
-  await expect(detail.getByRole("button", { name: "Sign in again", exact: true })).toHaveCount(0);
-  const shots = process.env.ACCOUNT_DETAIL_SHOTS;
-  if (shots) mkdirSync(shots, { recursive: true });
-  for (const theme of ["default", "terminal"]) {
-    await goToId(page, "themes");
-    await page
-      .getByRole("radiogroup", { name: "Theme" })
-      .getByRole("radio", { name: theme, exact: false })
-      .check();
-    detail = await openAccount(page, "tools-key");
-    await expect(detail.getByText("Cooling down", { exact: true })).toBeVisible();
-    await noSplitWords(detail.locator('[data-part="account-cooldowns"]'));
-    await noSplitWords(detail.locator("dt").filter({ hasText: "Last error at" }));
-    if (shots) await settledShot(page, join(shots, `${theme}-cooldown.png`));
-    await detail.getByRole("button", { name: "Show models", exact: true }).click();
-    const models = detail.locator('[data-part="account-models"]');
-    await expect(models).toContainText("Supported models");
-    for (const id of ["fake-model", "rate-limited", "server-error"]) await expect(models).toContainText(id);
-    await noSplitWords(models);
-    await detail.getByRole("button", { name: "Test (spends one request)", exact: true }).click();
-    const result = detail.locator('[data-part="account-test-result"]');
-    await expect(result).toContainText("v=0.2.0 pid=");
-    await expect(result).toContainText("fake-model");
-    await expect(result).toContainText(/[0-9]+ ms/);
-    if (shots) await settledShot(page, join(shots, `${theme}-test.png`));
-    await expect(detail.getByText("Cooling down", { exact: true })).toBeVisible();
-  }
-  await detail.getByRole("button", { name: "Clear cooldown", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Clear credential cooldown?", exact: true });
-  await expect(dialog).toContainText("though upstream quota does not reset.");
-  await dialog.getByRole("button", { name: "Clear cooldown", exact: true }).click();
-  await dialog.getByRole("button", { name: "Yes, clear cooldown", exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  await expect(detail.getByText("Cooling down", { exact: true })).toHaveCount(0);
+  await openAccount(page, "tools-key");
+  await expect(page.locator('[data-part="header"]')).toContainText("Accounts/tools-key");
+  await expect(opening(page)).toContainText("Cooling down on rate-limited, back in");
+  // The facts: how it signs in, its place in the order, its public ID.
+  const about = page.getByRole("region", { name: "About" });
+  await expect(about).toContainText("an API key");
+  await expect(
+    about.getByRole("link", { name: /^(First among Alpha accounts|Backup \d+)$/ }),
+  ).toHaveAttribute("href", "#/routing");
+  await expect(about).toContainText(/Known to tools as\s*acc_[0-9a-f]{8}/);
+  const tools = await more(page);
+  const models = tools.locator('[data-part="account-models"]');
+  for (const id of ["fake-model", "rate-limited", "server-error"]) await expect(models).toContainText(id);
+  await noSplitWords(models);
+  await expect(tools).toContainText("Uses one request.");
+  await tools.getByRole("button", { name: "Send a test request", exact: true }).click();
+  const result = tools.locator('[data-part="account-test-result"]');
+  await expect(result).toContainText("Succeeded");
+  await expect(result).toContainText("v=0.2.0 pid=");
+  await expect(result).toContainText(/[0-9]+ ms/);
+  // Clear cooldown asks nothing: nothing is lost.
+  await opening(page).getByRole("button", { name: "Clear cooldown", exact: true }).click();
+  await expect(opening(page)).toContainText("Serving.");
   const r = await core.mgmt<{ accounts: { id: string; cooldowns?: unknown[] }[] }>("GET", "/accounts");
   expect(r.body.accounts.find((a) => a.id === "tools-key")?.cooldowns ?? []).toEqual([]);
-  await detail.getByLabel("Test model").selectOption("server-error");
-  await detail.getByRole("button", { name: "Test (spends one request)", exact: true }).click();
-  await expect(detail.locator('[data-part="account-test-result"]')).toContainText(
-    "the test provider failed this request",
-  );
+  await tools.getByLabel("Test with").selectOption("server-error");
+  await tools.getByRole("button", { name: "Send a test request", exact: true }).click();
+  await expect(result).toContainText("Provider error");
+  await expect(result).toContainText("the test provider failed this request");
 });
 
-test("config models and credential tools follow core metadata", async ({ page }) => {
+test("limits show on an account's row and on its page", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Accounts");
+  const row = accountRow(page, "alpha-1");
+  await expect(row.locator('[data-part="limits"]')).toHaveAttribute("data-state", /^(read|none)$/);
+  await row.getByRole("link", { name: "alpha-1", exact: true }).click();
+  const limits = page.getByRole("region", { name: "Limits" });
+  await expect(limits.locator('[data-part="limits"]')).toHaveAttribute("data-state", /^(read|none)$/);
+  await expect(limits).toContainText(/Read at \d\d:\d\d/);
+  // Refresh reads the limits from core again, not from what the page read before.
+  const read = page.waitForRequest(
+    (r) => r.method() === "GET" && new URL(r.url()).pathname.endsWith("/accounts/alpha-1/quota"),
+  );
+  await limits.getByRole("button", { name: "Refresh", exact: true }).click();
+  await read;
+  await expect(limits).toContainText(/Read at \d\d:\d\d/);
+});
+
+test("an account from the settings file leads to it; a signed-in one renews and signs in again", async ({
+  page,
+}) => {
   await addAccount("tools-oauth", "browser");
   await openPanel(page, core);
   await signIn(page, core);
-  let detail = await openAccount(page, "alpha-1");
-  await expect(detail.getByRole("link", { name: "Edit in Config Panel" })).toHaveAttribute(
+  await openAccount(page, "alpha-1");
+  await expect(page.getByRole("main")).toContainText("Set in pluxy's settings file.");
+  await expect(page.getByRole("link", { name: "Open the settings file" })).toHaveAttribute(
     "href",
     "#/config/source?account=alpha-1",
   );
-  await expect(detail.getByRole("button", { name: "Refresh OAuth credential" })).toHaveCount(0);
-  await expect(detail.getByRole("button", { name: "Sign in again", exact: true })).toHaveCount(0);
-  await detail.getByRole("button", { name: "Show models", exact: true }).click();
-  await expect(detail.locator('[data-part="account-models"]')).toContainText("alpha-model");
-  detail = await openAccount(page, "tools-oauth");
-  await detail.getByRole("button", { name: "Refresh OAuth credential", exact: true }).click();
-  await expect(detail.getByRole("status")).toContainText("Credential refreshed.");
-  await expect(detail.getByRole("button", { name: "Sign in again", exact: true })).toHaveCount(0);
+  for (const label of [
+    "Rename",
+    "Turn off",
+    "Remove…",
+    "Edit settings",
+    "Renew sign-in now",
+    "Sign in again",
+  ])
+    await expect(page.getByRole("button", { name: label, exact: true })).toHaveCount(0);
+  const alpha = await more(page);
+  await expect(alpha.locator('[data-part="account-models"]')).toContainText("alpha-model");
+
+  await openAccount(page, "tools-oauth");
+  const tools = await more(page);
+  await tools.getByRole("button", { name: "Renew sign-in now", exact: true }).click();
+  await expect(tools.getByRole("status")).toContainText("Signed in again.");
+  await expect(page.getByRole("link", { name: "Sign in again", exact: true })).toHaveCount(0);
   // The fake has no auth-failure model. Supply core's reauth state at the HTTP edge;
   // sign-in still goes through the real core and provider.
   await page.route("**/v0/management/accounts", async (route) => {
@@ -150,27 +153,27 @@ test("config models and credential tools follow core metadata", async ({ page })
     for (const account of body.accounts) if (account.id === "tools-oauth") account.state = "reauth_required";
     await route.fulfill({ response, json: body });
   });
-  await goTo(page, "Add Account");
-  detail = await openAccount(page, "tools-oauth");
-  await detail
-    .locator('[data-part="account-tool-actions"]')
-    .getByRole("button", { name: "Sign in again", exact: true })
-    .click();
-  await detail.getByRole("button", { name: "Test browser", exact: true }).click();
-  await expect(detail.getByLabel("Address the browser ended on")).toBeVisible();
-  await detail.getByLabel("Address the browser ended on").fill("http://localhost/callback?code=ok");
-  await detail.getByRole("button", { name: "Submit" }).click();
-  await expect(detail.locator('[data-part="account-sign-in"]').getByRole("status")).toContainText(
-    "Signed in.",
-  );
-  await expect(detail.getByRole("button", { name: "Sign in to another account" })).toHaveCount(0);
+  await page.reload();
+  await expect(opening(page)).toContainText("Alpha no longer accepts its sign-in.");
+  // One Sign in again, in the opening.
+  await expect(page.getByRole("link", { name: "Sign in again", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Sign in again", exact: true })).toHaveCount(0);
+  await opening(page).getByRole("link", { name: "Sign in again", exact: true }).click();
+  await expect(page).toHaveURL(/#\/accounts\/tools-oauth\/sign-in$/);
+  await expect(pageTitle(page)).toHaveText("Test account");
+  const signInPart = page.locator('[data-part="account-sign-in"]');
+  await signInPart.getByRole("button", { name: "Test browser", exact: true }).click();
+  await signInPart.getByLabel("Address the browser ended on").fill("http://localhost/callback?code=ok");
+  await signInPart.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("main").getByText("Signed in again.", { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/#\/accounts\/tools-oauth$/);
 });
 
-test("Edit in Config Panel opens the Source tab with the account's ID selected", async ({ page }) => {
+test("Open the settings file opens the Source tab with the account's ID selected", async ({ page }) => {
   await openPanel(page, core);
   await signIn(page, core);
-  const detail = await openAccount(page, "alpha-2");
-  await detail.getByRole("link", { name: "Edit in Config Panel" }).click();
+  await openAccount(page, "alpha-2");
+  await page.getByRole("link", { name: "Open the settings file" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Config Panel" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Source", exact: true })).toHaveAttribute(
     "aria-selected",
@@ -193,12 +196,9 @@ test("Edit in Config Panel opens the Source tab with the account's ID selected",
   // Core writes its config on one line, so the ID is far to the right: the editor shows it.
   expect((await cursor()).scrollLeft).toBeGreaterThan(0);
   await expect(page.getByText(/No entry matches/)).toHaveCount(0);
-  if (process.env.CONFIG_SOURCE_SHOTS) {
-    await page.screenshot({ path: process.env.CONFIG_SOURCE_SHOTS, fullPage: true, animations: "disabled" });
-  }
 });
 
-test("Edit in Config Panel still opens Source when the file does not hold the account's ID", async ({
+test("Open the settings file still opens Source when the file does not hold the account's ID", async ({
   page,
 }) => {
   // An account of a provider key section (claude-api-key, ...) has an ID made from its place.
@@ -210,12 +210,21 @@ test("Edit in Config Panel still opens Source when the file does not hold the ac
   });
   await openPanel(page, core);
   await signIn(page, core);
-  const detail = await openAccount(page, "alpha-2");
-  await detail.getByRole("link", { name: "Edit in Config Panel" }).click();
+  await openAccount(page, "alpha-2");
+  await page.getByRole("link", { name: "Open the settings file" }).click();
   await expect(page.getByRole("tab", { name: "Source", exact: true })).toHaveAttribute(
     "aria-selected",
     "true",
   );
   await expect(page.getByRole("textbox", { name: "Configuration source", exact: true })).not.toHaveValue("");
   await expect(page.getByText(/No entry matches alpha-2/)).toBeVisible();
+});
+
+test("an address of an account pluxy does not have says so and leads back", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/accounts/acc_00000000`);
+  await expect(page.getByText("This account is not in pluxy.")).toBeVisible();
+  await page.getByRole("link", { name: "Back to accounts", exact: true }).click();
+  await expect(page).toHaveURL(/#\/accounts$/);
 });
