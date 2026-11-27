@@ -419,18 +419,26 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="login-details"` | The Details fold of a sign-in that ended with a message from pluxy, such as signing in to a different account |
 | `data-part="account-added"` | What Add an account shows once the sign-in is done: Added, the optional Name, Save name, Open account and Add another |
 | `data-part="account-row"` | One account on one line, the same on every page: its group's mark, name, provider, plan and limits, and why and its fix when it needs the person or waits. `data-group` is `needs`, `waiting`, `serving` or `off`; `data-condition` is `serving`, `cooling`, `exhausted`, `needs_login`, `banned`, `broken`, `no_provider` or `off`, or `unchecked` when the status that says whether its provider runs could not be read (its mark then has `data-group="unchecked"`); `data-tall` is set on a row that says why under the name; `data-wide` on the Accounts list's wider row |
-| `data-part="request-row"` | One request on one line: its time, model, account, key, tokens, time taken and result. `data-failed` is set on a failed one; `data-open` while it shows its details; `data-compact` on Home's shorter row, a link to the request |
+| `data-part="request-row"` | One request: a row of the Requests table (its time, model, account, key, tokens, time taken and result) or, on Home, one shorter line. `data-failed` is set on a failed one; `data-open` while its pane is open; `data-compact` on Home's shorter row, a link to the request |
 | `data-part="setting-row"` | One setting: its name and what it does beside its control. `data-disabled` is set while the control cannot be used |
 | `data-part="tool-row"` | One coding tool: its name, version, state and settings file. `data-state` is `configured`, `not-configured`, `needs-update`, `refused`, `not_installed` or `unchecked` |
 | `data-part="state-pane"` | What a whole pane shows while it loads, when it is empty, or when it could not be read; `data-kind` is `loading`, `empty` or `failed` |
 | `data-part="plan-pill"` | An account's plan as a word; `data-plan-tier` is `top` (the largest plans: Max 20x, Ultra, API), `high` (the next: Max 5x), `mid` (any other plan) or `free`. The default theme draws them as a warm metal pill, a cool metal pill, an outline and plain text, from the `color.plan-*` tokens; never in a state's colour |
 | `data-part="limits"` | An account's limits on its row; `data-state` is `read`, `unread`, `reading`, `none` or `failed` |
 | `data-part="activity"` | The body of the Requests and Usage tabs |
-| `data-part="activity-filters"` | The Requests tab's filter row: All or Failed, then the lists of providers, accounts, models and keys |
-| `data-part="usage-chart"` | The Usage tab's chart of requests, a bar per hour or per day; its bars carry `data-outcome` (`success` or `failure`) |
-| `data-part="usage-chip"` | The one filter a breakdown click set on the Usage tab, a button that removes it |
+| `data-part="activity-filters"` | The Requests tab's filter row: All or Failed, the Filter button and the filters it applied as chips |
+| `data-part="usage-chart"` | The Usage tab's chart, a bar per hour or per day; `data-metric` is `requests`, `through` or `tokens`, the tile chosen above it; its bars carry `data-outcome` (`success` or `failure`) |
+| `data-part="usage-chip"` | The one filter a breakdown click set on the Usage tab, a chip that removes it |
 | `data-part="usage-numbers"` | The table behind the Usage chart, shown on request |
 | `data-part="usage-breakdown"` | The Usage tab's breakdown table by provider, model, account or key |
+| `data-part="requests-table"` | The Requests tab's table: sticky column heads, the requests grouped under the day each came on |
+| `data-part="request-story"` | What a request's pane says of why it went where it did: the decision sentence, then the other sentences |
+| `data-part="filter-menu"` | The Filter button and the panel of lists it opens |
+| `data-part="filter-button"` | The Filter button; `aria-expanded` while its panel is open, `data-active` while a filter is applied |
+| `data-part="filter-chip"` | One applied filter on the Requests tab, a button that removes it |
+| `data-part="word-chip"` | A word as a chip in a list: a failure's word (`data-tone="danger"`) or a note such as 2nd or via backup |
+| `data-part="usage-panel"` | The Usage tab's tiles and chart in one panel |
+| `data-part="usage-tiles"` | The Usage tab's figures as tiles; three are the chart's tabs (radio buttons), and the last, the time a request took, is only read |
 | `data-part="tool-steps"` | The numbered steps under a coding tool's row on the Tools page: make a key, put the text in the settings file, start the tool again |
 | `data-part="tool-key"` | One key on the Tools page: its name, its use this week, Rename and Delete |
 

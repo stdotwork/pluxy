@@ -40,6 +40,13 @@ async function addAccount(id: string, priority: number, settings?: Record<string
 const trace: Record<string, string> = {};
 const rows = (page: Page) => page.locator('[data-page="usage"] [data-part="request-row"]');
 const row = (page: Page, id: string) => page.locator(`[data-trace="${id}"] [data-part="request-row"]`);
+/** The side pane of the request that is open. */
+const pane = (page: Page) => page.locator('[data-part="detail"]');
+/** The Filter button's panel, opened. */
+const openFilter = async (page: Page) => {
+  if ((await page.locator(".filter-panel").count()) === 0)
+    await page.getByRole("button", { name: "Filter", exact: true }).click();
+};
 
 test.beforeAll(async () => {
   await addAccount("usage-account", 1);
@@ -79,12 +86,16 @@ test("Requests opens newest first; Failed, an account and a key filter it, and t
   expect(new URL(page.url()).hash).toBe("#/activity?failed=1");
 
   // A failed request through the second account does not exist: nothing matches.
+  await openFilter(page);
   await page.getByLabel("Every account", { exact: true }).selectOption({ label: "usage-second" });
+  // The filter is a chip, and takes itself off with a press.
+  await expect(page.getByRole("button", { name: /^Account: usage-second/ })).toBeVisible();
   await expect(page.getByText("No requests match.")).toBeVisible();
   await page.getByRole("button", { name: "Clear filters", exact: true }).click();
   await expect(rows(page)).toHaveCount(3);
   expect(new URL(page.url()).hash).toBe("#/activity");
 
+  await openFilter(page);
   await page.getByLabel("Every account", { exact: true }).selectOption({ label: "usage-second" });
   await expect(rows(page)).toHaveCount(1);
   await page.getByLabel("Every key", { exact: true }).selectOption({ label: "Claude Code" });
@@ -92,53 +103,74 @@ test("Requests opens newest first; Failed, an account and a key filter it, and t
   const hash = new URL(page.url()).hash;
   expect(hash).toMatch(/^#\/activity\?account=usage-second&key=/);
 
-  // Opening that address again restores the filters.
+  // Opening that address again restores the filters, as chips and in the Filter panel.
   await page.reload();
   await expect(rows(page)).toHaveCount(1);
+  await expect(page.getByRole("button", { name: /^Account: usage-second/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Key: Claude Code/ })).toBeVisible();
+  await openFilter(page);
   await expect(page.getByLabel("Every account", { exact: true }).locator("option:checked")).toHaveText(
     "usage-second",
   );
   await expect(page.getByLabel("Every key", { exact: true }).locator("option:checked")).toHaveText(
     "Claude Code",
   );
+  // A chip's press takes its filter off; Escape closes the panel.
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".filter-panel")).toHaveCount(0);
+  await page.getByRole("button", { name: /^Key: Claude Code/ }).click();
+  await expect(page.getByRole("button", { name: /^Key: Claude Code/ })).toHaveCount(0);
+  expect(new URL(page.url()).hash).toBe("#/activity?account=usage-second");
 });
 
-test("a row opens to why it went where it did, and its trace links to its log", async ({ page }) => {
+test("a row opens in the side pane to why it went where it did, and its trace links to its log", async ({
+  page,
+}) => {
   await openPanel(page, core);
   await signIn(page, core);
   await page.goto(`${core.base}/panel/#/activity`);
   const failed = row(page, trace.failed ?? "");
+  // A failed request has its failure as a word, in the list.
+  await expect(failed).toContainText("Provider error");
   await failed.getByRole("button", { expanded: false }).click();
-  await expect(failed).toContainText("usage-account failed: Provider error.");
-  await expect(failed.getByRole("link", { name: "Open usage-account" })).toHaveAttribute(
+  await expect(pane(page)).toContainText("Tried usage-account: provider error. No account answered.");
+  await expect(pane(page).getByRole("link", { name: "Open usage-account" })).toHaveAttribute(
     "href",
     "#/accounts/usage-account",
   );
-  await expect(failed.getByRole("link", { name: trace.failed })).toHaveAttribute(
+  await expect(pane(page).getByRole("link", { name: trace.failed })).toHaveAttribute(
     "href",
     `#/logs/${trace.failed}`,
   );
   // The account first in the order says so, and links to the order.
   const named = row(page, trace.named ?? "");
   await named.getByRole("button", { expanded: false }).click();
-  await expect(named).toContainText("usage-second comes first in its provider's account order.");
-  await expect(named.getByRole("link", { name: "Order & fallback" })).toHaveAttribute("href", "#/routing");
-  // One row is open at a time.
+  await expect(pane(page)).toContainText("usage-second comes first in its provider's account order.");
+  await expect(pane(page).getByRole("link", { name: "Order & fallback" })).toHaveAttribute(
+    "href",
+    "#/routing",
+  );
+  // One request is open at a time.
   const ok = row(page, trace.ok ?? "");
   await ok.getByRole("button", { expanded: false }).click();
   await expect(failed.getByRole("button", { expanded: true })).toHaveCount(0);
+  await expect(pane(page)).toHaveCount(1);
   // A request that succeeded says why its account answered: it was the only one then.
-  await expect(ok).toContainText("usage-account is the only account that serves fake-model.");
+  await expect(pane(page)).toContainText("usage-account is the only account that serves fake-model.");
   // A request that succeeded has a log only while core logs every request.
-  await expect(ok.getByRole("link", { name: trace.ok })).toHaveCount(0);
-  await expect(ok.getByText(trace.ok ?? "", { exact: true })).toBeVisible();
+  await expect(pane(page).getByRole("link", { name: trace.ok })).toHaveCount(0);
+  await expect(pane(page).getByText(trace.ok ?? "", { exact: true })).toBeVisible();
+  // Escape closes the pane and puts focus back on the row.
+  await page.keyboard.press("Escape");
+  await expect(pane(page)).toHaveCount(0);
+  await expect(ok.getByRole("button", { expanded: false })).toBeFocused();
   try {
     await core.mgmt("PATCH", "/settings", { observability: { logs: { "request-log": true } } });
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await row(page, trace.ok ?? "")
       .getByRole("button", { expanded: false })
       .click();
-    await expect(row(page, trace.ok ?? "").getByRole("link", { name: trace.ok })).toHaveAttribute(
+    await expect(pane(page).getByRole("link", { name: trace.ok })).toHaveAttribute(
       "href",
       `#/logs/${trace.ok}`,
     );
@@ -188,13 +220,15 @@ test("a request that fell back says how many accounts failed, and its row what e
   await page.goto(`${core.base}/panel/#/activity`);
   const request = row(page, answered.trace);
   await expect(request).toContainText("tries-second");
-  await expect(request).toContainText("after 1 other");
+  // The list says it in two words; the chip's title is the longer note.
+  await expect(request.locator(".word-chip")).toHaveText("2nd");
+  await expect(request.locator(".word-chip")).toHaveAttribute("title", "after 1 other");
   await request.getByRole("button", { expanded: false }).click();
-  await expect(request).toContainText("tries-second succeeded after 1 other account failed.");
-  await expect(request).toContainText(
+  await expect(pane(page)).toContainText(/Tried tries-first: .+\. Then tries-second answered in /);
+  await expect(pane(page)).toContainText(
     "tries-second is a backup in its provider's account order: no account above it could take the request then.",
   );
-  const attempts = request.locator(".request-attempts li");
+  const attempts = pane(page).locator(".request-attempts li");
   await expect(attempts).toHaveCount(2);
   await expect(attempts.nth(0)).toContainText("tries-first");
   await expect(attempts.nth(1)).toContainText("tries-second");
@@ -239,14 +273,39 @@ test("Usage adds the requests up, by range and by name; a name filters, and its 
     page.getByRole("heading", { level: 1, name: "Activity: Requests", exact: true }),
   ).toBeVisible();
   await expect(rows(page)).toHaveCount(1);
-  await expect(page.getByLabel("Every account", { exact: true }).locator("option:checked")).toHaveText(
-    "usage-second",
-  );
+  await expect(page.getByRole("button", { name: /^Account: usage-second/ })).toBeVisible();
   // The chip comes off.
   await page.goto(`${core.base}/panel/#/activity/usage?account=nobody`);
   await expect(page.getByText("No requests in the last 7 days.")).toBeVisible();
   await page.getByRole("button", { name: /^Account: nobody/ }).click();
   await expect(page.locator(".usage-figures")).toContainText("requests");
+});
+
+test("the Usage tiles are the chart's tabs: the chart shows the figure that is chosen", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/activity/usage`);
+  const tiles = page.locator('[data-part="usage-tiles"]');
+  const bars = page.locator('[data-part="usage-chart"] svg g[role="img"]');
+  await expect(bars).toHaveCount(7);
+  await expect(tiles.getByRole("radio", { name: /^Requests/ })).toBeChecked();
+  await expect(bars.last()).toHaveAttribute("aria-label", /: \d+ requests?, \d+ failed$/);
+  await tiles.getByRole("radio", { name: /^Went through/ }).check();
+  await expect(page.locator('[data-part="usage-chart"]')).toHaveAttribute("data-metric", "through");
+  await expect(bars.last()).toHaveAttribute(
+    "aria-label",
+    /: \d+(\.\d)?% went through, of \d+ requests?$|: no requests$/,
+  );
+  await tiles.getByRole("radio", { name: /^Tokens/ }).check();
+  await expect(bars.last()).toHaveAttribute("aria-label", /: [\d,]+ tokens$/);
+  // The time a request took has no figure per bar, so it is read, not chosen.
+  const time = tiles.locator(".usage-tile[data-static]");
+  await expect(time).toContainText("Avg time");
+  await expect(time.getByRole("radio")).toHaveCount(0);
+  // The arrow keys move between the tiles, as in any group of radio buttons.
+  await tiles.getByRole("radio", { name: /^Tokens/ }).focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(tiles.getByRole("radio", { name: /^Went through/ })).toBeChecked();
 });
 
 test("with the record turned off, both tabs say so and link to the switch", async ({ page }) => {

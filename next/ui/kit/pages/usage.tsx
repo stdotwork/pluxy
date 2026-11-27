@@ -274,6 +274,7 @@ export function UsagePage() {
           {picked && (
             <>
               <FilterChip
+                part="usage-chip"
                 kind={kindWord(picked)}
                 name={nameOf(picked, value)}
                 onRemove={() => setAddress("")}

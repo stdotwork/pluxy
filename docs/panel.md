@@ -126,23 +126,31 @@ Activity has two tabs. Both read what core records, and both say so when core is
 a record (`observability.usage.usage-statistics-enabled` is off): they show one pane that links
 to the setting.
 
-**Requests** (`#/activity`, or `#/usage`) lists what core still keeps in memory, newest first,
-under the day each request came on, 50 at a time. That is a day by default and at most 10,000
+**Requests** (`#/activity`, or `#/usage`) lists what core still keeps in memory, newest first, as a
+table (column heads stay in view) under the day each request came on, 50 at a time. A request
+that failed has a bar at its start and its failure as a word ("Rate limited", not the status);
+one that a second or later account, a backup or a fallback model answered says so in two words
+("2nd", "via backup") beside its account. That is a day by default and at most 10,000
 requests (`usage.max_age_ms` and `usage.max_events`), so the list has no time range; its end says
 how far back it goes. It is read when the page opens, on Refresh and when a filter changes, not on
-a timer. A row opens to why the request went where it did, in a sentence, what each attempt came
-to, and its facts. The trace links to the request's log on the Logs page for a failed request,
+a timer. A row opens a pane beside the list (a drawer over it in a narrow window) that starts with one
+sentence on what routing did ("Tried studio-max: rate limited. Then pro-main answered in 2.4 s."),
+then why that account was chosen, what each attempt came to as a timeline, the request's facts and
+the one next step (Open the account, or its log). The trace links to the request's log on the Logs page for a failed request,
 and for a successful one only while `observability.logs.request-log` is on (the log of a
 successful request is kept only then); otherwise it shows as text to copy. The filters are in the
-address: `failed=1`, `provider`, `account` (the account's ID, which is what a request
+address, shown as All | Failed and a Filter button whose lists (provider, account, model, key) turn
+into chips that come off with a press: `failed=1`, `provider`, `account` (the account's ID, which is what a request
 records; a public ID is turned into it), `model` and `key`. `trace=<id>` opens one request, reading down
 the record until it finds it. **Save as spreadsheet** writes the newest 10,000 matching requests,
 with the columns `Time, Model, Provider, Account, Client key, Failed, Status, Latency, Tokens,
 Trace ID`, newest first.
 
-**Usage** (`#/activity/usage`) adds the requests up over 24 hours, 7 days or 30 days: the totals,
-a chart with a bar per hour (24 hours) or per local day, and a breakdown by provider, model,
-account or key. Core adds closed days from its day files (kept 90 days) and today from memory, so
+**Usage** (`#/activity/usage`) adds the requests up over 24 hours, 7 days or 30 days: the totals as
+tiles (requests, the share that went through, tokens, the average time), a chart with a bar per
+hour (24 hours) or per local day, and a breakdown by provider, model, account or key, each row
+with a bar for its share. The first three tiles are also the chart's tabs: it shows the requests
+(went through in ink, failed on top in red), the share that went through, or the tokens. Core adds closed days from its day files (kept 90 days) and today from memory, so
 the 7 and 30 days are real, though Requests holds less. `GET /usage` is asked for hourly steps and
 the page adds them into the person's local days. When core could not write some requests to its
 usage files (`write_errors` and `dropped` in `GET /usage`), Requests says how many.

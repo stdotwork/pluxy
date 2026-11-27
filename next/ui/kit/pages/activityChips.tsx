@@ -19,19 +19,25 @@ const t = strings("activity.chips", {
  */
 export function WordChip(props: { tone?: "danger"; title?: string; children: ComponentChildren }) {
   return (
-    <span class="word-chip" data-tone={props.tone} title={props.title}>
+    <span class="word-chip" data-part="word-chip" data-tone={props.tone} title={props.title}>
       {props.children}
     </span>
   );
 }
 
 /** One applied filter, as a chip: "Account: studio-max ×". A press takes it off. */
-export function FilterChip(props: { kind: string; name: string; onRemove: () => void }) {
+export function FilterChip(props: {
+  kind: string;
+  name: string;
+  onRemove: () => void;
+  /** The data-part the chip carries: the Usage tab keeps its own, usage-chip. */
+  part?: "filter-chip" | "usage-chip";
+}) {
   return (
     <button
       type="button"
       class="filter-chip"
-      data-part="filter-chip"
+      data-part={props.part ?? "filter-chip"}
       title={t("remove")}
       onClick={props.onRemove}
     >

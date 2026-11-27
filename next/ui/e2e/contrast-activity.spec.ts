@@ -1,6 +1,6 @@
 // Activity's own text is readable (WCAG AA, 4.5:1) in every built-in theme, in light and in dark:
-// the day headings and the end of the Requests list, and the Usage chart's labels, readout and
-// legend, with the figures above them.
+// the day headings and the end of the Requests list, the failure and detour chips, the Usage
+// tiles, and the Usage chart's labels, readout and legend.
 import { expect, type Page, test } from "@playwright/test";
 import { measureContrast } from "./contrast";
 import { openPanel, signIn, useCore } from "./support";
@@ -53,9 +53,24 @@ for (const theme of THEMES) {
       expect(
         await unreadable(
           page,
-          ".usage-chart .chart-label, .usage-readout, .usage-chart .chart-legend, .usage-figures",
+          ".usage-chart .chart-label, .usage-readout, .usage-chart .chart-legend, .usage-step",
         ),
       ).toEqual([]);
+    });
+
+    test(`the Usage tiles and the breakdown are readable: ${name}`, async ({ page }) => {
+      await open(page, theme, appearance, "activity/usage");
+      expect(
+        await unreadable(
+          page,
+          ".usage-tile-label, .usage-tile-value, .usage-tile-sub, .usage-percent, .usage-breakdown td[data-failed]",
+        ),
+      ).toEqual([]);
+    });
+
+    test(`the Requests list's chips and headings are readable: ${name}`, async ({ page }) => {
+      await open(page, theme, appearance, "activity");
+      expect(await unreadable(page, ".word-chip, .requests-table thead th, .req-time")).toEqual([]);
     });
   }
 }
