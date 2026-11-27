@@ -4,6 +4,7 @@
 // picked by its ID so it keeps the same one everywhere. The mark is decoration: the provider's
 // name is always beside it.
 
+import { Icon } from "../icons";
 import { providerName } from "./account";
 
 /** The part of an extension ID after "/": "pluxy/claude" is claude. */
@@ -110,6 +111,8 @@ export function ProviderMark(props: { extension?: string; size?: "small" | "medi
       ? { role: "img" as const, "aria-label": providerName(props.extension) }
       : { "aria-hidden": "true" as const };
   if (!mark) {
+    // Another service with an API key is any service at all: a key, not a letter.
+    const key = id === "openai-compatible";
     const initial = props.extension ? providerName(props.extension).charAt(0).toUpperCase() : "?";
     return (
       <span
@@ -121,7 +124,7 @@ export function ProviderMark(props: { extension?: string; size?: "small" | "medi
         data-initial=""
         {...name}
       >
-        {initial}
+        {key ? <Icon name="key" size={props.size === "small" ? 11 : 14} /> : initial}
       </span>
     );
   }
