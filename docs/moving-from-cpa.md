@@ -4,7 +4,7 @@ This page takes a working [CLIProxyAPI](https://github.com/router-for-me/CLIProx
 pluxy. One command, `pluxy import cpa`, reads CPA's `config.yaml` and its auth folder (the folder of
 signed-in accounts) and brings the settings, client keys, provider keys and accounts across. It
 then lists everything it brought, everything it changed on the way and everything it left behind,
-with a reason for each, so nothing is dropped without a word.
+with a reason for what it changed or left, so nothing is dropped without a word.
 
 The import never changes CPA's files, so you can go back at any point.
 
@@ -28,8 +28,9 @@ cd ~/pluxy
 ./pluxy serve
 ```
 
-With no config in the folder or in pluxy's home ([setup](setup.md)), pluxy writes its own
-`config.json` there on this first start and prints its address: `127.0.0.1` port 8317, or a free
+With no `config.json` in the current folder or in pluxy's home folder ([setup](setup.md)), pluxy
+writes its own `config.json` in pluxy's home on this first start (not in `~/pluxy`) and prints its
+address: `127.0.0.1` port 8317, or a free
 port when 8317 is taken, for example by CPA. The import adds to this config. Leave pluxy running
 and open a second terminal in `~/pluxy`.
 
@@ -40,18 +41,20 @@ and open a second terminal in `~/pluxy`.
 ```
 
 This writes nothing. It prints these lists, which together name every key of the file and every
-file of the auth folder, each once:
+entry of the auth folder, each once. (A file with `server.tls.enable: true` is refused even here:
+see the result notes in step 3.)
 
 - **Brought**: what comes across as it is.
 - **Changed**: what comes across differently, with what it was (`FROM`), what it becomes (`TO`), why,
   and, for the address, what to write to keep the old behaviour (`KEEP WITH`).
-- **Not brought**: what stays behind, with the reason. Most rows end with "it is off, empty or at
-  today's default here, so nothing is lost"; read the ones that do not.
+- **Not brought**: what stays behind, with the reason. A row that ends with "it is off, empty or at
+  today's default here, so nothing is lost" costs you nothing; read the others.
 - **Needs**: the provider packages the imported accounts need and pluxy has not installed yet.
   It appears only when there are some.
 
-`--json` prints the reply as JSON. An import that cannot place an item fails and names it, and
-writes nothing.
+`--json` prints the reply as JSON. A setting the import cannot place fails the whole import, names
+it and writes nothing. An auth file it cannot use does not: it goes under **Not brought** with the
+reason.
 
 ### 3. Import
 
@@ -81,8 +84,8 @@ Four things to know about the result:
 - **pluxy keeps its own address.** It goes on listening where it started. The **Changed** list
   shows the address CPA's file asked for and the `"listen"` line to put in `config.json` if you want
   it; restart pluxy after changing it.
-- **TLS is refused.** A file with `server.tls.enable: true` fails with `tls cannot change while core
-  runs; restart core to apply it`. Set the `tls` section (`enable`, `cert`, `key`) in pluxy's
+- **TLS is refused, in a dry run too.** A file with `server.tls.enable: true` fails with
+  `config: tls cannot change while core runs; restart core to apply it (a renewed certificate in the same files is read without a restart) (refused)`. Set the `tls` section (`enable`, `cert`, `key`) in pluxy's
   `config.json` yourself and restart pluxy, then import a copy of the file without its `tls`
   section.
 - **A core that runs on a `config.yaml` takes dry runs only.** The real import writes pluxy's JSON
@@ -168,34 +171,43 @@ From `config.yaml`:
 - model aliases and excluded models for signed-in accounts (`oauth-model-alias`,
   `oauth-excluded-models`) of the channels `codex`, `claude`, `antigravity`, `vertex`, `kimi`,
   `xai`, `meta` and `devin`; rules for another channel are named and left out;
-- the payload rules;
-- the log, request-log and usage settings;
+- the payload rules. A rule path pluxy cannot apply (a `*` wildcard, for example) fails the import,
+  naming it, and a rule CPA skipped or dropped is carried the way CPA applied it, with the
+  difference named under **Changed**. `protocol` names the extension here, not CPA's upstream API
+  format;
+- the log, request-log and usage settings (`debug` and the usage queue's retention are not
+  brought), and `pprof`, which only a build with `-tags pprof` serves;
 - per-provider switches: `disable-codex-cloaking` (as `codex_identity: false` on the Codex accounts
   the import makes from auth files, and on a Codex key that sets it itself), `model-level-cooling`
   for Claude, `inject-x-search` for xAI, `disable-image-generation`, and the sign-in with ChatGPT
   identifier;
 - the [Lamplighter plugin](https://github.com/PosvdM/cpa-plugin-lamplighter)'s window ignition, when
   `plugins.enabled` and the plugin's own `enabled` are both true: pluxy has it built in as
-  `routing.ignition`. Its hours, waits and retries carry over, held to the ranges pluxy accepts (a
-  retry of at least 60 seconds, a hold of at least 15), and the **Changed** list names any value it
-  had to move. The providers it starts windows for carry over with their models: `claude` and `codex`
+  `routing.ignition`. Its hours, waits and retries carry over, held to the plugin's own ranges (a
+  retry of at least 60 seconds, a hold of at least 15, hours 0 to 23), and the **Changed** list
+  names any value it had to move. The providers it starts windows for carry over with their models: `claude` and `codex`
   become `pluxy/claude` and `pluxy/codex`, and `antigravity`, when its `ignite` is on, becomes
   `pluxy/antigravity`.
 
 From the auth folder, the `.json` files at its top of these types: `codex`, `claude`, `kimi`
 (also `kimi-ai`), `vertex`, `xai`, `meta`, `devin` and `antigravity`. Each becomes an account:
 
-- Its ID is the file's name without `.json`, with every character other than letters, digits, `.`,
-  `_` and `-` changed to `-`.
+- Its ID is the file's name without `.json`. Every character other than letters, digits, `.`, `_`
+  and `-` becomes `-`, leading `.`, `_` and `-` are dropped, and the ID is cut to 128 characters.
+  When two files make the same ID (ignoring letter case), the later one goes under **Not brought**.
 - It keeps the file's label, priority, weight, prefix, excluded models, model aliases, proxy,
   headers, `disable-cooling` and `request-retry` settings, and whether the file was disabled.
-- A Codex file with a `siwc` section also makes a second account, `<id>-siwc`, which is disabled
-  unless the file says `use_siwc: true`.
+- A Codex file with a `siwc` section that holds a token (`access_token`, `access` or
+  `refresh_token`) also makes a second account, `<id>-siwc`, which is disabled unless the file says
+  `use_siwc: true`.
+- A file whose `proxy_url` or `headers` pluxy cannot use goes under **Not brought**, whole.
+- A symbolic link, a subfolder and any file that is not a `.json` file are not read.
 - An `antigravity` account serves only once the Antigravity extension is installed (step 4).
 
-The reference for every setting and every auth-file field is the table "What each setting does here"
-in [`next/README.md`](../next/README.md#what-each-setting-does-here). It still uses CPA's own name
-for the setting's source, "today's core".
+The reference for every setting is the table "What each setting does here" in
+[`next/README.md`](../next/README.md#what-each-setting-does-here), and for every auth-file field the
+table under ["Moving from CLIProxyAPI"](../next/README.md#moving-from-cliproxyapi-pluxy-import-cpa)
+in the same file. Both call CPA "today's core".
 
 ## What does not carry over
 
@@ -209,19 +221,24 @@ for the setting's source, "today's core".
 | The Antigravity provider's own settings under `oauth.providers.antigravity` (`sensitive-words`, `connection-pool`, the signature and credit switches) | The extension does not read them. The import names each one |
 | Auth files of any other type, with no `type`, larger than 1 MiB, that are not a JSON object or have no token, or whose ID pluxy already has; entries that are not `.json` files at the top of the folder | No provider in pluxy serves them, or they are unusable. The import names each file |
 | The settings that make another client look like Claude Code (cloaking, fingerprint profiles) and the header defaults | pluxy does not make another client look like Claude Code |
-| A header that holds `$CPA-SESSION-ID`, or that copies the client's `Authorization`, `Proxy-Authorization`, `X-Api-Key`, `X-Goog-Api-Key` or `Cookie` header | pluxy has no CPA session ID, and never sends a client's key, a proxy password or cookies upstream. The import names each one. A header name pluxy refuses (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`) fails the import, naming it |
+| A header that holds `$CPA-SESSION-ID`, or that copies the client's `Authorization`, `Proxy-Authorization`, `X-Api-Key`, `X-Goog-Api-Key` or `Cookie` header | pluxy has no CPA session ID, and never sends a client's key, a proxy password or cookies upstream. The import names each one. A header name pluxy refuses (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`) in `config.yaml` fails the import, naming it; in an auth file it leaves that file under **Not brought** |
 | `plugins`, other than Lamplighter's window ignition | pluxy's providers are separate programs, installed as packages, not libraries loaded into the core |
 | Lamplighter's notifications and reminders (Bark, webhooks, the usage thresholds, reset reminders) and its own page | pluxy sends no usage notifications. The panel shows each account's usage, and `pluxy account list` its health |
 | Lamplighter's `timezone` | pluxy reads the ignition hours in the machine's local time zone. Move `start_hour` and `end_hour`, or set the machine's time zone |
 | The panel download settings (`panel-github-repository`, `disable-auto-update-panel`, `disable-control-panel`, `github-token`) | The panel is built into pluxy; nothing is downloaded, and it is always on with the management API |
 | The remote model catalogs (`models.catalog` and the others) | Each provider carries its own model list |
 | Response compression, `commercial-mode`, discovery, `max-request-body-bytes` | Left to a reverse proxy, or switches for features pluxy does not have. Request bodies are capped at 24 MiB |
-| Settings pluxy has not built yet (the Codex `enable-apply-patch`, `optimize-multi-agent-v2`, stream bootstrap settings; model `force-mapping` and `openapi`) | Named in the **Not brought** list as "not supported yet" |
+| Settings pluxy has not built yet (the Codex `enable-apply-patch`, `optimize-multi-agent-v2` and stream bootstrap settings) | Named in the **Not brought** list as "not supported yet". A model's `force-mapping` and `openapi` are named the same way in the **Changed** row of the account |
+| A provider key with no `api-key`, a Codex key with no `base-url`, an `openai-compatibility` group with `disabled: true`, and `api-keys.meta` | They make no account. The import names each one |
+| `session-affinity-subagents`, `session-affinity-rebind-on`, `management.base-url`, `oauth.providers.devin` (only its `sensitive-words`), a key's `websockets` for xAI | No use here: a subagent stays on its session's account, there is no terminal UI, and xAI is served over HTTP. The import names each one |
 | Environment variables and `.env` (`MANAGEMENT_PASSWORD`, `PGSTORE_*`, `GITSTORE_*`, `OBJECTSTORE_*`) | pluxy does not read them; the settings are in the config file |
 | `save-cooldown-status` | pluxy needs no switch: it saves the blocks it must keep in `state/routing.json` by itself |
 
 You do not have to work out which of these your file uses: the import names each one in your file,
-with its reason, in the **Changed** or **Not brought** list.
+with its reason, in the **Changed** or **Not brought** list. Where it cannot place a setting at all
+(TLS that differs from the running pluxy, a refused header name, a rule path pluxy cannot apply, an
+invalid `quota-response-mode`, a key `weight` outside 0 to 1000000, an unusable proxy URL), it fails
+and writes nothing, naming the setting.
 
 ## What is named differently
 
@@ -231,10 +248,11 @@ with its reason, in the **Changed** or **Not brought** list.
 | `api-keys` (`access.api-keys` in the newer layout): the keys clients send | Client keys (`client_keys`); `pluxy key list` |
 | `secret-key` under `remote-management` or `management` | pluxy's own management key (`management_key`) |
 | A provider or channel (`codex`, `claude`, ...) built into the program | A provider extension, installed as a package (`pluxy/codex`, `pluxy/claude`, ...); `pluxy ext list` |
-| Login flags (`--codex-login` and the like) | `pluxy account add <provider>`, or the panel's **Add an account** page |
+| CPA's login command-line flags | `pluxy account add <provider>`, or the panel's **Add an account** page |
 | Several models pooled under one alias in an `openai-compatibility` entry | A fallback chain; `pluxy chain list` |
 | `weighted-round-robin` | `weighted` |
-| Cooling, `disable-cooling` | Cooldown; `pluxy account list` shows each account's health, until when and why, and `pluxy account clear <id>` ends a cooldown |
+| Cooling | An account's health is `cooling` (blocked for now) or `exhausted` (usage used up); `pluxy account list` shows the health, until when and why, and `pluxy account clear <id>` forgets the blocks and the last error |
+| `disable-cooling` | `disable_cooling`, in `routing` or on an account |
 | `oauth-model-alias`, `oauth-excluded-models` | `model_alias` and `excluded_models` |
 | Usage statistics | The usage record; `pluxy usage` |
 | The management API at `/v0/management` | The same path, with pluxy's own calls ([management API](management-api.md)) |
@@ -245,7 +263,7 @@ The names on the right are the ones in pluxy's `config.json`, its commands and i
 
 - **Nothing is installed at first.** A new pluxy serves no provider until you install one, so a moved
   setup needs step 4 once.
-- **pluxy listens on `127.0.0.1` unless told otherwise.** A CPA config with no host listens on every
+- **pluxy's own config listens on `127.0.0.1`.** A CPA config with no host listens on every
   interface. The import does not carry that over by itself: the **Changed** list says how to keep it.
 - **pluxy always has a management key and a client key.** With an empty key, CPA turns the
   management API off, and with no client keys it serves anyone. pluxy refuses to start without
@@ -258,16 +276,19 @@ The names on the right are the ones in pluxy's `config.json`, its commands and i
 - **A block ends when the limit does.** pluxy blocks an account for as long as the provider said. A
   rate limit or quota block with more than 15 minutes left is checked every 15 minutes: pluxy reads
   the account's usage from the provider and ends the block once the limit is no longer full. A
-  reset time more than 8 days away is not believed, unless the provider also names a longer usage
-  window: the account is then held for 30 minutes and checked after 15.
+  reset time more than 8 days away is not believed, unless the provider also names the usage
+  window's length and the reset fits it: the account is then held for 30 minutes and checked after
+  15.
 - **A failing upstream is retried sooner.** After a server error or a broken connection, with
-  `transient-error-cooldown-seconds` at 0, pluxy backs off from one second up to a minute, where CPA
-  waits a fixed minute.
+  `transient-error-cooldown-seconds` at 0, pluxy waits one second at first and doubles the wait up to
+  a minute (each wait is cut by a random share of up to half), where CPA waits a fixed minute. A
+  `Retry-After` from the upstream wins.
 - **Blocks survive a restart.** Blocks on an account or one of its models with more than 30 seconds
   left, and bans, are saved in `state/routing.json` and read back at start, so a restart sends no
   requests to an account whose usage ran out. Blocks on an upstream endpoint are not saved.
 - **Window ignition checks that the window started.** `hold_ms` after the request that starts a
   window (60 seconds unless set), pluxy reads the account's usage again; a window that still does
   not run counts as a failed ignition. A failed ignition is retried after `retry_ms`, longer after
-  each failure in a row, and `max_failures` in a row pause that window until the next `start_hour`. What ignition knows is not saved:
-  after a restart pluxy reads each account at once.
+  each failure in a row, and `max_failures` in a row pause that window until the next `start_hour`;
+  a failure that would repeat (a refused key or account, a missing model) pauses it at once. What
+  ignition knows is not saved: after a restart pluxy reads each account at once.

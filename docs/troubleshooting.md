@@ -34,8 +34,8 @@ Stop the other program, or change `"listen"` in `config.json` to a free port and
 pluxy: config <path>: no management key: core always has one, so the panel and the pluxy command can manage it. Add "management_key": "<a long random secret>" to the file, or move the file aside and run pluxy init to write a new config with both keys
 ```
 
-Core does not start without a management key (`management_key` in `config.json`; `management.secret-key`
-in a `config.yaml`). Add the line the message shows, or move the file aside and run `pluxy init`.
+Core does not start without a management key (`management_key` in `config.json`; `remote-management.secret-key`
+or `management.secret-key` in a `config.yaml`). Add the line the message shows, or move the file aside and run `pluxy init`.
 
 A `config.yaml` that CLIProxyAPI wrote can hold the key as a bcrypt hash, which pluxy cannot use:
 
@@ -85,8 +85,8 @@ extension that holds the start up. See [An extension is not running](#an-extensi
 
 ## A `pluxy` command cannot reach core
 
-A `pluxy` command other than `serve` and `init` calls a running core. It finds core's address
-and management key in the first of these that applies: `--url` and `--key` (or `PLUXY_URL` and
+A `pluxy` command other than `serve`, `init`, `help` and `key management` calls a running core. It finds core's address
+and its management key, each in the first of these that applies: `--url` and `--key` (or `PLUXY_URL` and
 `PLUXY_MANAGEMENT_KEY`), `--config <file>`, `config.json` in the current folder, `config.json` in
 [pluxy's home](setup.md). `--verbose` on any of these commands prints which one it used.
 
@@ -97,7 +97,7 @@ pluxy: no core is listening at http://127.0.0.1:8317, the address in <path>/conf
 ```
 
 Exit code 3. Nothing answers at the address. Two other forms name the source of the address:
-`pluxy: no core is listening at <address> (from --url). Start one with: pluxy serve, or check --url`, and, for a
+`pluxy: no core is listening at <address> (from --url). Start one with: pluxy serve, or check --url` (`from PLUXY_URL` when the address came from the environment), and, for a
 `config.json` in the current folder or a `--config` file,
 `pluxy: no core is listening at <address>. Start one with: pluxy serve -config <file>, or check --url`.
 
@@ -158,8 +158,11 @@ Exit code 2. See [Point a coding tool at pluxy](clients.md).
 
 ## A client gets an error
 
-A client is the tool that sends requests to pluxy. For the error bodies below, the `error.code`
-field is what to look for; the `pluxy` member of an error body, when there is one, names the accounts
+A client is the tool that sends requests to pluxy. The bodies below are what an OpenAI-style
+request (`/v1/chat/completions`, `/v1/responses`) gets, with the `error.code` field to look for.
+An Anthropic request (`/v1/messages`) gets `{"type":"error","error":{"type":...,"message":...}}`, and a
+Gemini request gets `{"error":{"code":<status>,"message":...,"status":...}}`; the status and the
+message are the same. In an OpenAI-style body, the `pluxy` member of an error body, when there is one, names the accounts
 tried (`tried`) and the ones left out (`left_out`), and `trace` holds the request's trace ID (see
 [Finding out what happened](#finding-out-what-happened)).
 
@@ -182,8 +185,8 @@ parameter. Check the key against `client_keys` in `config.json`, or make a new o
 ```
 
 `client_keys` still holds one of the example config's public keys (`your-api-key-1` and its
-neighbours), which anyone can read. While it does, pluxy refuses every client request, even one with a
-different key. Core says so at start: `pluxy: client_keys still holds the example config's public keys (your-api-key-1): every client request is refused (403 unsafe_example_api_key) until they are replaced`.
+neighbours), which anyone can read. While it does, pluxy refuses every client request that carries a
+configured key, including your own. This reply has no trace ID header. Core says so at start: `pluxy: client_keys still holds the example config's public keys (your-api-key-1): every client request is refused (403 unsafe_example_api_key) until they are replaced`.
 Remove the example keys from `client_keys` and run `pluxy reload`.
 
 ### 404 `model_not_found`
@@ -199,8 +202,8 @@ pluxy: no account serves nonexistent-model. See pluxy model list.
 ```
 
 Run `pluxy model list` for the names clients can ask for. A model name is not served when the account
-that offers it is turned off, needs a new sign-in, or belongs to an extension that is not installed or not running
-(see [An account is not used](#an-account-is-not-used)). When the accounts that serve a model are all
+that offers it is turned off or needs a new sign-in (see [An account is not used](#an-account-is-not-used)),
+or when the extension it needs is not installed or not enabled. When the accounts that serve a model are all
 turned off or waiting for a sign-in, the message says so instead:
 
 ```text
@@ -215,22 +218,35 @@ pins one account with the `X-Pluxy-Account` header gets `account "<id>" cannot s
 
 `GET /v1/models` answers `{"data":[],"object":"list"}` while no account serves any model, for
 example when no extension is installed or no account is added. `pluxy model list` shows the same
-list. A provider's model list is read again every 30 minutes; `pluxy model refresh` asks every
-provider now. For a model that is still missing, `pluxy account models <id>` lists what an account
+list. A provider's model list is read again every 30 minutes (with up to 3 minutes added), and when an
+account signs in or renews; `pluxy model refresh` asks every provider now. For a model that is still missing, `pluxy account models <id>` lists what an account
 serves; the account's `excluded_models` setting can leave a model out.
 
 ### 429 `model_cooldown`
 
 ```text
-every account for model "<model>" is cooling down; try again in <seconds>s
+every account for model "<model>" is cooling down; try again in <wait>
 ```
+
+`<wait>` is written as a duration, such as `45s`, `1m30s` or `5m0s`.
 
 HTTP 429 with a `Retry-After` header. When no account can serve the request for more than 5
 minutes (a usage limit that resets later, or an account that needs a person), the reply carries
-`X-Should-Retry: false` and no `Retry-After`: the client should stop instead of retrying. Every account that serves the model is blocked for now, after
+`X-Should-Retry: false` and no `Retry-After`: the client should stop instead of retrying. Any
+routing error of that kind carries it. Every account that serves the model is blocked for now, after
 a rate limit or a failing upstream. By default pluxy does not wait for a block to end: it fails at
 once with the time the first block ends (`max_wait_ms` under `routing` in `config.json` makes it wait up to that many milliseconds).
 Wait for the time in the message, or end a block yourself with `pluxy account clear <id>`.
+
+### 503 `extension_unavailable`
+
+```text
+extension <id> is not running
+```
+
+The account's extension is installed and enabled but is not serving: it crashed, was stopped or is
+quarantined. Other forms: `extension <id> does not run`, and, when core runs with `-safe-mode`,
+`core is in safe mode: no extension runs`. See [An extension is not running](#an-extension-is-not-running).
 
 ### 429 `accounts_busy`
 
@@ -253,13 +269,14 @@ in words.
 | `ok` | Serving | The account takes requests. | Nothing. |
 | `cooling` | Cooling down | A rate limit or a failing upstream blocked it, until `UNTIL`. | Wait, or run `pluxy account clear <id>` (**Clear cooldown** on the Accounts page). |
 | `exhausted` | Limit used up | A usage window of the provider ran out. A usage block shorter than 5 minutes shows as `cooling` instead. | Wait for the reset, check what is left with `pluxy account quota <id>`, or add another account. |
-| `needs_login` | Needs sign-in | The provider refused the account's sign-in. | `pluxy account login <id>`, or **Sign in again** on the Accounts page. |
-| `banned` | Closed by provider | The provider closed or suspended the account. | Check the account with its provider; once it is open again, run `pluxy account enable <id>`, which also forgets the ban. |
+| `needs_login` | Needs sign-in | The provider refused the account's sign-in. | `pluxy account login <id>`, or **Sign in again** on the Accounts page (for an account set in `config.json`, the button reads **See what to do**). |
+| `banned` | Closed by provider | The provider closed or suspended the account. | Check the account with its provider; once it is open again, run `pluxy account enable <id>` (**Turn on** on the Accounts page), which also forgets the ban. |
 | `disabled` | Turned off | A person turned it off (`WHY` says `turned off`). | `pluxy account enable <id>`, or **Turn on** on the Accounts page. |
 | `broken` | Cannot be read | pluxy cannot read the account's saved credential file; `WHY` gives the file's path and the error. | Fix or remove that file. |
 
-A block with more than 15 minutes left is checked every 15 minutes: core reads the account's usage
-from the provider and ends the block early when the limit is no longer full.
+A rate-limit or usage block with more than 15 minutes left is checked every 15 minutes: core reads
+the account's usage from the provider and ends the block early when the limit is no longer full. An
+account with no usage reading, such as an API key, gets one request let through instead.
 
 The panel says **Provider stopped** for an account whose provider's extension is not running: see
 [An extension is not running](#an-extension-is-not-running). An account that `pluxy route <model>`
@@ -280,10 +297,13 @@ test/beta      1.0.0    no       disabled  bundled
 | --- | --- | --- |
 | `disabled` | The package is installed and turned off. | `pluxy ext enable <id>`. |
 | `starting`, `active`, `idle` | Normal. `idle`: the program was stopped for lack of use and starts at the next request. | Nothing. |
-| `crashed` | The program exited or did not start; pluxy restarts it after a wait that grows from 1 second to 1 minute. | Read the error in `pluxy logs`. |
+| `crashed` | The program exited or did not start; pluxy restarts it after a wait that grows from 1 second to 1 minute. | `pluxy status` shows the last error next to the state; `pluxy logs` shows more when file logging is on. |
 | `quarantined` | It crashed 5 times in a row; pluxy does not restart it until the config is reloaded. | Fix the cause, then `pluxy reload`. |
 | `failed: <reason>` | The package is enabled but could not start. | Fix what the reason names, then `pluxy reload`. |
-| `stopped` | Core runs in safe mode (`-safe-mode`), where no extension runs. | Start core without `-safe-mode`. |
+| `stopped` | The package is enabled but nothing runs it: core is in safe mode (`-safe-mode`), or it has not been started. | Start core without `-safe-mode`, then `pluxy reload`. |
+
+The waits, the 5 crashes and the run that resets the count (10 minutes) are defaults; the `restart`
+setting of an extension in `config.json` changes them.
 
 An account is served only when its provider's package is installed and enabled. `pluxy account list`
 names the package an account needs in the `EXTENSION` column.
@@ -346,7 +366,7 @@ one of two refusals, and a call from the same machine as core never gets either 
   core's own machine, or set `"management_allow_remote": true` and run `pluxy reload`. Docker needs it, because requests
   through a published port arrive from Docker's network address: see [Setup](setup.md).
 - **The address is blocked.** Five wrong management keys in a row from one address block it for 30
-  minutes: a 403 with the code `blocked`, `too many failed management keys from this address; try again in 30m0s`,
+  minutes (a call with no key does not count, and a right key resets the count): a 403 with the code `blocked`, `too many failed management keys from this address; try again in 30m0s`,
   and a `Retry-After` header. The block holds even for the right key. Wait it out, or restart core. An IPv6 address is counted by its /64 block.
 
 ### The sign-in form says "no pluxy management API answered at this address" or "core could not be reached"
@@ -372,7 +392,8 @@ requests, and a log per request when request logging is on. [Usage and logs](usa
 pluxy: logging to file is off (invalid_request)
 ```
 
-Exit code 2, from `pluxy logs`. Core writes its log to standard error unless file logging is on. Set
+Exit code 2, from `pluxy logs`. Core always writes its log to standard error, and writes `main.log` too when file logging is on;
+`pluxy logs` reads `main.log`. Set
 `"logs": {"to_file": true}` in `config.json` and run `pluxy reload`, or turn on **File logging** on
 the panel's **Config Panel** page, **Logging** tab.
 
@@ -388,7 +409,8 @@ run `pluxy reload`, send the request again, and use its new trace ID.
 
 ### Why a request went where it did
 
-Every reply to a request that passed the client key check has the header `X-CPA-TRACE-ID`. A reply from
+Every reply to a request that passed the client key check, except the 403 for example keys, has the
+header `X-CPA-TRACE-ID`. A reply from
 an account also has `X-Pluxy-Account` (its public ID), `X-Pluxy-Provider`, `X-Pluxy-Model` and
 `X-Pluxy-Attempts`, unless `routing.explain` is `false`.
 

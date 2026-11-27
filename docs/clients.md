@@ -24,9 +24,11 @@ You need a running pluxy with at least one account ([setup](setup.md)).
    not replace the file. `pluxy client show` only prints: it changes no file.
 5. **Start the tool again** so it reads the new settings.
 
-The panel's **Tools** page shows the same text under each tool's **Set up**, and its **Make key**
-button does step 1. The panel's **Set up pluxy** page does the same in step 2, "Your coding
-tool". The [desktop app](app.md) can also write a tool's files itself.
+The panel's **Tools** page shows the same settings under each tool's **Set up**, as numbered steps
+with a **Copy** button. Its **Make key** button makes a new client key and puts it into the text, so
+you do not paste it yourself. The panel's guided setup (the **Set up pluxy** page, called **Setup**
+once first-run setup is done) shows the same in its second step, "Your coding tool". The
+[desktop app](app.md) can also write a tool's files itself.
 
 Claude Desktop, Grok Build and Hermes Agent are set up from the desktop app only; `pluxy client
 show` does not know them.
@@ -170,7 +172,7 @@ Every route reads the client key from `Authorization: Bearer <client-key>` or fr
 <client-key>`. Gemini's routes also read it from `x-goog-api-key: <client-key>` or from the `key`
 query parameter.
 
-`GET /v1/models` lists the models the key's accounts serve, in OpenAI's shape, or in Anthropic's
+`GET /v1/models` lists the models pluxy serves now (every client key sees the same list), in OpenAI's shape, or in Anthropic's
 for a client that sends an `anthropic-version` header or whose user agent starts with `claude-cli`. `GET /v1beta/models` lists them in Gemini's shape.
 
 ## Check that it works
