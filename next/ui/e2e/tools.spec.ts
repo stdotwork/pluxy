@@ -205,10 +205,10 @@ test("the address uses ConnectionCard with Copy and says who can reach it", asyn
   await expect(address).toContainText(core.base);
   await address.getByRole("button", { name: "Copy", exact: true }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(core.base);
-  await expect(address.getByRole("link", { name: "Addresses for other programs" })).toHaveAttribute(
-    "href",
-    "#/system",
-  );
+  const systemLink = address.getByRole("link", { name: "Addresses for other programs" });
+  await expect(systemLink).toHaveAttribute("href", "#/system");
+  expect(await systemLink.evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe("none");
+  await expect(systemLink.locator("svg")).toHaveCount(1);
 });
 
 test("opening a key menu does not cover the next key row or the last-key note", async ({ page }) => {

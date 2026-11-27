@@ -45,11 +45,13 @@ for (const theme of THEMES) {
           .evaluate((el) => getComputedStyle(el).opacity),
       ).toBe("0.6");
 
-      const parts = stale.locator(".tool-name, .tool-version, .badge, .tools-row-path");
+      const parts = page.locator(
+        ".tools-fade[data-stale] .tool-name, .tools-fade[data-stale] .tool-version, .tools-fade[data-stale] .badge, .tools-fade[data-stale] .tools-row-path, .tools-foot-link",
+      );
       await expect(parts.first()).toBeVisible();
       const measured = await measureContrast(parts);
       const texts = await parts.allTextContents();
-      expect(measured.length).toBeGreaterThanOrEqual(4);
+      expect(measured.length).toBeGreaterThanOrEqual(5);
       const low = measured
         .map((m, i) => ({ text: texts[i]?.trim().slice(0, 30), ...m }))
         .filter((m) => m.ratio < AA)

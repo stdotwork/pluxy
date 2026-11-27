@@ -818,9 +818,11 @@ function ConnectionSection(props: { state: ToolsState; keys?: ClientKey[]; remot
             <span>{network ? t("network") : t("thisComputer")}</span>
           </p>
         )}
-        <p class="muted">
-          {t("otherPrograms")} <a href="#/system">{t("otherProgramsLink")}</a>
-        </p>
+        <p class="muted">{t("otherPrograms")}</p>
+        <a class="tools-foot-link" href="#/system">
+          {t("otherProgramsLink")}
+          <Icon name="chevron" size={12} />
+        </a>
       </div>
     </section>
   );

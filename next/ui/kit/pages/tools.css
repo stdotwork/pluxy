@@ -577,6 +577,31 @@
     margin: 0;
   }
 
+  .tools-foot-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    justify-self: start;
+    min-height: 24px;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-medium);
+    text-decoration: none;
+    transition: color var(--t);
+  }
+
+  .tools-foot-link:hover {
+    color: var(--px-color-text);
+  }
+
+  .tools a:not(.btn):not(.tools-foot-link):not(.tool-chip) {
+    text-decoration: none;
+  }
+
+  .tools a:not(.btn):not(.tools-foot-link):not(.tool-chip):hover {
+    text-decoration: underline;
+  }
+
   .tools-reach {
     display: flex;
     align-items: center;
