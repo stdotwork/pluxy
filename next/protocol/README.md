@@ -25,8 +25,9 @@ client ──HTTP──▶ core ──one local socket connection per call──
 - Closing the connection is how core cancels a call.
 - A call has exactly one terminal outcome: a `finish` event or an `error` event. A connection
   that ends without one is an error, never a success.
-- A [session](#sessions) (since 0.1) is the one call that carries more than one request: its connection
-  stays open while core sends one turn after another, each answered like a `generate` call.
+- A [session](#sessions) (since 0.1) is the one call that carries more than one request: its
+  connection stays open while core sends one turn after another, each answered like a `generate`
+  call.
 
 ## Package manifest
 
@@ -54,7 +55,7 @@ An extension ships as a folder with a manifest named `pluxy-extension.json`:
 | `programs` | Program to run per platform, keyed by Go's `GOOS/GOARCH`. Paths are relative to the manifest's folder and may not leave it. |
 | `ui` | Optional: pages the panel shows for the extension, with their own `version`. See [extension pages](../ui/extension-pages/README.md#ui). |
 | `config` | Optional: the schema of the extension's settings, with its own `version`; the panel draws a form from it. See [extension pages](../ui/extension-pages/README.md#config). |
-| `title` | Since 0.21: the package's name for people, a few words such as `Claude`. One line, at most 80 characters. Core does not need it; `pluxy-pack` refuses to pack a provider extension without it, or an app tool that sets `summary` or `"kind": "client"`. |
+| `title` | Since 0.21: the package's name for people, a few words such as `Claude`. One line, at most 80 characters. Core does not need it. `pluxy-pack` refuses to pack without it a provider extension, or an app tool that sets `summary` or `"kind": "client"`. |
 | `summary` | Since 0.21: one sentence saying what the package adds, for someone who does not know the provider. One line, at most 300 characters. `pluxy-pack` needs it as it needs `title`. |
 | `kind` | Since 0.21, optional: what the package adds. `provider` (the default for a manifest with `protocol`), or `client` for an app tool that points a coding client at core. Later versions add kinds. |
 
@@ -146,7 +147,7 @@ Windows) and these variables:
 | `PLUXY_PROTOCOL_VERSIONS` | Protocol versions core speaks, comma-separated, for example `0`. |
 | `PLUXY_SOCKET` | Path of the Unix socket the extension must listen on. Its folder is private to this extension process. |
 | `PLUXY_EXTENSION_ID` | The manifest `id`, for logs. |
-| `PLUXY_TEST_LOGIN_HOSTS` | Passed on only when core's own environment holds it; only tests set it. With `1`, an extension may take the address of its provider's login or token endpoint from an account's settings, so a test can point it at a fake provider. Without it the extension uses the provider's own hosts: an account's settings must not decide where a login's codes or a refresh token are sent. The Go SDK's `sdk.TestLoginHost` applies the rule. |
+| `PLUXY_TEST_LOGIN_HOSTS` | Passed on only when core's own environment holds it; only tests set it. With `1`, an extension may take the address of its provider's login or token endpoint from an account's settings, so a test can point it at a fake provider. Without it the extension must use the provider's own hosts: an account's settings must not decide where a login's codes or a refresh token are sent. The Go SDK's `sdk.TestLoginHost` applies the rule. |
 
 The extension then:
 
@@ -162,13 +163,14 @@ The extension then:
 
    The fields are a fixed marker, the chosen protocol version, the network type and the address.
 
-If `PLUXY_PROTOCOL_VERSIONS` is not set, the program was not started by pluxy: it says so on
-stderr and exits with a non-zero status.
+If `PLUXY_PROTOCOL_VERSIONS` is not set, the program was not started by pluxy: it should say so on
+stderr and exit with a non-zero status.
 
 Core waits for the handshake line for 10 seconds by default, counted from when the program is
 running (the time the system takes to start it does not count). After the line, core sends a
 `describe` call, which keeps to the same deadline, and checks that the reply's `id` matches the
-manifest. These are the only limits on how long starting an extension may take.
+manifest. These are the only limits on how long starting an extension may take; the work itself is
+bounded by an account's [timeouts](#timeouts) and by [alive frames](#alive-frames).
 
 Anything the extension writes to stderr goes to core's log, prefixed with the extension ID. Never
 write credentials there. Anything written to stdout after the handshake line is also logged.
@@ -380,12 +382,12 @@ account cannot be checked without a generation (the upstream has no such call), 
 
 ### `quota`
 
-Since 0.5. Core asks what an account's plan allows and how much of it is used, for the
-management API's quota view (`GET /v0/management/accounts/{id}/quota`). Core sends it only to an
-extension that reports `protocol_minor` 5 or more and lists `quota` in `operations`, and only when
-someone asks or to check an account that routing keeps out after a refusal (at most once every 15
-minutes for each such account; see [core's README](../README.md#accounts-and-routing)): core does not poll
-accounts that serve.
+Since 0.5. Core asks what an account's plan allows and how much of it is used, for the management
+API's quota view (`GET /v0/management/accounts/{id}/quota`). Core sends it only to an extension that
+reports `protocol_minor` 5 or more and lists `quota` in `operations`, and only when someone asks or
+to check an account that routing keeps out after a refusal (at most once every 15 minutes for each
+such account; see [core's README](../README.md#accounts-and-routing)): core does not poll accounts
+that serve.
 
 ```json
 {"type": "call", "id": "c-22", "op": "quota", "account": {"id": "work", "settings": {...}, "credential": {...}}}
@@ -428,11 +430,12 @@ that counts only some of the account's requests must say so, with `models` when 
 name them and `feature` when it counts a feature, or core may keep the whole account out until it
 resets.
 
-Read the quota from the provider's own usage endpoint for the account's subscription, with the same client identity
-(user agent and the like) the extension uses for the account's requests, and never with a request
-that spends from the plan (a generation). An account that has no plan or balance to report (for
-example, an API key on a provider with no usage endpoint) answers with code `unsupported` and
-scope `credential`. Core removes the account's credential from every string and from `raw`, as from every other reply.
+Read the quota from the provider's own usage endpoint for the account's subscription, with the same
+client identity (user agent and the like) the extension uses for the account's requests, and never
+with a request that spends from the plan (a generation). An account that has no plan or balance to
+report (for example, an API key on a provider with no usage endpoint) answers with code
+`unsupported` and scope `credential`. Core removes the account's credential from every string and
+from `raw`, as from every other reply.
 
 ### `endpoint`
 
@@ -546,19 +549,22 @@ Escapes core cannot follow within that limit:
   bytes of those kinds, up to the first other byte (such as a space or a comma), and no more than
   48 bytes past the length of the longest of those forms in a row without a backslash or `%`.
   Where it stops at that limit, a secret that began in what it replaced is replaced whole.
-- Where holding back would change what core finds in the text whole (for example text so heavily
-  escaped that core replaces all of it with `[redacted]`), core sends at once all it has, redacted
-  whole, but for the end of what it would have held that this left as it was, which it goes on
-  holding back. It then replaces with `[redacted]` the rest of a secret that began in what it
-  would have held and that later pieces complete; what it sent of that start stays sent. It
-  replaces too the rest of an escape that began there and that later pieces complete, up to where
-  no escape or secret in the decoded text goes on: what the client got for that end may be
-  `[redacted]`, after which the client reads the rest of such an escape on its own. Where the text
-  after that is so heavily escaped that core cannot tell what secrets it holds, core replaces the
-  rest of the run of bytes that can be part of a secret or an escape instead.
 
 When a secret holds U+FFFD, core first reads each byte of invalid UTF-8 in the body as U+FFFD, as a
-JSON decoder does. Core sends what it still holds once the body ends with `finish`, and drops it
+JSON decoder does.
+
+Where holding back would change what core finds in the text whole (for example text so heavily
+escaped that core replaces all of it with `[redacted]`), core sends at once all it has, redacted
+whole, but for the end of what it would have held that this left as it was, which it goes on
+holding back. It then replaces with `[redacted]` the rest of a secret that began in what it
+would have held and that later pieces complete; what it sent of that start stays sent. It
+replaces too the rest of an escape that began there and that later pieces complete, up to where
+no escape or secret in the decoded text goes on: what the client got for that end may be
+`[redacted]`, after which the client reads the rest of such an escape on its own. Where the text
+after that is so heavily escaped that core cannot tell what secrets it holds, core replaces the
+rest of the run of bytes that can be part of a secret or an escape instead.
+
+Core sends what it still holds once the body ends with `finish`, and drops it
 when the body breaks off with an error or is cancelled: the body is broken there anyway, and what
 it held could be part of a secret.
 
@@ -624,21 +630,20 @@ response's `format`, the finish's `reason` and an opaque's `format`, a value cor
 passed on as it is, and any other value that holds the credential is replaced whole with
 `[redacted]`. Keep values that are not secret, especially short ones, out of the credential.
 
-Core removes the secrets in the account's
-`settings` the same way: every value below a key named like a secret (such as `api_key`,
-`password`, `*_token`, `accessToken` or `aws_secret_access_key`: names are compared in lower case
-whatever joins their words, or none, and may end in a number or a word such as `value` or
-`pem`), header values about authentication or named like a secret in an object whose name holds
-`header` (`extra_headers`, `headers_override`), and any URL
-with a user name, password or query (a `base_url` with a token in it), or with a parameter named
-like a secret in its fragment, as its management API
-hides them; of such a URL also its user name, its password, the two together (in Basic form
-too) and the value of each parameter named like a secret (`key`, `token`, `sig`, ...) in its query
-or fragment, split on `&` or `;`, as written and decoded, on their own. Below a key named like a secret, `true`, `false`, `null` and the empty string are
-not secrets: they carry none. Unlike a credential's strings, a settings secret shorter than 8
-bytes is left in text (the management API still shows it as a placeholder). When the settings change,
-core keeps removing the secrets of every earlier settings from the extension's stderr and stdout
-until the program exits, for calls that still run with them.
+Core removes the secrets in the account's `settings` the same way: every value below a key named
+like a secret (such as `api_key`, `password`, `*_token`, `accessToken` or `aws_secret_access_key`:
+names are compared in lower case whatever joins their words, or none, and may end in a number or a
+word such as `value` or `pem`), header values about authentication or named like a secret in an
+object whose name holds `header` (`extra_headers`, `headers_override`), and any URL with a user
+name, password or query (a `base_url` with a token in it), or with a parameter named like a secret
+in its fragment, as its management API hides them; of such a URL also its user name, its password,
+the two together (in Basic form too) and the value of each parameter named like a secret (`key`,
+`token`, `sig`, ...) in its query or fragment, split on `&` or `;`, as written and decoded, on their
+own. Below a key named like a secret, `true`, `false`, `null` and the empty string are not secrets:
+they carry none. Unlike a credential's strings, a settings secret shorter than 8 bytes is left in
+text (the management API still shows it as a placeholder). When the settings change, core keeps
+removing the secrets of every earlier settings from the extension's stderr and stdout until the
+program exits, for calls that still run with them.
 
 A secret made of parts (in the credential, the settings, the proxy or the headers) counts part by
 part too, since an upstream may echo only one part: core also removes each part of 8 bytes or
@@ -663,27 +668,26 @@ In Go, `protocol.SecretParts(s, 8)` returns a secret's parts. With a smaller min
 returns shorter parts, so that a secret whose parts are all short, which has some, can be told
 from one with none of these structures, which has none.
 
-An upstream may echo a piece of a credential, such as its first 24 characters and `...`, which
-none of the forms above is. So from an upstream's error text core also removes every run of token characters (letters, digits and `_-.+/=~`) that holds 4 or more
-consecutive characters of one of the account's secrets, or 8 or more of a long token, reading a
-run as written and with its
-escapes decoded (JSON's `\/`, `\\` and `\uXXXX` and percent-encoding's `%XX`, nested up to 8
-times); a `[redacted]` already there stays as it is. A run also takes any other character one of
-the account's secrets holds, such as a password's `@` or a letter outside ASCII, so a cut of such a
-secret is one run; whitespace, control characters, quotes, brackets, commas and backslashes always
-end a run. A PEM private key
-counts by its lines and its unwrapped body, at 8 bytes or more in a row. A long token is a secret
-that, trimmed of the whitespace around it, is one run of 32 or more token characters and is not
-base64 (standard or URL-safe, padded or not) of text. A cut of 4 to 7 bytes of either is not
-removed, so an ordinary word of an error stays, such as `test` for a key that spells it, or
-`Signature` for a PEM key whose body spells `Sign`. Every other secret stays at 4, each by its
-own text: a shorter one, which may be hand-picked, and a longer value that can hold a shorter
+An upstream may echo a piece of a credential, such as its first 24 characters and `...`, which none
+of the forms above is. So from an upstream's error text core also removes every run of token
+characters (letters, digits and `_-.+/=~`) that holds 4 or more consecutive characters of one of the
+account's secrets, or 8 or more of a long token, reading a run as written and with its escapes
+decoded (JSON's `\/`, `\\` and `\uXXXX` and percent-encoding's `%XX`, nested up to 8 times); a
+`[redacted]` already there stays as it is. A run also takes any other character one of the account's
+secrets holds, such as a password's `@` or a letter outside ASCII, so a cut of such a secret is one
+run; whitespace, control characters, quotes, brackets, commas and backslashes always end a run. A
+PEM private key counts by its lines and its unwrapped body, at 8 bytes or more in a row. A long
+token is a secret that, trimmed of the whitespace around it, is one run of 32 or more token
+characters and is not base64 (standard or URL-safe, padded or not) of text. A cut of 4 to 7 bytes of
+either is not removed, so an ordinary word of an error stays, such as `test` for a key that spells
+it, or `Signature` for a PEM key whose body spells `Sign`. Every other secret stays at 4, each by
+its own text: a shorter one, which may be hand-picked, and a longer value that can hold a shorter
 secret, such as a header with a scheme other than `Bearer` or `Basic`, a JSON value, or Basic's
-base64 of `user:password`.
-The rule runs on an [error](#errors)'s `message` and on each string value of its `raw` (object keys
-are names, and stay), on every call on an account and on a [login](#login), and on a
-[captured](#upstream-capture) upstream reply's body whose status is 400 or more, or of every reply
-when the call or turn ended in an error, such as a 200 stream that ends in an error event.
+base64 of `user:password`. The rule runs on an [error](#errors)'s `message` and on each string value
+of its `raw` (object keys are names, and stay), on every call on an account and on a
+[login](#login), and on a [captured](#upstream-capture) upstream reply's body whose status is 400 or
+more, or of every reply when the call or turn ended in an error, such as a 200 stream that ends in
+an error event.
 
 The account's secrets for this rule are the credential's `api_key`, `access_token` and
 `refresh_token`, the value of each header named like a secret, the proxy's user name and
@@ -818,8 +822,9 @@ stream or request with an error instead.
 ## The request
 
 A request is an ordered list of typed items plus options, modelled on the prompt types of Vercel's
-AI SDK Language Model Specification and on the items of Open Responses. A [native-only call](#native-only-calls) (since 0.27) carries it without its `items`,
-`tools` and `origin`, which the extension parses from `native.body`.
+AI SDK Language Model Specification and on the items of Open Responses. A [native-only
+call](#native-only-calls) (since 0.27) carries it without its `items`, `tools` and `origin`, which
+the extension parses from `native.body`.
 
 ```json
 {
@@ -1004,7 +1009,7 @@ already read). Core sends a `generate` call's request without its parsed form, w
 `native_only: true`, when all of these hold:
 
 - the extension's `native_parser` equals core's own parser version, so both parse the body into
-  the same `items`, `tools` and `origin`. An extension from another release whose parsers differ,
+  the same `items`, `tools` and `origin`. An extension whose parser version differs,
   older or newer, gets full calls; 0 or absent means it does not parse;
 - `native.format` is `openai.chat`, `openai.responses`, `anthropic.messages` or
   `gemini.generate_content`;
@@ -1032,7 +1037,7 @@ with deltas and closed, then one terminal event.
 
 | Type | Fields | Meaning |
 | --- | --- | --- |
-| `response.start` | `response`: `id`, `model`, `created` (Unix seconds), optional `format`, `raw`, `translation` and `headers` (0.34) | First event. `model` is the model that actually served the request. `format` names the upstream format the reply came from (for example `openai.chat`); `raw` is a JSON object of the upstream's reply-level fields that have no place in the model (for example `system_fingerprint`). `translation` is the translation report (above). `headers` (0.34) holds the upstream's documented rate-limit response headers by lower-case name (at most 32 entries, each value at most 256 bytes with no control characters); only explicit vendor-documented rate-limit headers are carried, and only values of a shape the vendors document: a non-negative integer (OpenRouter's reset is milliseconds since the Unix epoch) or exactly `-1`, an RFC 3339 time or a duration such as `1s`, `6m0s` or `17ms`, never cookies, tokens or other text. An all-digit ID cannot be told from a number, so it is carried. Core forwards to a client only headers documented for that client's format, with a value of those shapes; any other value is dropped. The conformance kit refuses an extension that sends one. |
+| `response.start` | `response`: `id`, `model`, `created` (Unix seconds), optional `format`, `raw`, `translation` and `headers` (0.34) | First event. `model` is the model that actually served the request. `format` names the upstream format the reply came from (for example `openai.chat`); `raw` is a JSON object of the upstream's reply-level fields that have no place in the model (for example `system_fingerprint`). `translation` is the translation report (above). `headers` (0.34) holds the upstream's documented rate-limit response headers by lower-case name (at most 32 entries, each value at most 256 bytes with no control characters); only explicit vendor-documented rate-limit headers are carried, and only values of a shape the vendors document: a non-negative integer (OpenRouter's reset is milliseconds since the Unix epoch) or exactly `-1`, an RFC 3339 time or a duration such as `1s`, `6m0s` or `17ms`, never cookies, tokens or other text. An all-digit ID cannot be told from a number, so it is carried. Core forwards to a client only headers documented for that client's format, with a value of those shapes; any other value is dropped. The conformance kit refuses an extension that sends any other header or value. |
 | `item.start` | `index`, `item`: `kind` (`message`, `reasoning`, `tool_call`), and for tool calls `call_id` and `name` | Opens output item `index`. |
 | `text.delta` | `index`, `delta` | Text for an open `message` item. |
 | `reasoning.delta` | `index`, `delta` | Reasoning text for an open `reasoning` item. |
@@ -1222,22 +1227,23 @@ absent (`null` also means absent); `POST /accounts` refuses a non-object with `i
 before starting a login. Like a grant's `identity`, core uses grant settings regardless of
 the extension's reported minor version, an exception to the general minor-version rule.
 
-`login.done` carries the `grant`: the new `credential`, a `label` naming the account for people
-(not secret) and, since 0.5, its `identity`: the upstream account the credential signs in
-to, as an object of the fields the provider knows it by, such as
-`{"email": "user@example.com", "account_id": "..."}`. Identity is not secret, has at most 16 fields,
-and each name and value is a non-empty string (names up to 64 bytes, values up to 512). Core
-stores it with the account. On a new login to an existing account, every field of the stored
-identity must be in the new grant's identity with the same value, letter case aside; otherwise
-core refuses the login and keeps the old credential. Report the fields that tell two accounts apart: for a provider whose users
-can belong to several workspaces, both the user and the workspace. An account stored without an
-identity is checked by `label` instead, when both have one: the last label a grant for it carried
-(none when no grant carried one; for an account imported from a credential file, the file's e-mail),
-never a name a person gave the account, which core shows in place of the grant's. An account stored
-before core kept the two apart is checked by its old label, whoever gave it. A grant with an identity that breaks
-these bounds fails the login with `extension_protocol`. A refusal (the user denied access, the code expired, the key was refused) is an
-`error` with code `auth`. Closing the connection cancels the login: stop polling and release any
-callback listener. A login may wait for a person for a long time; core ends it after 15 minutes.
+`login.done` carries the `grant`: the new `credential`, a `label` naming the account for people (not
+secret) and, since 0.5, its `identity`: the upstream account the credential signs in to, as an
+object of the fields the provider knows it by, such as `{"email": "user@example.com", "account_id":
+"..."}`. Identity is not secret, has at most 16 fields, and each name and value is a non-empty
+string (names up to 64 bytes, values up to 512). Core stores it with the account. On a new login to
+an existing account, every field of the stored identity must be in the new grant's identity with the
+same value, letter case aside; otherwise core refuses the login and keeps the old credential. Report
+the fields that tell two accounts apart: for a provider whose users can belong to several
+workspaces, both the user and the workspace. An account stored without an identity is checked by
+`label` instead, when both have one: the last label a grant for it carried (none when no grant
+carried one; for an account imported from a credential file, the file's e-mail), never a name a
+person gave the account, which core shows in place of the grant's. An account stored before core
+kept the two apart is checked by its old label, whoever gave it. A grant with an identity that
+breaks these bounds fails the login with `extension_protocol`. A refusal (the user denied access,
+the code expired, the key was refused) is an `error` with code `auth`. Closing the connection
+cancels the login: stop polling and release any callback listener. A login may wait for a person for
+a long time; core ends it after 15 minutes.
 
 The provider does the protocol work: generating and checking the PKCE verifier and `state`,
 polling the token endpoint at the interval it gave (and slowing down on `slow_down`), and talking
@@ -1265,15 +1271,15 @@ stored one with it; keep the old refresh token when the provider did not send a 
 | The token endpoint rate limited the call (429). | Code `rate_limit`, retryable, with `retry_after_ms` when known. Core keeps the credential and tries again later. |
 
 Core sends at most one refresh per credential at a time, and every request that needs the same
-credential renewed waits for that one call. It applies the result only if the stored credential
-has not changed since the refresh began (a new login, a removal); otherwise the result is
-discarded. A refresh call is never cancelled because a client stopped waiting (a provider that
-rotates refresh tokens, [RFC 9700 section 4.14](https://www.rfc-editor.org/rfc/rfc9700#section-4.14),
-may already have retired the old one): only core shutting down cancels it. Core renews a credential
-at its `refresh_at` (on the first request after it), before first use when it is an `oauth`
-credential with no `access_token` (core does not send one on a request while the extension can
-renew it; a renewal that returns one counts as giving a credential already due), and when the upstream refuses it with an
-`auth` error (once per request). After a renewal that failed in a way that may pass, core waits 5
+credential renewed waits for that one call. It applies the result only if the stored credential has
+not changed since the refresh began (a new login, a removal); otherwise the result is discarded. A
+refresh call is never cancelled because a client stopped waiting (a provider that rotates refresh
+tokens, [RFC 9700 section 4.14](https://www.rfc-editor.org/rfc/rfc9700#section-4.14), may already
+have retired the old one): only core shutting down cancels it. Core renews a credential at its
+`refresh_at` (on the first request after it), before first use when it is an `oauth` credential with
+no `access_token` (core does not send one on a request while the extension can renew it; a renewal
+that returns one counts as giving a credential already due), and when the upstream refuses it with
+an `auth` error (once per request). After a renewal that failed in a way that may pass, core waits 5
 minutes (or the `retry_after_ms` given) before renewing automatically again; after one that gave a
 credential already due for renewal, 30 seconds. An extension never refreshes on its own.
 
@@ -1380,10 +1386,10 @@ A session holds its extension generation like a running request, so core never m
 another account, another extension or a newer generation: no credential changes account halfway
 through a conversation whose state lives upstream. A crash or stop of the program ends the session.
 
-Liveness: the extension checks its upstream connection itself (for example, a read deadline
-between upstream messages), one of the named liveness checks that
-[core's design](../../docs/design.md#inside-core) allows in place of time limits. The local session connection needs none: either end sees the other go
-when the connection closes.
+Liveness: the extension checks its upstream connection itself (for example, a read deadline between
+upstream messages), one of the named liveness checks that [core's
+design](../../docs/design.md#inside-core) allows in place of time limits. The local session
+connection needs none: either end sees the other go when the connection closes.
 
 ### `openai.responses` sessions
 
@@ -1488,10 +1494,10 @@ does a call with a [proxy](#proxy).
 
 ## Upstream capture
 
-Since 0.13. The extension reports what it sent upstream and what came back, for core's request
-logs (see [the README](../README.md#request-logs)). Core asks for it with `"capture": true` on a `generate`,
-`count_tokens` or `endpoint` call frame, or on a `session.turn` frame, only while its config
-writes every request to a request log (`logs.request_log`), and only to an extension whose
+Since 0.13. The extension reports what it sent upstream and what came back, for core's request logs
+(see [the README](../README.md#request-logs)). Core asks for it with `"capture": true` on a
+`generate`, `count_tokens` or `endpoint` call frame, or on a `session.turn` frame, only while its
+config writes every request to a request log (`logs.request_log`), and only to an extension whose
 describe reports `protocol_minor` 13 or more. A call without it records nothing and sends nothing
 more. Other operations (`login`, `refresh`, `models`, `check`, `quota`, and the `session` call that
 opens a session) never carry it.
