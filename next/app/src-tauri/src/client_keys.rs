@@ -3,10 +3,13 @@
 //! kept in the vault (`vault.rs`) and bound to the core it belongs to (the connection's mode and
 //! origin), to core's ID of it then and to the one native tool it is for (`vault::ClientKey`).
 //!
-//! It is obtained natively only, never through the window: `capture` asks a native confirmation,
-//! then the app itself asks core for a new key (`POST /client-keys`) with the management key and
-//! keeps core's reply in the vault; `enter` reads an existing key from native key entry and keeps
-//! it once core takes it. The window gets the secret's ID, label and binding, never the key.
+//! It is obtained natively only, never through the window: `capture` has the app itself ask core
+//! for a new key (`POST /client-keys`) with the management key and keeps core's reply in the
+//! vault; `enter` reads an existing key from native key entry and keeps it once core takes it.
+//! The window gets the secret's ID, label and binding, never the key. Capture asks no
+//! confirmation of its own: the window can already have core make a client key with its
+//! management calls, and the key leaves the vault only in a call of its tool, whose native
+//! confirmation names it (`route.rs`).
 //!
 //! At every use the router (`route.rs`) checks the binding with `admit`: the window gives the key
 //! only to its tool, and its value is delivered only to that tool; the app must be connected to
@@ -221,8 +224,8 @@ fn make_key(caller: &Caller, label: &str) -> Result<Value, String> {
     Ok(r.body.unwrap_or_default())
 }
 
-/// Asks core for a new client key for client after the person confirms, and keeps it in the
-/// vault as label, trimmed; gives the window's view of it. Run off the window's thread.
+/// Asks core for a new client key for client, and keeps it in the vault as label, trimmed; gives
+/// the window's view of it. Run off the window's thread.
 pub fn capture(app: &AppHandle, label: &str, client: &str) -> Result<Value, String> {
     // Core keeps a label trimmed (`CheckLabel`): this one trimmed value is what the checks, the
     // confirmation, core, the vault and the window all get, so the key has one name.
@@ -234,13 +237,6 @@ pub fn capture(app: &AppHandle, label: &str, client: &str) -> Result<Value, Stri
     // Before core makes a key: one the vault cannot keep would be left on core.
     st.vault.can_add()?;
     let (pin, target) = connected(app)?;
-    let origin = target.origin.clone();
-    let what = format!(
-        "Create a new client key on the core at {origin} for {client}, and keep it in this device's vault as \"{label}\". Core adds it to its client keys at once; the key is not shown. {client} gets it only after you confirm each use."
-    );
-    if !crate::confirmation::confirm_app(app, what, pin.revision)? {
-        return Err("cancelled".into());
-    }
     let caller = fresh(app, &pin, "Capture the key again.")?;
     let made = make_key(&caller, label)?;
     let (value, binding) = from_reply(&made, target, client)?;
@@ -277,7 +273,7 @@ pub fn enter(app: &AppHandle, label: &str, client: &str) -> Result<Value, String
         app,
         ENTRY,
         format!(
-            "An existing client key of the core at {origin} for {client}, to keep in this device's vault as \"{label}\". {client} gets it only after you confirm each use."
+            "An existing client key of the pluxy at {origin} for {client}, to keep in this device's vault as \"{label}\". {client} gets it only after you confirm each use."
         ),
         false,
     );

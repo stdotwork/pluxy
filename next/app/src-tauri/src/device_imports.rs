@@ -135,6 +135,51 @@ pub struct Grant {
     pub passes_secrets: bool,
 }
 
+impl Grant {
+    /// What the native confirmation of a call of its operation says first, in plain words, from
+    /// the checked records: the add-on by its name and what the operation does (its manifest's
+    /// description); each secret it gets from the vault, by its label (label, whether the tool
+    /// gets the value itself); that a launch starts a program; who asked, when that is not the
+    /// main window (chain, the requester first); and that the add-on has full access to the user
+    /// account. The exact call (its input, chain, executor and launch) follows below it.
+    #[cfg(native_stack)]
+    pub fn headline(
+        &self,
+        secrets: &[(&str, bool)],
+        chain: &[crate::confirmation::Package],
+    ) -> String {
+        use crate::confirmation::one_line;
+        let mut s = format!(
+            "{} add-on: {}",
+            one_line(self.target.name()),
+            one_line(&self.op.description)
+        );
+        for (label, value) in secrets {
+            s.push_str(&format!(
+                "\nIt gets \"{}\" from this device's vault{}.",
+                one_line(label),
+                if *value {
+                    ""
+                } else {
+                    ", as a reference it can pass on only in this call"
+                }
+            ));
+        }
+        if self.op.effect == "launch" {
+            s.push_str(
+                "\nIt starts a program: the details below name it, with its arguments and folder.",
+            );
+        }
+        if chain.first().map(|p| p.id.as_str()) != Some(super::admission::main_window().id.as_str())
+        {
+            let ids: Vec<String> = chain.iter().map(|p| one_line(&p.id)).collect();
+            s.push_str(&format!("\nAsked by: {}.", ids.join(" → ")));
+        }
+        s.push_str(&format!("\n\n{}", crate::confirmation::text::FULL_ACCESS));
+        s
+    }
+}
+
 /// Why a call is not allowed: `permission` (the caller may not make it) or
 /// `extension_unavailable` (the target cannot take it now), and a message.
 #[derive(Clone, Debug, PartialEq, Eq)]

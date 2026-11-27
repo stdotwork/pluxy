@@ -25,7 +25,7 @@ use std::time::Duration;
 use tauri::Manager;
 use tauri::{AppHandle, Webview};
 
-const DIALOG: &str = "pluxy native confirmation";
+const DIALOG: &str = crate::confirmation::text::CONFIRM_TITLE;
 
 #[cfg(target_os = "linux")]
 fn env(name: &str) -> Result<String, String> {

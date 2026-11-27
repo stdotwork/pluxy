@@ -194,9 +194,20 @@ pub struct Admitted {
     pub(super) exports: Option<ExportDecl>,
     pub(super) produces: Vec<ProduceDecl>,
     pub(super) consumes: Vec<ConsumeDecl>,
+    /// Its manifest's name for people and summary (`Release::title`), empty when it has none.
+    pub(super) title: String,
+    pub(super) summary: String,
 }
 
 impl Admitted {
+    /// Its name for people: its manifest's title, or its ID when it has none.
+    pub fn name(&self) -> &str {
+        if self.title.is_empty() {
+            &self.id
+        } else {
+            &self.title
+        }
+    }
     /// Package ID, `publisher/name`.
     pub fn id(&self) -> &str {
         &self.id
@@ -326,6 +337,55 @@ impl Admitted {
             launch: None,
             environment: None,
         }
+    }
+}
+
+impl Admitted {
+    /// What the native confirmation enabling it says first, in plain words, from its checked
+    /// record: what it is and does, that it runs with full access to the user account, who signed
+    /// it and where it came from, and the add-ons it uses. The exact record follows below it.
+    #[cfg(native_stack)]
+    pub fn enable_headline(&self) -> String {
+        self.headline(format!(
+            "Turn on the {} add-on.",
+            crate::confirmation::one_line(self.name())
+        ))
+    }
+
+    /// `enable_headline` for an update from version from to this release.
+    #[cfg(native_stack)]
+    pub fn update_headline(&self, from: &str) -> String {
+        use crate::confirmation::one_line;
+        self.headline(format!(
+            "Update the {} add-on from {} to {}. {} keeps working until {} is ready.",
+            one_line(self.name()),
+            one_line(from),
+            one_line(&self.version),
+            one_line(from),
+            one_line(&self.version)
+        ))
+    }
+
+    #[cfg(native_stack)]
+    fn headline(&self, first: String) -> String {
+        use crate::confirmation::one_line;
+        let mut s = first;
+        if !self.summary.is_empty() {
+            s.push_str(&format!("\n{}", one_line(&self.summary)));
+        }
+        s.push_str(&format!(
+            "\n\nIt runs as you on this computer, with full access to your user account. It is verified: signed by {} and installed from {}.",
+            one_line(&self.signed.publisher),
+            one_line(&self.source.name)
+        ));
+        if !self.imports.is_empty() {
+            let uses: Vec<String> = self.imports.iter().map(|i| one_line(&i.package)).collect();
+            s.push_str(&format!(
+                "\n\nIt also uses these add-ons: {}.",
+                uses.join(", ")
+            ));
+        }
+        s
     }
 }
 
@@ -626,6 +686,8 @@ impl Catalog {
             exports: r.exports.clone(),
             produces: r.produces.clone(),
             consumes: r.consumes.clone(),
+            title: r.title.clone(),
+            summary: r.summary.clone(),
         };
         Ok((a, r.tree.clone()))
     }

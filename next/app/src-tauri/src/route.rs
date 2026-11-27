@@ -65,8 +65,9 @@ mod jobs;
 #[path = "route_rules.rs"]
 mod rules;
 pub use rules::Routes;
-/// How long a call waits for its native confirmation, which expires after a minute.
-const CONFIRMATION: Duration = Duration::from_secs(75);
+/// How long a call waits for its native confirmation, which closes by itself once it has been
+/// open `confirmation::SHOWN_LIFETIME`.
+const CONFIRMATION: Duration = confirmation::WAIT;
 /// The largest input, as the program host takes it.
 const MAX_INPUT: usize = 64 << 10;
 
@@ -1196,6 +1197,8 @@ fn authorize(
         executor,
         launch,
     );
+    let secrets: Vec<(&str, bool)> = filled.iter().map(|f| (f.label.as_str(), f.value)).collect();
+    let headline = grant.headline(&secrets, &action.chain);
     let refuse = |e: String| fail("permission", e);
     let st = app.state::<App>();
     // A page's or an import's confirmation is queued with the page limits and never remembered.
@@ -1219,10 +1222,13 @@ fn authorize(
             .unwrap()
             .prepare_page(action)
             .map_err(refuse)?;
+        let mut p = p;
+        p.set_headline(headline);
         confirmation::page_start(app, p).map_err(refuse)?
     } else if preparation == rules::Preparation::Import {
         let mut c = st.confirmations.lock().unwrap();
-        let p = c.prepare_import(action).map_err(refuse)?;
+        let mut p = c.prepare_import(action).map_err(refuse)?;
+        p.set_headline(headline);
         let id = c.queue(p).map_err(refuse)?;
         drop(c);
         confirmation::request(app, id.clone()).map_err(refuse)?;
@@ -1253,6 +1259,8 @@ fn authorize(
             },
             None => p,
         };
+        let mut p = p;
+        p.set_headline(headline);
         let id = c.queue(p).map_err(refuse)?;
         drop(c);
         confirmation::request(app, id.clone()).map_err(refuse)?;

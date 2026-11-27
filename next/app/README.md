@@ -476,7 +476,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, its vault journals, open and recently ended, or why they cannot be read, and its managed runtimes, running, ended or `unknown` (left running by a run of the app that did not stop them) |
 | `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID |
 | `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one |
-| `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key |
+| `client_key_capture` | Asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key. The tool gets it only in a call the person confirms |
 | `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it |
 | `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it |
 | `launcher_state` | The launcher's state: whether the execution program can be used, the remembered launches with their source, the recent folders and the notice setting |
@@ -1067,9 +1067,15 @@ can change files between a check and a read.
 Native code prepares each immutable action with its requester chain, executing package, full
 source/digest/signer/contract/generation, selected and resolved file identities, and launch recipe
 where applicable. The main window can ask to review that preparation's opaque ID. A native dialog
-(GTK on Linux, Win32 on Windows, AppKit on macOS) shows the action and, for a native tool, “full access to your user account”. Only its native
-response handler issues approval. No IPC command accepts an approval result, gesture flag or token
-consumption request. Page webviews have no confirmation capability.
+(GTK on Linux, Win32 on Windows, AppKit on macOS), titled "pluxy needs your OK", says first what
+will happen in plain words, which native code writes from the records it checked (an add-on by
+its manifest's title and summary, an operation by its manifest's description, a secret by its
+vault label, who asked when it was not the window, and for a native tool that it has “full access
+to your user account”), and shows the exact action below it under **Details**: the same text it
+showed before, nothing left out. The plain words bind nothing; what is confirmed and remembered is
+the exact action. Only its native response handler issues approval. No IPC command accepts an
+approval result, gesture flag or token consumption request. Page webviews have no confirmation
+capability.
 
 The dialog offers **Remember this exact executable, argv and cwd**, unchecked by default for each
 launch review. Remembered launches are stored privately in `remembered-launches.json` next to
@@ -1116,8 +1122,10 @@ a remembered approval, and only those dialogs offer Remember. Gesture constructi
 is private to native handlers and fixtures, and a gesture expires after five seconds.
 
 Page Start uses the separate native entry point, always opens a fresh dialog, permits one pending
-confirmation per original package and one attempt per second, and shows a native notice with
-requester, action and outcome, including refusals. Page/Import pending entries have their own
+confirmation per original package and one attempt per second, and shows a native notice ("pluxy
+notice", with a Close button) with requester, action and outcome, including refusals. Every
+answer to a page's or a tool's request gets that notice too; an answer to one the window, the tray
+or native UI asked for does not, as those show their own outcome, unless remembering it failed. Page/Import pending entries have their own
 limit of 16; trusted requests have a separate limit of 64. Page dialogs focus Cancel and keep
 Confirm disabled for one second after mapping. (On macOS a button takes the keyboard focus only
 with full keyboard access turned on; Cancel is the default button there, which Return presses.)
@@ -1129,8 +1137,11 @@ Pango line separators (U+2028/U+2029) are displayed as escaped Unicode.
 
 The launcher ([The launcher](#the-launcher)) is a caller of this module. Host
 callers must invalidate pending preparations/tokens when package, contract, environment or secret
-policy records change, and prepare a new action. Tokens and pending reviews expire after 60
-seconds, work once for their preparation, and fail on changed file identity or executable metadata.
+policy records change, and prepare a new action. A pending review lapses if its dialog has not
+shown within 60 seconds; once shown, it stays open for 10 minutes, the person's time to read it
+(every answer checks the action again, and a changed record withdraws it), and then closes as
+cancelled. A token lapses 60 seconds after the confirmation; native code spends it at once. Each
+works once for its preparation, and fails on changed file identity or executable metadata.
 Revoking a remembered approval also invalidates its outstanding tokens.
 
 ## The launcher
@@ -1218,8 +1229,8 @@ the page.
 - **Connect {tool}** is one press. It uses the vault's key bound to this add-on and to the pluxy the
   app is connected to (or the one the person chose); with none, it makes one with
   `client_key_capture`, named for the tool (`Claude Code`, `Codex`, `Claude Desktop`) in the vault
-  and in pluxy, which shows that name for the key in Activity and the web panel, in its own native
-  confirmation, then writes the settings in the add-on's confirmation. A cancel stops
+  and in pluxy, which shows that name for the key in Activity and the web panel, then writes the
+  settings in the add-on's confirmation, which names the key. A cancel stops
   quietly and a key that could not be made writes nothing. When the key was made but the write did
   not happen, the page says the key is kept, and the next Connect uses it, even before the key
   list is read again. Connect, Update and Save say each reason they are held, such as the app not

@@ -152,6 +152,13 @@ pub struct Release {
     /// release's Linux build: `Package::linux`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub environments: Vec<String>,
+    /// The manifest's name for people and one sentence on what it adds, when it has them: what
+    /// the native confirmation enabling it says first. Empty for a release installed before they
+    /// were kept.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
 }
 
 fn web() -> String {
@@ -1188,6 +1195,11 @@ struct Manifest {
     manifest_version: i64,
     id: String,
     version: String,
+    /// The package's name for people, and what it adds (the protocol's manifest, since 0.21).
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    summary: String,
     protocol: Vec<i64>,
     programs: BTreeMap<String, String>,
     ui: Option<Ui>,
@@ -1500,6 +1512,25 @@ impl App {
 
 /// Checks the common manifest format, as core does, except that an app-only package is a valid
 /// manifest here. Returns the app contribution, when there is one.
+/// The longest manifest title and summary, in characters (the protocol's manifest).
+const MAX_TITLE: usize = 80;
+const MAX_SUMMARY: usize = 300;
+
+/// Refused unless value (a manifest's field name) is one line of at most max characters: no
+/// control character, line or paragraph separator, as the protocol's manifest rules say.
+fn one_line_within(value: &str, name: &str, max: usize) -> Result<(), String> {
+    if value.chars().count() > max
+        || value
+            .chars()
+            .any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}')
+    {
+        return Err(format!(
+            "{name} must be one line of at most {max} characters"
+        ));
+    }
+    Ok(())
+}
+
 fn validate(m: &Manifest) -> Result<Option<App>, String> {
     if m.manifest_version != 0 && m.manifest_version != 1 {
         return Err(format!(
@@ -1513,6 +1544,8 @@ fn validate(m: &Manifest) -> Result<Option<App>, String> {
     if !valid_version(&m.version) {
         return Err(format!("version {:?} is not a package version", m.version));
     }
+    one_line_within(&m.title, "title", MAX_TITLE)?;
+    one_line_within(&m.summary, "summary", MAX_SUMMARY)?;
     let app = match &m.app {
         Some(v) if m.manifest_version == 1 && !v.is_null() => {
             let app: App = serde_json::from_value(v.clone()).map_err(|e| format!("app: {e}"))?;
@@ -1787,6 +1820,8 @@ fn stage_signed(
             produces: vec![],
             consumes: vec![],
             environments: vec![],
+            title: String::new(),
+            summary: String::new(),
         },
         staged: staged.clone(),
     };
@@ -1833,6 +1868,8 @@ fn stage_signed(
     }
     let r = &mut c.release;
     r.version = m.version.clone();
+    r.title = m.title.clone();
+    r.summary = m.summary.clone();
     r.manifest_version = m.manifest_version;
     r.app_version = app.version;
     r.host_versions = app.host_versions.clone();

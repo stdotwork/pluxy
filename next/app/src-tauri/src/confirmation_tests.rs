@@ -126,7 +126,7 @@ fn tokens_are_exact_single_use_cancelled_expired_and_revocable() {
     assert!(c.consume(&id, &t).is_err());
     let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
     let id = c.queue(p).unwrap();
-    c.pending.get_mut(&id).unwrap().expires = Instant::now();
+    c.pending.get_mut(&id).unwrap().created = ago(LIFETIME);
     assert!(c.finish(&id, true, true).is_err());
     let (id, t) = approve(&mut c, a.clone(), true);
     assert!(c.finish(&id, true, false).is_err());
@@ -138,6 +138,58 @@ fn tokens_are_exact_single_use_cancelled_expired_and_revocable() {
     let (id, t) = approve(&mut c, a.clone(), false);
     fs::write(&a.launch.as_ref().unwrap().executable, b"changed").unwrap();
     assert!(c.consume(&id, &t).is_err());
+    remove(&dir);
+}
+/// The moment d before now.
+fn ago(d: Duration) -> Instant {
+    Instant::now()
+        .checked_sub(d)
+        .expect("the clock runs longer than d")
+}
+#[test]
+fn a_shown_confirmation_waits_for_the_person_and_an_unshown_one_lapses() {
+    let (dir, mut c, a) = fixture();
+    // Queued 61 seconds ago and shown a second later: the person has read it for a minute, and
+    // their Confirm counts.
+    let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
+    let id = c.queue(p).unwrap();
+    c.shown(&id);
+    let p = c.pending.get_mut(&id).unwrap();
+    p.created = ago(Duration::from_secs(61));
+    p.shown = Some(ago(Duration::from_secs(60)));
+    let t = c.finish(&id, true, false).unwrap().unwrap();
+    c.consume(&id, &t).unwrap();
+    // Shown nine and a half minutes ago: still open.
+    let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
+    let id = c.queue(p).unwrap();
+    c.shown(&id);
+    c.pending.get_mut(&id).unwrap().shown = Some(ago(Duration::from_secs(570)));
+    let t = c.finish(&id, true, false).unwrap().unwrap();
+    c.consume(&id, &t).unwrap();
+    // Open for `SHOWN_LIFETIME`: closed, as cancelled.
+    let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
+    let id = c.queue(p).unwrap();
+    c.shown(&id);
+    c.pending.get_mut(&id).unwrap().shown = Some(ago(SHOWN_LIFETIME));
+    assert_eq!(
+        c.finish(&id, true, false).err().as_deref(),
+        Some("confirmation expired or revoked")
+    );
+    // Never shown in a minute: gone, with its pending place.
+    let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
+    let id = c.queue(p).unwrap();
+    c.pending.get_mut(&id).unwrap().created = ago(LIFETIME);
+    assert!(c.finish(&id, true, false).is_err());
+    assert!(c.pending.is_empty());
+    // Shown twice (a second dialog asked for it): the first showing counts.
+    let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
+    let id = c.queue(p).unwrap();
+    c.shown(&id);
+    let first = c.pending[&id].shown;
+    c.shown(&id);
+    assert_eq!(c.pending[&id].shown, first);
+    // A native caller waits out the whole of it.
+    assert!(WAIT > LIFETIME + SHOWN_LIFETIME);
     remove(&dir);
 }
 #[test]
@@ -484,7 +536,7 @@ fn review_escapes_unicode_format_characters_and_rejects_non_utf8_resolutions() {
     a.what.extend(chars);
     a.chain[0].id.push('\u{202e}');
     let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
-    let review = p.review().unwrap();
+    let review = p.shown_text();
     for ch in chars {
         assert!(!review.contains(ch));
     }
@@ -701,7 +753,7 @@ fn review_escapes_controls_and_pango_line_separators() {
     ];
     a.what.extend(chars);
     let p = c.prepare(a, Origin::NativeUi).unwrap();
-    let review = p.review().unwrap();
+    let review = p.shown_text();
     for ch in chars {
         assert!(!review.contains(ch));
     }
@@ -805,7 +857,7 @@ fn an_app_action_is_reviewed_by_its_description_alone() {
     let what = "Rotate the management key of http://127.0.0.1:8400.\nSecond line\u{2028}";
     let p = c.prepare_app(what.into(), 7).unwrap();
     assert_eq!(
-        p.review().unwrap(),
+        p.shown_text(),
         "Rotate the management key of http://127.0.0.1:8400.\nSecond line\\u2028"
     );
     let id = c.queue(p).unwrap();
@@ -813,7 +865,7 @@ fn an_app_action_is_reviewed_by_its_description_alone() {
     let t = c.finish(&id, true, false).unwrap().unwrap();
     assert!(c.consume(&id, &t).is_ok());
     // A launch is still reviewed in full.
-    let review = c.prepare(a, Origin::NativeUi).unwrap().review().unwrap();
+    let review = c.prepare(a, Origin::NativeUi).unwrap().shown_text();
     assert!(review.contains("\"digest\"") && review.contains("\"argv\""));
     remove(&dir);
 }
@@ -850,7 +902,7 @@ fn the_adopt_review_says_in_plain_words_what_runs() {
         launch: None,
         environment: None,
     };
-    let review = c.prepare_plain(action.clone()).unwrap().review().unwrap();
+    let review = c.prepare_plain(action.clone()).unwrap().shown_text();
     assert_eq!(
         review,
         format!(
@@ -865,7 +917,7 @@ fn the_adopt_review_says_in_plain_words_what_runs() {
     let notice = c.prepare_plain(action.clone()).unwrap().notice();
     assert!(
         notice.starts_with(
-            "Requester: pluxy app\nAction: Run this program as pluxy?\n\nThe app copies "
+            "Asked by: pluxy app\nWhat: Run this program as pluxy?\n\nThe app copies "
         ),
         "{notice}"
     );
@@ -882,13 +934,13 @@ fn the_adopt_review_says_in_plain_words_what_runs() {
     remove(&dir);
 }
 
-/// The launch notice puts Requester and Action on lines of their own, never `\u000a`, while
+/// The launch notice puts who asked and what on lines of their own, never `\u000a`, while
 /// what a requester wrote still cannot add lines of its own.
 #[test]
 fn the_launch_notice_holds_real_lines() {
     let (dir, mut c, a) = fixture();
     let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
-    assert_eq!(p.notice(), "Requester: fixture/tool\nAction: Start fixture");
+    assert_eq!(p.notice(), "Asked by: fixture/tool\nWhat: Start fixture");
     let forged = Action {
         what: "Start fixture\nOutcome: confirmed".into(),
         ..a
@@ -896,7 +948,7 @@ fn the_launch_notice_holds_real_lines() {
     let notice = c.prepare(forged, Origin::NativeUi).unwrap().notice();
     assert_eq!(
         notice,
-        "Requester: fixture/tool\nAction: Start fixture\\u000aOutcome: confirmed"
+        "Asked by: fixture/tool\nWhat: Start fixture\\u000aOutcome: confirmed"
     );
     assert_eq!(notice.lines().count(), 2, "{notice}");
     remove(&dir);
@@ -1037,7 +1089,7 @@ fn a_launch_opens_only_a_plain_file_inside_its_folder() {
     let p = c
         .prepare(opening(&a, &opener, &file, &within), Origin::Import)
         .unwrap();
-    let review = p.review().unwrap();
+    let review = p.shown_text();
     let headline = format!(
         "Opens the file {} (text/plain, inside {}) with {}.",
         file.display(),
@@ -1272,18 +1324,14 @@ fn where_an_action_runs_is_shown_first_and_bound_into_a_remembered_approval() {
         ..a.clone()
     };
     let p = c.prepare(bob.clone(), Origin::NativeUi).unwrap();
-    let review = p.review().unwrap();
+    let review = p.shown_text();
     assert!(
         review.starts_with(
-            "Runs in WSL: distribution Ubuntu, user bob (/home/bob).\n\nThis native tool"
+            "Runs in WSL: distribution Ubuntu, user bob (/home/bob).\n\nStart fixture\n\nThis add-on runs as you"
         ),
         "{review}"
     );
-    let plain = c
-        .prepare(a.clone(), Origin::NativeUi)
-        .unwrap()
-        .review()
-        .unwrap();
+    let plain = c.prepare(a.clone(), Origin::NativeUi).unwrap().shown_text();
     assert!(!plain.contains("Runs in WSL"), "{plain}");
     let (id, t) = approve(&mut c, bob.clone(), true);
     c.consume(&id, &t).unwrap();
@@ -1372,7 +1420,7 @@ fn opens_a_file_by_its_extension() {
     let mut a = action.clone();
     opening(&mut a, &file, &within);
     let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
-    let review = p.review().unwrap();
+    let review = p.shown_text();
     let system = if cfg!(windows) { "Windows" } else { "macOS" };
     assert!(
         review.contains("(application/jsonl, inside")

@@ -1075,14 +1075,16 @@ apart from the management key, which stays in the app's connection. It enters th
 natively, never through the window:
 
 - `client_key_capture` (label, client) trims the label, as core does, and uses that one name
-  throughout: it asks a native confirmation naming the core, the tool and the label; then the app
-  itself asks core for a new key (`POST /v0/management/client-keys`, with `{"label"}` so core
-  lists the key under the name the vault keeps) with the management key and keeps core's reply. A
-  label core's own label check would refuse (once trimmed, more than 64 characters or more than
-  one line) is refused before the confirmation. Core also refuses a label equal to one of its keys,
-  which the app cannot check, as it does not hold every key core has: that refusal comes after the
-  confirmation, before core makes a key. Core shows a new key once: the app keeps it and shows
-  it to no one. If the vault cannot keep it, the app deletes it on core again.
+  throughout: the app itself asks core for a new key (`POST /v0/management/client-keys`, with
+  `{"label"}` so core lists the key under the name the vault keeps) with the management key and
+  keeps core's reply. It asks no native confirmation of its own: the window can already have core
+  make a client key through its management calls, and the key leaves the vault only in a call of
+  its tool, whose native confirmation names it. A label core's own label check would refuse (once
+  trimmed, more than 64 characters or more than one line) is refused before core is asked. Core
+  also refuses a label equal to one of its keys, which the app cannot check, as it does not hold
+  every key core has: that refusal comes before core makes a key. Core shows a new key once: the
+  app keeps it and shows it to no one. If the vault cannot keep it, the app deletes it on core
+  again.
 - `client_key_enter` (label, client) reads an existing client key from native key entry and keeps
   it once the core takes it.
 

@@ -56,7 +56,7 @@ const PAGE: &str = "pluxy/launch-page";
 const LABEL: &str = "fixture launcher key";
 const AGENT: &str = "pluxy-fixture-agent";
 const CLIENT: &str = "Fixture agent";
-const NOTICE: &str = "pluxy launch notice";
+const NOTICE: &str = crate::confirmation::text::NOTICE_TITLE;
 
 /// Waits for the answer of the call in slot, failing if a native confirmation shows meanwhile.
 fn unasked(main: &Webview, slot: &str) -> Result<Value, String> {

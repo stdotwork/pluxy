@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Manager, Webview};
 
 static CALLS: AtomicU64 = AtomicU64::new(0);
-const DIALOG: &str = "pluxy native confirmation";
+const DIALOG: &str = crate::confirmation::text::CONFIRM_TITLE;
 const FULL_ACCESS: &str = "full access to your user account";
 /// What the Add-ons page says of a coding-tool add-on before it is turned on.
 const RUNS_AS_YOU: &str = "Runs as you, with your permissions.";
