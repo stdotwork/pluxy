@@ -4095,6 +4095,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // it makes the settings folder read-only with Unix permission bits
     fn a_failed_sign_out_keeps_the_kept_key() {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!(
