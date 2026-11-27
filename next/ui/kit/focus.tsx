@@ -3,9 +3,16 @@
 // first run use it, so the way into pluxy looks the same wherever it starts.
 
 import { type ComponentChildren, createContext } from "preact";
+import { useContext } from "preact/hooks";
 
 /** True inside a page the shell shows in the focused window instead of the frame. */
 export const FocusedContext = createContext(false);
+
+/**
+ * What the shell puts at the end of the focused window's bar, before the page's own: the Names
+ * hidden button while names are hidden, as the frame's header strip has it.
+ */
+export const FocusBarContext = createContext<ComponentChildren>(null);
 
 /** pluxy's name with its mark, as the focused window's bar shows it. */
 export function FocusBrand() {
@@ -30,11 +37,17 @@ export function Focus(props: {
   below?: ComponentChildren;
   children: ComponentChildren;
 }) {
+  const shell = useContext(FocusBarContext);
   return (
     <main class="focus" data-part={props.part ?? "focus"}>
       <header class="focus-bar">
         <FocusBrand />
-        {props.bar && <div class="focus-bar-end">{props.bar}</div>}
+        {(shell || props.bar) && (
+          <div class="focus-bar-end">
+            {shell}
+            {props.bar}
+          </div>
+        )}
       </header>
       <div class="focus-stage" data-width={props.width ?? "narrow"}>
         {props.above}

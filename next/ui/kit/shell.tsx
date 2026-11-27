@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import { api } from "./api";
 import { DESTINATIONS, destinationHome, type PageDef, place } from "./destinations";
 import { ExtensionPage, type ExtensionPageProps } from "./extensions/page";
-import { Focus, FocusedContext, FocusGround } from "./focus";
+import { Focus, FocusBarContext, FocusedContext, FocusGround } from "./focus";
 import { destinationLabel, Frame, type FrameLink, type FrameStatus } from "./frame";
 import type { Host, Reply } from "./host";
 import { Icon } from "./icons";
@@ -421,12 +421,14 @@ export function Shell(props: {
       <KitContext.Provider value={kit}>
         <PrivacyContext.Provider value={masks}>
           <FocusedContext.Provider value={true}>
-            <div class="shell" data-part="shell" ref={rootRef}>
-              {active.render()}
-              <p class="sr-only" aria-live="polite">
-                {announced}
-              </p>
-            </div>
+            <FocusBarContext.Provider value={<NamesHiddenButton privacy={privacy} />}>
+              <div class="shell" data-part="shell" ref={rootRef}>
+                {active.render()}
+                <p class="sr-only" aria-live="polite">
+                  {announced}
+                </p>
+              </div>
+            </FocusBarContext.Provider>
           </FocusedContext.Provider>
         </PrivacyContext.Provider>
       </KitContext.Provider>

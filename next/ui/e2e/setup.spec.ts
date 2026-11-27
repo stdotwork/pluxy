@@ -17,6 +17,21 @@ test("with no account, Accounts names the page that adds one", async ({ page }) 
   await expect(page.getByRole("heading", { level: 1, name: "Add an account" })).toBeVisible();
 });
 
+test("with names hidden, Setup's focused window says so and shows them again, as the header strip does", async ({
+  page,
+}) => {
+  await openPanel(page, core);
+  await page.evaluate(() => localStorage.setItem("pluxy.privacy", "on"));
+  await page.reload();
+  await signIn(page, core);
+  const hidden = setupFocus(page).locator('[data-part="privacy-toggle"]');
+  await expect(hidden).toHaveText("Names hidden");
+  await expect(hidden).toHaveAttribute("aria-pressed", "true");
+  await hidden.click();
+  await expect(hidden).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem("pluxy.privacy"))).toBeNull();
+});
+
 test("a first run opens Setup and its three steps lead to Finish setup and Home", async ({ page }) => {
   await openPanel(page, core);
   await signIn(page, core);

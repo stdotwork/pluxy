@@ -142,7 +142,7 @@ fn go_step(app: &AppHandle, step: &str) -> bool {
         app,
         10,
         &format!(
-            "(() => {{ const b = [...document.querySelectorAll('[data-part=setup-stepper] button')].find((b) => b.textContent.startsWith({step})); if (!b) return false; b.click(); return true; }})()",
+            "(() => {{ const b = [...document.querySelectorAll('[data-part=setup-stepper] button')].find((b) => b.querySelector('.setup-stepper-title')?.textContent.startsWith({step})); if (!b) return false; b.click(); return true; }})()",
             step = json!(step),
         ),
     )
