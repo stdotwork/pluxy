@@ -470,6 +470,20 @@ describe("the add-on first", () => {
     ]);
   });
 
+  test("answering No to Turn on add-on on a tool page stops quietly", async () => {
+    const catalog = catalogOf(ADDONS.map((id) => ({ id, enabled: id !== "pluxy/claude-code" })));
+    const ch = channel({ catalog });
+    const invoke = (cmd: string, args?: Record<string, unknown>) =>
+      cmd === "device_enable"
+        ? Promise.reject("native enable cancelled; pluxy/claude-code stays disabled")
+        : ch.invoke(cmd, args);
+    const page = await mount(() => <ClaudeCodePage />, invoke);
+    await page.click("Turn on add-on");
+    expect(page.text()).not.toContain("native enable cancelled");
+    expect(page.text()).not.toContain("stays disabled");
+    expect(page.canPress("Turn on add-on")).toBe(true);
+  });
+
   test("a missing add-on links to Add-ons and reads nothing", async () => {
     const ch = channel({
       catalog: catalogOf(ADDONS.filter((id) => id !== "pluxy/codex-setup").map((id) => ({ id }))),
