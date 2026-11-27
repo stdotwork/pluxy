@@ -117,6 +117,23 @@ test("a pool with nothing serving says so, and when the first account is back", 
   expect(html).toContain("The first is back in 2h");
 });
 
+test("a pool with status unread keeps unchecked accounts out of the serving count and mean", () => {
+  const list = [account("a"), account("b", { state: "reauth_required" })];
+  const windows = new Map([["a", read(window(5 * HOUR, 20, HOUR))]]);
+  const pool = poolOf("pluxy/claude", list, windows, undefined, NOW, true);
+  expect(pool.serving).toBe(0);
+  expect(pool.unchecked).toBe(1);
+  expect(pool.left).toBeUndefined();
+  expect(pool.segments).toEqual([
+    { id: "a", kind: "unknown" },
+    { id: "b", kind: "out" },
+  ]);
+  const html = renderToString(<PoolCard pool={pool} />);
+  expect(html).toContain("Not checked");
+  expect(html).not.toContain("Nothing is serving");
+  expect(html).not.toContain("80%");
+});
+
 test("the pool's number is in text ink when green and takes the warning or danger tone when its bar does", () => {
   const html = (used: number) =>
     renderToString(

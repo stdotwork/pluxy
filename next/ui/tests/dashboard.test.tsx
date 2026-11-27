@@ -586,6 +586,48 @@ describe("the page", () => {
     expect(page.text()).not.toContain("refused");
   });
 
+  test("when status fails with no prior read, accounts with a provider read Not checked and stay out of the serving count and pool mean", async () => {
+    const accounts = ok({
+      accounts: [
+        {
+          id: "c-1",
+          extension: "pluxy/claude",
+          source: "login",
+          state: "active",
+          refreshable: true,
+          quota: {
+            fetched_at: new Date().toISOString(),
+            quota: { limits: [{ id: "five", window_seconds: 18_000, used_percent: 20 }] },
+          },
+        },
+        {
+          id: "c-wait",
+          extension: "pluxy/claude",
+          source: "login",
+          state: "active",
+          refreshable: true,
+          cooldowns: [
+            { scope: "account", kind: "rate_limit", until: new Date(Date.now() + 3_600_000).toISOString() },
+          ],
+        },
+      ],
+    });
+    const page = await mount([{ ...good, accounts, status: hiccup }]);
+    const text = page.text();
+    expect(text).toContain("Could not check which providers are running.");
+    expect(text).not.toContain("Everything is serving.");
+    expect(text).toContain("2 not checked");
+    expect(text).toContain("pluxy could not check whether Claude is running.");
+    const rows = parts(page.root, "account-row");
+    expect(rows).toHaveLength(2);
+    for (const r of rows) expect(attr(r, "data-condition")).toBe("unchecked");
+    const pool = parts(page.root, "pool-card")[0];
+    if (!pool) throw new Error("no pool card");
+    expect(pool.textContent).toContain("Not checked");
+    expect(pool.textContent).not.toContain("80%");
+    expect(pool.textContent).not.toContain("serving");
+  });
+
   test("a refused settings change shows its error, once", async () => {
     const refused = {
       ...statusBody,

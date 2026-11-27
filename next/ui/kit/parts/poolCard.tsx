@@ -8,6 +8,7 @@ import type { ComponentChildren } from "preact";
 import { meterTone, useThresholds } from "../meter";
 import { strings } from "../strings";
 import { shortDuration } from "../time";
+import { uncheckedWord } from "./account";
 import type { Pool } from "./pool";
 import { ProviderMark, providerId } from "./providerMark";
 
@@ -17,6 +18,8 @@ const t = strings("parts.poolCard", {
   notReported: "Not reported by {provider}",
   nothingServing: "Nothing is serving",
   servingOf: "{serving} of {total} serving",
+  notChecked: "{count} not checked",
+  servingOfUnchecked: "{serving} of {total} serving · {unchecked} not checked",
   back: "+{gain}% back in {duration}",
   firstBack: "The first is back in {duration}",
   balance: "Balance",
@@ -44,8 +47,11 @@ export function PoolCard(props: { pool: Pool }) {
   const thresholds = useThresholds();
   const tone = p.left === undefined ? undefined : meterTone(p.left, thresholds);
   const nothing = p.serving === 0;
+  const unchecked = p.unchecked ?? 0;
   let hero: ComponentChildren;
-  if (nothing) {
+  if (nothing && unchecked > 0) {
+    hero = <span class="pool-sentence">{uncheckedWord()}</span>;
+  } else if (nothing) {
     hero = (
       <span class="pool-sentence" data-tone="danger">
         {t("nothingServing")}
@@ -104,7 +110,13 @@ export function PoolCard(props: { pool: Pool }) {
         </div>
       ) : null}
       <p class="pool-foot">
-        <span>{t("servingOf", { serving: p.serving, total: p.total })}</span>
+        <span>
+          {unchecked > 0
+            ? p.serving === 0 && unchecked === p.total
+              ? t("notChecked", { count: unchecked })
+              : t("servingOfUnchecked", { serving: p.serving, total: p.total, unchecked })
+            : t("servingOf", { serving: p.serving, total: p.total })}
+        </span>
         {after && <span class="pool-back">{after}</span>}
       </p>
     </section>

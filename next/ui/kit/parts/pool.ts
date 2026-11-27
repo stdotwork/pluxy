@@ -4,7 +4,15 @@
 
 import type { Account } from "../api/accounts";
 import type { QuotaLimit } from "../api/quota";
-import { accountCondition, leftPercent, providerName, resetsIn, rowWindows, windowName } from "./account";
+import {
+  accountCondition,
+  conditionUnchecked,
+  leftPercent,
+  providerName,
+  resetsIn,
+  rowWindows,
+  windowName,
+} from "./account";
 import type { Windows } from "./hooks";
 
 /** One account in a pool's bar. */
@@ -29,6 +37,8 @@ export interface Pool {
   balance?: number;
   segments: PoolSegment[];
   serving: number;
+  /** Accounts whose provider status could not be checked. */
+  unchecked?: number;
   /** The accounts counted: every one that is not turned off. */
   total: number;
   /** The next limit to start again among those counted: what it adds to the average, and when (ms from now). */
@@ -71,18 +81,24 @@ export function poolOf(
   windows: ReadonlyMap<string, Windows>,
   running?: ReadonlySet<string>,
   now = Date.now(),
+  statusFailed = false,
 ): Pool {
   const members = accounts
-    .map((a) => ({ a, c: accountCondition(a, running, now) }))
+    .map((a) => {
+      const c = accountCondition(a, running, now);
+      return { a, c, unchecked: statusFailed && conditionUnchecked(a, c, running) };
+    })
     .filter((m) => m.c.group !== "off");
-  const serving = members.filter((m) => m.c.group === "serving").map((m) => m.a);
+  const serving = members.filter((m) => m.c.group === "serving" && !m.unchecked).map((m) => m.a);
+  const uncheckedCount = members.filter((m) => m.unchecked).length;
   const seconds = poolWindow(serving, windows);
   const limitOf = (a: Account): QuotaLimit | undefined => {
     const w = windows.get(a.id);
     if (w?.state !== "read" || seconds === undefined) return undefined;
     return w.limits.find((l) => isWindow(l) && l.window_seconds === seconds);
   };
-  const segments: PoolSegment[] = members.map(({ a, c }) => {
+  const segments: PoolSegment[] = members.map(({ a, c, unchecked }) => {
+    if (unchecked) return { id: a.id, kind: "unknown" };
     if (c.group !== "serving") return { id: a.id, kind: "out" };
     const l = limitOf(a);
     const left = l && leftPercent(l);
@@ -115,8 +131,8 @@ export function poolOf(
 
   let firstBack: number | undefined;
   if (serving.length === 0) {
-    for (const { c } of members) {
-      if (c.until !== undefined && c.until > now)
+    for (const { c, unchecked } of members) {
+      if (!unchecked && c.until !== undefined && c.until > now)
         firstBack = Math.min(firstBack ?? Number.POSITIVE_INFINITY, c.until - now);
     }
   }
@@ -131,6 +147,7 @@ export function poolOf(
     balance,
     segments,
     serving: serving.length,
+    ...(uncheckedCount > 0 ? { unchecked: uncheckedCount } : {}),
     total: members.length,
     back,
     firstBack,

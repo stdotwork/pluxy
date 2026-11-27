@@ -19,6 +19,7 @@ import {
   accountFix,
   byProvider,
   ConnectionCard,
+  conditionUnchecked,
   groupWord,
   Placeholder,
   PoolCard,
@@ -79,6 +80,10 @@ const t = strings("home", {
   allAccounts: "All accounts",
   pools: "Pools",
   groupCount: { one: "1 account · {serving} serving", other: "{count} accounts · {serving} serving" },
+  groupCountUnchecked: {
+    one: "1 account · {unchecked} not checked",
+    other: "{count} accounts · {unchecked} not checked",
+  },
   lastWeek: "Last 7 days",
   usage: "Usage",
   requestsKpi: { one: "request", other: "requests" },
@@ -289,14 +294,16 @@ function Skeleton() {
   );
 }
 
-/** The thin bar beside the verdict: how many serve, wait, need the person and are turned off. */
-function StateBar(props: { counts: { needs: number; waiting: number; serving: number; off: number } }) {
+/** The thin bar beside the verdict: how many serve, wait, need the person, are unchecked and are turned off. */
+function StateBar(props: {
+  counts: { needs: number; waiting: number; serving: number; unchecked?: number; off: number };
+}) {
   const c = props.counts;
-  const parts = (["serving", "waiting", "needs", "off"] as const).filter((g) => c[g] > 0);
+  const parts = (["serving", "waiting", "needs", "unchecked", "off"] as const).filter((g) => (c[g] ?? 0) > 0);
   return (
     <div class="home-state-bar" aria-hidden="true">
       {parts.map((g) => (
-        <span key={g} data-group={g} style={{ flexGrow: c[g] }} />
+        <span key={g} data-group={g} style={{ flexGrow: c[g] ?? 0 }} />
       ))}
     </div>
   );
@@ -341,12 +348,13 @@ export function HomePage() {
   const { accounts, status, week, latest } = round;
   const list = accounts.data;
   const running = runningExtensions(status.data);
+  const statusFailed = status.phase === "failed" && status.data === undefined;
   const naming = useNaming(list);
   const now = new Date();
-  const grouped = list && groupAccounts(list, running, now.getTime());
+  const grouped = list && groupAccounts(list, running, now.getTime(), statusFailed);
   // The limits are read for the accounts that serve or wait, the waiting ones first.
   const windows = useWindows(
-    grouped && [...grouped.groups.waiting, ...grouped.groups.serving],
+    grouped && [...grouped.groups.waiting, ...grouped.groups.serving, ...grouped.unchecked],
     running,
     refreshed,
   );
@@ -450,9 +458,11 @@ export function HomePage() {
   const quiet = record?.enabled === true && record.total_requests === 0;
   const line = quiet && setup ? toolLine(setup.found.clients) : undefined;
   const pools = byProvider(list)
-    .map((g) => poolOf(g.extension, g.accounts, windows, running, now.getTime()))
+    .map((g) => poolOf(g.extension, g.accounts, windows, running, now.getTime(), statusFailed))
     .filter((pool) => pool.total > 0);
   const listed = providerGroups(grouped, windows, running, now.getTime());
+  const isUnchecked = (a: Account) =>
+    statusFailed && conditionUnchecked(a, accountCondition(a, running, now.getTime()), running);
 
   // The view's one filled button: the first fix in the band that repairs something.
   const firstRepair = grouped.groups.needs.findIndex(
@@ -496,7 +506,9 @@ export function HomePage() {
                 <ProviderMark extension={g.extension || undefined} size="small" />
                 <span class="home-group-name">{name}</span>
                 <span class="home-group-count">
-                  {t("groupCount", { count: g.accounts.length, serving: g.serving })}
+                  {g.unchecked > 0 && g.serving === 0
+                    ? t("groupCountUnchecked", { count: g.accounts.length, unchecked: g.unchecked })
+                    : t("groupCount", { count: g.accounts.length, serving: g.serving })}
                 </span>
               </h3>
               {shown.map((a) => (
@@ -505,6 +517,7 @@ export function HomePage() {
                   account={a}
                   windows={windows.get(a.id)}
                   running={running}
+                  unchecked={isUnchecked(a)}
                   grouped
                   onTurnOn={turnOn}
                   onClearCooldown={clearCooldown}

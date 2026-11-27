@@ -120,6 +120,7 @@
     background: var(--px-color-error);
   }
 
+  .home-state-bar [data-group="unchecked"],
   .home-state-bar [data-group="off"] {
     background: var(--px-color-meter-unknown);
   }
