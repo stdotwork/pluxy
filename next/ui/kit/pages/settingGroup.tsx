@@ -3,7 +3,6 @@
 // saves the moment it changes, and says Saved beside it.
 
 import type { ComponentChildren } from "preact";
-import { useId } from "preact/hooks";
 
 /** The column the groups sit in: centred, no wider than a row stays easy to read. */
 export function SettingsColumn(props: { children: ComponentChildren; class?: string }) {
@@ -30,17 +29,11 @@ export function SettingGroup(props: {
   card?: boolean;
   children: ComponentChildren;
 }) {
-  const heading = useId();
   return (
-    <section
-      class="setting-group"
-      data-part="settings-section"
-      id={props.id}
-      aria-labelledby={props.title ? heading : undefined}
-    >
+    <section class="setting-group" data-part="settings-section" id={props.id} aria-label={props.title}>
       {(props.title || props.actions) && (
         <header class="setting-group-head">
-          {props.title && <h2 id={heading}>{props.title}</h2>}
+          {props.title && <h2>{props.title}</h2>}
           {props.actions && <div class="actions">{props.actions}</div>}
         </header>
       )}

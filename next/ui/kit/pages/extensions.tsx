@@ -26,6 +26,7 @@ import {
   usePoll,
   when,
 } from "../ui";
+import { SettingGroup, SettingsColumn } from "./settingGroup";
 
 const t = strings("extensions", {
   title: "Extensions",
@@ -67,6 +68,21 @@ const t = strings("extensions", {
   openFile: "Open the settings file",
   listFailed: "Could not read the list {name}: {error}",
 });
+
+/**
+ * A small tile for an extension: the first letter of its provider's name, on a tint of one of the
+ * theme's six series colours, the same colour for the same extension every time. The provider's own
+ * mark replaces it once extensions report one.
+ */
+function ExtMark(props: { id: string }) {
+  let hash = 0;
+  for (const c of props.id) hash = (hash * 31 + c.charCodeAt(0)) % 6;
+  return (
+    <span class="ext-mark" data-series={hash + 1} aria-hidden="true">
+      {providerName(props.id).slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
 
 /** How often the lists are read again while an extension is starting. */
 const STARTING_POLL_MS = 1500;
@@ -157,10 +173,7 @@ function Installed(props: {
 }) {
   const [selected, setSelected] = useState<string>();
   return (
-    <section class="ext-section" aria-labelledby="ext-installed">
-      <h2 id="ext-installed" class="ext-heading">
-        {t("installedHeading")}
-      </h2>
+    <SettingGroup title={t("installedHeading")} card={false}>
       <Phases
         load={props.packages}
         loading={t("loading")}
@@ -177,27 +190,30 @@ function Installed(props: {
           return (
             <MasterDetail
               list={
-                <ul class="ext-rows">
-                  {data.packages.map((p) => (
-                    <li key={p.id}>
-                      <button
-                        type="button"
-                        class="ext-row"
-                        aria-current={p.id === selected ? "true" : undefined}
-                        onClick={() => setSelected(p.id)}
-                      >
-                        <span class="ext-who">
-                          <span class="ext-name">{providerName(p.id)}</span>
-                          <span class="ext-id mono">{p.id}</span>
-                        </span>
-                        <span class="ext-version mono">{p.version}</span>
-                        <span class="ext-state">
-                          <StateBadge state={p.state} />
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                <div class="setting-group-card" data-part="setting-card">
+                  <ul class="ext-rows">
+                    {data.packages.map((p) => (
+                      <li key={p.id}>
+                        <button
+                          type="button"
+                          class="ext-row"
+                          aria-current={p.id === selected ? "true" : undefined}
+                          onClick={() => setSelected(p.id)}
+                        >
+                          <ExtMark id={p.id} />
+                          <span class="ext-who">
+                            <span class="ext-name">{providerName(p.id)}</span>
+                            <span class="ext-id mono">{p.id}</span>
+                          </span>
+                          <span class="ext-version mono">{p.version}</span>
+                          <span class="ext-state">
+                            <StateBadge state={p.state} />
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               }
               detail={
                 chosen && (
@@ -213,7 +229,7 @@ function Installed(props: {
           );
         }}
       </Phases>
-    </section>
+    </SettingGroup>
   );
 }
 
@@ -230,6 +246,7 @@ function OfferRow(props: { o: Offer; onInstalled: () => void }) {
   return (
     <li class="ext-offer">
       <div class="ext-row" data-static="">
+        <ExtMark id={o.id} />
         <span class="ext-who">
           <span class="ext-name">{providerName(o.id)}</span>
           <span class="ext-id mono">{o.id}</span>
@@ -269,10 +286,7 @@ function Available(props: {
   onInstalled: () => void;
 }) {
   return (
-    <section class="ext-section" aria-labelledby="ext-available">
-      <h2 id="ext-available" class="ext-heading">
-        {t("availableHeading")}
-      </h2>
+    <SettingGroup title={t("availableHeading")} card={false}>
       <Phases
         load={props.registries}
         loading={t("loadingList")}
@@ -291,11 +305,13 @@ function Available(props: {
                 </Notice>
               ))}
               {offers.length > 0 && (
-                <ul class="ext-rows">
-                  {offers.map((o) => (
-                    <OfferRow key={`${o.registry}:${o.id}`} o={o} onInstalled={props.onInstalled} />
-                  ))}
-                </ul>
+                <div class="setting-group-card" data-part="setting-card">
+                  <ul class="ext-rows">
+                    {offers.map((o) => (
+                      <OfferRow key={`${o.registry}:${o.id}`} o={o} onInstalled={props.onInstalled} />
+                    ))}
+                  </ul>
+                </div>
               )}
               {offers.length === 0 && data.registries.length === 0 && (
                 <StatePane
@@ -313,7 +329,7 @@ function Available(props: {
           );
         }}
       </Phases>
-    </section>
+    </SettingGroup>
   );
 }
 
@@ -351,7 +367,7 @@ export function ExtensionsPage() {
           </Button>
         }
       />
-      <div class="stack ext">
+      <SettingsColumn class="ext">
         <p class="muted ext-intro">{t("intro")}</p>
         {status.data?.safe_mode && <Notice tone="warn">{t("safeMode")}</Notice>}
         <Installed packages={packages} status={status} onChanged={changed} />
@@ -360,7 +376,7 @@ export function ExtensionsPage() {
           installed={new Set((packages.data?.packages ?? []).map((p) => p.id))}
           onInstalled={changed}
         />
-      </div>
+      </SettingsColumn>
     </>
   );
 }

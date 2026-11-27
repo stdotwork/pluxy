@@ -2,13 +2,17 @@
    rows inside them (SettingRow, parts/settingRow.tsx). General, Themes, Config, System and
    Extensions all draw from it. */
 @layer kit {
-  .settings-column {
+  .settings-column,
+  .settings-groups {
     display: grid;
     gap: calc(var(--s) * 6);
     align-content: start;
+    min-width: 0;
+  }
+
+  .settings-column {
     max-width: 52rem;
     margin-inline: auto;
-    min-width: 0;
   }
 
   /* A group: its title sits outside the card, as in T3 Code's settings. */

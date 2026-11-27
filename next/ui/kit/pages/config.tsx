@@ -24,6 +24,7 @@ import {
 } from "./configSource.helpers";
 import { fileError, configText as t } from "./configStrings";
 import { nest, settingAt } from "./routing.rules";
+import { SettingsColumn } from "./settingGroup";
 
 /** core's settings as read: loading, read (at is when), or failed (over what was read before, if anything). */
 type SettingsLoad =
@@ -252,96 +253,99 @@ export function ConfigPage() {
   return (
     <>
       <PageHead title={t("title")} />
-      {file.phase === "broken" && (
-        <Notice tone="danger">
-          {t("fileBroken", { error: p.text(file.error) })} <Button onClick={tryAgain}>{t("tryAgain")}</Button>
-        </Notice>
-      )}
-      {notInUse && (
-        <Notice tone="warn">{t("notInUse", { error: p.text(notInUse.replace(/\.$/, "")) })}</Notice>
-      )}
-      <Tabs
-        label={t("title")}
-        tabs={configTabIds.map((id) => ({ id, label: t(id) }))}
-        active={tab}
-        onChange={(next) => {
-          if (next !== tab) switchTab(next as ConfigTab);
-        }}
-      >
-        {tab === "settings" ? (
-          settings.phase === "loading" ? (
-            <StatePane kind="loading" title={t("loadingSettings")} />
-          ) : !settings.data ? (
+      <SettingsColumn class="config-page">
+        {file.phase === "broken" && (
+          <Notice tone="danger">
+            {t("fileBroken", { error: p.text(file.error) })}{" "}
+            <Button onClick={tryAgain}>{t("tryAgain")}</Button>
+          </Notice>
+        )}
+        {notInUse && (
+          <Notice tone="warn">{t("notInUse", { error: p.text(notInUse.replace(/\.$/, "")) })}</Notice>
+        )}
+        <Tabs
+          label={t("title")}
+          tabs={configTabIds.map((id) => ({ id, label: t(id) }))}
+          active={tab}
+          onChange={(next) => {
+            if (next !== tab) switchTab(next as ConfigTab);
+          }}
+        >
+          {tab === "settings" ? (
+            settings.phase === "loading" ? (
+              <StatePane kind="loading" title={t("loadingSettings")} />
+            ) : !settings.data ? (
+              <StatePane
+                kind="failed"
+                title={t("settingsFailed")}
+                details={settings.phase === "failed" ? settings.error : undefined}
+                primary={{ label: t("tryAgain"), onClick: tryAgain }}
+              />
+            ) : (
+              <>
+                {settings.phase === "failed" && (
+                  <StaleNotice at={settings.at} error={settings.error} onRetry={tryAgain} />
+                )}
+                <ConfigSettings
+                  settings={settings.data}
+                  format={doc?.format}
+                  disabled={disabled}
+                  keys={keys}
+                  change={change}
+                />
+              </>
+            )
+          ) : file.phase === "loading" ? (
+            <StatePane kind="loading" title={t("loadingFile")} />
+          ) : file.phase === "failed" ? (
             <StatePane
               kind="failed"
-              title={t("settingsFailed")}
-              details={settings.phase === "failed" ? settings.error : undefined}
-              primary={{ label: t("tryAgain"), onClick: tryAgain }}
+              title={t("fileFailed")}
+              details={file.error}
+              primary={{ label: t("tryAgain"), onClick: () => void loadFile() }}
             />
-          ) : (
-            <>
-              {settings.phase === "failed" && (
-                <StaleNotice at={settings.at} error={settings.error} onRetry={tryAgain} />
-              )}
-              <ConfigSettings
-                settings={settings.data}
-                format={doc?.format}
-                disabled={disabled}
-                keys={keys}
-                change={change}
-              />
-            </>
-          )
-        ) : file.phase === "loading" ? (
-          <StatePane kind="loading" title={t("loadingFile")} />
-        ) : file.phase === "failed" ? (
-          <StatePane
-            kind="failed"
-            title={t("fileFailed")}
-            details={file.error}
-            primary={{ label: t("tryAgain"), onClick: () => void loadFile() }}
-          />
-        ) : file.phase === "ready" ? (
-          <ConfigSource
-            busy={busy}
-            setBusy={setBusy}
-            base={file.doc}
-            account={account}
-            text={text}
-            setText={setText}
-            reload={() => {
-              void loadFile();
-              void loadStatus();
-            }}
-            refused={refused}
-            saved={(current) => {
-              setFile({ phase: "ready", doc: current });
-              setText(current.content);
-              void loadSettings();
-              void loadStatus();
-            }}
-          />
-        ) : null}
-      </Tabs>
-      {leave && (
-        <ConfigDialog title={t("leaveQuestion")} close={() => setLeave(undefined)}>
-          <div class="actions">
-            <Button
-              variant="danger"
-              onClick={() => {
-                setText(doc?.content ?? "");
-                dirtyRef.current = false;
-                const run = leave.run;
-                setLeave(undefined);
-                run();
+          ) : file.phase === "ready" ? (
+            <ConfigSource
+              busy={busy}
+              setBusy={setBusy}
+              base={file.doc}
+              account={account}
+              text={text}
+              setText={setText}
+              reload={() => {
+                void loadFile();
+                void loadStatus();
               }}
-            >
-              {t("leave")}
-            </Button>
-            <Button onClick={() => setLeave(undefined)}>{t("stay")}</Button>
-          </div>
-        </ConfigDialog>
-      )}
+              refused={refused}
+              saved={(current) => {
+                setFile({ phase: "ready", doc: current });
+                setText(current.content);
+                void loadSettings();
+                void loadStatus();
+              }}
+            />
+          ) : null}
+        </Tabs>
+        {leave && (
+          <ConfigDialog title={t("leaveQuestion")} close={() => setLeave(undefined)}>
+            <div class="actions">
+              <Button
+                variant="danger"
+                onClick={() => {
+                  setText(doc?.content ?? "");
+                  dirtyRef.current = false;
+                  const run = leave.run;
+                  setLeave(undefined);
+                  run();
+                }}
+              >
+                {t("leave")}
+              </Button>
+              <Button onClick={() => setLeave(undefined)}>{t("stay")}</Button>
+            </div>
+          </ConfigDialog>
+        )}
+      </SettingsColumn>
     </>
   );
 }

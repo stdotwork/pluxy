@@ -11,12 +11,9 @@
     overflow-wrap: anywhere;
     user-select: all;
   }
-  /* The Settings tab's sections: an address with a section scrolls to it, under the sticky frame. */
-  .config-section {
-    scroll-margin-top: calc(var(--s) * 4);
-  }
-  .config-rows {
-    display: grid;
+  /* The Settings tab's groups: an address with a group scrolls to it, under the sticky frame. */
+  .config-settings {
+    min-width: 0;
   }
   .config-key-said {
     display: grid;
@@ -24,9 +21,12 @@
   .config-key-said:empty {
     display: none;
   }
-  .config-rows > .config-key-said > .notice,
-  .config-rows > .config-key-notice {
-    margin: calc(var(--s) * 2) 0 0;
+  .setting-group-card > .config-key-said > .notice,
+  .setting-group-card > .config-key-notice {
+    margin: 0 calc(var(--s) * 4) calc(var(--s) * 3);
+  }
+  .setting-group-card > .config-key-said > .notice:first-child {
+    margin-top: calc(var(--s) * 3);
   }
   /* A fixed width: the row's control column fits its content, so a share of it would be no width. */
   .setting-control input.config-text {
@@ -46,6 +46,19 @@
   }
   .config-find-count {
     color: var(--px-color-text-muted);
+  }
+  /* The Settings file tab: the search bar and the file in one card, the file as wide as the card. */
+  .config-editor-card {
+    overflow: hidden;
+  }
+  .config-editor-card > .config-find {
+    padding: calc(var(--s) * 2) calc(var(--s) * 3);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+  .config-editor-card > .config-editor {
+    border: 0;
+    border-radius: 0;
+    padding: calc(var(--s) * 3);
   }
   .config-editor {
     width: 100%;
