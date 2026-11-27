@@ -501,6 +501,59 @@ for (const appearance of ["light", "dark"] as const) {
   });
 }
 
+test("Clear cooldown shares the same quiet button border as Turn on", async ({ page }) => {
+  const until = new Date(Date.now() + 10 * 60_000).toISOString();
+  await page.route("**/v0/management/accounts", (route) =>
+    route.request().method() === "GET"
+      ? route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            accounts: [
+              {
+                id: "cooling-1",
+                label: "cooling-1",
+                source: "login",
+                state: "active",
+                priority: 10,
+                refreshable: false,
+                extension: "test/alpha",
+                cooldowns: [{ scope: "model", model: "fake-model", kind: "rate_limit", until }],
+              },
+              {
+                id: "paused-1",
+                label: "paused-1",
+                source: "login",
+                state: "active",
+                disabled: true,
+                priority: 0,
+                refreshable: false,
+                extension: "test/alpha",
+              },
+            ],
+          }),
+        })
+      : route.fallback(),
+  );
+  await open(page);
+  const clear = page.getByRole("button", { name: "Clear cooldown: cooling-1", exact: true });
+  const turnOn = page.getByRole("button", { name: "Turn on: paused-1", exact: true });
+  await expect(clear).toBeVisible();
+  await expect(turnOn).toBeVisible();
+  const [clearStyle, turnOnStyle] = await Promise.all([
+    clear.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { borderColor: s.borderTopColor, borderWidth: s.borderTopWidth };
+    }),
+    turnOn.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { borderColor: s.borderTopColor, borderWidth: s.borderTopWidth };
+    }),
+  ]);
+  expect(clearStyle.borderColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(clearStyle).toEqual(turnOnStyle);
+});
+
 for (const size of [
   { width: 640, height: 480 },
   { width: 1100, height: 760 },

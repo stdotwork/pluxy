@@ -345,6 +345,15 @@
     width: calc(var(--s) * 9);
   }
 
+  /* Clear cooldown shares the same quiet outlined button style as Turn on and non-primary fixes. */
+  .order-account .fix .btn[data-variant="ghost"] {
+    border-color: var(--px-color-input-border);
+  }
+
+  .order-account .fix .btn[data-variant="ghost"]:disabled:not([aria-busy="true"]) {
+    border-color: var(--px-color-border);
+  }
+
   @container (max-width: 52em) {
     /* When AccountRow wraps its reason under the condition word, omit the trailing separator dot. */
     .order-account .account-word:not(:last-child)::after {
