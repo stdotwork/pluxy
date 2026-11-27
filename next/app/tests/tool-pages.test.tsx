@@ -486,6 +486,22 @@ describe("models", () => {
     expect([input?.opus, input?.sonnet, input?.haiku]).toEqual(["fake-gpt-1", "fake-gpt-1", "fake-gpt-1"]);
   });
 
+  test("a file pluxy has not set up keeps Claude Code's own names when pluxy serves no model, and Connect writes them", async () => {
+    const ch = channel();
+    const page = await mount(() => <ClaudeCodePage />, ch.invoke, []);
+    ch.reads[0]?.answer(claudeCode("not-configured", { opus: "", sonnet: "", haiku: "" }));
+    await settle();
+    expect(page.text()).not.toContain("so these start with");
+    expect(page.shown("Opus")).toBe("claude-opus-5-5");
+    await page.click("Connect Claude Code");
+    const input = applies(ch)[0]?.input;
+    expect([input?.opus, input?.sonnet, input?.haiku]).toEqual([
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+      "claude-haiku-5-5",
+    ]);
+  });
+
   test("a file pluxy already set up keeps its models, served or not", async () => {
     const ch = channel();
     const page = await mount(() => <ClaudeCodePage />, ch.invoke, ["fake-gpt-1"]);

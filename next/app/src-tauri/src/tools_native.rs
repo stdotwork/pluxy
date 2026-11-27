@@ -444,16 +444,21 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             })
             .map_err(|e| format!("{e}: {:?}", text(main, page)))?;
             let target = s(&ok(main, "connection_get", json!({}))?["target"]);
-            // Core's accounts serve none of Claude Code's own model names, so the page started
-            // the three models with one core serves, not with claude-opus-5-5 and the others.
-            let served: Vec<String> = ok(
+            // This core has no account, so it serves no model: the page then has none to start
+            // the models with and keeps Claude Code's own names. A core that served models would
+            // make the page start them with one of those (the page's unit tests), so the check
+            // says when its premise stops holding rather than expect either.
+            let served = ok(
                 main,
                 "core_call",
                 json!({"method": "GET", "path": "/models"}),
             )?["body"]["models"]
                 .as_array()
-                .map(|m| m.iter().map(|x| s(&x["id"])).collect())
-                .unwrap_or_default();
+                .map(|m| m.len());
+            require(
+                served == Some(0),
+                format!("the check's core serves {served:?} models; it was written for none"),
+            )?;
             let v: Value = serde_json::from_str(&read(&settings).unwrap_or_default())
                 .map_err(|e| format!("the applied file is not JSON: {e}"))?;
             let env = &v["env"];
@@ -462,9 +467,9 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                     && env["ANTHROPIC_BASE_URL"] == target.trim_end_matches('/')
                     && env["ANTHROPIC_AUTH_TOKEN"] == c.key
                     && env["API_TIMEOUT_MS"] == "1"
-                    && served.contains(&s(&env["ANTHROPIC_DEFAULT_OPUS_MODEL"]))
-                    && env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == env["ANTHROPIC_DEFAULT_OPUS_MODEL"]
-                    && env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == env["ANTHROPIC_DEFAULT_OPUS_MODEL"]
+                    && env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-5-5"
+                    && env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-5-5"
+                    && env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "claude-haiku-5-5"
                     && v["model"] == "opus",
                 format!(
                     "the file after the page's apply (core {target}) holds env {} and model {}",
