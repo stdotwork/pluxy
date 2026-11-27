@@ -79,9 +79,15 @@
     background: var(--px-color-error);
   }
 
-  .accounts-state-bar [data-group="off"],
+  .accounts-state-bar [data-group="off"] {
+    background: var(--px-color-text-muted);
+  }
+
+  /* Not checked (status unread) stays at >= 3:1 in text-muted while reading distinct from turned
+     off: a hollow ringed pill, matching muted badges. */
   .accounts-state-bar [data-group="unchecked"] {
-    background: var(--px-color-meter-unknown);
+    background: transparent;
+    border: 1.5px solid var(--px-color-text-muted);
   }
 
   /* View bar: provider chips left; search, List | Cards switch and Select right */

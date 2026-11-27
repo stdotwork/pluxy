@@ -9,6 +9,55 @@ const core = useCore();
 const THEMES = ["", "pluxy/terminal", "pluxy/paper"] as const; // "" is the default theme
 const APPEARANCES = ["light", "dark"] as const;
 const AA = 4.5;
+const GRAPHIC = 3;
+
+/** Measures every segment of .accounts-state-bar against the ground behind it (solid fill or ring). */
+async function measureStateBar(page: Page) {
+  return page.locator(".accounts-state-bar").evaluate((bar) => {
+    const ctx = document.createElement("canvas").getContext("2d");
+    if (!ctx) throw new Error("no 2d context");
+    const rgb = (c: string) => {
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillStyle = "#000";
+      ctx.fillStyle = c;
+      ctx.fillRect(0, 0, 1, 1);
+      return [...ctx.getImageData(0, 0, 1, 1).data];
+    };
+    const lum = ([r = 0, g = 0, b = 0]: number[]) => {
+      const lin = (v: number) => {
+        const s = v / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+    };
+    const ratio = (a: number[], b: number[]) => {
+      const [hi = 0, lo = 0] = [lum(a), lum(b)].sort((x, y) => y - x);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    const over = (top: number[], below: number[]) => {
+      const a = (top[3] ?? 255) / 255;
+      return [0, 1, 2].map((i) => (top[i] ?? 0) * a + (below[i] ?? 0) * (1 - a)).concat(255);
+    };
+    const layers: number[][] = [];
+    for (let e: Element | null = bar; e; e = e.parentElement) {
+      const c = rgb(getComputedStyle(e).backgroundColor);
+      if ((c[3] ?? 0) > 0) layers.push(c);
+    }
+    let ground = [255, 255, 255, 255];
+    for (const l of layers.reverse()) ground = over(l, ground);
+    return [...bar.querySelectorAll<HTMLElement>("[data-group]")].map((seg) => {
+      const style = getComputedStyle(seg);
+      const fill = rgb(style.backgroundColor);
+      const borderWidth = Number.parseFloat(style.borderTopWidth);
+      const paint = (fill[3] ?? 0) > 0 ? over(fill, ground) : over(rgb(style.borderTopColor), ground);
+      return {
+        group: seg.dataset.group ?? "",
+        ratio: ratio(paint, ground),
+        kind: (fill[3] ?? 0) > 0 ? "solid" : borderWidth > 0 ? "ring" : "empty",
+      };
+    });
+  });
+}
 
 const SAMPLE_ACCOUNTS = [
   {
@@ -149,6 +198,51 @@ for (const theme of THEMES) {
         .evaluateAll((els) => els.map((el) => Number.parseFloat(getComputedStyle(el).opacity)));
       expect(faded.length).toBeGreaterThanOrEqual(4);
       for (const opacity of faded) expect(opacity).toBeCloseTo(0.6, 2);
+    });
+
+    test(`summary state bar segments clear 3:1 and distinguish unchecked from turned off: ${name}`, async ({
+      page,
+    }) => {
+      let failStatus = false;
+      await page.route("**/v0/management/accounts", async (route) => {
+        if (route.request().method() !== "GET") return route.continue();
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ accounts: SAMPLE_ACCOUNTS }),
+        });
+      });
+      await page.route("**/v0/management/status", async (route) => {
+        if (!failStatus) return route.continue();
+        return route.fulfill({
+          status: 502,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "bad_gateway", message: "status down" } }),
+        });
+      });
+
+      await openAccounts(page, theme, appearance);
+      await expect(page.locator(".accounts-state-bar")).toBeVisible();
+      const normal = await measureStateBar(page);
+      expect(normal.map((s) => s.group).sort()).toEqual(["needs", "off", "serving", "waiting"]);
+      const lowNormal = normal
+        .filter((s) => s.ratio < GRAPHIC || s.kind === "empty")
+        .map((s) => `${s.group} (${s.kind}): ${s.ratio.toFixed(2)}:1`);
+      expect(lowNormal).toEqual([]);
+
+      // Reload with status unread so unchecked and turned off show side by side.
+      failStatus = true;
+      await page.reload();
+      await expect(page.locator('.accounts-state-bar [data-group="unchecked"]')).toBeVisible();
+      const unread = await measureStateBar(page);
+      expect(unread.map((s) => s.group).sort()).toEqual(["needs", "off", "unchecked"]);
+      const lowUnread = unread
+        .filter((s) => s.ratio < GRAPHIC || s.kind === "empty")
+        .map((s) => `${s.group} (${s.kind}): ${s.ratio.toFixed(2)}:1`);
+      expect(lowUnread).toEqual([]);
+      const offSeg = unread.find((s) => s.group === "off");
+      const uncheckedSeg = unread.find((s) => s.group === "unchecked");
+      expect(uncheckedSeg?.kind).not.toBe(offSeg?.kind);
     });
   }
 }
