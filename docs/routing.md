@@ -40,19 +40,28 @@ by sign-in, in order of account ID.
   serves the name nor decides its provider.
 
 When another provider also serves the name, its accounts take none of these requests, however
-blocked the first provider's accounts are. Only a change to accounts, priorities, weights or
-chains moves a name to another provider. To send a name to another provider or model when the
-first runs out, use a [fallback chain](#fallback-chains).
+blocked the first provider's accounts are. Only a change to the accounts or to what they serve
+(their priorities, weights, model lists, excluded models and prefixes) or to the chains moves a
+name to another provider. To send a name to another provider or model when the first runs out,
+use a [fallback chain](#fallback-chains).
 
 ### Which accounts can take it
 
-An account is **eligible** for a request when it serves the model, no block covers it, and it is
-under its [`max_concurrency`](config.md) limit (the number of requests it may run at once; 0 is no
-limit). Among eligible accounts, core prefers, in order:
+An account is **eligible** for a request when all of these hold:
+
+- it serves the model;
+- it is not banned, turned off or waiting for a new sign-in;
+- no block covers it;
+- it is under its [`max_concurrency`](config.md) limit (the number of requests it may run at
+  once; 0 is no limit);
+- this request has not tried it in the current round, and the round's
+  [`max_accounts`](config.md) limit has not left it out.
+
+Among eligible accounts, core prefers, in order:
 
 1. the account the request's session is bound to (see [Session stickiness](#session-stickiness));
-2. the accounts with the highest `priority` (an account with a lower priority serves only while
-   every higher one is blocked);
+2. the accounts with the highest `priority`: an account with a lower priority serves only while no
+   higher one is eligible;
 3. the account the [`routing.strategy`](config.md) picks.
 
 | Strategy | Picks |
@@ -70,12 +79,15 @@ Reset times are rounded to the hour, so accounts whose windows end minutes apart
 turns. Accounts with no known reset come after those with one, and an account whose reading shows
 a full window comes last until that window resets. A blocked account is never picked, whatever its
 reset. Core reads every enabled account's usage for this every
-[`routing.quota_refresh_ms`](config.md) (30 minutes by default; 0 turns the readings off), in the
-background and never while a request waits; the first reading comes a minute after core starts.
-Accounts whose provider gives no usage reading, such as API keys, are never read.
+[`routing.quota_refresh_ms`](config.md) (30 minutes by default), in the background and never while
+a request waits; the first reading comes a minute after core starts. 0 turns these readings off:
+accounts are then ranked only by the readings core takes when it checks a long block (see
+[Checks while an account is blocked](#checks-while-an-account-is-blocked)). Accounts whose provider
+gives no usage reading, such as API keys, have no reset to rank by.
 
-`pluxy route <model>` shows the accounts a request for a model would try now, in order, the reset
-each was ranked by, and the accounts it would leave out and why.
+`pluxy route <model>` shows the accounts a request for a model would try now, in order, and the
+accounts it would leave out and why; under `soonest-reset` it also shows the reset each account
+was ranked by.
 
 ### Pinning a request to one account
 
@@ -92,9 +104,9 @@ hour after its last request; `ttl_ms` changes that.
 
 The session comes from the first of these the request has: the `X-Claude-Code-Session-Id`,
 `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`. A
-request with none is routed by strategy as usual. Bindings are kept per client key and model. A
-`config.yaml` with CLIProxyAPI's key names has session affinity off unless it turns it on (see the
-[config reference](config.md)).
+request with none is routed by strategy as usual. Bindings are kept per client key and model. When
+core runs from a `config.yaml` with CLIProxyAPI's key names, session affinity is off unless that
+file turns it on (see the [config reference](config.md)).
 
 ### When a refused request moves to another account
 
@@ -103,6 +115,9 @@ set a block, below). Then:
 
 - If the extension reports the refusal as **retry-safe**, meaning the upstream certainly did not
   run the request (for example a 429 or a 401), the request moves on to another eligible account.
+- When the upstream refuses the credential of an account added by sign-in, core first renews the
+  credential and tries the same account again, once per request. Only when the renewal gives no
+  newer credential does the request move on.
 - An account that cannot serve this request moves it on too: its upstream speaks another format and
   the request cannot be translated to it, or the upstream says it does not have the model.
 - Any other failure goes to the client.
@@ -123,8 +138,8 @@ These settings bound the moves:
 
 With `request_retry` set, a round starts at once when no account is blocked, or else when the first
 block ends, if that is within `max_wait_ms`. An account refused for rate or quota in this request
-waits at least 10 seconds before its next round. A refused key (401) or a missing model (404)
-starts no new round. An account's own `request_retry` takes it out of a request's rounds past its
+waits at least 10 seconds before its next round. When the request's last failure was a refused key
+(401) or a missing model (404), no new round starts. An account's own `request_retry` takes it out of a request's rounds past its
 count, and a count above the routing one runs more rounds with only the accounts whose count reaches
 them. Setting `request_retry` on any account runs rounds even when `routing.request_retry` is not
 set; accounts that set none then take part in the first round only. With `request_retry` unset
@@ -149,11 +164,12 @@ started. When a limit this deadline needs is 0, there is no such deadline.
 
 ### What the reply says about routing
 
-A reply names the account, provider and model that served it in the `X-Pluxy-Account`,
-`X-Pluxy-Provider`, `X-Pluxy-Model` and `X-Pluxy-Attempts` headers, and an error carries a `pluxy`
-member with the same details and the accounts left out. Set [`routing.explain`](config.md) to
-`false` to leave all of these out, for a core whose client keys go to people who should not see
-which accounts serve them. The trace ID stays.
+A reply names the account (by its public ID), provider and model that served it in the `X-Pluxy-Account`,
+`X-Pluxy-Provider`, `X-Pluxy-Model` and `X-Pluxy-Attempts` headers. An error carries a `pluxy`
+member: the request's trace ID, the accounts it tried (`tried`, each with its result) and the
+accounts it left out (`left_out`, each with why). Set [`routing.explain`](config.md) to `false` to
+leave the headers and the `pluxy` member out, for a core whose client keys go to people who should
+not see which accounts serve them. The trace ID stays, in the `X-CPA-TRACE-ID` header.
 
 ## Blocks
 
@@ -167,14 +183,22 @@ default each account is its own endpoint. A block lasts as long as the upstream 
 | Rate limit or quota on one model (a plain 429) | That model on the account | Backs off from 1 second, doubling each time, up to 30 minutes |
 | Rate limit or quota on the whole credential (the provider says the allowance is used up, such as a subscription's usage window) | The account | Backs off from 1 second, doubling, up to 30 minutes |
 | Failing endpoint or other transient upstream failure (a 5xx, a broken connection) | The endpoint | Backs off from 1 second, doubling, up to 1 minute |
-| Refused key (401) | The account | 30 minutes |
+| Refused key (401) or refused permission (403) | The account | 30 minutes |
 | Missing model (404) | That model on the account | 12 hours |
 
+A backoff step is not exact: each block lasts a random time between half and all of the step, so
+accounts that failed together do not all come back at the same moment. The first block of a
+ladder lasts 0.5 to 1 second, and the top step 15 to 30 minutes (30 to 60 seconds for transient
+failures).
+
 Two settings change this. [`routing.disable_cooling`](config.md) `true` (or an account's own
-`disable_cooling`) records no blocks after failures, so every account stays eligible.
-[`routing.transient_error_cooldown_ms`](config.md) sets how long a transient failure blocks: 0
-(the default) uses the backoff above, a value above 0 blocks that long, and a value below 0 blocks
-not at all, whether the upstream gave `Retry-After` or not.
+`disable_cooling`) records no blocks after failures, so every account stays eligible; a ban (an
+account the provider closed, below) is still recorded.
+[`routing.transient_error_cooldown_ms`](config.md) sets how long a failing upstream or endpoint
+(a 5xx or a broken connection) blocks: 0 (the default) uses the backoff above; a value above 0
+blocks that long when the upstream gave no `Retry-After`; a value below 0 blocks not at all,
+whether the upstream gave `Retry-After` or not. It does not cover an extension that stopped
+answering (`extension_timeout`), which always uses the backoff.
 
 A request for a renamed or prefixed model reaches the upstream under the upstream's name, and a
 block on a model is kept under that name, so asking for the same model by another name does not
@@ -189,13 +213,15 @@ scope with no live block for an hour is forgotten, and its backoff step with it.
 ### Resets the upstream names
 
 Core believes a reset the upstream names when it is between 1 second and 8 days away. When the
-upstream also names the length of its usage window, core believes a reset up to that length plus
-an hour, so Codex's monthly window (28 to 31 days) can reset a month off. A reset sooner than 1
-second is held for 1 second. A reset further off than core believes is not trusted: the account is
-held for 30 minutes and checked after 15.
+upstream also names the length of its usage window, and that length is 31 days or less, core
+believes a reset up to that length plus an hour, so Codex's monthly window (28 to 31 days) can
+reset a month off. A reset sooner than 1 second is held for 1 second. A reset further off than core
+believes is not trusted: the account is held for 30 minutes, and a rate-limit or quota block is
+checked after 15.
 
-The upstream's newest word replaces the block's end, whether sooner or later. A backoff core chose
-itself only ever moves a block later.
+The newest attempt's word replaces the block's end, whether sooner or later. A backoff core chose
+itself, or the word of an attempt that started before the one that set the block, only moves the
+block later.
 
 ### Checks while an account is blocked
 
@@ -211,7 +237,8 @@ is checked every 15 minutes. The check reads the account's usage from its provid
 - An account with no usage reading, such as an API key, lets one real request through at the check
   instead, and that request's outcome decides. Where a reading exists, a real request is never used
   as the check.
-- A check that cannot be made leaves the block in place and is tried again 15 minutes later.
+- A check that cannot be made leaves the block in place, and is tried again 15 minutes later
+  while more than 15 minutes of the block are left.
 
 Endpoint blocks and plain cooldowns are not checked: they end when their time runs out.
 
@@ -222,18 +249,19 @@ than 30 seconds left are saved to `state/routing.json`, in a `state` folder besi
 (mode 0600). Each is saved with its kind and the failure that set it (code, status and message, the
 message cut to 256 bytes). Core reads them back at start, with the account's last error when one of
 them set it, so a restart sends no requests to accounts whose usage ran out, that a provider rate
-limited, or that it refused. A quota block read back is checked at once. A rate-limit block with
-more than 15 minutes left is checked 15 minutes on, as it would have been had core kept running.
-Endpoint blocks are not saved.
+limited, or that it refused. A quota block read back with more than 15 minutes left is checked at
+once. A rate-limit block with more than 15 minutes left is checked 15 minutes on, as it would have
+been had core kept running. Endpoint blocks are not saved.
 
 A file core cannot read, or one in a form this core does not read, is not loaded and is left as it
-is until a block must be saved; it is then moved to `routing.json.bad`.
+is until a block or a ban must be saved; it is then moved to `routing.json.bad`.
 
 ### Bans
 
 A provider can close an account for good (a ban). Core saves bans in `state/routing.json` too, each
 with the account, the provider's reason and when it was banned, and reads them back at start. A
-saved ban whose account the config no longer has is dropped, at start and on a reload. A ban for an
+saved ban whose account core no longer has (in the config or among the accounts added by sign-in)
+is dropped, at start and on a reload. A ban for an
 account that is only out of routing for now, such as one whose extension is stopped or whose
 sign-in is due, is kept.
 
@@ -246,7 +274,7 @@ is turned back on (`pluxy account enable`).
 clears an account's blocks at once: on its credential, its models and its endpoint (which the
 accounts naming the same endpoint share), with their backoff steps and its last error. The account
 serves again straight away, and `state/routing.json` is written again without them. It does not
-lift a ban. It works for accounts from the config too.
+lift a ban, and a banned account keeps its last error. It works for accounts from the config too.
 
 Each account's `health` in `pluxy account list` (`GET /v0/management/accounts`) sums its state up in
 one word; the [management API reference](management-api.md) lists the words.
@@ -256,8 +284,7 @@ one word; the [management API reference](management-api.md) lists the words.
 When no account that serves the model can take the request, the reply tells the client how long is
 left, in whole seconds, rounded up and at least 1 while anything is left. The message's "try again
 in 1s" (or `1m1s`), the `Retry-After` header, and the usage-limit reply's `reset_time`,
-`reset_seconds` and "reset after" all come from the same rounding, so they agree. `retry_after_ms`
-keeps the exact wait.
+`reset_seconds` and "reset after" all come from the same rounding, so they agree.
 
 **Telling a client to stop.** A request can end because no account that serves its model can take
 it for more than 5 minutes, or because none can until a person acts: every one is turned off, waits
@@ -280,16 +307,16 @@ In `usage-limit` mode, a request that ends with a rate or quota refusal, or find
 blocked, gets the usage-limit reply when each account that serves its model was blocked last by a
 quota refusal whose reset the upstream named (Codex's `usage_limit_reached`, an OpenAI-compatible
 `insufficient_quota` with `Retry-After`, a Claude subscription's used-up window, Google's
-`QUOTA_EXHAUSTED`), and the first reset is more than 5 minutes away. A block on the whole account
-counts on its own, and its reset is the account's. A block on the model or the endpoint counts only
-when no block of another kind on the account ends as late.
+`QUOTA_EXHAUSTED`), and the first reset is more than 5 minutes away. For each account, core looks
+at the account's own blocks first: the quota block on the whole account that ends last counts when
+no block of another kind on the account ends as late, and its reset is the account's. Otherwise
+the blocks on the model and the endpoint are looked at with the account's, by the same rule.
 
 The reply is a 429 that tells the client to stop until the reset rather than retry: no
 `Retry-After`, `X-Should-Retry: false`, and, when the upstream said how long the used-up window is,
 Codex's `X-Codex-Primary-*` headers (`X-Codex-Secondary-*` for a window of a day or more) with
-`Used-Percent` 100, `Window-Minutes` and `Reset-At`. OpenAI, Responses and Gemini clients get this
-body; Responses WebSocket clients get the same object in an `error` message, with the headers in
-its `headers`:
+`Used-Percent` 100, `Window-Minutes` and `Reset-At`. A Responses WebSocket turn that fails this way
+closes the socket without a message. OpenAI, Responses and Gemini clients get this body:
 
 ```json
 {"error": {"code": "model_cooldown", "type": "usage_limit_reached", "retryable": false,
