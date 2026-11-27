@@ -1,5 +1,6 @@
 // One account's page stays readable (WCAG AA, 4.5:1 for text; 3:1 for non-text marks) in every
-// built-in theme, light and dark: text kept on screen after a failed refresh.
+// built-in theme, light and dark: text kept on screen after a failed refresh, and the waiting
+// header's reason sentence on its warning band.
 import { expect, type Page, test } from "@playwright/test";
 import { measureContrast } from "./contrast";
 import { openPanel, signIn, useCore } from "./support";
@@ -100,6 +101,37 @@ for (const theme of THEMES) {
       const measured = await measureContrast(parts);
       const texts = await parts.allTextContents();
       expect(measured.length).toBeGreaterThanOrEqual(12);
+      const low = measured
+        .map((m, i) => ({ text: texts[i]?.trim().slice(0, 40), ...m }))
+        .filter((m) => m.ratio < AA)
+        .map((m) => `"${m.text}": ${m.ratio.toFixed(2)}:1 (${m.fg} on ${m.bg})`);
+      expect(low).toEqual([]);
+    });
+
+    test(`waiting header reason text is readable on the warning band: ${name}`, async ({ page }) => {
+      await core.mgmt("PUT", "/theme", { id: theme });
+      await page.emulateMedia({ colorScheme: appearance });
+      const until = new Date(Date.now() + 20 * 60_000).toISOString();
+      await page.route("**/v0/management/accounts", async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        const reply = await route.fetch();
+        const body = (await reply.json()) as { accounts: Record<string, unknown>[] };
+        for (const a of body.accounts) {
+          if (a.id === "alpha-1") {
+            a.cooldowns = [{ scope: "account", kind: "rate_limit", until }];
+            a.last_error = { code: "rate_limit", message: "too many requests" };
+          }
+        }
+        await route.fulfill({ response: reply, json: body });
+      });
+      await openPanel(page, core, "/panel/#/accounts/alpha-1");
+      await signIn(page, core);
+      const header = page.locator('[data-part="account-opening"][data-group="waiting"]');
+      await expect(header).toBeVisible();
+      const parts = header.locator(".account-state-text, .account-said");
+      const measured = await measureContrast(parts);
+      const texts = await parts.allTextContents();
+      expect(measured.length).toBeGreaterThanOrEqual(2);
       const low = measured
         .map((m, i) => ({ text: texts[i]?.trim().slice(0, 40), ...m }))
         .filter((m) => m.ratio < AA)

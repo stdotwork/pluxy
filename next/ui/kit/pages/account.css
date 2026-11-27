@@ -138,7 +138,7 @@
 
   .account-state[data-group="waiting"] .account-state-text,
   .account-state[data-resting] .account-state-text {
-    color: var(--px-color-warn);
+    color: var(--px-color-text);
   }
 
   .account-state[data-group="off"] .account-state-text,
@@ -158,10 +158,13 @@
   }
 
   .account-opening[data-group="needs"] .account-said {
+    color: var(--px-color-text);
     border-inline-start-color: color-mix(in srgb, var(--px-color-error) 45%, var(--px-color-border));
   }
 
-  .account-opening[data-group="waiting"] .account-said {
+  .account-opening[data-group="waiting"] .account-said,
+  .account-opening[data-resting] .account-said {
+    color: var(--px-color-text);
     border-inline-start-color: color-mix(in srgb, var(--px-color-warning) 45%, var(--px-color-border));
   }
 
