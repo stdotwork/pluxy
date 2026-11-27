@@ -24,7 +24,7 @@ func TestAPIKeyLoginBaseURLIsRequired(t *testing.T) {
 // config jargon or Gemini-specific URL paths on an OpenAI-compatible form.
 func TestAPIKeyLoginFieldLabels(t *testing.T) {
 	want := map[string]string{
-		"base_url": "Service address (the API URL, including /v1 for most services)",
+		"base_url": "Service address (the API URL, including /v1 for most services, or /v1beta for gemini)",
 		"api_key":  "API key",
 		"wire_api": "How pluxy talks to it. Leave blank for most services (uses chat). Other values: responses, messages, gemini.",
 		"quota":    "How pluxy checks your remaining balance. Leave blank for most services (detected from the address). Values: openrouter, deepseek, none.",
