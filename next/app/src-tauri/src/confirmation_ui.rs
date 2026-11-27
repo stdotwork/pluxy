@@ -33,6 +33,7 @@ fn review_view(review: &str, details: &str) -> gtk::Box {
     let heading = gtk::Label::new(Some(text::DETAILS));
     heading.set_xalign(0.0);
     let b = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    b.set_border_width(8);
     b.pack_start(&words, false, false, 0);
     b.pack_start(&heading, false, false, 4);
     b.pack_start(&text_view_of(details, 200), true, true, 0);
@@ -41,7 +42,8 @@ fn review_view(review: &str, details: &str) -> gtk::Box {
 
 /// The notice's text: wrapped at a readable width, so the window is measured at that width (a
 /// wrapped label with no width of its own asks for its height at one word a line, taller than any
-/// screen), and scrolled past a few lines.
+/// screen), in an area as tall as its lines up to `NOTICE_MAX_HEIGHT`, scrolled past that. (A
+/// scrolled area does not take its text's height here by itself, so the lines are counted.)
 fn notice_body(text: &str) -> gtk::ScrolledWindow {
     let label = gtk::Label::new(Some(text));
     label.set_line_wrap(true);
@@ -53,7 +55,17 @@ fn notice_body(text: &str) -> gtk::ScrolledWindow {
     label.set_selectable(true);
     let scroll = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
     scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    scroll.set_propagate_natural_height(true);
+    let line = label.create_pango_layout(Some("Xg")).pixel_size().1.max(1);
+    // Lines a little shorter than the width, as wrapping breaks between words.
+    let per_line = (NOTICE_WIDTH_CHARS - 5) as usize;
+    let lines: usize = text
+        .split('\n')
+        .map(|l| l.chars().count().div_ceil(per_line).max(1))
+        .sum();
+    let height = i32::try_from(lines)
+        .unwrap_or(i32::MAX)
+        .saturating_mul(line);
+    scroll.set_min_content_height(height.min(NOTICE_MAX_HEIGHT));
     scroll.set_max_content_height(NOTICE_MAX_HEIGHT);
     scroll.add(&label);
     scroll
@@ -61,7 +73,33 @@ fn notice_body(text: &str) -> gtk::ScrolledWindow {
 /// The notice's text width, in characters.
 const NOTICE_WIDTH_CHARS: i32 = 60;
 /// The most the notice's text area grows to, in pixels; longer text scrolls.
-pub(crate) const NOTICE_MAX_HEIGHT: i32 = 320;
+const NOTICE_MAX_HEIGHT: i32 = 320;
+
+/// Puts text in the notice window, in place of what it showed, with its Close button, which
+/// hides it and is given the focus once it shows.
+fn fill_notice(window: &gtk::Window, text: &str) -> gtk::Button {
+    if let Some(child) = window.child() {
+        window.remove(&child);
+    }
+    let close = gtk::Button::with_mnemonic(text::NOTICE_CLOSE);
+    let weak = window.downgrade();
+    close.connect_clicked(move |_| {
+        if let Some(w) = weak.upgrade() {
+            w.hide();
+        }
+    });
+    let buttons = gtk::ButtonBox::new(gtk::Orientation::Horizontal);
+    buttons.set_layout(gtk::ButtonBoxStyle::End);
+    buttons.add(&close);
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    body.set_border_width(12);
+    body.pack_start(&notice_body(text), true, true, 0);
+    body.pack_start(&buttons, false, false, 0);
+    window.add(&body);
+    // Back to the size the new text asks for, not the last one's.
+    window.resize(1, 1);
+    close
+}
 
 /// Always host-owned, including the result of a refused page Start. Later ingress calls this
 /// with the host-resolved requester/action; a page cannot provide the notice or outcome. It has
@@ -89,26 +127,7 @@ pub(crate) fn notice(app: &tauri::AppHandle, text: String) {
                 });
                 w
             });
-            if let Some(child) = window.child() {
-                window.remove(&child);
-            }
-            let close = gtk::Button::with_mnemonic(text::NOTICE_CLOSE);
-            let weak = window.downgrade();
-            close.connect_clicked(move |_| {
-                if let Some(w) = weak.upgrade() {
-                    w.hide();
-                }
-            });
-            let buttons = gtk::ButtonBox::new(gtk::Orientation::Horizontal);
-            buttons.set_layout(gtk::ButtonBoxStyle::End);
-            buttons.add(&close);
-            let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
-            body.set_border_width(12);
-            body.pack_start(&notice_body(&text), true, true, 0);
-            body.pack_start(&buttons, false, false, 0);
-            window.add(&body);
-            // Back to the size the new text asks for, not the last one's.
-            window.resize(1, 1);
+            let close = fill_notice(window, &text);
             window.show_all();
             close.grab_focus();
         });
