@@ -139,9 +139,9 @@ These settings bound the moves:
 With `request_retry` set, a round starts at once when no account is blocked, or else when the first
 block ends, if that is within `max_wait_ms`. An account refused for rate or quota in this request
 waits at least 10 seconds before its next round. When the request's last failure was a refused key
-(401) or a missing model (404), no new round starts. An account's own `request_retry` takes it out of a request's rounds past its
-count, and a count above the routing one runs more rounds with only the accounts whose count reaches
-them. Setting `request_retry` on any account runs rounds even when `routing.request_retry` is not
+(401) or a missing model (404), no new round starts. An account's own `request_retry` takes it out
+of a request's rounds past its count, and a count above the routing one runs more rounds with only
+the accounts whose count reaches them. Setting `request_retry` on any account runs rounds even when `routing.request_retry` is not
 set; accounts that set none then take part in the first round only. With `request_retry` unset
 everywhere, rounds are bounded by `max_attempts` and `max_wait_ms`, and each new round needs a wait.
 
@@ -164,8 +164,8 @@ started. When a limit this deadline needs is 0, there is no such deadline.
 
 ### What the reply says about routing
 
-A reply names the account (by its public ID), provider and model that served it in the `X-Pluxy-Account`,
-`X-Pluxy-Provider`, `X-Pluxy-Model` and `X-Pluxy-Attempts` headers. An error carries a `pluxy`
+A reply names the account (by its public ID), provider and model that served it in the
+`X-Pluxy-Account`, `X-Pluxy-Provider`, `X-Pluxy-Model` and `X-Pluxy-Attempts` headers. An error carries a `pluxy`
 member: the request's trace ID, the accounts it tried (`tried`, each with its result) and the
 accounts it left out (`left_out`, each with why). Set [`routing.explain`](config.md) to `false` to
 leave the headers and the `pluxy` member out, for a core whose client keys go to people who should
@@ -240,7 +240,8 @@ is checked every 15 minutes. The check reads the account's usage from its provid
 - A check that cannot be made leaves the block in place, and is tried again 15 minutes later
   while more than 15 minutes of the block are left.
 
-Endpoint blocks and plain cooldowns are not checked: they end when their time runs out.
+Other blocks (on an endpoint, or after a refused key, a missing model or a transient failure) are
+not checked: they end when their time runs out.
 
 ### Blocks kept across a restart
 
@@ -261,9 +262,8 @@ is until a block or a ban must be saved; it is then moved to `routing.json.bad`.
 A provider can close an account for good (a ban). Core saves bans in `state/routing.json` too, each
 with the account, the provider's reason and when it was banned, and reads them back at start. A
 saved ban whose account core no longer has (in the config or among the accounts added by sign-in)
-is dropped, at start and on a reload. A ban for an
-account that is only out of routing for now, such as one whose extension is stopped or whose
-sign-in is due, is kept.
+is dropped, at start and on a reload. A ban for an account that is only out of routing for now,
+such as one whose extension is stopped or whose sign-in is due, is kept.
 
 A ban has no expiry. It ends when the account signs in again (`pluxy account login`), is removed, or
 is turned back on (`pluxy account enable`).
@@ -373,7 +373,7 @@ The rules for a chain:
 On the command line a step is `model[@provider][:account,account]`. What follows the last `@` is
 the provider only when it is an extension's ID (`publisher/name`), so `claude-opus-4-7@20260416` is
 a model. A model whose name holds a colon ends with an `@`: `llama3:8b@`, or
-`llama3:8b@pluxy/ollama:a1` with a provider and an account.
+`llama3:8b@pluxy/openai-compatible:a1` with a provider and an account.
 
 Setting a chain fails with 422 (the error names the step) for:
 
