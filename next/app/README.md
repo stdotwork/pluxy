@@ -1069,12 +1069,12 @@ source/digest/signer/contract/generation, selected and resolved file identities,
 where applicable. The main window can ask to review that preparation's opaque ID. A native dialog
 (GTK on Linux, Win32 on Windows, AppKit on macOS), titled "pluxy needs your OK", says first what
 will happen in plain words, which native code writes from the records it checked (an add-on by
-its manifest's title and summary; a call by what its operation's effect does, such as "will make
-changes on this computer", and for a launch the program it starts; a secret by its vault label;
-who asked when it was not the window; and for a native tool that it has “full access to your
-user account”). An operation's description comes after the app's own words, quoted as the
-add-on's ("The add-on says: …"), since the manifest wrote it and nothing checks it against the
-effect. The dialog shows the exact action below it under **Details**: the same text it
+its manifest's title; a call by what its operation's effect does, such as "will make changes on
+this computer", and for a launch the program it starts; a secret by its vault label; who asked
+when it was not the window; and for a native tool that it has “full access to your user
+account”). What the manifest wrote comes last, after all of the app's own words: an add-on's
+summary, and an operation's description quoted as the add-on's ("The add-on says: …"), since
+nothing checks them against the effect. A long one can push only its own end out of view. The dialog shows the exact action below it under **Details**: the same text it
 showed before, nothing left out. The plain words bind nothing; what is confirmed and remembered is
 the exact action. Only its native response handler issues approval. No IPC command accepts an
 approval result, gesture flag or token consumption request. Page webviews have no confirmation

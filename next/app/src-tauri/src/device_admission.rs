@@ -342,8 +342,9 @@ impl Admitted {
 
 impl Admitted {
     /// What the native confirmation enabling it says first, in plain words, from its checked
-    /// record: what it is and does, that it runs with full access to the user account, who signed
-    /// it and where it came from, and the add-ons it uses. The exact record follows below it.
+    /// record: what it is, that it runs with full access to the user account, who signed it and
+    /// where it came from, the add-ons it uses, and last its manifest's summary of what it does.
+    /// The exact record follows below it.
     #[cfg(native_stack)]
     pub fn enable_headline(&self) -> String {
         self.headline(format!(
@@ -369,10 +370,9 @@ impl Admitted {
     #[cfg(native_stack)]
     fn headline(&self, first: String) -> String {
         use crate::confirmation::one_line;
+        // The app's own words all come before the manifest's summary, so a long summary can push
+        // only its own end out of view, never the full-access line.
         let mut s = first;
-        if !self.summary.is_empty() {
-            s.push_str(&format!("\n{}", one_line(&self.summary)));
-        }
         s.push_str(&format!(
             "\n\nIt runs as you on this computer, with full access to your user account. It is verified: signed by {} and installed from {}.",
             one_line(&self.signed.publisher),
@@ -384,6 +384,9 @@ impl Admitted {
                 "\n\nIt also uses these add-ons: {}.",
                 uses.join(", ")
             ));
+        }
+        if !self.summary.is_empty() {
+            s.push_str(&format!("\n\n{}", one_line(&self.summary)));
         }
         s
     }

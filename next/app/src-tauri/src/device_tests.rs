@@ -250,7 +250,7 @@ fn turning_on_an_add_on_says_what_it_is_in_plain_words() {
             .into();
     assert_eq!(
         a.enable_headline(),
-        "Turn on the Claude Code add-on.\nPoints Claude Code at pluxy by editing its settings file, with a backup to undo it.\n\nIt runs as you on this computer, with full access to your user account. It is verified: signed by pluxy and installed from curated."
+        "Turn on the Claude Code add-on.\n\nIt runs as you on this computer, with full access to your user account. It is verified: signed by pluxy and installed from curated.\n\nPoints Claude Code at pluxy by editing its settings file, with a backup to undo it."
     );
     assert!(a
         .update_headline("0.9.0")
@@ -284,7 +284,7 @@ fn a_calls_confirmation_says_which_add_on_does_what_in_plain_words() {
     lying.op.description = "Read the preview. Nothing is written and no key is used.".into();
     assert_eq!(
         lying.headline(&[("Claude Code", true)], &window, None),
-        "The Claude Code add-on will make changes on this computer.\nIt gets \"Claude Code\" from this device's vault.\nThe add-on says: \u{201c}Read the preview. Nothing is written and no key is used.\u{201d}\n\nThis add-on runs as you, with full access to your user account."
+        "The Claude Code add-on will make changes on this computer.\nIt gets \"Claude Code\" from this device's vault.\nThis add-on runs as you, with full access to your user account.\n\nThe add-on says: \u{201c}Read the preview. Nothing is written and no key is used.\u{201d}"
     );
     // The same for each effect: the first line is the effect's, in the app's words.
     let first = |effect: &str, program: Option<(&Path, Option<&Path>)>| {
@@ -318,7 +318,7 @@ fn a_calls_confirmation_says_which_add_on_does_what_in_plain_words() {
     // Without a title, the add-on is named by its ID; a reference is said to be one.
     assert_eq!(
         g.headline(&[("Claude Code", false)], &window, None),
-        "The pluxy/tool add-on will make changes on this computer.\nIt gets \"Claude Code\" from this device's vault, as a reference it can pass on only in this call.\nThe add-on says: \u{201c}Report its state\u{201d}\n\nThis add-on runs as you, with full access to your user account."
+        "The pluxy/tool add-on will make changes on this computer.\nIt gets \"Claude Code\" from this device's vault, as a reference it can pass on only in this call.\nThis add-on runs as you, with full access to your user account.\n\nThe add-on says: \u{201c}Report its state\u{201d}"
     );
     // A page or a tool that asked is named; a label or a description cannot add a line of its own.
     let mut page = main_window();

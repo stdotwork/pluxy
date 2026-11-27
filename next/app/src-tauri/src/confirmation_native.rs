@@ -231,9 +231,9 @@ fn words_fit(app: &tauri::AppHandle, main: &Webview, a: &Action) -> Result<(), S
     use gtk::prelude::*;
     let mut p = prepare(app, a)?;
     p.set_headline(format!(
-        "The fixture add-on will make changes on this computer.\nThe add-on says: \u{201c}{}\u{201d}\n\n{}",
-        "Write the fixture's settings file, keeping a backup to undo it. ".repeat(60),
-        text::FULL_ACCESS
+        "The fixture add-on will make changes on this computer.\n{}\n\nThe add-on says: \u{201c}{}\u{201d}",
+        text::FULL_ACCESS,
+        "Write the fixture's settings file, keeping a backup to undo it. ".repeat(60)
     ));
     let id = app
         .state::<crate::App>()

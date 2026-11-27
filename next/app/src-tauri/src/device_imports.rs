@@ -141,10 +141,10 @@ impl Grant {
     /// the call does by its effect (for a launch, the program the confirmation opened, program;
     /// as `launch.program` and `launch.executable`). Then each secret it gets from the vault, by
     /// its label (label, whether the tool gets the value itself); who asked, when that is not the
-    /// main window (chain, the requester first); the operation's description, quoted as the
-    /// add-on's own words, since its manifest wrote it and nothing checks it against the effect;
-    /// and that the add-on has full access to the user account. The exact call (its input, chain,
-    /// executor and launch) follows below it.
+    /// main window (chain, the requester first); that the add-on has full access to the user
+    /// account; and last, the operation's description, quoted as the add-on's own words, since its
+    /// manifest wrote it and nothing checks it against the effect. The exact call (its input,
+    /// chain, executor and launch) follows below it.
     #[cfg(native_stack)]
     pub fn headline(
         &self,
@@ -190,11 +190,13 @@ impl Grant {
             let ids: Vec<String> = chain.iter().map(|p| one_line(&p.id)).collect();
             s.push_str(&format!("\nAsked by: {}.", ids.join(" → ")));
         }
+        // The app's own words all come before the add-on's, so a long description can push only
+        // its own end out of view, never the full-access line.
+        s.push_str(&format!("\n{}", crate::confirmation::text::FULL_ACCESS));
         s.push_str(&format!(
-            "\nThe add-on says: \u{201c}{}\u{201d}",
+            "\n\nThe add-on says: \u{201c}{}\u{201d}",
             one_line(&self.op.description)
         ));
-        s.push_str(&format!("\n\n{}", crate::confirmation::text::FULL_ACCESS));
         s
     }
 }
