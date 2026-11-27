@@ -363,3 +363,25 @@ test("privacy mode masks the owner's address in model names: the week's bars, th
   const select = all(page.root, "select")[0];
   expect(all(select as FakeNode, "option").map((o) => o.value)).toContain(model);
 });
+
+test("saving the Edit settings dialog closes it and says Saved., as Rename does", async () => {
+  const page = await open(account({ settings: { api_key: "pluxy-redacted-1" } }));
+  await click(button(page.root, "Edit settings"));
+  const field = all(page.root, "label")
+    .find((l) => l.textContent.startsWith("Priority"))
+    ?.childNodes.flatMap((c) => all(c, "input"))[0];
+  if (!field) throw new Error("no priority field in the Edit settings dialog");
+  field.value = "5";
+  await act(async () => {
+    field.dispatchEvent(new Event("input"));
+  });
+  const form = all(page.root, "form")[0];
+  if (!form) throw new Error("no Edit settings form");
+  await act(async () => {
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+  });
+  await settle();
+  expect(page.changes().map((c) => `${c.method} ${c.path}`)).toContain("PATCH /accounts/acc-1");
+  expect(all(page.root, "form")).toHaveLength(0);
+  expect(page.text()).toContain("Saved.");
+});

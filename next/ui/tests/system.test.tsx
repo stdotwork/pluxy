@@ -141,7 +141,8 @@ test("which pluxy this is: its version, its commit's first 12 characters, when i
   expect(about.textContent).not.toContain(COMMIT.slice(0, 13));
   expect(all(about, "time")).toHaveLength(1);
   expect(about.textContent).toContain("http://127.0.0.1:8317");
-  expect(about.textContent).toContain("In use");
+  expect(about.textContent).toContain("pluxy is using it as it is saved.");
+  expect(about.textContent).not.toContain("In use");
   // Connection status, config revision and safe mode are no longer rows.
   for (const gone of ["Connection status", "Config revision", "Safe mode", "Core version"])
     expect(m.text()).not.toContain(gone);
@@ -160,7 +161,7 @@ test("a settings file that is not in use says why", async () => {
   expect(card(m.root, "About").textContent).toContain(
     "pluxy is not using the latest version of its settings file: line 3: unknown key. It keeps working with the version before.",
   );
-  expect(card(m.root, "About").textContent).not.toContain("In use");
+  expect(card(m.root, "About").textContent).not.toContain("using it as it is saved");
 });
 
 test("safe mode has its own notice", async () => {

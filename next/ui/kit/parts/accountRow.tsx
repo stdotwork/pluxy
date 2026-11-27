@@ -16,6 +16,7 @@ import {
   accountFix,
   accountHref,
   accountReason,
+  accountServer,
   type Condition,
   conditionTall,
   conditionWord,
@@ -259,6 +260,7 @@ export function AccountRow(props: {
   const a = props.account;
   const c = accountCondition(a, props.running, now);
   const name = naming.of(a);
+  const address = accountServer(a);
   // What names the account in text about it (a reason, an error): its label and its ID.
   const ids = [...accountIdentities(a), a.id];
   const href = accountHref(a.id);
@@ -303,6 +305,11 @@ export function AccountRow(props: {
             <span class="account-meta">
               {/* An account pluxy cannot read names no provider: nothing to say here. */}
               {a.extension && <span class="account-provider">{providerName(a.extension)}</span>}
+              {address && (
+                <span class="account-address" title={address}>
+                  {address}
+                </span>
+              )}
               {plan && <PlanPill plan={plan} />}
             </span>
           </span>
