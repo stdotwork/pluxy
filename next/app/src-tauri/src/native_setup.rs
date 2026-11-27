@@ -181,7 +181,7 @@ fn first(c: &mut Checks, app: &AppHandle) {
                 .is_some_and(|p| p.is_empty()),
         format!("GET /packages through the app's host lists nothing installed at first ({r})"),
     );
-    let open = until(app, 15, &format!("{OPEN_STEP} === 'Your AI accounts'"));
+    let open = until(app, 15, &format!("({OPEN_STEP}) === 'Your AI accounts'"));
     c.check(
         open,
         format!(
