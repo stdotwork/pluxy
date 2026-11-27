@@ -30,7 +30,7 @@ The connection is one of three modes, kept in `connection.json` in the app's con
 | Mode | Core | Address rule |
 | --- | --- | --- |
 | `managed` | The app's own core, from its store (below) | A loopback address the app picks once (`pluxy init -port 0`) |
-| `local` | A core someone else runs on this computer | A loopback origin (`127.0.0.0/8`, `::1`, `localhost`); `http://` is accepted only here |
+| `local` | A core someone else runs on this computer | A loopback origin (`127.0.0.0/8`, `::1`, `localhost`), `http://` or `https://` |
 | `remote` | A core on another computer | `https://` only, with an optional PEM file of certificate authorities to trust |
 
 Addresses are origins only (scheme, host and port). The native side holds the management key.
@@ -111,8 +111,8 @@ A changed version does not start until it is installed again.
 **Switching** (an install, a rollback, an adoption) stops the running core, keeps a copy of
 `core/config.json`, records the new version as the candidate and starts it. It counts as started
 once the core says it listens on its `listen` address, every socket listening on that port is the
-started process's (read from `/proc` on Linux, the TCP table on Windows), it answers
-`GET /v0/management/status` with the app's key and, for a release, reports the version it was
+started process's (`owns_listener` in `managed.rs`: `/proc` on Linux, the system's TCP table on
+Windows, a check of its own on macOS), it answers `GET /v0/management/status` with the app's key and, for a release, reports the version it was
 signed as, and the selection is saved. Otherwise the app puts the config back, removes a version
 it installed for this switch and runs the one that worked before. If the config cannot be put
 back, no core runs and the next start tries again. The store keeps the running version, the one
@@ -168,7 +168,7 @@ release feed, granting a file) opens a native confirmation and applies nothing i
 
 | Group | Commands |
 | --- | --- |
-| Connection | `connection_get` (without the key), `connection_set` (no key), `key_entry` (native entry; returns signed-in, wrong-key, cancelled or error), `sign_out`, `management_key_rotate` |
+| Connection | `connection_get` (without the key), `connection_set` (no key), `key_entry` (native entry; returns `signed_in`, `wrong_key`, `cancelled` or `error`), `sign_out`, `management_key_rotate` |
 | The app's own core | `core_start`, `core_stop`, `core_restart` (managed mode only), `core_versions`, `core_install`, `core_rollback`, `core_adopt` |
 | Core's API | `core_call` |
 | Startup, window, privacy | `startup_get`, `startup_set`, `window_get`, `window_set`, `window_close`, `privacy_get`, `privacy_set` |
@@ -399,8 +399,9 @@ The frame's contract:
   `client_key_capture` (named for the tool, in the vault and in core), each in its own native
   confirmation.
 - Every native reply goes through `nativeReply` (`next/app/src/toolWords.ts`), which turns the
-  native side's words into the page's and, in privacy mode, masks paths, user names, account IDs and
-  model names.
+  native side's words into the page's. In privacy mode `useShown` in the same file masks what the
+  page shows: paths (the home folder's user name, and all but the last two parts), IDs such as a WSL
+  user or an account ID, and e-mail addresses, URL credentials and paths in free text.
 
 A tool joins the list Beginner Mode and the Tools topics draw from by being an agent page: a window
 page that names the package it drives (`AgentPage` in `next/app/src/easyMode.tsx`), listed in
@@ -442,7 +443,7 @@ nothing in it is trusted as markup. Signed update artifacts carry their own sign
 | `published` | RFC 3339 in UTC, ending in `Z` |
 | `notes` | Optional Markdown, at most 64 KiB |
 | `notes_url` | Optional `https://` address with a host and no user name or password, at most 2048 bytes |
-| `update` | Optional, app releases only: signed update artifacts by target, `linux-x86_64-appimage`, `windows-x86_64-set` (the program set as a `.tar.gz`), `darwin-aarch64-app` or `darwin-x86_64-app` (a `.app.tar.gz`), each `{"url", "signature", "size"}` |
+| `update` | Optional, app releases only: signed update artifacts by updater target name (1 to 64 characters), each `{"url", "signature", "size"}`. The app reads its own system's: `linux-x86_64-appimage` (an AppImage), `windows-x86_64-set` or `windows-aarch64-set` (the program set as a `.tar.gz`), `darwin-aarch64-app` or `darwin-x86_64-app` (a `.app.tar.gz`) |
 
 A feed is read over https with the public certificate roots, no redirects, at most 1 MiB, within 30
 seconds; a feed with any bad release is refused whole. The last good feed is kept in
@@ -558,8 +559,8 @@ add-on index only. That is weaker than compiled-in roots, since any program runn
 write a profile, and acceptable for a build that never ships.
 
 **The release gate.** `bun run package:release` builds the release app with no features and no
-config overlay and runs the release validator (`cargo run --locked --example
-validate-release-config` from `next/app/src-tauri`) on the build's config, trust and feature
+config overlay, builds the release validator (the `validate-release-config` example in
+`next/app/src-tauri`) and runs it on the build's config, trust and feature
 snapshots, the staged trust folder, the binary and each artifact given. `build.rs` writes those
 snapshots in Cargo's `OUT_DIR` and embeds a digest of them in the app; the validator requires that
 receipt in each artifact and refuses test roots or features, private trust material, updater keys,

@@ -58,9 +58,9 @@ next/app/local-build/start --real-home    # on your own home folder and coding t
   folder it writes and the commands that remove them. It refuses to start when your home folder is a
   link, belongs to another user, or other users can open it (`chmod 700` it).
 
-The local build has its own name, **pluxy Local**, and its own settings folders
-(`dev.pluxy.desktop.local`), so it never shares anything with another copy of the app. It never
-opens at sign-in: it starts only with `start`.
+The local build says "pluxy (local build)" in its window title and tray, and has settings folders of
+its own (`dev.pluxy.desktop.local`), so it never shares anything with another copy of the app. It
+never opens at sign-in: it starts only with `start`.
 
 **Build it again** after a change: quit the app (from the tray if it is there), then run
 `make app-local` again with the same folder. Your accounts and settings stay. After a rebuild the
@@ -98,8 +98,8 @@ window of its own, keeps the new key the way the old one was kept, and shows it 
 other programs that used the old key.
 
 When pluxy is not running or the app is not signed in, the window shows none of pluxy's pages, only
-one pane that says what happened and what to press: **Start pluxy**, **Enter management key**, or
-**Change where pluxy runs**.
+one pane that says what happened and offers the way on, such as **Start pluxy**, **Enter management
+key** or **Change where pluxy runs** ([Troubleshooting](#troubleshooting) lists the cases).
 
 ### The app's own pluxy
 
@@ -130,8 +130,9 @@ entirely, so they use no memory. Quitting stops pluxy only when the app runs it 
 computer**); a pluxy you connected to keeps running.
 
 The tray menu's first line says how pluxy is: **pluxy: Running**, **Stopped**, **Restarting**,
-**Stopped restarting** or **Not installed** when the app runs it; **pluxy: Connected to <host>** or
-**pluxy: Not connected** otherwise. Then:
+**Stopped restarting** or **Not installed** when the app runs it; **pluxy: Connected to <host>** (once
+signed in) or **pluxy: Not connected** otherwise; **pluxy: Working…** while a tray action runs.
+Then:
 
 | Item | What it does |
 | --- | --- |
@@ -142,7 +143,8 @@ The tray menu's first line says how pluxy is: **pluxy: Running**, **Stopped**, *
 | **Quit** | Quits the app; it reads **Quit (stops pluxy)** when the app runs pluxy |
 
 When the desktop has no usable tray, closing the window quits the app. If the app runs pluxy, it
-asks first, **Close and stop pluxy?**, since your coding tools then stop getting answers.
+asks first, **Close and stop pluxy?**, since your coding tools then stop getting answers, unless you
+chose **Don't ask again** there.
 
 The window reopens at the size and place it last had.
 
@@ -154,11 +156,12 @@ folder is a separate profile, with its own app and pluxy.
 
 ## Startup
 
-Where pluxy runs has three startup rows, each saved as soon as you change it:
+Where pluxy runs has up to three startup rows, each saved as soon as you change it. The last two show
+only when the app runs pluxy itself.
 
 | Row | Default | What it does |
 | --- | --- | --- |
-| **Open at sign-in** | Off | Opens the app when you sign in (an entry in your autostart folder). The local build does not offer it |
+| **Open at sign-in** | Off | Opens the app when you sign in (an entry in your autostart folder). The local build does not offer it, and then shows no Start in the tray either |
 | **Start in the tray** | Off | At sign-in, starts in the tray without a window. Needs Open at sign-in, a usable tray, and the app running pluxy itself |
 | **Start pluxy with the app** | On | Starts the app's own pluxy when the app opens. Off: pluxy stays stopped until you press Start pluxy |
 
@@ -252,7 +255,7 @@ asks you to read it again.
 | Oh My Pi | `pluxy/omp-setup` | `~/.omp/agent/models.yml` and `config.yml` | `omp` in a terminal | Sets the default model; Oh My Pi lists pluxy's other models itself |
 | Grok Build | `pluxy/grok-setup` | `~/.grok/config.toml` | `grok` in a terminal | **Import models from pluxy** fills the model list |
 | Hermes Agent | `pluxy/hermes-setup` | `~/.hermes/config.yaml` (or the active profile's) | `hermes` in a terminal | Sets the default model |
-| Pi | `pluxy/pi-setup` | In `~/.pi/agent`: `cliproxyapi.json`, `settings.json` and a provider plugin | `pi` in a terminal | Connect is **Install plugin** until the plugin is in place; **Update plugin**, **Uninstall plugin** |
+| Pi | `pluxy/pi-setup` | In `~/.pi/agent`: `cliproxyapi.json`, `settings.json` and the provider plugin's folder `pluxy-cliproxyapi-provider/`; it removes the plugin's model cache `cliproxyapi-models.json` | `pi` in a terminal | Connect is **Install plugin** until the plugin is in place; **Update plugin**, **Uninstall plugin** |
 
 A tool started from another program keeps its old settings until you start it again: the app never
 stops a program it did not start.
@@ -265,9 +268,10 @@ These eight are the coding tools the app sets up. For any other tool, point it a
 Beginner Mode (Tools) walks through two steps. **Connect a model** signs in to an AI account or adds
 an API key, as Add an account does; **Next: connect an agent** turns on once pluxy has an account.
 **Connect an agent** lists the coding tools this app can set up whose add-on is installed or offered,
-with **Install**, **Enable** and **Set up** for each; Set up shows the tool's page below. Beginner
-Mode changes nothing itself: leaving it, or cancelling a confirmation, leaves files and add-ons as they
-were.
+with **Install**, **Enable** and **Set up** for each: Install installs the add-on (turned off),
+Enable asks in its confirmation window, and Set up shows the tool's page below, where Connect writes
+the tool's settings. Beginner Mode writes no tool's settings itself, and leaving it or cancelling a
+confirmation changes nothing.
 
 ### Launcher
 
@@ -337,8 +341,8 @@ unless it runs with `--real-home`). Files are readable only by you.
 | `device-packages/` | data | Installed add-ons |
 | `instance/` | data | What lets a second launch find the first |
 
-A settings file the app cannot read is moved aside (named `.damaged-<random>` or `.corrupt-<time>`)
-and the defaults are used.
+A settings file the app cannot read is moved aside (such as `startup.damaged-<random>.json` or
+`launcher.json.corrupt-<time>`) and the defaults are used.
 
 ## Troubleshooting
 
@@ -346,8 +350,9 @@ and the defaults are used.
 | --- | --- |
 | **No pluxy is installed** | A plain build has no pluxy inside. Press **Use this program** if the app found one, name your own under **Your own pluxy program**, or use the local build |
 | **pluxy kept stopping, so the app stopped restarting it** | Read why on the pane and in pluxy's log (Settings, Logs, or the files in `core/` in the app's data folder), fix the config, then press **Start pluxy** |
-| **Not signed in to pluxy** | Press **Enter management key**. Print the key with `pluxy key management --show-key` on the computer pluxy runs on |
-| **Cannot connect to pluxy at <host>** | Check pluxy runs there, the address and port, and for `https://` the certificate (add its **Certificate file** if you made it yourself) |
+| **Not signed in to pluxy on this computer** (or **at <host>**) | Press **Enter management key**. Print the key with `pluxy key management --show-key` on the computer pluxy runs on |
+| **Cannot connect to pluxy at <host>** (or **on this computer**) | Check pluxy runs there, the address and port, and for `https://` the certificate (add its **Certificate file** if you made it yourself) |
+| **pluxy at <host> is not answering** (or **on this computer**) | Nothing answered as pluxy at that address while the app checked its key; the line under the heading says why (no answer in time, a name not found, a certificate that could not be checked). Fix that, then press **Enter management key** |
 | A tool page says its add-on is missing or off | Install it on Add-ons (in the local build it is under **Available to install**), then **Turn on add-on** |
 | Add-ons show **Unverified** after `make app-local` | Expected after a rebuild: **Remove** each, **Install** it again and turn it on |
 | A tool page refuses to write: the file changed | The tool or you edited it since the page read it. Press **Read this file** (or **Try again**) and write again |
