@@ -195,6 +195,8 @@
   }
 
   .req-open {
+    display: flex;
+    align-items: center;
     min-height: 24px;
     padding: 0;
     border: 0;
@@ -261,18 +263,82 @@
     color: var(--px-color-ok);
   }
 
-  /* A narrow list (a window of 820 pixels with the pane open): the key, tokens and time taken go
-     to the pane, and then the account's note is all that is left to cut. */
-  @container (max-width: 46em) {
+  /* With the pane beside the list, the key, the tokens and the time taken are in the pane (which
+     says them again in full), so the list keeps the columns that find a request: when it
+     happened, what it asked for, who answered and how it ended. */
+  @media (min-width: 1281px) {
+    html[data-detail="side"] .master[data-open] :is(.req-key, .req-tokens, .req-taken) {
+      display: none;
+    }
+  }
+
+  /* A narrow list drops the key and the tokens (the pane has them), a narrower one the time taken
+     and some of the width of the names, and the narrowest the detour's note too. */
+  @container (max-width: 1040px) {
     .req-key,
     .req-tokens {
       display: none;
     }
   }
 
-  @container (max-width: 32em) {
+  @container (max-width: 720px) {
     .req-taken {
       display: none;
+    }
+
+    .req-model {
+      max-width: 16em;
+    }
+
+    .req-account {
+      max-width: 13em;
+    }
+  }
+
+  @container (max-width: 520px) {
+    .req-model {
+      max-width: 12em;
+    }
+
+    .req-account {
+      max-width: 9em;
+    }
+
+    /* The detour's note is in the pane; the failure's word is the result column's, and stays. */
+    .req-account-box .word-chip {
+      display: none;
+    }
+  }
+
+  /* A window too narrow for a pane beside the list: the pane is a drawer over the page, from its
+     side, and from its foot under 720 pixels. The list keeps the whole width under it. */
+  @media (max-width: 1280px) {
+    html[data-detail="side"] .activity .master[data-open] {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    html[data-detail="side"] .activity .detail {
+      position: fixed;
+      inset-block: calc(var(--s) * 16) auto;
+      inset-inline: auto calc(var(--s) * 3);
+      z-index: 40;
+      width: min(26em, calc(100vw - var(--s) * 6));
+      max-height: calc(100vh - var(--s) * 19);
+      overflow: auto;
+      background: var(--px-color-overlay);
+      box-shadow: var(--px-shadow-overlay);
+    }
+  }
+
+  @media (max-width: 720px) {
+    html[data-detail] .activity .detail {
+      position: sticky;
+      inset-block: auto calc(var(--s) * 2);
+      z-index: 40;
+      max-height: 70vh;
+      overflow: auto;
+      background: var(--px-color-overlay);
+      box-shadow: var(--px-shadow-overlay);
     }
   }
 
@@ -283,6 +349,11 @@
   }
 
   /* ---- the request pane -------------------------------------------------------------------- */
+
+  /* The pane's content is as wide as the pane, however long a name in it is. */
+  .activity .detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
 
   .request-chips {
     display: flex;
@@ -295,6 +366,11 @@
   .request-account-name {
     color: var(--px-color-text);
     font-weight: var(--px-font-weight-strong);
+    overflow-wrap: anywhere;
+  }
+
+  .request-story {
+    overflow-wrap: anywhere;
   }
 
   .request-tiles {
@@ -418,6 +494,11 @@
   }
 
   .request-next .btn {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     text-decoration: none;
   }
 
@@ -537,9 +618,14 @@
     padding: calc(var(--s) * 3) calc(var(--s) * 4) calc(var(--s) * 2);
   }
 
+  /* The chart is measured here and drawn at this width, so its text is the size it says. */
+  .usage-chart-box {
+    min-width: 0;
+  }
+
   .usage-chart svg {
     display: block;
-    width: 100%;
+    max-width: 100%;
     height: auto;
   }
 

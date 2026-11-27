@@ -4,7 +4,7 @@
 // A bar says its figures when hovered or focused; the arrow keys move between bars, so the chart
 // is one stop for the keyboard, not thirty.
 
-import { useRef, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { strings } from "../strings";
 import { Button, TableFrame } from "../ui";
 import { type Bar, shortCount, succeededPercent } from "./activity";
@@ -37,8 +37,10 @@ const t = strings("usage.chart", {
 /** What the bars show: the requests, the share that went through, or the tokens. */
 export type Metric = "requests" | "through" | "tokens";
 
-const W = 600;
-const H = 188;
+/** The chart is drawn at the width it is shown at, so its text keeps its size; this is its width before it is measured. */
+const DEFAULT_W = 600;
+const MIN_W = 280;
+const H = 200;
 const LEFT = 34;
 const TOP = 14;
 const BOTTOM = 22;
@@ -87,6 +89,18 @@ export function UsageChart(props: { bars: Bar[]; unit: "hour" | "day"; range: st
   const [numbers, setNumbers] = useState(false);
   const [stop, setStop] = useState(bars.length - 1);
   const refs = useRef<(SVGGElement | null)[]>([]);
+  const box = useRef<HTMLDivElement>(null);
+  const [W, setW] = useState(DEFAULT_W);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const seen = new ResizeObserver(() => {
+      const width = Math.round(el.clientWidth);
+      if (width > 0) setW(Math.max(MIN_W, width));
+    });
+    seen.observe(el);
+    return () => seen.disconnect();
+  }, []);
   const requests = bars.reduce((n, b) => n + b.requests, 0);
   const failed = bars.reduce((n, b) => n + b.failed, 0);
   const tokens = bars.reduce((n, b) => n + b.tokens, 0);
@@ -123,102 +137,111 @@ export function UsageChart(props: { bars: Bar[]; unit: "hour" | "day"; range: st
         </p>
         <p class="usage-step">{unit === "hour" ? t("perHour") : t("perDay")}</p>
       </div>
-      {/* biome-ignore lint/a11y/useSemanticElements: an SVG cannot be a fieldset; the group names the whole chart */}
-      <svg viewBox={`0 0 ${W} ${H}`} role="group" aria-label={sum} onMouseLeave={() => setShown(undefined)}>
-        <line class="chart-grid" x1={LEFT} x2={W} y1={y(peak)} y2={y(peak)} />
-        <line class="chart-grid chart-grid-mid" x1={LEFT} x2={W} y1={y(peak / 2)} y2={y(peak / 2)} />
-        <line class="chart-axis" x1={LEFT} x2={W} y1={y(0)} y2={y(0)} />
-        <text class="chart-label" x={LEFT - 6} y={y(peak)} text-anchor="end" dominant-baseline="middle">
-          {top}
-        </text>
-        {bars.map((b, i) => {
-          const x = LEFT + i * slot + (slot - barW) / 2;
-          const ok = b.requests - b.failed;
-          // What the bar stacks: its two parts, in the unit of the scale.
-          const first =
-            metric === "tokens" ? b.tokens : metric === "through" ? (b.requests ? ok / b.requests : 0) : ok;
-          const second =
-            metric === "tokens"
-              ? 0
-              : metric === "through"
-                ? b.requests
-                  ? b.failed / b.requests
-                  : 0
-                : b.failed;
-          const firstTop = y(first);
-          const secondTop = y(first + second);
-          const label = barLabel(b, i, bars.length, unit);
-          const text = barFigures(b, unit, metric);
-          return (
-            // biome-ignore lint/a11y/noInteractiveElementToNoninteractiveRole: a bar is read, not pressed; it takes focus so the keyboard hears its figures, as chart libraries do
-            <g
-              key={b.start.getTime()}
-              class="chart-bar"
-              ref={(el) => {
-                refs.current[i] = el;
-              }}
-              role="img"
-              aria-label={text}
-              tabIndex={i === stop ? 0 : -1}
-              onMouseEnter={() => setShown(i)}
-              onFocus={() => {
-                setStop(i);
-                setShown(i);
-              }}
-              onBlur={() => setShown(undefined)}
-              onKeyDown={(e) => {
-                const to =
-                  e.key === "ArrowRight"
-                    ? i + 1
-                    : e.key === "ArrowLeft"
-                      ? i - 1
-                      : e.key === "Home"
-                        ? 0
-                        : e.key === "End"
-                          ? bars.length - 1
-                          : undefined;
-                if (to === undefined) return;
-                e.preventDefault();
-                move(to);
-              }}
-            >
-              <title>{text}</title>
-              <rect class="chart-hit" x={LEFT + i * slot} y={TOP} width={slot} height={plotH} />
-              {first > 0 && (
-                <rect
-                  data-outcome="success"
-                  x={x}
-                  y={firstTop}
-                  width={barW}
-                  height={y(0) - firstTop}
-                  rx={2}
-                />
-              )}
-              {second > 0 && (
-                <rect
-                  data-outcome="failure"
-                  x={x}
-                  y={secondTop}
-                  width={barW}
-                  height={Math.max(1, firstTop - secondTop - (first > 0 ? GAP : 0))}
-                  rx={2}
-                />
-              )}
-              {label && (
-                <text
-                  class="chart-label"
-                  x={i === bars.length - 1 && i > 0 ? W : x + barW / 2}
-                  y={H - 6}
-                  // The last label ends at the chart's edge, so a long one (Today) is not cut off.
-                  text-anchor={i === bars.length - 1 && i > 0 ? "end" : "middle"}
-                >
-                  {label}
-                </text>
-              )}
-            </g>
-          );
-        })}
-      </svg>
+      <div class="usage-chart-box" ref={box}>
+        {/* biome-ignore lint/a11y/useSemanticElements: an SVG cannot be a fieldset; the group names the whole chart */}
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          width={W}
+          height={H}
+          role="group"
+          aria-label={sum}
+          onMouseLeave={() => setShown(undefined)}
+        >
+          <line class="chart-grid" x1={LEFT} x2={W} y1={y(peak)} y2={y(peak)} />
+          <line class="chart-grid chart-grid-mid" x1={LEFT} x2={W} y1={y(peak / 2)} y2={y(peak / 2)} />
+          <line class="chart-axis" x1={LEFT} x2={W} y1={y(0)} y2={y(0)} />
+          <text class="chart-label" x={LEFT - 6} y={y(peak)} text-anchor="end" dominant-baseline="middle">
+            {top}
+          </text>
+          {bars.map((b, i) => {
+            const x = LEFT + i * slot + (slot - barW) / 2;
+            const ok = b.requests - b.failed;
+            // What the bar stacks: its two parts, in the unit of the scale.
+            const first =
+              metric === "tokens" ? b.tokens : metric === "through" ? (b.requests ? ok / b.requests : 0) : ok;
+            const second =
+              metric === "tokens"
+                ? 0
+                : metric === "through"
+                  ? b.requests
+                    ? b.failed / b.requests
+                    : 0
+                  : b.failed;
+            const firstTop = y(first);
+            const secondTop = y(first + second);
+            const label = barLabel(b, i, bars.length, unit);
+            const text = barFigures(b, unit, metric);
+            return (
+              // biome-ignore lint/a11y/noInteractiveElementToNoninteractiveRole: a bar is read, not pressed; it takes focus so the keyboard hears its figures, as chart libraries do
+              <g
+                key={b.start.getTime()}
+                class="chart-bar"
+                ref={(el) => {
+                  refs.current[i] = el;
+                }}
+                role="img"
+                aria-label={text}
+                tabIndex={i === stop ? 0 : -1}
+                onMouseEnter={() => setShown(i)}
+                onFocus={() => {
+                  setStop(i);
+                  setShown(i);
+                }}
+                onBlur={() => setShown(undefined)}
+                onKeyDown={(e) => {
+                  const to =
+                    e.key === "ArrowRight"
+                      ? i + 1
+                      : e.key === "ArrowLeft"
+                        ? i - 1
+                        : e.key === "Home"
+                          ? 0
+                          : e.key === "End"
+                            ? bars.length - 1
+                            : undefined;
+                  if (to === undefined) return;
+                  e.preventDefault();
+                  move(to);
+                }}
+              >
+                <title>{text}</title>
+                <rect class="chart-hit" x={LEFT + i * slot} y={TOP} width={slot} height={plotH} />
+                {first > 0 && (
+                  <rect
+                    data-outcome="success"
+                    x={x}
+                    y={firstTop}
+                    width={barW}
+                    height={y(0) - firstTop}
+                    rx={2}
+                  />
+                )}
+                {second > 0 && (
+                  <rect
+                    data-outcome="failure"
+                    x={x}
+                    y={secondTop}
+                    width={barW}
+                    height={Math.max(1, firstTop - secondTop - (first > 0 ? GAP : 0))}
+                    rx={2}
+                  />
+                )}
+                {label && (
+                  <text
+                    class="chart-label"
+                    x={i === bars.length - 1 && i > 0 ? W : x + barW / 2}
+                    y={H - 6}
+                    // The last label ends at the chart's edge, so a long one (Today) is not cut off.
+                    text-anchor={i === bars.length - 1 && i > 0 ? "end" : "middle"}
+                  >
+                    {label}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
       <div class="usage-chart-foot">
         <p class="chart-legend">
           {metric === "tokens" ? (

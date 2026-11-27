@@ -1,19 +1,55 @@
 @layer kit {
+  /* The log is one panel: its controls in a bar across the top, the lines under them on the
+     code ground. */
   .logs-pane {
     display: grid;
-    gap: calc(var(--s) * 3);
     min-width: 0;
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-card);
+    background: var(--px-color-code-bg);
+    overflow: hidden;
   }
+
   .logs-controls {
     display: flex;
     flex-wrap: wrap;
-    align-items: end;
-    gap: calc(var(--s) * 4);
+    align-items: center;
+    gap: calc(var(--s) * 2) calc(var(--s) * 4);
+    padding: calc(var(--s) * 2) calc(var(--s) * 3);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    background: var(--px-color-surface);
   }
+
+  /* In the bar the fields name themselves (a placeholder, the choices), so their labels are only
+     for assistive technology. */
+  .logs-controls .field > .label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .logs-controls .field {
+    position: relative;
+  }
+
+  .logs-controls .actions {
+    margin-inline-start: auto;
+  }
+
   .logs-search {
     flex: 1;
     min-width: min(100%, 14em);
   }
+
+  .logs-pane > .notice {
+    margin: 0;
+    padding: calc(var(--s) * 2) calc(var(--s) * 3);
+    border-radius: 0;
+  }
+
   /* The box is as tall as the window leaves it, and never short enough to be of no use. */
   .logs-text {
     font-family: var(--px-font-mono);
@@ -29,20 +65,45 @@
     background: var(--px-color-code-bg);
     margin: 0;
   }
+
   .logs-text[data-wrap] {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
+
   .logs-core {
     height: max(12em, calc(100vh - 22em));
     max-height: none;
+    padding: calc(var(--s) * 2) 0;
+    border: 0;
+    border-radius: 0;
   }
+
+  /* A line that warns or fails has a bar at its start, as a failed request has in Requests. */
+  .logs-core [data-part="log-line"] {
+    padding: 0 calc(var(--s) * 3);
+  }
+
   .logs-core [data-level="warn"] {
     color: var(--px-color-warn);
+    background: var(--px-color-warn-surface);
+    box-shadow: inset 2px 0 0 var(--px-color-warning);
   }
+
   .logs-core [data-level="error"] {
     color: var(--px-color-danger);
+    background: var(--px-color-danger-surface);
+    box-shadow: inset 2px 0 0 var(--px-color-error);
   }
+
+  .logs-core time {
+    color: var(--px-color-secondary-label);
+  }
+
+  .logs-core [data-level] time {
+    color: inherit;
+  }
+
   .logs-failed-head {
     display: flex;
     flex-wrap: wrap;
@@ -51,9 +112,14 @@
     gap: calc(var(--s) * 3) calc(var(--s) * 6);
     margin-bottom: calc(var(--s) * 3);
   }
-  .logs-failed-head > p {
-    margin: 0;
+  .logs-failed-intro {
+    display: grid;
+    gap: var(--s);
     align-self: center;
+  }
+
+  .logs-failed-intro > p {
+    margin: 0;
   }
   .logs-trace-form {
     display: flex;
