@@ -542,10 +542,12 @@ account, or on an account for that one:
 - Extensions run with a cleared environment, so `HTTP_PROXY` and `ALL_PROXY` never reach them:
   `proxy_url` is the only way to set a proxy.
 
-The user name and password are secret. The management API shows the URL with `redacted` in their
-place (`socks5://redacted@proxy.example:1080`), and they are removed from what extensions log and
-send back. An extension older than protocol 0.11 cannot use a proxy, so core does not send it the
-accounts that have one: their requests go to other accounts, and the error says why.
+The user name and password are secret. `GET /v0/management/accounts` shows the URL with
+`redacted` in their place (`socks5://redacted@proxy.example:1080`); `GET /v0/management/config`
+shows a placeholder in place of a whole `proxy_url` that has them. They are removed from what
+extensions log and send back. An extension older than protocol 0.11 cannot use a proxy, so core
+does not send it the accounts that go through one, their own or the top-level one: their requests
+go to other accounts, and the error says why.
 
 ## Upstream headers
 
@@ -565,14 +567,18 @@ extension's other headers stay. A sign-in that adds an account uses the `headers
 
 The config load fails, with a message that names the header but never its value, for `Host`,
 `Content-Length`, `Transfer-Encoding` or `Connection`, a name that is not a valid header name or is
-given twice (letter case aside), an empty value, and a value with a line break.
+given twice (letter case aside), a blank value, and a value with a control character other than
+a tab (a line break, for example).
 
-A redirect to another host, or from `https` to `http`, carries the headers that are not secret
+A redirect to another host or port, or to another scheme (`https` to `http` or the other way),
+carries the headers that are not secret
 (below) but not the secret ones, even one the provider set itself under that name, as an HTTP
 client leaves out `Authorization` there.
 
-`pluxy account set <id>` and `PATCH /v0/management/accounts/{id}` with `headers` as an object
-replace all the account's headers (one left out is removed); `null` or `{}` removes them all.
+For an account added by sign-in, `pluxy account set <id>` and
+`PATCH /v0/management/accounts/{id}` with `headers` as an object replace all the account's headers
+(one left out is removed); `null` or `{}` removes them all. An account set in the config file is
+changed there: the call fails with 409.
 
 ### Copying a header from the client
 
@@ -611,8 +617,8 @@ extensions log and send back.
 A copied header counts by the same rule: under such a name the `$` value shows as a placeholder,
 and the value copied for a request is removed from what that request's call sends back. Core writes
 no header value in its own logs or errors. An extension older than protocol 0.12 cannot send
-headers, so core does not send it the accounts that have them: their requests go to other accounts,
-and the error says why.
+headers, so core does not send it a call that carries any: the request goes to other accounts,
+and the error says why. A header copied from the client counts only when the client sent it.
 
 ## Payload rules
 
@@ -644,7 +650,7 @@ A rule applies when any entry of its `models` matches:
 | Field | Matches |
 | --- | --- |
 | `name` | The model the request reaches the upstream as, or the one the client asked for (before an alias or prefix, with its thinking suffix or without it). `*` matches any text. |
-| `protocol` | The extension: `openai` (`pluxy/openai-compatible`), `claude`, `codex`, `gemini` (Gemini API keys and Vertex), `kimi`, `xai`, `meta`; for another package, the last part of its ID. Kimi is `kimi`, not `openai`, though CLIProxyAPI counts it as `openai`. |
+| `protocol` | The extension: `openai` (`pluxy/openai-compatible`), `claude`, `codex`, `gemini` (Gemini API keys and Vertex), `kimi`, `xai`, `meta`; for another package, the last part of its ID. Kimi is `kimi`, not `openai`. |
 | `from-protocol` | The API the client called: `openai` (Chat Completions, legacy Completions), `responses` (also compaction), `claude`, `gemini`, `interactions`, `codex-alpha-search`, `openai-image`. |
 | `headers` | The client's request headers, each value a pattern with `*`. Core checks them; they are not sent to the extension. |
 | `match`, `not-match`, `exist`, `not-exist` | The body about to go upstream. |
@@ -664,7 +670,10 @@ the `response.create` message the extension sends for the turn, selected for tha
 request. A message that is not a turn, such as the client's interrupt, goes upstream as it is. A
 client WebSocket turn that goes upstream as an HTTP request gets them as an HTTP request does.
 
-Rules do not reach Devin, whose upstream body is protobuf. An extension older than protocol 0.14
+Rules change only a JSON body (`application/json` or a `+json` type, with no `Content-Encoding`);
+any other body goes upstream as it is. So they do not reach Devin, whose upstream body is protobuf,
+nor the OpenAI-compatible extension's audio transcription and translation requests, which are
+multipart forms. An extension older than protocol 0.14
 cannot apply rules (0.15 for a turn on an upstream WebSocket), so a request that rules apply to is
 not sent to it: it goes to other accounts, and the error says why. The protocol side is in the
 [extension protocol](../next/protocol/README.md#payload-rules).
@@ -758,11 +767,13 @@ request:
 | `GET /v1/models` | OpenAI's list: `{"object": "list", "data": [{"id", "object", "created", "owned_by", "context_length", "max_output_tokens", "capabilities", "from"}]}`. A request with an `anthropic-version` header or Claude Code's user agent (`claude-cli/...`) gets Anthropic's list instead: each model's `display_name`, `created_at`, `max_input_tokens` and `max_tokens` (200000 and 64000 when not known), sorted by display name, with `has_more`, `first_id` and `last_id`. A request with a `client_version` query gets the [Codex client catalog](#codex-client-catalog). |
 | `GET /v1/models/{id}` | One model from that list, or a 404 with code `model_not_found`. |
 | `GET /v1beta/models` | Gemini's list, `{"models": [...]}`: each model's `name` (`models/{id}`), `displayName`, `description`, token limits and `supportedGenerationMethods` (`["generateContent"]` when not known). |
-| `GET /v1beta/models/{name}` | One model, named with or without `models/`, or a 404. |
+| `GET /v1beta/models/{name}` | One model, or a 404. A model the upstream names `models/{id}` is found with or without `models/`; any other model only by its ID. |
 
-A list holds each model the accounts serve, once under each name a client can ask for it by, and
-the name of each fallback chain no account serves, sorted by name. `pluxy model list` shows the
-same models with the accounts that serve each.
+A list holds each model the accounts list, once under each name a client can ask for it by, and
+the name of each fallback chain no account serves, sorted by name. A name whose accounts are all
+turned off, waiting for a sign-in or banned is not listed, since no request for it can be served
+now, and an account with `weight` 0 under the `weighted` strategy adds nothing. `pluxy model list`
+shows the same models with the accounts that serve each.
 
 ### Where an account's models come from
 
@@ -771,7 +782,7 @@ same models with the accounts that serve each.
   (the protocol's `models` operation), under the account's naming rules
   ([below](#model-names-and-aliases)). An extension that cannot say adds nothing for it.
 - An account whose extension has no list, gives an empty one, or could not give one within 15
-  seconds serves any model.
+  seconds serves any model, but adds no names to the lists.
 
 The same list decides routing: a request for a model no account serves is refused without calling
 an upstream, with a 404 and code `model_not_found`.
@@ -780,7 +791,7 @@ an upstream, with a 404 and code `model_not_found`.
 
 | When | What happens |
 | --- | --- |
-| A list could not be read | It is asked for again a minute later. |
+| A list could not be read | It is asked for again when a request or a listing next needs it, a minute or more later. |
 | Every 30 minutes, plus up to 3 minutes of random spread | Each known list is asked for again, so accounts do not all refresh at once. An empty list counts as known. |
 | An account's credential is renewed, or it signs in again | That account's list is asked for again. |
 | `pluxy model refresh` (`POST /v0/management/models/refresh`) | Every list is asked for again now; `--account` limits it to one account. |
