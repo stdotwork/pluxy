@@ -119,10 +119,13 @@ test("an account set in the settings file has no handle, arrows or weight, and l
   await expect(file).toBeVisible();
   await expect(file.getByRole("button")).toHaveCount(0);
   await expect(file.locator("[draggable]")).toHaveCount(0);
-  await expect(file.getByRole("link", { name: "In the settings file", exact: true })).toHaveAttribute(
-    "href",
-    "#/config/source?account=alpha-1",
-  );
+  const fileLink = file.getByRole("link", { name: "In the settings file", exact: true });
+  await expect(fileLink).toHaveAttribute("href", "#/config/source?account=alpha-1");
+  const chipStyle = await fileLink.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { bg: s.backgroundColor, border: s.borderTopWidth };
+  });
+  expect(chipStyle).toEqual({ bg: "rgba(0, 0, 0, 0)", border: "0px" });
 });
 
 test("a sole account of the first group cannot go up and one of the last cannot go down", async ({

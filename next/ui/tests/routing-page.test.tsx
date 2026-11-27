@@ -676,6 +676,32 @@ test("unchecked accounts are not counted as serving in the provider header when 
   expect(page.text()).toContain("Not checked");
 });
 
+test("settings-file note collapses to one header link when every account in a provider is from config, and stays per-row on mixed providers", async () => {
+  const page = await mount({
+    "GET /accounts": ok({
+      accounts: [
+        // All-config provider: Claude
+        account("c1", { extension: "pluxy/claude", source: "config", priority: 10 }),
+        account("c2", { extension: "pluxy/claude", source: "config", priority: 0 }),
+        // Mixed provider: Gemini
+        account("g1", { extension: "pluxy/gemini", source: "config", priority: 10 }),
+        account("g2", { extension: "pluxy/gemini", source: "login", priority: 0 }),
+      ],
+    }),
+  });
+  const claude = all(page.root, "section").find((n) => attr(n, "data-extension") === "pluxy/claude");
+  const gemini = all(page.root, "section").find((n) => attr(n, "data-extension") === "pluxy/gemini");
+  if (!claude || !gemini) throw new Error("missing provider sections");
+
+  const claudeLinks = all(claude, "a").filter((a) => a.textContent === "In the settings file");
+  expect(claudeLinks).toHaveLength(1);
+  expect(attr(claudeLinks[0] as FakeNode, "href")).toBe("#/config/source");
+
+  const geminiLinks = all(gemini, "a").filter((a) => a.textContent === "In the settings file");
+  expect(geminiLinks).toHaveLength(1);
+  expect(attr(geminiLinks[0] as FakeNode, "href")).toBe("#/config/source?account=g1");
+});
+
 test("saving a rule shows a Saved tick beside it", async () => {
   const page = await mount();
   const box = toggle(page.root, "Keep a conversation on one account");

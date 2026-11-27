@@ -105,6 +105,7 @@ function Row(props: {
   windows?: Windows;
   running?: ReadonlySet<string>;
   unchecked: boolean;
+  allConfig: boolean;
   quietFix: boolean;
   moved: boolean;
   name: string;
@@ -137,20 +138,21 @@ function Row(props: {
       data-moved={props.moved ? "" : undefined}
     >
       <div class="order-line">
-        {config ? (
-          <span class="order-handle" data-locked="" aria-hidden="true" />
-        ) : (
-          <span
-            class="order-handle"
-            draggable
-            title={t("drag")}
-            aria-hidden="true"
-            onDragStart={props.onDragStart}
-            onDragEnd={props.onDragEnd}
-          >
-            <Icon name="grip" size={14} />
-          </span>
-        )}
+        {!props.allConfig &&
+          (config ? (
+            <span class="order-handle" data-locked="" aria-hidden="true" />
+          ) : (
+            <span
+              class="order-handle"
+              draggable
+              title={t("drag")}
+              aria-hidden="true"
+              onDragStart={props.onDragStart}
+              onDragEnd={props.onDragEnd}
+            >
+              <Icon name="grip" size={14} />
+            </span>
+          ))}
         <div class="order-account">
           <AccountRow
             account={a}
@@ -163,55 +165,57 @@ function Row(props: {
             onClearCooldown={props.onClearCooldown}
           />
         </div>
-        <div class="order-controls">
-          {config ? (
-            <a class="order-file" href={`#/config/source?account=${encodeURIComponent(a.id)}`}>
-              {t("inFile")}
-            </a>
-          ) : (
-            <>
-              {props.weighted && (
-                <Button
-                  label={t("changeWeight", { name })}
-                  focusKey={`weight ${a.id}`}
-                  onClick={() => props.onEdit(a.weight === undefined ? "" : String(a.weight))}
-                >
-                  <span class="num">{t("weight", { n: a.weight ?? 1 })}</span>
-                </Button>
-              )}
-              <span class="order-arrows">
-                {(["up", "down"] as const).map((direction) => {
-                  const why =
-                    moveOf(props.accounts, a.id, direction) === undefined
-                      ? t(direction === "up" ? "alreadyFirst" : "alreadyLast")
-                      : undefined;
-                  const whyId = `order-${direction}-${a.id}-why`;
-                  return (
-                    <span key={direction} title={why}>
-                      <Button
-                        disabled={!!why}
-                        focusKey={`${direction} ${a.id}`}
-                        describedBy={why ? whyId : undefined}
-                        label={t(direction === "up" ? "upFor" : "downFor", { name })}
-                        onClick={() => {
-                          props.setFocus(`${direction} ${a.id}`);
-                          props.move(direction);
-                        }}
-                      >
-                        {t(direction)}
-                      </Button>
-                      {why && (
-                        <span id={whyId} hidden>
-                          {why}
-                        </span>
-                      )}
-                    </span>
-                  );
-                })}
-              </span>
-            </>
-          )}
-        </div>
+        {!props.allConfig && (
+          <div class="order-controls">
+            {config ? (
+              <a class="order-file" href={`#/config/source?account=${encodeURIComponent(a.id)}`}>
+                {t("inFile")}
+              </a>
+            ) : (
+              <>
+                {props.weighted && (
+                  <Button
+                    label={t("changeWeight", { name })}
+                    focusKey={`weight ${a.id}`}
+                    onClick={() => props.onEdit(a.weight === undefined ? "" : String(a.weight))}
+                  >
+                    <span class="num">{t("weight", { n: a.weight ?? 1 })}</span>
+                  </Button>
+                )}
+                <span class="order-arrows">
+                  {(["up", "down"] as const).map((direction) => {
+                    const why =
+                      moveOf(props.accounts, a.id, direction) === undefined
+                        ? t(direction === "up" ? "alreadyFirst" : "alreadyLast")
+                        : undefined;
+                    const whyId = `order-${direction}-${a.id}-why`;
+                    return (
+                      <span key={direction} title={why}>
+                        <Button
+                          disabled={!!why}
+                          focusKey={`${direction} ${a.id}`}
+                          describedBy={why ? whyId : undefined}
+                          label={t(direction === "up" ? "upFor" : "downFor", { name })}
+                          onClick={() => {
+                            props.setFocus(`${direction} ${a.id}`);
+                            props.move(direction);
+                          }}
+                        >
+                          {t(direction)}
+                        </Button>
+                        {why && (
+                          <span id={whyId} hidden>
+                            {why}
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })}
+                </span>
+              </>
+            )}
+          </div>
+        )}
       </div>
       {editing && (
         <label class="order-weight field" data-part="field">
@@ -360,6 +364,9 @@ export function AccountOrder(props: OrderProps) {
                 }).length,
               0,
             );
+            const allConfig = section.tiers.every((tier) =>
+              tier.accounts.every((a) => a.source === "config"),
+            );
             const firstEdge = `${section.extension}:first`;
             const lastEdge = `${section.extension}:last`;
             return (
@@ -367,14 +374,22 @@ export function AccountOrder(props: OrderProps) {
                 key={section.extension}
                 class="order-provider card"
                 data-extension={section.extension}
+                data-all-config={allConfig ? "" : undefined}
                 data-dragging={dragging?.extension === section.extension ? "" : undefined}
                 aria-label={section.name}
               >
                 <header class="order-provider-head">
                   <ProviderMark extension={section.extension} size="small" />
                   <h3 class="order-provider-name">{section.name}</h3>
-                  <span class="order-provider-count num">
-                    {t("providerCount", { count: total, serving })}
+                  <span class="order-provider-meta">
+                    {allConfig && (
+                      <a class="order-file" href="#/config/source">
+                        {t("inFile")}
+                      </a>
+                    )}
+                    <span class="order-provider-count num">
+                      {t("providerCount", { count: total, serving })}
+                    </span>
                   </span>
                   <div
                     class="order-edge"
@@ -419,6 +434,7 @@ export function AccountOrder(props: OrderProps) {
                               windows={props.windows.get(a.id)}
                               running={running}
                               unchecked={conditionUnchecked(a, c, running)}
+                              allConfig={allConfig}
                               quietFix={a.id !== firstRepairId}
                               moved={movedId === a.id}
                               name={name}
