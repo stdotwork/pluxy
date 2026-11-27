@@ -11,7 +11,6 @@ import {
   type Outcome,
   Phases,
   refreshWord,
-  StaleNotice,
   StatePane,
   tryAgainWord,
   useShownAfter,
@@ -169,7 +168,6 @@ export function RoutingPage() {
   const all = [accounts, settings, chains];
   const nothingYet = all.every((l) => l.phase === "loading");
   const nothingRead = all.every((l) => l.phase === "failed" && l.data === undefined);
-  const stale = all.find((l) => l.phase === "failed" && l.data !== undefined);
   const weighted = settings.data?.routing.strategy === "weighted-round-robin";
   return (
     <>
@@ -198,10 +196,7 @@ export function RoutingPage() {
           primary={{ label: tryAgainWord(), onClick: reloadAll }}
         />
       ) : (
-        <div class="routing-page" data-stale={stale ? "" : undefined}>
-          {stale && lastAt !== undefined && (
-            <StaleNotice at={lastAt} error={stale.error} onRetry={reloadAll} />
-          )}
+        <div class="routing-page">
           <div class="routing-layout">
             <div class="routing-main">
               <section class="routing-order" aria-labelledby="routing-order-h">

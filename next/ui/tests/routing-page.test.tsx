@@ -486,7 +486,7 @@ test("a failed refresh over loaded data keeps the page under the stale notice", 
     button(live.root, "Refresh").dispatchEvent(new Event("click"));
   });
   await settle();
-  expect(live.text()).toContain("Could not refresh.");
+  expect(live.text().match(/Could not refresh\./g)).toHaveLength(1);
   expect(live.text()).toContain("a1");
 });
 

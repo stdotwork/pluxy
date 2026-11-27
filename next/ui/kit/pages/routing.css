@@ -12,6 +12,13 @@
     white-space: nowrap;
   }
 
+  /* In narrow windows keep the header strip single-row by leaving out the freshness label. */
+  @media (max-width: 56rem) {
+    .routing-fresh {
+      display: none;
+    }
+  }
+
   /* The page is two columns while its own width allows, not the window's: a theme may narrow it. */
   .routing-page {
     container-type: inline-size;
@@ -19,7 +26,12 @@
     gap: calc(var(--s) * 4);
   }
 
-  .routing-page[data-stale] .routing-layout {
+  /* Over data from an earlier read, when a refresh failed: dim the stale section under its notice. */
+  .routing-page .stale-notice {
+    margin-top: calc(var(--s) * 2);
+  }
+
+  .routing-page .stale-notice + * {
     opacity: 0.7;
   }
 
@@ -108,6 +120,7 @@
   }
 
   .order-empty.card {
+    margin-top: calc(var(--s) * 2.5);
     padding: calc(var(--s) * 4);
   }
 
@@ -311,6 +324,13 @@
 
   .order-account .account-row .meter[data-mode="left"] {
     width: calc(var(--s) * 9);
+  }
+
+  @container (max-width: 52em) {
+    /* When AccountRow wraps its reason under the condition word, omit the trailing separator dot. */
+    .order-account .account-word:not(:last-child)::after {
+      content: none;
+    }
   }
 
   /* When the account row has a fix alongside its limits, give the limits their own line earlier. */
@@ -522,10 +542,7 @@
   }
 
   .fallback-step-text {
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 0;
+    display: inline;
     min-width: 0;
     overflow-wrap: anywhere;
   }
@@ -781,7 +798,7 @@
     }
   }
 
-  @container (max-width: 30em) {
+  @container (max-width: 36em) {
     .order-line {
       grid-template-columns: calc(var(--s) * 5) minmax(0, 1fr);
       row-gap: var(--s);
@@ -794,7 +811,9 @@
       padding-inline-start: calc(var(--s) * 1.5);
       padding-bottom: var(--s);
     }
+  }
 
+  @container (max-width: 30em) {
     .fallback-fields {
       grid-template-columns: minmax(0, 1fr);
     }
