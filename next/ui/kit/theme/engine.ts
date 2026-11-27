@@ -125,10 +125,11 @@ export class ThemeApplier {
   apply(r: Resolved) {
     const root = this.doc.documentElement;
     // Nothing animates into a new theme: transitions are off until the next frame has painted it.
-    root.toggleAttribute("data-theme-switching", true);
+    root.dataset.themeSwitching = "";
     const raf = this.doc.defaultView?.requestAnimationFrame?.bind(this.doc.defaultView);
-    if (raf) raf(() => raf(() => root.removeAttribute("data-theme-switching")));
-    else root.removeAttribute("data-theme-switching");
+    const done = () => delete root.dataset.themeSwitching;
+    if (raf) raf(() => raf(done));
+    else done();
     root.dataset.appearance = r.appearance;
     // The class CSS written for T3 Code picks the dark appearance by.
     root.classList.toggle("dark", r.appearance === "dark");

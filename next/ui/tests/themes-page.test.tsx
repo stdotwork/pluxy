@@ -185,8 +185,9 @@ test("Layout has a row and a sentence for each choice, and Reset layout puts the
   const w = world();
   const m = await w.mount(<ThemesPage />);
   const rows = withClass(m.root, "setting-name").map((n) => n.textContent);
-  expect(rows).toEqual(["Navigation", "Width", "Density", "Tabs", "Details", "Lists", "Custom CSS"]);
+  expect(rows).toEqual(["Frame", "Navigation", "Width", "Density", "Tabs", "Details", "Lists", "Custom CSS"]);
   for (const sentence of [
+    "The page on a panel inset from the window, or flush with it.",
     "Where the main pages are listed.",
     "How wide pages may grow.",
     "How much space is between things.",

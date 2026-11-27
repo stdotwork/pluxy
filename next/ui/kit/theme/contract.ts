@@ -79,25 +79,25 @@ export const TOKENS = {
   "color.chart-6": { light: "#a855f7", dark: "#b875f8" },
   "color.plan-top": {
     light:
-      "linear-gradient(135deg, color-mix(in oklab, var(--px-color-warning) 20%, var(--px-color-surface)), color-mix(in oklab, var(--px-color-warning) 40%, var(--px-color-surface)))",
-    dark: "linear-gradient(135deg, color-mix(in oklab, var(--px-color-warning) 26%, var(--px-color-surface)), color-mix(in oklab, var(--px-color-warning) 14%, var(--px-color-surface)))",
+      "linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 20%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 40%, var(--px-color-surface)))",
+    dark: "linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 26%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 14%, var(--px-color-surface)))",
   },
   "color.plan-top-text": {
-    light: "color-mix(in oklab, var(--px-color-warning) 35%, var(--px-color-text))",
-    dark: "color-mix(in oklab, var(--px-color-warning) 55%, var(--px-color-text))",
+    light: "color-mix(in srgb, var(--px-color-warning) 35%, var(--px-color-text))",
+    dark: "color-mix(in srgb, var(--px-color-warning) 55%, var(--px-color-text))",
   },
   "color.plan-top-border": {
-    light: "color-mix(in oklab, var(--px-color-warning) 55%, var(--px-color-surface))",
-    dark: "color-mix(in oklab, var(--px-color-warning) 40%, var(--px-color-surface))",
+    light: "color-mix(in srgb, var(--px-color-warning) 55%, var(--px-color-surface))",
+    dark: "color-mix(in srgb, var(--px-color-warning) 40%, var(--px-color-surface))",
   },
   "color.plan-high": {
     light:
-      "linear-gradient(180deg, var(--px-color-surface), color-mix(in oklab, var(--px-color-text) 10%, var(--px-color-surface)))",
-    dark: "linear-gradient(180deg, color-mix(in oklab, var(--px-color-text) 18%, var(--px-color-surface)), color-mix(in oklab, var(--px-color-text) 8%, var(--px-color-surface)))",
+      "linear-gradient(180deg, var(--px-color-surface), color-mix(in srgb, var(--px-color-text) 10%, var(--px-color-surface)))",
+    dark: "linear-gradient(180deg, color-mix(in srgb, var(--px-color-text) 18%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-text) 8%, var(--px-color-surface)))",
   },
   "color.plan-high-text": { light: "var(--px-color-text)" },
   "color.plan-high-border": {
-    light: "color-mix(in oklab, var(--px-color-text) 24%, var(--px-color-surface))",
+    light: "color-mix(in srgb, var(--px-color-text) 24%, var(--px-color-surface))",
   },
   "color.plan-mid-text": { light: "var(--px-color-text)" },
   "color.plan-mid-border": { light: "var(--px-color-input-border)" },

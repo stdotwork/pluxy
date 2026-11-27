@@ -284,9 +284,12 @@ describe("resolving", () => {
     const resolved = resolve(custom, DEFAULT_CHOICES, env);
     expect(resolved.tokens["color.meter-track"]).toBe("#123456");
     expect(resolved.tokens["color.meter-fill"]).toBe("#abcdef");
-    expect(resolve(ok(base).theme, DEFAULT_CHOICES, env).tokens["color.meter-fill"]).toBe(
-      "var(--px-color-accent)",
-    );
+    // A full gauge is the success colour; a theme without meter tokens gets its own meanings.
+    const plain = resolve(ok(base).theme, DEFAULT_CHOICES, env).tokens;
+    expect(plain["color.meter-fill"]).toBe("var(--px-color-success)");
+    expect(plain["color.meter-high"]).toBe("var(--px-color-meter-fill)");
+    expect(plain["color.meter-mid"]).toBe("var(--px-color-warning)");
+    expect(plain["color.meter-low"]).toBe("var(--px-color-error)");
   });
   const theme = ok({
     ...base,
@@ -313,7 +316,15 @@ describe("resolving", () => {
 
   test("the person's layout and density override the theme's", () => {
     const r = resolve(theme, choose({ layout: { nav: "top" }, density: "1.25" }), env);
-    expect(r.layout).toEqual({ nav: "top", list: "cards", detail: "side", width: "wide", tabs: "top" });
+    expect(r.layout).toEqual({
+      frame: "inset",
+      nav: "top",
+      list: "cards",
+      detail: "side",
+      width: "wide",
+      tabs: "top",
+    });
+    expect(resolve(theme, choose({ layout: { frame: "flat" } }), env).layout.frame).toBe("flat");
     expect(r.tokens.density).toBe("1.25");
     expect(resolve(theme, choose({ density: "9" }), env).warnings).toHaveLength(1);
   });
@@ -327,18 +338,39 @@ describe("resolving", () => {
   });
 
   test("reduced motion stops transitions", () => {
-    expect(resolve(theme, choose({}), { ...env, reducedMotion: true }).tokens["motion.duration"]).toBe("0ms");
+    const still = resolve(theme, choose({}), { ...env, reducedMotion: true }).tokens;
+    expect(still["motion.duration"]).toBe("0ms");
+    expect(still["motion.duration-menu"]).toBe("0ms");
+    expect(still["motion.duration-slow"]).toBe("0ms");
+    expect(still["motion.press-scale"]).toBe("1");
+    expect(resolve(theme, choose({}), env).tokens["motion.duration-slow"]).toBe("240ms");
+  });
+
+  test("meter thresholds are numbers from 0 to 100", () => {
+    expect(tokenValueProblem("meter.mid-below", "50")).toBeUndefined();
+    expect(tokenValueProblem("meter.low-below", "0")).toBeUndefined();
+    expect(tokenValueProblem("meter.mid-below", "101")).toBe("must be a number from 0 to 100");
+    expect(tokenValueProblem("meter.low-below", "lots")).toBe("must be a number from 0 to 100");
+    expect(tokenValueProblem("meter.low-below", " ")).toBe("must be a number from 0 to 100");
+    const r = parseTheme({ ...base, tokens: { "meter.mid-below": "150", "meter.low-below": "15" } });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.theme.tokens["meter.mid-below"]).toBeUndefined();
+    expect(r.theme.tokens["meter.low-below"]).toBe("15");
+    expect(r.warnings.length).toBeGreaterThan(0);
   });
 
   test("the newer colour tokens follow the older ones until a theme sets them", () => {
     const plain = resolve(ok(base).theme, DEFAULT_CHOICES, env).tokens;
-    expect(plain["color.nav"]).toBe("color-mix(in srgb, var(--px-color-surface) 97%, black)");
-    expect(plain["color.input-border"]).toBe(
-      "color-mix(in srgb, var(--px-color-text-muted) 70%, var(--px-color-surface))",
-    );
+    // The navigation sits on the window's ground, a shade darker than the page.
+    expect(plain["color.nav"]).toBe("var(--px-color-chrome)");
+    expect(plain["color.chrome"]).toBe("color-mix(in srgb, var(--px-color-bg) 96.5%, black)");
     expect(plain["color.code-bg"]).toBe("var(--px-color-surface-raised)");
-    // A notice is a bar, not a tinted box, unless a theme sets its background.
-    expect(plain["color.danger-surface"]).toBe("transparent");
+    // The filled button follows the accent, and secondary text the muted text, until set.
+    expect(plain["color.message-action"]).toBe("var(--px-color-accent)");
+    expect(plain["color.message-action-foreground"]).toBe("var(--px-color-accent-text)");
+    expect(plain["color.secondary-label"]).toBe("var(--px-color-text-muted)");
+    // A notice is tinted from its state's solid colour.
+    expect(plain["color.danger-surface"]).toBe("color-mix(in srgb, var(--px-color-error) 8%, var(--px-color-bg))");
     const set = resolve(ok({ ...base, tokens: { "color.nav": "#102030" } }).theme, DEFAULT_CHOICES, env);
     expect(set.tokens["color.nav"]).toBe("#102030");
     expect(tokensCss(set.tokens)).toContain("--px-color-nav:#102030;");
@@ -511,7 +543,7 @@ describe("T3 Code themes", () => {
     expect(resolved.tokens["color.danger"]).toBe(expected.errorForeground);
     // Unmapped roles keep pluxy defaults.
     expect(resolved.tokens["color.ok"]).toBe(TOKENS["color.ok"].dark);
-    expect(resolved.tokens["color.diff-add"]).toBe(TOKENS["color.diff-add"].dark);
+    expect(resolved.tokens["color.diff-add"]).toBe(TOKENS["color.diff-add"].light);
     // Explicit overrides win in --app-theme-* and generated roles keep generated values.
     expect(resolved.variables["--app-theme-terminal-selection-background"]).toBe("#292e42");
     expect(resolved.variables["--app-theme-error"]).toBe("#f7768e");
@@ -573,7 +605,7 @@ describe("T3 Code themes", () => {
     expect(dark.tokens["color.surface"]).toBe("#241f1a");
     expect(dark.tokens["color.text"]).toBe("#efe6d8");
     expect(dark.tokens["color.accent"]).toBe("#f0a36b");
-    expect(dark.tokens["color.nav"]).toBe(TOKENS["color.nav"].dark);
+    expect(dark.tokens["color.nav"]).toBe(TOKENS["color.nav"].light);
     expect(dark.tokens["color.border"]).toBe(TOKENS["color.border"].dark);
     expect(dark.variables).toEqual({
       "--app-theme-canvas": "#1c1814",

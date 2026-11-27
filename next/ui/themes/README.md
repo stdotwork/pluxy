@@ -135,12 +135,12 @@ colour role take that role's name (`color.chrome`, `color.message-action`); the
 | `color.chart-4` | The fourth series | `var(--px-color-text)` |
 | `color.chart-5` | The fifth series | `#14b8a6` / `#2dd4bf` |
 | `color.chart-6` | The sixth series | `#a855f7` / `#b875f8` |
-| `color.plan-top` | Background of the plan pill of the largest plans (`data-plan-tier="top"`): a warm metal | `linear-gradient(135deg, color-mix(in oklab, var(--px-color-warning) 20%, var(--px-color-surface)), color-mix(in oklab, var(--px-color-warning) 40%, var(--px-color-surface)))` / `linear-gradient(135deg, color-mix(in oklab, var(--px-color-warning) 26%, var(--px-color-surface)), color-mix(in oklab, var(--px-color-warning) 14%, var(--px-color-surface)))` |
-| `color.plan-top-text` | Its text | `color-mix(in oklab, var(--px-color-warning) 35%, var(--px-color-text))` / `color-mix(in oklab, var(--px-color-warning) 55%, var(--px-color-text))` |
-| `color.plan-top-border` | Its border | `color-mix(in oklab, var(--px-color-warning) 55%, var(--px-color-surface))` / `color-mix(in oklab, var(--px-color-warning) 40%, var(--px-color-surface))` |
-| `color.plan-high` | Background of the next plans' pill (`high`): a cool metal | `linear-gradient(180deg, var(--px-color-surface), color-mix(in oklab, var(--px-color-text) 10%, var(--px-color-surface)))` / `linear-gradient(180deg, color-mix(in oklab, var(--px-color-text) 18%, var(--px-color-surface)), color-mix(in oklab, var(--px-color-text) 8%, var(--px-color-surface)))` |
+| `color.plan-top` | Background of the plan pill of the largest plans (`data-plan-tier="top"`): a warm metal | `linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 20%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 40%, var(--px-color-surface)))` / `linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 26%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 14%, var(--px-color-surface)))` |
+| `color.plan-top-text` | Its text | `color-mix(in srgb, var(--px-color-warning) 35%, var(--px-color-text))` / `color-mix(in srgb, var(--px-color-warning) 55%, var(--px-color-text))` |
+| `color.plan-top-border` | Its border | `color-mix(in srgb, var(--px-color-warning) 55%, var(--px-color-surface))` / `color-mix(in srgb, var(--px-color-warning) 40%, var(--px-color-surface))` |
+| `color.plan-high` | Background of the next plans' pill (`high`): a cool metal | `linear-gradient(180deg, var(--px-color-surface), color-mix(in srgb, var(--px-color-text) 10%, var(--px-color-surface)))` / `linear-gradient(180deg, color-mix(in srgb, var(--px-color-text) 18%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-text) 8%, var(--px-color-surface)))` |
 | `color.plan-high-text` | Its text | `var(--px-color-text)` |
-| `color.plan-high-border` | Its border | `color-mix(in oklab, var(--px-color-text) 24%, var(--px-color-surface))` |
+| `color.plan-high-border` | Its border | `color-mix(in srgb, var(--px-color-text) 24%, var(--px-color-surface))` |
 | `color.plan-mid-text` | Text of the other plans' pill (`mid`), an outline | `var(--px-color-text)` |
 | `color.plan-mid-border` | Its outline | `var(--px-color-input-border)` |
 | `color.plan-free-text` | The Free plan (`free`), plain text | `var(--px-color-secondary-label)` |

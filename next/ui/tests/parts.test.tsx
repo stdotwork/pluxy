@@ -26,6 +26,7 @@ import {
   useWindows,
   type Windows,
 } from "../kit/parts";
+import { Meter, meterTone } from "../kit/meter";
 import { PrivacyContext, privacyMasks } from "../kit/privacy";
 import { failureWord, stateText } from "../kit/states";
 import { ConfirmButton, type Kit, KitContext, type Loaded, Switch } from "../kit/ui";
@@ -375,9 +376,12 @@ test("limits are read only for accounts that serve or wait", async () => {
 // ---- plan and gauge ---------------------------------------------------------------------------
 
 test("the plan pill's tier follows the plan word, and there is no pill without a plan", () => {
+  // The largest plans (Max 20x, Ultra, an API key's) are top; the next (Max 5x) are high.
   expect(planTier("Max 20x")).toBe("top");
-  expect(planTier("Max 5x")).toBe("top");
+  expect(planTier("Max 5x")).toBe("high");
+  expect(planTier("Max")).toBe("high");
   expect(planTier("Ultra")).toBe("top");
+  expect(planTier("API")).toBe("top");
   expect(planTier("Pro")).toBe("mid");
   expect(planTier("Team")).toBe("mid");
   expect(planTier("Plus")).toBe("mid");
@@ -397,19 +401,22 @@ test("the plan pill's tier follows the plan word, and there is no pill without a
 const limitsOf = (limits: QuotaLimit[], now = NOW) =>
   renderToString(<Limits windows={{ state: "read", limits }} account="alpha" now={now} />);
 
-test("the gauge shows what is left: 7% left warns with a 7% fill, used up is danger", () => {
+test("the gauge shows what is left: ok from 60%, warn under 60%, danger under 20% and used up", () => {
   const seven = limitsOf([
     { id: "five", window_seconds: 18000, used_percent: 93, resets_at: (NOW + 85 * 60_000) / 1000 },
   ]);
-  expect(seven).toContain('data-tone="warn"');
+  expect(seven).toContain('data-tone="danger"');
   expect(seven).toContain('data-mode="left"');
   expect(seven).toContain("width:7%");
   expect(plain(seven)).toContain("7% left");
   expect(attr(seven, "title")).toBe("5-hour limit: 7% left, resets in 1h 25m");
-  const plenty = limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 42 }]);
-  expect(plenty).toContain('data-tone="ok"');
-  expect(plenty).toContain("width:58%");
-  expect(plain(plenty)).toBe("wk58% left");
+  const half = limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 42 }]);
+  expect(half).toContain('data-tone="warn"');
+  expect(half).toContain("width:58%");
+  expect(plain(half)).toBe("wk58% left");
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 40 }])).toContain('data-tone="ok"');
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 80 }])).toContain('data-tone="warn"');
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 81 }])).toContain('data-tone="danger"');
   const out = limitsOf([{ id: "five", window_seconds: 18000, used_percent: 100 }]);
   expect(out).toContain('data-tone="danger"');
   expect(plain(out)).toContain("Used up");
@@ -422,6 +429,27 @@ test("the gauge shows what is left: 7% left warns with a 7% fill, used up is dan
     { id: "five", window_seconds: 18000, used_percent: 1 },
   ]);
   expect([...two.matchAll(/class="limit-name">([^<]+)</g)].map((m) => m[1])).toEqual(["5h", "wk"]);
+});
+
+test("a theme moves where the gauge changes colour with meter.mid-below and meter.low-below", () => {
+  expect(meterTone(55, { mid: 50, low: 15 })).toBe("ok");
+  expect(meterTone(14, { mid: 50, low: 15 })).toBe("danger");
+  const themes = {
+    resolved: { tokens: { "meter.mid-below": "50", "meter.low-below": "15" } },
+    subscribe: () => () => {},
+  };
+  const kit = { themes } as unknown as Kit;
+  const gauge = (percent: number) =>
+    renderToString(
+      <KitContext.Provider value={kit}>
+        <Meter label="g" percent={percent} />
+      </KitContext.Provider>,
+    );
+  expect(gauge(55)).toContain('data-tone="ok"');
+  expect(gauge(30)).toContain('data-tone="warn"');
+  expect(gauge(14)).toContain('data-tone="danger"');
+  // Outside the kit's shell, the contract's defaults: 55% left is under 60.
+  expect(renderToString(<Meter label="g" percent={55} />)).toContain('data-tone="warn"');
 });
 
 test("the limits' other states are said in words", () => {
