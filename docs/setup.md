@@ -47,6 +47,10 @@ first config in pluxy's home and starts on it: it listens on `127.0.0.1:8317` (o
 8317 is taken), with one new client key and a new management key, in a file only your user can read.
 Core prints the file's path and its address, never the keys: read them in the file, or run
 `pluxy key management --show-key`. `pluxy init` writes the same file without starting core.
+It writes nothing when the desktop app already keeps a core of its own: it then says to serve that
+core's config with `-config`, or to make a separate pluxy with `pluxy init`
+([Where the config is](config.md#where-the-config-is)). It also refuses a folder that other users
+could write in ([A first config](config.md#a-first-config)).
 
 To write the config yourself, it needs at least these keys; core refuses to start without a
 management key:
