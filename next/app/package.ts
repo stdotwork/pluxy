@@ -1128,12 +1128,13 @@ export async function localBuild(
 
 /** Builds the local build into stage, at version, with its record naming program and the rest by
  * their paths once in place (in program's folder's parent), and returns its core and the IDs of its
- * coding-tool add-ons. */
-async function buildStage(
+ * coding-tool add-ons. stop runs each command (a Stoppable's run; the tests give a stand-in, and
+ * CARGO_TARGET_DIR for where the programs it builds land). */
+export async function buildStage(
   stage: string,
   version: string,
   program: string,
-  stop: Stoppable,
+  stop: { run: Runner },
 ): Promise<BundledCore & { addOns: string[] }> {
   const work = join(stage, "work");
   mkdirSync(work);
@@ -1175,7 +1176,9 @@ async function buildStage(
   const bin = join(stage, "bin");
   mkdirSync(bin);
   mkdirSync(join(lib, "core"), { recursive: true });
-  copyFileSync(join(targetDir, "release", LOCAL.mainBinaryName), join(bin, LOCAL.mainBinaryName));
+  // Where tauri build put the app, by the CARGO_TARGET_DIR it was given.
+  const appTarget = resolve(tauriDir, process.env.CARGO_TARGET_DIR || "target");
+  copyFileSync(join(appTarget, "release", LOCAL.mainBinaryName), join(bin, LOCAL.mainBinaryName));
   copyFileSync(join(core.dir, coreProgram), join(bin, coreProgram));
   cpSync(join(core.dir, "bundled"), join(lib, "core", "bundled"), { recursive: true });
   copyFileSync(join(app, "local-start.sh"), join(stage, "start"));

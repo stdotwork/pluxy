@@ -190,6 +190,8 @@ export interface StartupPreferences {
 export interface StartupView extends StartupPreferences {
   registration_owned: boolean;
   registration_conflict: boolean;
+  /** Whether this build offers Open at sign-in: a local build does not, and opens with its start. */
+  sign_in: boolean;
 }
 export const startupGet = () => invoke<StartupView>("startup_get");
 export const startupSet = (preferences: StartupPreferences) =>

@@ -533,6 +533,7 @@ const startup = (over: Partial<StartupView> = {}): StartupView => ({
   start_core_on_launch: true,
   registration_owned: false,
   registration_conflict: false,
+  sign_in: true,
   ...over,
 });
 const windowPrefs = (over: Partial<WindowPreferences> = {}): WindowPreferences => ({
@@ -804,6 +805,22 @@ test("the close choice saves on change, and a failed save goes back with the rea
   expect(all(row(m, "When you close the window").node, "label").map((l) => l.textContent)).toEqual(
     expect.arrayContaining(["Keep in the tray", "Quit", "Ask"]),
   );
+});
+
+test("a local build offers no Open at sign-in: one line says it opens with its start, and Start in the tray is not drawn", async () => {
+  const m = await mount(page(running), settings({ startup_get: startup({ sign_in: false }) }));
+  expect(rows(m).map((r) => r.name)).toEqual([
+    "Open at sign-in",
+    "Start pluxy with the app",
+    "When you close the window",
+  ]);
+  const signIn = row(m, "Open at sign-in");
+  expect(signIn.node.textContent).toContain(
+    "This local build opens only with its start command, not at sign-in.",
+  );
+  expect(signIn.node.textContent).not.toContain("Opens this app when you sign in to the computer.");
+  expect(all(signIn.node, "input")).toEqual([]);
+  expect(all(signIn.node, "button")).toEqual([]);
 });
 
 test("another program owning the sign-in entry shows as a warning under Open at sign-in", async () => {

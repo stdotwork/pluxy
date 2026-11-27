@@ -19,8 +19,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { checkOutDir, LOCAL_RECORD, localVersion, signAppTools, swapIn } from "../package";
+import { basename, join } from "node:path";
+import { buildStage, checkOutDir, LOCAL_RECORD, localVersion, signAppTools, swapIn } from "../package";
 
 /** A test that needs file modes to hold: root reads and removes past them. */
 const asUser = test.skipIf(process.getuid?.() === 0);
@@ -579,6 +579,148 @@ try {
     expect(tree(outDir)).toEqual({ notes: `file ${Buffer.from("mine").toString("base64")}` });
     expect(tree(`${outDir}-aside`)).toEqual(build);
     expect(readdirSync(root).sort()).toEqual(["out", "out-aside"]);
+  });
+});
+
+describe("buildStage", () => {
+  /** The add-ons' programs the build must make: each app tool's linux/amd64 program, but the app's
+   * own test fixture's, read from the manifests in next/app-tools. */
+  function toolPrograms(): string[] {
+    const tools = join(app, "..", "app-tools");
+    const names: string[] = [];
+    for (const folder of readdirSync(tools)) {
+      const manifest = join(tools, folder, "pluxy-extension.json");
+      if (folder === "usage-fixture" || !existsSync(manifest)) continue;
+      const program = JSON.parse(readFileSync(manifest, "utf8")).app?.programs?.["linux/amd64"];
+      if (typeof program === "string") names.push(basename(program));
+    }
+    return names.sort();
+  }
+
+  /** Runs buildStage into a new stage with commands that write what the real ones would (each
+   * program, pluxy-pack's archives and index, the bundle-core tool's core, the app), with
+   * CARGO_TARGET_DIR at a folder of the test's, and returns the stage, the build's folder once in
+   * place, what buildStage returned and the commands it ran. */
+  async function planned() {
+    const root = tempDir();
+    const target = join(root, "target");
+    const stage = join(root, "stage");
+    mkdirSync(stage);
+    const outDir = join(root, "local-build");
+    const calls: { cmd: string; args: string[]; env?: Record<string, string> }[] = [];
+    const after = (args: string[], flag: string) => args[args.indexOf(flag) + 1] as string;
+    const run = async (cmd: string, args: string[], _cwd: string, env?: Record<string, string>) => {
+      calls.push({ cmd, args, env });
+      if (cmd === "go" && args[0] === "run" && args.includes("-app-tools")) {
+        const programs = join(after(args, "-app-tools"), "linux-amd64");
+        const dest = join(after(args, "-out"), "app-tools");
+        mkdirSync(dest, { recursive: true });
+        const packages: Record<string, unknown> = {};
+        for (const name of readdirSync(programs)) {
+          const bytes = Buffer.from(`archive of ${readFileSync(join(programs, name), "utf8")}`);
+          const url = `pluxy-${name}-0.1.0-linux-amd64.tar.gz`;
+          writeFileSync(join(dest, url), bytes);
+          const sha256 = createHash("sha256").update(bytes).digest("hex");
+          packages[`pluxy/${name}`] = {
+            releases: [
+              { version: "0.1.0", artifacts: { "linux/amd64": { url, size: bytes.length, sha256 } } },
+            ],
+          };
+        }
+        writeFileSync(join(dest, "index.json"), JSON.stringify({ registry_version: 0, packages }));
+      } else if (cmd === "go" && args[0] === "run") {
+        mkdirSync(join(after(args, "-out"), "bundled"), { recursive: true });
+        writeFileSync(join(after(args, "-out"), "bundled", "index.json"), '{"packages":{"pluxy/openai":{}}}');
+      } else if (cmd === "go" && args[0] === "build") {
+        writeFileSync(after(args, "-o"), "core program");
+      } else if (cmd === "cargo" && args.includes("--release")) {
+        mkdirSync(join(target, "release"), { recursive: true });
+        for (const name of args.filter((_, i) => args[i - 1] === "--bin")) {
+          writeFileSync(join(target, "release", name), `program ${name}`);
+        }
+      } else if (cmd === "cargo" && args.includes("bundle-core")) {
+        // The tool's own build: the stand-in below is the tool.
+      } else if (basename(cmd) === "bundle-core") {
+        const out = args[4] as string;
+        mkdirSync(join(out, "core", "bundled"), { recursive: true });
+        writeFileSync(join(out, "core", "pluxy"), "core program");
+        writeFileSync(join(out, "core", "bundled", "index.json"), '{"packages":{"pluxy/openai":{}}}');
+        writeFileSync(join(out, "bundled-core.json"), "{}");
+      } else if (basename(cmd) === "tauri") {
+        mkdirSync(join(target, "release"), { recursive: true });
+        writeFileSync(join(target, "release", "pluxy-app-local"), "app program");
+      } else throw new Error(`a command the plan does not have: ${cmd} ${args.join(" ")}`);
+    };
+    const before = process.env.CARGO_TARGET_DIR;
+    process.env.CARGO_TARGET_DIR = target;
+    try {
+      const built = await buildStage(
+        stage,
+        "0.1.0+local.0123456789ab",
+        join(outDir, "bin", "pluxy-app-local"),
+        {
+          run,
+        },
+      );
+      return { stage, outDir, built, calls };
+    } finally {
+      if (before === undefined) delete process.env.CARGO_TARGET_DIR;
+      else process.env.CARGO_TARGET_DIR = before;
+    }
+  }
+
+  test("builds and signs every coding-tool add-on into the stage", async () => {
+    const { stage, built, calls } = await planned();
+    const programs = toolPrograms();
+    expect(programs.length).toBeGreaterThan(0);
+    const cargo = calls.find((c) => c.cmd === "cargo" && c.args.includes("--release"));
+    expect(cargo?.args.filter((_, i, a) => a[i - 1] === "--bin").sort()).toEqual(programs);
+    const tools = join(stage, "lib", "pluxy Local", "app-tools");
+    const publisher = JSON.parse(readFileSync(join(tools, "publisher.json"), "utf8"));
+    const index = JSON.parse(readFileSync(join(tools, "index.json"), "utf8"));
+    const ids = programs.map((p) => `pluxy/${p}`).sort();
+    expect(Object.keys(index.packages).sort()).toEqual(ids);
+    for (const id of ids) {
+      const a = index.packages[id].releases[0].artifacts["linux/amd64"];
+      expect(a.key_id).toBe(publisher.key_id);
+      expect(existsSync(join(tools, a.url))).toBe(true);
+    }
+    expect(built.addOns).toEqual(ids);
+  });
+
+  test("builds the app with the local-build and artifact-test-trust features, beside its core", async () => {
+    const { stage, built, calls } = await planned();
+    const tauri = calls.filter((c) => basename(c.cmd) === "tauri");
+    expect(tauri).toHaveLength(1);
+    const args = tauri[0]?.args ?? [];
+    expect(args[args.indexOf("--features") + 1]).toBe("local-build,artifact-test-trust");
+    expect(tauri[0]?.env?.PLUXY_BUNDLED_CORE).toBe(built.manifest);
+    expect(readFileSync(join(stage, "bin", "pluxy-app-local"), "utf8")).toBe("app program");
+    expect(readFileSync(join(stage, "bin", "pluxy"), "utf8")).toBe("core program");
+    expect(existsSync(join(stage, "lib", "pluxy Local", "core", "bundled", "index.json"))).toBe(true);
+    expect(existsSync(join(stage, "work"))).toBe(false);
+  });
+
+  test("puts start in the stage, runnable, and a record naming it and the add-ons where they will be", async () => {
+    const { stage, outDir, built } = await planned();
+    expect(readFileSync(join(stage, "start"), "utf8")).toBe(
+      readFileSync(join(app, "local-start.sh"), "utf8"),
+    );
+    expect(lstatSync(join(stage, "start")).mode & 0o777).toBe(0o755);
+    const tools = join(stage, "lib", "pluxy Local", "app-tools");
+    const publisher = JSON.parse(readFileSync(join(tools, "publisher.json"), "utf8"));
+    expect(JSON.parse(readFileSync(join(stage, LOCAL_RECORD), "utf8"))).toEqual({
+      program: join(outDir, "bin", "pluxy-app-local"),
+      identifier: "dev.pluxy.desktop.local",
+      product_name: "pluxy Local",
+      bundled_core: { version: "0.1.0+local.0123456789ab", packages: ["pluxy/openai"] },
+      start: join(outDir, "start"),
+      app_tools: {
+        index: join(outDir, "lib", "pluxy Local", "app-tools", "index.json"),
+        key_id: publisher.key_id,
+        packages: built.addOns,
+      },
+    });
   });
 });
 

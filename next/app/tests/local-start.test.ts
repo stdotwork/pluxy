@@ -63,9 +63,10 @@ function buildAt(name = "build"): string {
   return build;
 }
 
-/** Runs build's start with args and HOME home, in an environment with no XDG folders. */
-function start(build: string, home: string, args: string[] = []) {
-  const env: Record<string, string> = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home };
+/** Runs build's start with args and HOME home, in an environment with no XDG folders but those in
+ * more. */
+function start(build: string, home: string, args: string[] = [], more: Record<string, string> = {}) {
+  const env: Record<string, string> = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, ...more };
   const r = spawnSync(join(build, "start"), args, { env, encoding: "utf8" });
   return { status: r.status, stderr: r.stderr, stdout: r.stdout };
 }
@@ -163,8 +164,8 @@ describe("start", () => {
         "this build's pluxy, away from any other pluxy it used.",
         "To remove it: press Disconnect on each tool page you connected (its backups are in the app's data),",
         "quit the app, then:",
-        `  rm -f "${home}/.pluxy-test-trust-profile.json" "${home}/.pluxy-test-trust-roots.json"`,
-        `  rm -rf "${config}" "${data}"`,
+        `  rm -f '${home}/.pluxy-test-trust-profile.json' '${home}/.pluxy-test-trust-roots.json'`,
+        `  rm -rf '${config}' '${data}'`,
         "",
       ].join("\n"),
     );
@@ -177,10 +178,16 @@ describe("start", () => {
   });
 
   /** start refused: exit 1, the message, the app not started and nothing written. */
-  function refused(build: string, home: string, args: string[], said: string) {
+  function refused(
+    build: string,
+    home: string,
+    args: string[],
+    said: string,
+    more: Record<string, string> = {},
+  ) {
     const folder = existsSync(home) && statSync(home).isDirectory();
     const before = folder ? readdirSync(home) : [];
-    const r = start(build, home, args);
+    const r = start(build, home, args, more);
     expect(r.stderr).toBe(`start: ${said}\n`);
     expect(r.status).toBe(1);
     expect(ran(build)).toBeUndefined();
@@ -196,7 +203,7 @@ describe("start", () => {
         build,
         home,
         ["--real-home"],
-        `not starting: other users can open your home folder ${home} (mode ${shown}). The add-ons are trusted only from a home only you can open: run chmod 700 "${home}"${instead}`,
+        `not starting: other users can open your home folder ${home} (mode ${shown}). The add-ons are trusted only from a home only you can open: run chmod 700 '${home}'${instead}`,
       );
     }
   });
@@ -259,7 +266,8 @@ describe("start", () => {
         [],
         `not starting: the build's path (${build}) holds a quote, backslash or control character: build it into another folder with make app-local LOCAL=<folder>`,
       );
-      expect(existsSync(join(build, "home", ".pluxy-test-trust-roots.json"))).toBe(false);
+      // Refused before it makes the build's home folder.
+      expect(existsSync(join(build, "home"))).toBe(false);
     }
   });
 
@@ -307,5 +315,185 @@ describe("start", () => {
       `${join(build, "lib", "pluxy Local", "app-tools")} is incomplete: build again with make app-local`,
     );
     expect(existsSync(join(build, "home"))).toBe(false);
+  });
+  /** A folder name that a shell would act on if it read it: a command substitution, a backquoted
+   * command, a variable, spaces and a single quote. Each command would make a file in the folder it
+   * runs in. */
+  const hostile = "it's a $(touch dollar) `touch tick` $HOME end";
+
+  /** Runs each of commands with sh in a folder of its own, with HOME set to a decoy folder holding
+   * the same names the commands name, and returns that folder and the decoy. */
+  function runPrinted(commands: string[]) {
+    const cwd = tempDir();
+    const decoy = tempDir();
+    mkdirSync(join(decoy, ".config", "dev.pluxy.desktop.local"), { recursive: true });
+    writeFileSync(join(decoy, ".pluxy-test-trust-roots.json"), "decoy");
+    for (const c of commands) {
+      const r = spawnSync("sh", ["-c", c], {
+        cwd,
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: decoy },
+        encoding: "utf8",
+      });
+      expect(r.stderr).toBe("");
+      expect(r.status).toBe(0);
+    }
+    return { cwd, decoy };
+  }
+
+  /** What a command run by runPrinted left: no file made by a command in a path, the decoy as it was. */
+  function inert(ran: { cwd: string; decoy: string }) {
+    expect(readdirSync(ran.cwd)).toEqual([]);
+    expect(readdirSync(ran.decoy).sort()).toEqual([".config", ".pluxy-test-trust-roots.json"]);
+    expect(existsSync(join(ran.decoy, ".config", "dev.pluxy.desktop.local"))).toBe(true);
+  }
+
+  asUser(
+    "--real-home prints removal commands that, run, remove exactly what it wrote, whatever the paths hold",
+    () => {
+      for (const xdg of [false, true]) {
+        const build = buildAt();
+        const home = join(tempDir(), hostile);
+        mkdirSync(home, { mode: 0o700 });
+        writeFileSync(join(home, "keep"), "mine");
+        const more: Record<string, string> = {};
+        if (xdg) {
+          more.XDG_CONFIG_HOME = join(tempDir(), `config ${hostile}`);
+          more.XDG_DATA_HOME = join(tempDir(), `data ${hostile}`);
+        }
+        const r = start(build, home, ["--real-home"], more);
+        expect(r.status).toBe(0);
+        const config = join(more.XDG_CONFIG_HOME ?? join(home, ".config"), "dev.pluxy.desktop.local");
+        const data = join(more.XDG_DATA_HOME ?? join(home, ".local", "share"), "dev.pluxy.desktop.local");
+        // The app makes its data folder; the stand-in does not.
+        mkdirSync(data, { recursive: true });
+        writeFileSync(join(data, "cores"), "");
+        expect(existsSync(join(config, "device-registries.json"))).toBe(true);
+        const commands = r.stderr.split("\n").filter((l) => l.startsWith("  rm "));
+        expect(commands).toHaveLength(2);
+        inert(runPrinted(commands));
+        for (const gone of [
+          join(home, ".pluxy-test-trust-profile.json"),
+          join(home, ".pluxy-test-trust-roots.json"),
+          config,
+          data,
+        ]) {
+          expect(existsSync(gone)).toBe(false);
+        }
+        expect(readFileSync(join(home, "keep"), "utf8")).toBe("mine");
+      }
+    },
+  );
+
+  asUser(
+    "--real-home's chmod for a home others can open is one quoted word: run, it fixes that folder only",
+    () => {
+      const build = buildAt();
+      const home = join(tempDir(), hostile);
+      mkdirSync(home);
+      chmodSync(home, 0o755);
+      const r = start(build, home, ["--real-home"]);
+      expect(r.status).toBe(1);
+      const command = /: run (chmod 700 '.*'), or run start/.exec(r.stderr)?.[1];
+      expect(command).toBe(`chmod 700 '${home.replaceAll("'", "'\\''")}'`);
+      inert(runPrinted([command as string]));
+      expect(statSync(home).mode & 0o777).toBe(0o700);
+      expect(ran(build)).toBeUndefined();
+    },
+  );
+
+  asUser(
+    "--real-home refuses an XDG settings or data folder whose path holds a quote, a backslash or a control character, before printing anything",
+    () => {
+      for (const name of ["XDG_CONFIG_HOME", "XDG_DATA_HOME"]) {
+        for (const bad of ['with"quote', "with\\backslash", "with\ttab"]) {
+          const build = buildAt();
+          const home = homeAt();
+          const path = join(tempDir(), bad);
+          refused(
+            build,
+            home,
+            ["--real-home"],
+            `not starting: the path in ${name} (${path}) holds a quote, backslash or control character${instead}`,
+            { [name]: path },
+          );
+          expect(existsSync(path)).toBe(false);
+        }
+      }
+    },
+  );
+
+  asUser(
+    "--real-home takes a relative XDG folder as the app does: not at all, the folder under HOME instead",
+    () => {
+      const build = buildAt();
+      const home = homeAt();
+      const r = start(build, home, ["--real-home"], {
+        XDG_CONFIG_HOME: "relative/config",
+        XDG_DATA_HOME: "relative/data",
+      });
+      expect(r.status).toBe(0);
+      const config = join(home, ".config", "dev.pluxy.desktop.local");
+      const data = join(home, ".local", "share", "dev.pluxy.desktop.local");
+      expect(r.stderr).toContain(`  rm -rf '${config}' '${data}'\n`);
+      expect(existsSync(join(config, "device-registries.json"))).toBe(true);
+    },
+  );
+
+  /** Runs start on a build whose app already has an add-on source file holding text, and returns
+   * what start said, with the file's path and the build's index. */
+  function withSources(text: (index: string) => string) {
+    const build = buildAt();
+    const index = join(build, "lib", "pluxy Local", "app-tools", "index.json");
+    const config = join(build, "home", ".config", "dev.pluxy.desktop.local");
+    mkdirSync(config, { recursive: true });
+    const file = join(config, "device-registries.json");
+    writeFileSync(file, text(index));
+    const r = start(build, homeAt());
+    expect(r.status).toBe(0);
+    expect(readFileSync(file, "utf8")).toBe(text(index));
+    expect(ran(build)).toBeDefined();
+    return { said: r.stderr, file, index };
+  }
+
+  test("reads the add-on source file's registries as JSON: the index named only in other fields is not a source", () => {
+    const r = withSources((index) =>
+      JSON.stringify({
+        version: 0,
+        note: index,
+        registries: [{ name: index, url: "/elsewhere/index.json", mirror: { url: index } }],
+        old: { registries: [{ name: "local-build", url: index }] },
+      }),
+    );
+    expect(r.said).toBe(
+      `start: this build's add-ons will not show in Add-ons: ${r.file} lists other add-on sources. Add {"name":"local-build","url":"${r.index}"} to its "registries", then start again.\n`,
+    );
+  });
+
+  test("says nothing when one of the file's registries has the build's index as its url, however the file is laid out", () => {
+    for (const text of [
+      (index: string) =>
+        `${JSON.stringify(
+          {
+            version: 0,
+            registries: [
+              { name: "mine", url: "https://example.invalid/index.json" },
+              { url: index, name: "here" },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+      (index: string) =>
+        `{"registries":[{"name":"local-build","url":"${index.replaceAll("/", "\\/")}"}],"version":0}`,
+    ]) {
+      expect(withSources(text).said).toBe("");
+    }
+  });
+
+  test("says so when the add-on source file is not JSON", () => {
+    const r = withSources((index) => `{"version":0,"registries":[{"name":"local-build","url":"${index}"}`);
+    expect(r.said).toBe(
+      `start: this build's add-ons will not show in Add-ons: ${r.file} cannot be read as JSON. Fix it or move it away, then start again.\n`,
+    );
   });
 });

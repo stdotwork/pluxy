@@ -401,6 +401,9 @@ back with the reason when the save fails). A row is not drawn until the native s
   Turning Open at sign-in off removes pluxy's entry (and turns Start in the tray off). Merely opening the app does
   not register it. The displayed choice is read from that entry, including desktop disable flags.
   A file without pluxy's ownership marker is shown as a conflict and left alone.
+  A [local build](#the-local-build) offers no Open at sign-in: the row says it opens only with its
+  start command, Start in the tray is not drawn, and a login launch (`--autostart`) of it, from an
+  entry an earlier local build wrote, ends at once.
 - **Start in the tray** (disabled until Open at sign-in is on, and when there is no tray) suppresses the window only for an autostart launch in managed mode when
   the session has a StatusNotifier watcher and a registered tray host. Local and remote modes
   host no core, so they open normally. In that case no window or webview is
@@ -1953,35 +1956,45 @@ It runs one of two ways:
 
 - **By itself** (`start`, the default). The app's HOME is `home/` in the build's folder, and its
   settings and data go under it (`home/.config/dev.pluxy.desktop.local`,
-  `home/.local/share/dev.pluxy.desktop.local`), so nothing of yours is read or written. The tool
+  `home/.local/share/dev.pluxy.desktop.local`), so nothing of yours is kept. Only passing state
+  goes elsewhere, as for any program: the socket a second launch uses to find the open window, in
+  `pluxy-app` in your runtime folder (`$XDG_RUNTIME_DIR`) or else in the system's temporary
+  folder, and the temporary files the app and the tools it starts may make there. The tool
   pages act on that home too: **Connect Claude Code** writes `home/.claude/settings.json`, and
   **Connect Codex** `home/.codex/config.toml`. That is right for trying the app, and useless for
   real work. Building again keeps `home/` ([Building it again](#building-it-again)).
 - **On your own tools** (`start --real-home`). The app runs with your HOME, so the tool pages read
   and write your own `~/.claude`, `~/.codex` and the rest. Before it starts, it prints each file
-  and folder it writes and the commands that remove them: the trust profile's two files in your
+  and folder it writes and the commands that remove them, each path in single quotes so that
+  pasting a command runs nothing in the path: the trust profile's two files in your
   home folder, the app's settings and data folders (`~/.config/dev.pluxy.desktop.local` and
   `~/.local/share/dev.pluxy.desktop.local`), and a tool's settings only when you confirm
   **Connect**, **Disconnect** or **Restore backup** on its page. Connect points that tool at this
   build's pluxy, away from any other pluxy it used. The backups the tool pages keep are in the
   app's data, so press **Disconnect** on each tool's page before you delete that folder. It refuses
   to start, saying what to fix, when your home folder is a link or not a folder, belongs to another
-  user, or other users can open it (its mode has any group or other bit: `chmod 700` it).
+  user, or other users can open it (its mode has any group or other bit: `chmod 700` it), and
+  when the path of your home folder, `$XDG_CONFIG_HOME` or `$XDG_DATA_HOME` holds a quote,
+  backslash or control character. Like the app, it ignores an `$XDG_CONFIG_HOME` or
+  `$XDG_DATA_HOME` that is not an absolute path.
 
 How the app comes to trust the add-ons: it is built with the `artifact-test-trust` feature, the
-one the native tests use ([Package signatures and trust](#package-signatures-and-trust)), which
-loads publisher roots from a trust profile in the process HOME, and only when that HOME is
+one the native tests use ([Package signatures and trust](#package-signatures-and-trust)), beside
+`local-build`. Together (or with the native tests' `native-test`) they load publisher roots from
+a trust profile in the process HOME, and only when that HOME is
 private, holds a marker naming it, and the app is given the marker's nonce as
 `PLUXY_TEST_TRUST_NONCE`. `start` writes that profile: one root, for publisher `pluxy`, whose
 source is this build's `lib/pluxy Local/app-tools/index.json` at its absolute path and whose key is
 the one in `publisher.json`; and it names that index in the app's `device-registries.json` when
-that file does not exist yet (when it exists and names other sources, `start` says what to add).
+that file does not exist yet. When it exists, `start` leaves it as it is and reads it as JSON:
+when none of its registries has this index as its `url`, it says what to add, and when the file is
+not JSON, that it cannot be read.
 It rewrites the root at each start, and keeps the marker and its nonce while the marker names that
 home, so an app already running keeps its trust. Nothing else changes: every add-on's signature,
 size, SHA-256, manifest and installed files are checked as in any build, an archive changed after
 the build is refused, and turning one on still asks you. The Rust test
 `local_build_start_trusts_its_add_ons_and_refuses_a_flipped_byte` (`tests/artifact_trust.rs`, run
-with the `artifact-test-trust` feature) checks that with an add-on signed the way the build signs
+with the `artifact-test-trust` and `native-test` features, as CI does) checks that with an add-on signed the way the build signs
 them: the profile `start` writes lets the app install it, and one flipped byte in its archive is
 refused. With `PLUXY_LOCAL_BUILD` naming a build's folder, it runs on that build's own `start` and
 every one of its add-ons.
@@ -1992,19 +2005,23 @@ How it differs from a release:
   `pluxy Local`, program `pluxy-app-local`. Its settings go to a `dev.pluxy.desktop.local` folder in
   its config folder, and its data and cores to one in its data folder: under `home/` when `start`
   runs it, and in `~/.config` and `~/.local/share` (or `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME`)
-  with `--real-home`. Its login entry, if you turn one on, goes to its own file
-  (`dev.pluxy.desktop.local.desktop`), so it never shares anything with an installed release. The
-  entry's name is written when you turn **Open at sign-in** on, so an entry an earlier build
-  wrote keeps that build's name until you turn it off and on again.
-- **Marked as a local build.** The window's title, the tray's tooltip and its Open item, and the
-  login item's name say "pluxy (local build)". The `local-build` Cargo feature also puts the test
-  build marker in the program, so the [release validator](#validate-release-inputs) refuses the
-  program given as an artifact (`test build marker/identity in artifact`), refuses the build's own
-  config for its identifier and product name, and refuses its `local-build` and
-  `artifact-test-trust` features (`test cargo feature in release`). Given the build's own
-  snapshots and program, it says `release configuration refused: release identifier/product must be
-  dev.pluxy.desktop/pluxy`; given a release identifier and product name in that config instead, it
-  says `release configuration refused: test cargo feature in release` for each of the two features.
+  with `--real-home`, so it never shares anything with an installed release.
+- **No Open at sign-in.** It opens only with its `start`, which sets its home folder and its
+  add-on trust; at sign-in nothing would. So Where pluxy runs says so in place of the switch, and
+  a login launch of it ends at once: a login entry an earlier local build wrote
+  (`dev.pluxy.desktop.local.desktop` in your autostart folder) starts nothing. Delete that file to
+  remove it.
+- **Marked as a local build.** The window's title and the tray's tooltip and its Open item say
+  "pluxy (local build)". The `local-build` Cargo feature also puts the test build marker in the
+  program. Given the build's own snapshots and program, the
+  [release validator](#validate-release-inputs) refuses its identity first:
+  `release configuration refused: release identifier/product must be dev.pluxy.desktop/pluxy`.
+  Given a release identifier and product name in that config instead, it refuses each of the
+  build's `local-build` and `artifact-test-trust` features:
+  `release configuration refused: test cargo feature in release`. Those checks come before the scan
+  of the program, so this build's own inputs never reach it; the marker is the further check that
+  refuses a program carrying it (`test build marker/identity in artifact`) should its config and
+  features ever get past them, as the `release_config` tests show with made-up inputs.
 - **No test checks.** It is built in the release profile without the `native-test` feature, so it
   runs no checks and does not exit by itself, as the test package does.
 - **Keys made for the build.** Its core and its add-ons are signed with two publisher keys made for
@@ -2018,8 +2035,9 @@ How it differs from a release:
   ships, because a program running as you can already change the build's files, and the profile
   binds the trust closely: the key exists only for this build and its private half is gone, the
   root names only this build's index path, and the marker's nonce reaches only an app `start`
-  started. A release build, built without `artifact-test-trust`, never reads the profile, so the
-  trust cannot reach it. Another local build has its own key and path; started on the same home, its
+  started. A release build, built without `artifact-test-trust`, never reads the profile, and a
+  build with that feature but neither `local-build` nor `native-test` refuses it, so the trust
+  cannot reach either. Another local build has its own key and path; started on the same home, its
   `start` replaces the root, and the add-ons the first build installed no longer verify against it.
 
 To remove it, quit the app (its pluxy stops with it), then delete the build folder (with `home/` in
@@ -2030,7 +2048,7 @@ then delete what `start` printed:
 rm -rf next/app/local-build
 rm -f ~/.pluxy-test-trust-profile.json ~/.pluxy-test-trust-roots.json   # only after --real-home
 rm -rf ~/.config/dev.pluxy.desktop.local ~/.local/share/dev.pluxy.desktop.local   # likewise
-rm -f ~/.config/autostart/dev.pluxy.desktop.local.desktop   # only if you turned on Open at sign-in with --real-home
+rm -f ~/.config/autostart/dev.pluxy.desktop.local.desktop   # only if an earlier local build's Open at sign-in was on
 ```
 
 ### Building it again
@@ -2376,8 +2394,11 @@ execute anything. See [the signed descriptor contract](app-host/README.md#signed
 
 Production publisher and updater roots are empty. The shared trust loader reports
 `not configured` for native-tier and updater trust and never substitutes test keys.
-The `artifact-test-trust` cargo feature permits a test runner to load public roots only from a
-private temporary HOME with a runner-created trust marker. A temporary HOME alone grants no trust.
+The `artifact-test-trust` cargo feature, in a build that also has `native-test` (the native
+tests) or `local-build` (the [local build](#the-local-build)), permits public roots to be loaded
+only from a private HOME with a trust marker: a test runner's temporary one, or the one the local
+build's `start` writes. With the feature alone, in any other build, a profile is refused
+(`trust::PROFILE_TRUST`). A temporary HOME alone grants no trust.
 Private signing keys are generated at runtime and kept only in temporary fixture directories.
 Tauri updater signatures have their own format; descriptor signatures cannot replace them.
 

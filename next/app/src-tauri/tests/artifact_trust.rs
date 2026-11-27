@@ -8,6 +8,13 @@ use serde_json::json;
 
 use std::{fs, io::Cursor, path::PathBuf};
 
+/// Whether this build loads a test trust profile (`trust::PROFILE_TRUST`): artifact-test-trust with
+/// local-build or native-test. Written out here so the tests hold the app to it.
+const PROFILE: bool = cfg!(all(
+    feature = "artifact-test-trust",
+    any(feature = "local-build", feature = "native-test")
+));
+
 // Isolate HOME in a child instead of mutating the parallel test runner environment.
 fn isolated(test: &str) -> bool {
     if std::env::var("PLUXY_TRUST_TEST_CHILD").as_deref() == Ok(test) {
@@ -141,6 +148,45 @@ impl Drop for Fixture {
     }
 }
 
+/// artifact-test-trust in a build that is neither the local build nor the native test's (a debug
+/// build with the feature, say) refuses a valid profile in HOME: nothing it names is trusted, for
+/// add-ons or for updates.
+#[cfg(all(
+    feature = "artifact-test-trust",
+    not(any(feature = "local-build", feature = "native-test"))
+))]
+#[test]
+fn a_test_trust_build_neither_local_nor_native_test_refuses_the_profile() {
+    if isolated("a_test_trust_build_neither_local_nor_native_test_refuses_the_profile") {
+        return;
+    }
+    let f = Fixture::new();
+    f.profile();
+    let error = TrustStore::load(&f.dir).err().expect("the profile loaded");
+    assert!(error.contains("loads no test trust profile"), "{error}");
+    let store = TrustStore::current();
+    assert!(store
+        .require_native()
+        .unwrap_err()
+        .contains("not configured"));
+    assert!(store.updater_key().is_err());
+    let refused = f
+        .verify(
+            &store,
+            &f.descriptor,
+            &f.signature(&f.descriptor),
+            &f.archive,
+            "https://example.invalid/index.json",
+            "linux/amd64",
+        )
+        .err()
+        .expect("an archive signed with the profile's key was accepted");
+    assert!(
+        refused.contains("native-tier trust not configured"),
+        "{refused}"
+    );
+}
+
 #[test]
 fn artifact_trust_feature_and_marker_are_both_required() {
     if isolated("artifact_trust_feature_and_marker_are_both_required") {
@@ -166,8 +212,13 @@ fn artifact_trust_feature_and_marker_are_both_required() {
         .unwrap()
         .contains("native-tier trust not configured"));
     f.profile();
-    let store = TrustStore::load(&f.dir).unwrap();
-    if cfg!(feature = "artifact-test-trust") {
+    if !PROFILE && cfg!(feature = "artifact-test-trust") {
+        // The feature without the local build's or the native test's: the profile is refused.
+        let error = TrustStore::load(&f.dir).err().unwrap();
+        assert!(error.contains("loads no test trust profile"), "{error}");
+    }
+    let store = TrustStore::current();
+    if PROFILE {
         store.require_native().unwrap();
         assert!(!store.updater_key().unwrap().is_empty());
         f.verify(
@@ -427,7 +478,10 @@ fn artifact_trust_signed_package_and_denial_controls() {
     }
 }
 
-#[cfg(feature = "artifact-test-trust")]
+#[cfg(all(
+    feature = "artifact-test-trust",
+    any(feature = "local-build", feature = "native-test")
+))]
 #[test]
 fn artifact_trust_marker_mismatch_and_weak_key_refuse() {
     if isolated("artifact_trust_marker_mismatch_and_weak_key_refuse") {
@@ -568,7 +622,10 @@ fn strict_signature_rejects_small_order_forgery() {
     .unwrap();
 }
 
-#[cfg(feature = "artifact-test-trust")]
+#[cfg(all(
+    feature = "artifact-test-trust",
+    any(feature = "local-build", feature = "native-test")
+))]
 #[test]
 fn real_trust_store_lookup_controls() {
     use artifact::PublisherKeys;
@@ -664,10 +721,29 @@ fn updater_gate_passes_only_the_test_package() {
         .unwrap()
         .to_string();
     let package = config(test_id, test_product, &key);
-    if !cfg!(feature = "artifact-test-trust") {
-        for c in [&package, &config("dev.pluxy.desktop", "pluxy", &key)] {
+    if !PROFILE {
+        // Without the test trust, or with it in a build that loads no profile, nothing passes.
+        let test_trust = cfg!(feature = "artifact-test-trust");
+        for (c, reason) in [
+            (
+                &package,
+                if test_trust {
+                    "loads no test trust profile"
+                } else {
+                    "updater trust not configured"
+                },
+            ),
+            (
+                &config("dev.pluxy.desktop", "pluxy", &key),
+                if test_trust {
+                    "test identifier"
+                } else {
+                    "updater trust not configured"
+                },
+            ),
+        ] {
             let error = trust::updater_gate(c, &f.dir).unwrap_err();
-            assert!(error.contains("updater trust not configured"), "{error}");
+            assert!(error.contains(reason), "expected {reason}, got {error}");
         }
         return;
     }
@@ -698,7 +774,11 @@ fn updater_gate_passes_only_the_test_package() {
 /// signs them (signAppTools), and one flipped byte in that add-on's archive is refused. With
 /// PLUXY_LOCAL_BUILD naming a built local build's folder, the same runs with that build's own
 /// `start`, signed index and every one of its archives (copies of them: the build is not changed).
-#[cfg(all(feature = "artifact-test-trust", target_os = "linux"))]
+#[cfg(all(
+    feature = "artifact-test-trust",
+    any(feature = "local-build", feature = "native-test"),
+    target_os = "linux"
+))]
 #[test]
 fn local_build_start_trusts_its_add_ons_and_refuses_a_flipped_byte() {
     use std::os::unix::fs::PermissionsExt;
@@ -805,7 +885,11 @@ fn local_build_start_trusts_its_add_ons_and_refuses_a_flipped_byte() {
 /// A coding-tool add-on, pluxy/notes, packed and signed into tools as package.ts's signAppTools
 /// writes them: the archive, index.json listing it with its descriptor (the same bytes, in the
 /// same field order) and signature, and publisher.json with the key's ID and public key.
-#[cfg(all(feature = "artifact-test-trust", target_os = "linux"))]
+#[cfg(all(
+    feature = "artifact-test-trust",
+    any(feature = "local-build", feature = "native-test"),
+    target_os = "linux"
+))]
 fn signed_like_package_ts(base: &std::path::Path, tools: &std::path::Path) {
     use sha2::{Digest, Sha256};
     let package = base.join("package");

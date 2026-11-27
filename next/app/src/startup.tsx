@@ -12,6 +12,7 @@ export const STARTUP = {
   signIn: "Open at sign-in",
   signInAbout: "Opens this app when you sign in to the computer.",
   conflict: "Another program owns the sign-in entry, so the app leaves it alone.",
+  localBuild: "This local build opens only with its start command, not at sign-in.",
   tray: "Start in the tray",
   trayAbout: "At sign-in, starts in the tray instead of opening this window.",
   trayNeedsSignIn: "Turn on Open at sign-in first.",
@@ -101,11 +102,19 @@ export function StartupRows(props: { managed: boolean; tray?: boolean }) {
       : shown?.autostart_enabled === false
         ? STARTUP.trayNeedsSignIn
         : undefined;
+  // A local build offers no sign-in entry, so neither choice that needs one is drawn.
+  const signIn = shown?.sign_in !== false;
   return (
     <>
-      {row("autostart_enabled", STARTUP.signIn, STARTUP.signInAbout)}
+      {signIn ? (
+        row("autostart_enabled", STARTUP.signIn, STARTUP.signInAbout)
+      ) : (
+        <SettingRow name={STARTUP.signIn} description={STARTUP.localBuild}>
+          {null}
+        </SettingRow>
+      )}
       {shown?.registration_conflict && <Notice tone="warn">{STARTUP.conflict}</Notice>}
-      {props.managed && row("silent_start_enabled", STARTUP.tray, STARTUP.trayAbout, trayReason)}
+      {props.managed && signIn && row("silent_start_enabled", STARTUP.tray, STARTUP.trayAbout, trayReason)}
       {props.managed && row("start_core_on_launch", STARTUP.withApp, STARTUP.withAppAbout)}
     </>
   );
