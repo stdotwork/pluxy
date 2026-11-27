@@ -74,6 +74,10 @@ The panel can do steps 2 and 3 too. When it finds `~/.cli-proxy-api/config.yaml`
 page (called **Setup** once first-run setup is done) shows one line above the steps: **Preview import**
 lists what would happen and **Import now** does it.
 
+To bring single auth files into a running pluxy instead, use **Import files…** at the end of the
+panel's **Add an account** page ("Have auth files from CLIProxyAPI?"), or `pluxy account import <file>`.
+Each file is read as the import reads it, and its account serves at once.
+
 Four things to know about the result:
 
 - **pluxy keeps its own management key.** CPA's key, if its file has one, is not brought: neither a
@@ -214,6 +218,7 @@ for every auth-file field [Auth files](config.md#auth-files), both in the config
 | The management key, plain or as a bcrypt hash | pluxy keeps its own; see step 3 |
 | The example config's client keys (`your-api-key-1` and the rest) | They are public. The import leaves them out |
 | The listen address | pluxy keeps the address it started on; see step 3 |
+| pluxy's own settings in the file: `credentials_dir`, `packages`, `extension`, `extension_pages` and `client_key_labels` | pluxy keeps those of the config it runs on. (`extensions`, `cors`, `drop_policy` and `token_count_estimate` are brought.) |
 | TLS | Refused while pluxy runs; see step 3 |
 | An `openai-compatibility` `excluded-models` | CPA does not use it either |
 | The Antigravity provider's own settings under `oauth.providers.antigravity` (`sensitive-words`, `connection-pool`, the signature and credit switches) | The extension does not read them. The import names each one |

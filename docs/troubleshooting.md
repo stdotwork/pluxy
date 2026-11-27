@@ -178,6 +178,11 @@ parameter. Check the key against `client_keys` in `config.json`, or make a new o
 `pluxy key add`. A management key is not a client key. For what to paste into a tool, see
 [Point a coding tool at pluxy](clients.md).
 
+The reply carries `X-Should-Retry: false`, in every API format and in the error message of an open
+Responses WebSocket, so a coding tool shows the error at once instead of retrying a key that cannot
+succeed. `client_keys` always holds at least one key: pluxy does not start on an empty list, and a
+reload that would leave it empty is refused.
+
 ### 403 `unsafe_example_api_key`
 
 ```json

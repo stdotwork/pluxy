@@ -175,6 +175,31 @@ query parameter.
 `GET /v1/models` lists the models pluxy serves now (every client key sees the same list), in OpenAI's shape, or in Anthropic's
 for a client that sends an `anthropic-version` header or whose user agent starts with `claude-cli`. `GET /v1beta/models` lists them in Gemini's shape.
 
+### Other routes
+
+| Route | What it is |
+| --- | --- |
+| `/backend-api/codex/responses` and `/responses` | The same route as `/v1/responses`, for `POST` and for the WebSocket `GET`: the same handlers and the same client-key check. The Codex CLI uses the first when its `chatgpt_base_url` points at pluxy; some clients post to the bare `/responses`. |
+| `GET /healthz` | Answers 200 with the text `ok`, for a container or load balancer. It takes no client key and writes no request log line. `HEAD` gets the same answer and any other method a 405. With `tls.enable` it is served over HTTPS like the rest. |
+| `GET /api/hello`, `POST /api/event_logging/batch` | Claude Code probes its configured Anthropic address with these before it sends a message. Core answers `{"status":"ok"}` itself, with no client key and no account, and drops the event batch. |
+
+**Responses WebSocket.** `GET /v1/responses` (or either alias above) upgrades to a WebSocket that
+speaks OpenAI's Responses WebSocket mode. The client sends a `response.create` message for each turn,
+and gets the turn's stream events back as text messages. When the account's extension holds
+sessions, core keeps one upstream session for the socket, so a turn can continue the previous one
+with `previous_response_id`; the Codex extension does this when the account's `websockets` setting
+is on ([Codex](providers.md#codex-chatgpt)). On any other account each turn is a separate request
+that carries the whole conversation, which core keeps for the socket. `response.append`,
+`response.interrupt` and a warmup (`generate: false`) are served too.
+
+**Keep-alive.** Once a streamed reply has started, core writes the SSE comment `: keep-alive` after
+every 15 seconds without a byte, so a client or proxy does not drop a model that thinks silently. A
+comment line starts with a colon, and readers of server-sent events skip it. It goes on
+`/v1/chat/completions`, `/v1/completions`, `/v1/responses` and its aliases, `/v1/messages`, and on
+the streamed replies of the other routes that stream (image generation, for example). There is none on the Gemini routes (Google's
+clients read every line as JSON) or on `/v1beta/interactions`, nor on a reply that is not streamed
+or on a WebSocket.
+
 ## Check that it works
 
 ```bash

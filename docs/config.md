@@ -145,7 +145,7 @@ need it.
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `listen` | string | none: required | The `host:port` core serves the client API, the management API and the web panel on. Needs a restart to change. |
-| `client_keys` | list of strings | none: at least one required | The keys clients send as a bearer token (or in `x-api-key`; Gemini clients may also use `x-goog-api-key` or the `key` query parameter). The example keys `your-api-key-1`, `your-api-key-2` and `your-api-key-3` are public: with one of them in the list, core starts but answers every request that carries a configured key with a 403 (`unsafe_example_api_key`) until none is left. The management API stays open, so you can replace them. |
+| `client_keys` | list of strings | none: at least one required | The keys clients send as a bearer token (or in `x-api-key`; Gemini clients may also use `x-goog-api-key` or the `key` query parameter). The example keys `your-api-key-1`, `your-api-key-2` and `your-api-key-3` are public: with one of them in the list, core starts but answers every request that carries a configured key with a 403 (`unsafe_example_api_key`) until none is left. The management API stays open, so you can replace them. A reload or a change through the management API that would leave the list empty is refused, and the running config stays. A request with a missing or wrong key gets a 401 with `X-Should-Retry: false` in every API format, so a coding tool stops instead of retrying. |
 | `client_key_labels` | object | none | A name for each client key, by the key's ID as `pluxy key list` shows it: `{"3fa9...": "work laptop"}`. A label is one line of at most 64 characters and is not a key. |
 | `management_key` | string | none: required | The key for the management API and the web panel. The panel and every `pluxy` client command send it. |
 | `management_allow_remote` | bool | `false` | Lets clients on other machines call the management API. Without it, only a caller on this machine (a loopback address) is served and any other gets a 403 `remote_disabled`. |
@@ -155,7 +155,7 @@ need it.
 | `packages` | object | none | Where installed packages are kept and the registries they are installed from. See [packages](#packages). |
 | `routing` | object | none | How requests pick accounts and how they are retried. See [routing](#routing). |
 | `drop_policy` | string | `report` | What happens when translating a request to the upstream's format would drop part of it: `report` sends the request and logs what was dropped; `reject` refuses it with a 400 that names what could not be carried. |
-| `token_count_estimate` | bool | `true` | What a token count gets when no account for the model can count: `true` answers with core's own estimate, `false` answers with an error. |
+| `token_count_estimate` | bool | `true` | What a token count gets when no account for the model can count: `true` answers with core's own estimate, `false` answers with an error. Which accounts count, and what the estimate counts, is in [Token counts](routing.md#token-counts). |
 | `extension_pages` | object | none | Where extension pages are served. See [extension_pages](#extension_pages). |
 | `cors` | object | none | Which web pages may call the client API from a browser. See [cors](#cors). |
 | `tls` | object | none | Serves `listen` over HTTPS. See [tls](#tls). |
@@ -165,6 +165,12 @@ need it.
 | `usage` | object | none | The usage record. See [usage](#usage). |
 | `logs` | object | none | Log files. See [logs](#logs). |
 | `pprof` | object | none | Profiling pages. See [pprof](#pprof). |
+
+**How `trusted_proxies` finds the client.** When a request's connection comes from a trusted proxy,
+core reads all `X-Forwarded-For` lines as one list and takes the last address in it that is not a
+trusted proxy, reading from the right (the first address when all are trusted proxies). With no
+usable `X-Forwarded-For`, it takes the first `X-Real-IP` line. A header with an entry that is not an
+IP address is not used. When neither names a client, core takes the connection's address.
 
 ### `routing`
 
@@ -281,6 +287,9 @@ Extension pages are served on a site of their own, never the one that serves the
 {"cors": {"allowed_origins": ["http://localhost:5173"]}}
 ```
 
+A browser sends no credentials with a preflight request, so core answers the preflight `OPTIONS`
+request of an allowed origin itself, with a 204, before it checks the client key.
+
 ### `tls`
 
 | Key | Type | Default | What it does |
@@ -291,7 +300,12 @@ Extension pages are served on a site of their own, never the one that serves the
 
 Core does not start when the files do not load. Turning TLS on or off, or pointing it at other
 files, needs a restart; a renewed certificate in the same files needs none (see
-[Reloading](#reloading)). The extension pages listener stays plain HTTP.
+[Reloading](#reloading)). The extension pages listener stays plain HTTP, whatever `tls` says. By
+default its address is `http://127.0.0.1:<port>` or `http://localhost:<port>` (whichever the panel is
+not opened at), and a browser lets a page served over HTTPS embed an `http://` page at a loopback
+address, though not at any other. A panel reached by another name needs `extension_pages.url`: the
+origin of a site of its own that reaches the pages listener, behind your own HTTPS when the panel
+is served over HTTPS.
 
 ### `usage`
 
@@ -596,7 +610,7 @@ does with the setting:
 | `oauth.providers.aistudio.ws-auth` (`ws-auth`) | | Ignored: the AI Studio relay needs a long-lived listener the extension protocol does not have |
 | `oauth.providers.codex.live-media-relay.*` | | Ignored: realtime and WebRTC are out of scope |
 | `oauth.providers.codex.signin-with-chatgpt-identifier` (`codex.signin-with-chatgpt-identifier`) | `signin_with_chatgpt_identifier` on the Sign in with ChatGPT (SIWC) accounts `pluxy import cpa` adds. Left unset, they use the extension's default, `pluxy`. | Supported when importing |
-| `oauth.providers.devin.*` (`devin`) | The whole section is ignored. | Ignored: rewriting words to get past a content filter is out of scope |
+| `oauth.providers.devin.*` (`devin`) | The whole section is ignored. Its only CLIProxyAPI setting is `sensitive-words`. | Ignored: rewriting words to get past a content filter is out of scope |
 | `oauth.providers.antigravity.*`, `antigravity-signature-cache-enabled`, `antigravity-signature-bypass-strict`, `quota-exceeded.antigravity-credits` | | Ignored: the Antigravity extension does not read these settings |
 | `api-keys.meta` (`meta-api-key`) | | Ignored: the login is built; no need for a bare key |
 | Every `headers` on a group or key | The account's [`headers`](routing.md#upstream-headers): a key's own, else its group's (a key's `headers: {}` sends none), and an `openai-compatibility` group's for all its keys. Names and values are trimmed and empty ones dropped, as in CLIProxyAPI. A value that copies a header from the client's request (`$` and a header name) comes across as `$` and that name, without the spaces CLIProxyAPI allows after the `$`; one whose rest is not a header name (such as `$` alone or `$5/mo`), which CLIProxyAPI never sends, is dropped. A copy of `Authorization`, `Proxy-Authorization`, `X-Api-Key`, `X-Goog-Api-Key` or `Cookie`, which CLIProxyAPI sends on and pluxy never does, and a value that holds `$CPA-SESSION-ID` are named in the log and not imported. A header pluxy refuses (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`) fails the load, where CLIProxyAPI sends it. | Supported |
@@ -620,7 +634,7 @@ does with the setting:
 | `observability.usage.usage-statistics-enabled` (`usage-statistics-enabled`) | `usage.enabled`: the [usage record](usage-and-logs.md#usage-statistics). CLIProxyAPI's example config sets it to `false`, which turns the record off here too. | Supported |
 | `observability.usage.redis-usage-queue-retention-seconds` (`redis-usage-queue-retention-seconds`) | The record keeps requests by `usage.max_events` and `usage.max_age_ms`. | Ignored: it was how long a queued usage record waited for a reader that removed it; reading the record here removes nothing, and its default of 60 seconds would leave little to read |
 | `observability.pprof.enable` (`pprof.enable`), `observability.pprof.addr` (`pprof.addr`) | `pprof.enable` and `pprof.addr`: the [profiling pages](usage-and-logs.md#profiling-pages). Only a build with `-tags pprof` serves them; the default build logs that the setting does nothing. With `enable` on, an address that is not loopback is refused. | Supported (in the `pprof` build) |
-| `models.catalog`, `models.codex-catalog`, `models.devin-catalog` | Each extension carries its model list, and a developer refreshes it by hand (see [Codex client catalog](routing.md#codex-client-catalog)). | Ignored: pluxy has no remote model catalog setting; each extension carries its model list |
+| `models.catalog`, `models.codex-catalog`, `models.devin-catalog` | Each extension carries its model list, and a developer refreshes it by hand (see [Codex client catalog](map.md#codex-client-catalog)). | Ignored: pluxy has no remote model catalog setting; each extension carries its model list |
 | `plugins.configs.lamplighter.ignition.*`, `plugins.configs.lamplighter.providers.*` | The [Lamplighter plugin](https://github.com/PosvdM/cpa-plugin-lamplighter)'s window ignition, while the plugin is on (`plugins.enabled` and its own `enabled` both `true`): `routing.ignition`, where what the plugin leaves out takes pluxy's defaults, which are the plugin's. `start_hour` and `end_hour` keep their names; `failure_backoff_multiplier` becomes `backoff_multiplier`, `max_transient_failures` `max_failures`, `end_grace_minutes` becomes `end_grace_ms`, `grace_seconds` `grace_ms`, `failure_retry_seconds` `retry_ms` and `post_success_hold_seconds` `hold_ms`, held to the plugin's ranges (a retry of at least 60 seconds, a hold of at least 15). A provider that ignites (its `ignite`, by default on for `claude` and `codex`, and not turned off by `monitor: false`) becomes an entry of `routing.ignition.extensions`, `pluxy/claude`, `pluxy/codex` or `pluxy/antigravity` (archived: it serves once installed by hand), with its `model`. Antigravity's `groups` (by default `Gemini`) and `models` become `windows`: `Gemini` is `gemini_models_five_hour`, `Claude / GPT` `claude_and_gpt_models_five_hour`, any other group its name in lower case with each run of characters that is not a letter or digit as one `_` (trimmed of `_`), then `_five_hour`; an empty list is `Gemini` and `Claude / GPT`, and any group that has a model set. The hours are the machine's local time. | Supported |
 | `plugins.configs.lamplighter.*`, other | The plugin's notifications and reminders (`bark_*`, `webhook`, the thresholds, `recovery_notify`, `reset_reminder`, `codex_reset_updates`), its time zone, poll interval, MCP server, page and records, and how it reached core (`cpa_base_url`, `models_api_key`). | Ignored: pluxy sends no usage notifications; it reads the hours in the machine's local time and usage when a window is due. While the plugin is off, all of its settings are dropped |
 | `plugins.*`, other | Extensions are separate programs (packages), not libraries loaded into core. | Ignored: replaced by packages |

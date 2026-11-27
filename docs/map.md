@@ -37,6 +37,12 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   `next/extensions/codex`, `next/extensions/devin`, `next/extensions/gemini`, `next/extensions/kimi`,
   `next/extensions/meta`, `next/extensions/xai`); wire up with `sdk.Extension` and `sdk.Serve` in
   `next/sdk/sdk.go`, and wrap every HTTP transport with `sdk.Upstream` in `next/sdk/upstream.go`.
+  `sdk.Upstream(base)` wraps login, refresh and WebSocket handshake transports too: it sends
+  requests through the account's proxy, extra headers and payload rules, and records captures.
+  Build each request with the handler's context, so the transport finds `sdk.UpstreamInfo(ctx)`
+  (account ID, settings, model, native format, operation; never the credential). `sdk.TrackSend`
+  sends a request on a connection of its own and reports whether it may have been written. When `base` sets `MaxIdleConns` but not
+  `MaxIdleConnsPerHost`, the per-host limit becomes `MaxIdleConns`.
 - **Tests**: `go test -count=1 -run TestBuildBodyTranslatesEveryWire ./extensions/openai-compatible`
   and `go test -count=1 -run TestExtensionUpstreamClients ./sdk`; full extension contract in
   `next/conformance/conformance.go` (`Run`, `BuildExtension`).

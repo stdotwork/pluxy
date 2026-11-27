@@ -126,6 +126,12 @@ Once a reply has started, nothing is retried, and no request moves on for an err
 request itself (a 400, or a refusal of its content), which would end the same way on another
 account.
 
+A prompt too long for the model's context window is such an error. The Claude, Codex, Gemini and
+OpenAI Compatible providers recognise it by the upstream's code `context_length_exceeded`, and,
+except Codex, by the wording of its message: the messages LiteLLM treats as context overflow, and
+Google's "input context is too long" on a 500. The request fails with that error alone. It blocks
+no account and no model, and no other account is tried.
+
 These settings bound the moves:
 
 | Setting | What it limits |
@@ -253,6 +259,9 @@ them set it, so a restart sends no requests to accounts whose usage ran out, tha
 limited, or that it refused. A quota block read back with more than 15 minutes left is checked at
 once. A rate-limit block with more than 15 minutes left is checked 15 minutes on, as it would have
 been had core kept running. Endpoint blocks are not saved.
+
+A saved block with no `kind` is read as a quota block, and a quota block saved with no failure shows
+the reason "a usage window was used up before pluxy restarted".
 
 A file core cannot read, or one in a form this core does not read, is not loaded and is left as it
 is until a block or a ban must be saved; it is then moved to `routing.json.bad`.
@@ -445,7 +454,8 @@ accounts change.
 From each reading it takes the windows to start: every usage window of five hours, whether it
 counts all the account's requests or those of one group of models. A provider with only one usage
 window has that one started, whatever its length. When the reading has more than one window, a
-window of any other length, such as a weekly one, is never started. An extension's `windows` narrows this: it maps window IDs to models, and when it is set,
+window of any other length, such as a weekly one (for all models or for one model family), is never started: a request starts
+such a window anyway once a 5-hour window is used up. An extension's `windows` narrows this: it maps window IDs to models, and when it is set,
 only the windows it lists among those are started. A window's ID is the `id` of its limit in
 `pluxy account quota <id> --json` (for example `five_hour` for Claude and Codex).
 
@@ -612,7 +622,9 @@ The value of a header whose name is about authentication (it holds `auth`, `key`
 secret, by the rule config redaction uses. `GET /v0/management/config` and
 `GET /v0/management/accounts` show a placeholder in its place. A value written as `true` or
 `false` is the exception: `GET /config` shows it as written, while `GET /accounts` shows a
-placeholder. A placeholder sent back keeps the stored value. A secret value is removed from what
+placeholder. A placeholder sent back keeps the stored value. In a `config.yaml` provider section, a
+secret header value written as a number, or with spaces around it, gets the placeholder of the text
+core sends: its text as written, without the spaces around it. A secret value is removed from what
 extensions log and send back.
 
 A copied header counts by the same rule: under such a name the `$` value shows as a placeholder,
@@ -758,6 +770,31 @@ token) goes too, such as `token` for a header `Bearer gw-token-12345`. A reply t
 not changed by this rule, except the values of the rate-limit headers it starts with (a plain time
 or duration among them stays).
 
+## Token counts
+
+A token count (`POST /v1/messages/count_tokens`, or Gemini's `:countTokens`) is routed like a
+request: to the accounts that serve its model, in the order above. Only some accounts can count
+tokens, by asking their upstream:
+
+| Counts with its upstream | Cannot count |
+| --- | --- |
+| Claude, when `base_url` is Anthropic's own (`https://api.anthropic.com`); Kimi; Gemini (API key or Vertex); OpenAI Compatible on a `messages` or `gemini` wire | Codex, xAI, Meta, Devin; Claude with another `base_url`; OpenAI Compatible on a `chat` or `responses` wire, or whose upstream answers 404 to the count |
+
+An account that cannot count answers so, and core tries the model's next account. When no account
+gave a count and the request reached at least one account that cannot count, core answers with its
+own estimate, in the client's format, whatever the other accounts answered. [`token_count_estimate`](config.md)
+`false` turns that off: the request then ends with the error instead. A request that reached no
+account that cannot count keeps its error: an upstream's own refusal (a 400, 401 or 429, for
+example), or a [`drop_policy`](config.md) `reject` refusal.
+
+The estimate is a heuristic written with the standard library, not a tokenizer. It splits text the
+way OpenAI's `o200k_base` tokenizer does and is usually within a few percent of its count on prose,
+code and JSON. Other providers' tokenizers differ from `o200k_base` anyway, so the same request gets
+the same number whichever account it reached. It counts the system text, each message's role and
+text, reasoning text, each tool call's ID, name and arguments, each tool result's call ID and
+output, each tool's name, description and parameters, and the tool choice. Images and files add
+nothing.
+
 ## Model lists
 
 Clients list the models they can ask for in their own API's shape, with a client key as for any
@@ -803,7 +840,8 @@ read from the provider.
 ### Token limits and other details
 
 For each model, core merges what three sources say: the account's upstream list, core's model
-catalogue (from `models.dev`) and the extension's built-in list.
+catalogue and the extension's built-in list. The catalogue is a snapshot of `models.dev` built into
+core, which core refreshes once a day into `state/catalogue.json`.
 
 - **Token limits** (`context_length`, `max_output_tokens`): the smallest positive limit wins. The
   sources are read in the order above, so an equal limit stays with the earlier source.
@@ -850,6 +888,22 @@ An extension's settings (`extension`, or its entry in `extensions`) may also hol
 `model_alias` rules come after an account's own, leaving out a rule for an alias the account
 already has. Its `excluded_models` apply to an account that has none of its own.
 
+### Thinking suffix
+
+A client can name a thinking setting in brackets after a model name: `gpt-5(high)`, or
+`claude-sonnet-4-5(16000)`. The suffix is one of:
+
+- a level: `minimal`, `low`, `medium`, `high`, `xhigh` or `max`;
+- `none`, which turns thinking off, or `auto`, which leaves the amount to the model;
+- a token budget, a whole number of 0 or more: `0` is `none` and `-1` is `auto`.
+
+Letter case, and spaces around the value inside the brackets, do not matter. Core takes the suffix off before it
+routes the request, so accounts, aliases and blocks see the plain model name, and the provider
+applies the suffix in place of any reasoning settings the request has. Core also sets the
+request's reasoning effort to the level the suffix comes to; a token budget comes to `minimal` up
+to 512, `low` up to 1024, `medium` up to 8192, `high` up to 24576 and `xhigh` above that. Any other
+bracketed text stays in the model name. Token counts read the suffix too.
+
 ## Codex client catalog
 
 The Codex client asks for its own model catalog: `GET /v1/models?client_version=0.153.0` returns
@@ -875,6 +929,9 @@ step a non-Codex account can serve. The catalog keeps each template's `minimal_c
 Clients below 0.144.0 get reasoning levels only up to `xhigh`; an empty or unreadable version keeps
 the newer levels. The catalog data lives in the extension program: core neither embeds it nor keeps
 a copy per account, and no upstream request or remote refresh is made for this list.
+
+To find which models each Codex account serves, core reads the account's saved credential, even an
+expired one, which still holds the account's plan, and never renews it.
 
 The call goes straight to the first enabled, usable Codex account in account order, with only its
 ID and no credential. It ignores blocks and concurrency limits, renews no credentials, records no
