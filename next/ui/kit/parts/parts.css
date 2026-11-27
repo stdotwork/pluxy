@@ -114,7 +114,7 @@
     --series: var(--px-color-chart-4);
     border-color: color-mix(in srgb, var(--series) 30%, var(--px-color-border));
     background: color-mix(in srgb, var(--series) 14%, var(--px-color-surface));
-    color: color-mix(in srgb, var(--series) 60%, var(--px-color-text));
+    color: color-mix(in srgb, var(--series) 50%, var(--px-color-text));
     font-size: var(--px-font-size-label);
     font-weight: var(--px-font-weight-strong);
   }

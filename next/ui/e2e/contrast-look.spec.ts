@@ -37,6 +37,15 @@ async function addSamples(page: Page) {
       pill.textContent = `${tier} plan`;
       surface.append(pill, " ");
     }
+    for (const series of ["1", "2", "3", "4", "5", "6"]) {
+      const mark = document.createElement("span");
+      mark.className = "provider-mark";
+      mark.dataset.part = "provider-mark";
+      mark.dataset.initial = "";
+      mark.dataset.series = series;
+      mark.textContent = "M";
+      surface.append(mark, " ");
+    }
     for (const tone of ["ok", "warn", "danger"]) {
       const meter = document.createElement("div");
       meter.className = "meter";
@@ -111,6 +120,7 @@ for (const theme of THEMES) {
           "#look-samples thead th",
           '#look-samples .plan-pill[data-plan-tier="mid"]',
           '#look-samples .plan-pill[data-plan-tier="free"]',
+          "#look-samples .provider-mark[data-initial]",
           "#look-samples .home-body[data-stale] .home-fade .account-word",
           "#look-samples .home-body[data-stale] .home-fade .pool-foot span",
         ].join(", "),
