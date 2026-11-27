@@ -1068,7 +1068,7 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
                     conn::finish_key_unlocked(&st.conn, target, &input.key, input.remember);
                 let status = match result {
                     Ok(()) => "signed_in",
-                    Err(e) if e == "core refused this key" => {
+                    Err(e) if e == "This management key was not accepted." => {
                         error = Some(e);
                         "wrong_key"
                     }
