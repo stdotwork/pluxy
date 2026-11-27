@@ -3603,15 +3603,24 @@ fn call_error_user_message_omits_protocol_code_and_falls_back_for_empty() {
     let repeated = fail("not_found", "not_found: settings.json is missing");
     assert_eq!(repeated.user_message(), "settings.json is missing");
 
-    // A cancelled confirmation keeps its plain words without a `cancelled:` prefix.
-    let cancel = fail("cancelled", "the native confirmation was cancelled");
+    // A cancelled error keeps the `cancelled:` prefix for any message so pages detect cancels by
+    // code rather than by message text.
     assert_eq!(
-        cancel.user_message(),
-        "the native confirmation was cancelled"
+        fail("cancelled", "the native confirmation was cancelled").user_message(),
+        "cancelled: the native confirmation was cancelled"
+    );
+    assert_eq!(
+        fail("cancelled", "confirmation window closed by desktop").user_message(),
+        "cancelled: confirmation window closed by desktop"
+    );
+    assert_eq!(
+        fail("cancelled", "cancelled: already prefixed").user_message(),
+        "cancelled: already prefixed"
     );
 
     // Empty, whitespace, bare-code, or punctuation-only messages fall back to a plain sentence
-    // that never leaks the raw protocol code.
+    // that never leaks the raw protocol code (except `cancelled`, which keeps its `cancelled:`
+    // prefix for window cancel detection).
     for code in [
         "invalid_request",
         "auth",
@@ -3623,7 +3632,6 @@ fn call_error_user_message_omits_protocol_code_and_falls_back_for_empty() {
         "unsupported",
         "upstream",
         "unavailable",
-        "cancelled",
         "internal",
         "extension_crashed",
         "extension_protocol",
@@ -3650,10 +3658,13 @@ fn call_error_user_message_omits_protocol_code_and_falls_back_for_empty() {
         fail("not_found", "").user_message(),
         "What the add-on looked for could not be found."
     );
-    assert_eq!(
-        fail("cancelled", "").user_message(),
-        "The action was cancelled."
-    );
+    for empty in ["", "   ", "cancelled", "cancelled: ", "..."] {
+        assert_eq!(
+            fail("cancelled", empty).user_message(),
+            "cancelled: The action was cancelled.",
+            "cancelled / {empty:?}"
+        );
+    }
 }
 
 // The program host and the spawn service against a real WSL distribution (`wsl_real_*`, ignored

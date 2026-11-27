@@ -547,7 +547,9 @@ fn plain_code_message(code: &str) -> &'static str {
 impl CallError {
     /// The error as a person reads it, without its protocol code. When the message itself is
     /// empty, repeats only the code, or carries no words, falls back to a plain sentence for the
-    /// code. `Display` keeps `code: message` for logs and tests.
+    /// code. For the `cancelled` code, keeps `cancelled: <message>` so window callers detect any
+    /// cancel by its code rather than by matching message text. `Display` keeps `code: message`
+    /// for logs and tests.
     pub fn user_message(&self) -> String {
         let code = self.code.trim();
         let mut msg = self.message.trim();
@@ -557,14 +559,20 @@ impl CallError {
                 msg = rest.trim();
             }
         }
-        if !msg.is_empty()
+        let body = if !msg.is_empty()
             && !msg.eq_ignore_ascii_case(code)
             && !is_protocol_code(msg)
             && msg.chars().any(char::is_alphanumeric)
         {
-            return msg.to_string();
+            msg
+        } else {
+            plain_code_message(code)
+        };
+        if code.eq_ignore_ascii_case("cancelled") {
+            format!("cancelled: {body}")
+        } else {
+            body.to_string()
         }
-        plain_code_message(code).to_string()
     }
 }
 

@@ -447,11 +447,12 @@ describe("the head, by state", () => {
     expect(page.text()).toContain("settings.json is read-only");
     expect(page.text()).not.toMatch(/permission:/i);
 
-    // An unprefixed confirmation cancel from program_call still stops quietly.
+    // A cancel with any message stops quietly because Rust keeps the `cancelled:` prefix.
     const { page: cancelPage } = await opened(TOOLS[0] as Tool, "not-configured", {
-      ops: { apply: () => new Error("the native confirmation was cancelled") },
+      ops: { apply: () => new Error("cancelled: confirmation window closed by desktop") },
     });
     await cancelPage.click("Connect Claude Code");
+    expect(cancelPage.text()).not.toContain("confirmation window closed by desktop");
     expect(cancelPage.text()).not.toMatch(/cancelled/i);
   });
 });

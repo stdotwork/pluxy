@@ -52,6 +52,7 @@ function withoutProtocolCode(message: string): string {
   const colon = trimmed.indexOf(":");
   if (colon > 0) {
     const code = trimmed.slice(0, colon).trim().toLowerCase();
+    if (code === "cancelled") return message;
     const fallback = PROTOCOL_CODES[code];
     if (fallback) {
       const rest = trimmed.slice(colon + 1).trim();
