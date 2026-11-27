@@ -418,6 +418,42 @@ describe("the head, by state", () => {
     await page.click("Try again");
     expect(ch.reads.length).toBe(2);
   });
+
+  test("an add-on error shows only its message without the protocol code, or a plain sentence when empty", async () => {
+    const claude = channel();
+    const claudePage = await mount(() => <ClaudeCodePage />, claude.invoke);
+    claude.reads[0]?.fail(
+      "invalid_request: /home/me/.claude does not exist yet: run Claude Code once (it makes the folder), then read the settings again",
+    );
+    await settle();
+    expect(claudePage.text()).toContain(
+      "Could not read Claude Code's settings. /home/me/.claude does not exist yet: run Claude Code once (it makes the folder), then read the settings again",
+    );
+    expect(claudePage.text()).not.toMatch(/invalid_request/i);
+
+    const pi = channel();
+    const piPage = await mount(() => <PiPage />, pi.invoke);
+    pi.reads[0]?.fail("not_found: ");
+    await settle();
+    expect(piPage.text()).toContain(
+      "Could not read Pi's settings. What the add-on looked for could not be found.",
+    );
+    expect(piPage.text()).not.toMatch(/not_found/i);
+
+    const { page } = await opened(TOOLS[0] as Tool, "not-configured", {
+      ops: { apply: () => new Error("permission: settings.json is read-only") },
+    });
+    await page.click("Connect Claude Code");
+    expect(page.text()).toContain("settings.json is read-only");
+    expect(page.text()).not.toMatch(/permission:/i);
+
+    // An unprefixed confirmation cancel from program_call still stops quietly.
+    const { page: cancelPage } = await opened(TOOLS[0] as Tool, "not-configured", {
+      ops: { apply: () => new Error("the native confirmation was cancelled") },
+    });
+    await cancelPage.click("Connect Claude Code");
+    expect(cancelPage.text()).not.toMatch(/cancelled/i);
+  });
 });
 
 describe("the add-on first", () => {

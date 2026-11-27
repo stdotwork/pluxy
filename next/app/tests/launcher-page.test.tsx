@@ -166,3 +166,14 @@ test("the notification switch saves the moment it changes", async () => {
   await m.fire(toggle as never, "change");
   expect(m.commands("launcher_settings")).toEqual([{ notice: false }]);
 });
+
+test("a launcher error drops any leading protocol code", async () => {
+  const m = await page({
+    launcher_launch: () => Promise.reject("invalid_request: the working directory does not exist"),
+  });
+  await m.input("Program", "claude");
+  await m.input("Folder", "/missing/project");
+  await m.click("Start…");
+  expect(m.text()).toContain("the working directory does not exist");
+  expect(m.text()).not.toMatch(/invalid_request/i);
+});

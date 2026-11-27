@@ -3566,6 +3566,96 @@ fn a_start_wsl_refused_is_tried_again_and_counts_as_one_crash_only_when_it_stays
     h.stop_all();
 }
 
+#[test]
+fn call_error_user_message_omits_protocol_code_and_falls_back_for_empty() {
+    // A real Host::call error carries its protocol code in `.code` and `Display`, while
+    // `user_message()` gives only the message that reaches a page or dialog.
+    let h = host(Value::Null);
+    let real = h.call(ID, "summary", json!({}), None).unwrap_err();
+    assert_eq!(real.code, "invalid_request", "{real}");
+    assert!(
+        real.to_string().starts_with("invalid_request: "),
+        "Display keeps the code for logs: {real}"
+    );
+    let shown = real.user_message();
+    assert_eq!(shown, real.message);
+    assert!(
+        !shown.contains("invalid_request"),
+        "window string must not show protocol code: {shown}"
+    );
+    h.stop_all();
+
+    // Realistic add-on error (missing settings folder): message only, no `invalid_request:`.
+    let missing = fail(
+        "invalid_request",
+        "/home/me/.claude does not exist yet: run Claude Code once",
+    );
+    assert_eq!(
+        missing.to_string(),
+        "invalid_request: /home/me/.claude does not exist yet: run Claude Code once"
+    );
+    assert_eq!(
+        missing.user_message(),
+        "/home/me/.claude does not exist yet: run Claude Code once"
+    );
+
+    // A message that repeats a protocol code prefix still loses it.
+    let repeated = fail("not_found", "not_found: settings.json is missing");
+    assert_eq!(repeated.user_message(), "settings.json is missing");
+
+    // A cancelled confirmation keeps its plain words without a `cancelled:` prefix.
+    let cancel = fail("cancelled", "the native confirmation was cancelled");
+    assert_eq!(
+        cancel.user_message(),
+        "the native confirmation was cancelled"
+    );
+
+    // Empty, whitespace, bare-code, or punctuation-only messages fall back to a plain sentence
+    // that never leaks the raw protocol code.
+    for code in [
+        "invalid_request",
+        "auth",
+        "permission",
+        "account_closed",
+        "not_found",
+        "rate_limit",
+        "quota",
+        "unsupported",
+        "upstream",
+        "unavailable",
+        "cancelled",
+        "internal",
+        "extension_crashed",
+        "extension_protocol",
+        "extension_unavailable",
+        "extension_timeout",
+        "incompatible",
+        "something_new",
+    ] {
+        for empty in ["", "   ", code, &format!("{code}: "), "..."] {
+            let e = fail(code, empty);
+            let msg = e.user_message();
+            assert!(!msg.is_empty(), "{code} / {empty:?}");
+            assert!(
+                !msg.contains('_'),
+                "fallback for {code} / {empty:?} must not leak snake_case code: {msg}"
+            );
+            assert!(
+                !msg.to_ascii_lowercase().starts_with(&format!("{code}:")),
+                "fallback for {code} / {empty:?} must not start with code: {msg}"
+            );
+        }
+    }
+    assert_eq!(
+        fail("not_found", "").user_message(),
+        "What the add-on looked for could not be found."
+    );
+    assert_eq!(
+        fail("cancelled", "").user_message(),
+        "The action was cancelled."
+    );
+}
+
 // The program host and the spawn service against a real WSL distribution (`wsl_real_*`, ignored
 // but in the WSL jobs of next-app-tools-platforms.yml).
 #[cfg(windows)]
