@@ -233,8 +233,9 @@ fn a_manifests_title_and_summary_are_kept_and_named_first() {
 }
 
 /// The native confirmation enabling a tool says first, in plain words, which add-on it is by its
-/// title, what it adds, that it runs with full access to the user account, who signed it and the
-/// add-ons it uses; the exact record follows it, with no package ID, JSON or "core" before it.
+/// title, that it runs with full access to the user account, who signed it and the add-ons it
+/// uses, and last what its manifest says it adds; the exact record follows it, with no package ID,
+/// JSON or "core" before it.
 #[cfg(native_stack)]
 #[test]
 fn turning_on_an_add_on_says_what_it_is_in_plain_words() {
@@ -252,9 +253,11 @@ fn turning_on_an_add_on_says_what_it_is_in_plain_words() {
         a.enable_headline(),
         "Turn on the Claude Code add-on.\n\nIt runs as you on this computer, with full access to your user account. It is verified: signed by pluxy and installed from curated.\n\nPoints Claude Code at pluxy by editing its settings file, with a backup to undo it."
     );
-    assert!(a
-        .update_headline("0.9.0")
-        .starts_with("Update the Claude Code add-on from 0.9.0 to 1.0.0. 0.9.0 keeps working until 1.0.0 is ready.\nPoints Claude Code"));
+    let update = a.update_headline("0.9.0");
+    assert!(update.starts_with("Update the Claude Code add-on from 0.9.0 to 1.0.0. 0.9.0 keeps working until 1.0.0 is ready.\n\nIt runs as you on this computer, with full access to your user account."));
+    assert!(update.ends_with(
+        "\n\nPoints Claude Code at pluxy by editing its settings file, with a backup to undo it."
+    ));
     // A title cannot add a line of its own.
     a.title = "Claude Code.\nIt is safe".into();
     assert!(a
