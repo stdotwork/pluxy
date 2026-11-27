@@ -13,6 +13,20 @@ export const configText = strings("config", {
   network: "Network",
   logging: "Logging",
   keys: "Keys",
+  access: "Other computers",
+  remote: "Let other computers manage pluxy",
+  remoteAbout:
+    "On: someone on another computer can open this panel and manage pluxy, with the management key. Off: only the computer pluxy runs on can. Takes effect at once.",
+  listen: "Address pluxy listens on",
+  listenAbout:
+    "Where pluxy waits for connections: an address and a port. 127.0.0.1:8317 lets only the computer pluxy runs on connect; 0.0.0.0:8317 lets any computer that can reach it connect. Takes effect the next time pluxy starts.",
+  listenPlaceholder: "0.0.0.0:8317",
+  listenWaits:
+    "Saved. pluxy answers at {now} until it starts again, and at {next} from then on. Stop it and start it again to use the new address.",
+  listenNeedsRemote:
+    "Other computers can open this address, but cannot sign in until Let other computers manage pluxy is on.",
+  listenInvalid:
+    "That is not an address and a port. Type them with a colon between, such as 0.0.0.0:8317 or 127.0.0.1:8317.",
   proxy: "Outbound proxy",
   proxyAbout: "Send pluxy's requests to providers through this proxy. Leave empty to connect directly.",
   proxySaved:
@@ -27,7 +41,7 @@ export const configText = strings("config", {
   logToFile: "Write pluxy's log to a file",
   logToFileAbout: "Needed to read pluxy's log on the Logs page.",
   size: "Largest log size (MB)",
-  sizeAbout: "Older log files are deleted past this size.",
+  sizeAbout: "Older log files are deleted past this size. 0 means no limit.",
   kept: "Failed requests to keep",
   keptAbout: "How many failed requests keep their full log. 0 keeps all.",
   usage: "Keep a record of requests",
@@ -86,4 +100,8 @@ export const configText = strings("config", {
 const UNPARSED = /^the config file does not parse, so it cannot be shown with its secrets hidden: /;
 
 /** Core's error for a file that does not parse, without core's own lead-in, and without a closing full stop. */
-export const fileError = (error: string) => error.replace(UNPARSED, "").trim().replace(/\.$/, "");
+export const fileError = (error: string) =>
+  error.replace(UNPARSED, "").replace(LEAD, "").trim().replace(/\.$/, "");
+
+/** Core's name for a file it cannot read, which says nothing a person needs before the reason. */
+const LEAD = /^invalid config document: /;

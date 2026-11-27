@@ -495,6 +495,16 @@ type Settings struct {
 	ProxyURL string `json:"proxy-url"`
 	// Payload is the payload rules, with today's core's names; absent when there are none.
 	Payload *payload.Rules `json:"payload,omitempty"`
+	// ManagementAllowRemote is management.allow-remote, under this core's own name: whether
+	// computers other than the one core runs on may use the management API.
+	ManagementAllowRemote bool `json:"management_allow_remote"`
+	// Listen is the address core serves on now, as host:port.
+	Listen string `json:"listen"`
+	// ListenAfterRestart is the address the config file holds when it is not the one core serves
+	// on: core takes a new address only when it starts. Absent when the two are the same.
+	ListenAfterRestart string `json:"listen_after_restart,omitempty"`
+	// FromThisComputer is whether this call came from the computer core runs on.
+	FromThisComputer bool `json:"from_this_computer"`
 }
 
 // ObservabilitySettings are the log and usage settings in Settings.
