@@ -133,7 +133,7 @@ test.describe("a core with accounts and requests", () => {
     });
   }
 
-  test("shows the verdict, the groups with limits, 7 bars and 10 latest rows, and All requests opens Activity", async ({
+  test("shows the verdict, the accounts by provider with limits, a pool per provider, 7 bars and 10 latest rows, and All requests opens Activity", async ({
     page,
   }) => {
     await withLimits(page);
@@ -145,9 +145,16 @@ test.describe("a core with accounts and requests", () => {
       /^\d+ serving · 14 requests in 7 days, 78\.5% succeeded$/,
     );
 
-    const serving = page.getByRole("region", { name: "Serving", exact: true });
-    await expect(serving.getByRole("link", { name: "Test account", exact: true })).toBeVisible();
-    const limits = serving.locator('[data-part="account-row"]').first().locator('[data-part="limits"]');
+    // The accounts by provider: Test account is test/alpha's, as is its pool.
+    const alpha = page.locator(".home-group").and(page.getByRole("region", { name: "Alpha", exact: true }));
+    await expect(alpha.getByRole("link", { name: "Test account", exact: true })).toBeVisible();
+    const pool = page.locator('[data-part="pool-card"][data-provider="alpha"]');
+    await expect(pool).toContainText("5-hour limit");
+    await expect(pool).toContainText(/\d+ of \d+ serving/);
+    const limits = alpha
+      .locator('[data-part="account-row"]')
+      .filter({ has: page.getByRole("link", { name: "Test account", exact: true }) })
+      .locator('[data-part="limits"]');
     await expect(limits).toContainText("5h");
     await expect(limits).toContainText("58% left");
     await expect(limits).toContainText("wk");
@@ -309,12 +316,17 @@ test.describe("a core with accounts and requests", () => {
     await expect(page.locator('[data-part="days"]')).toHaveCount(0);
   });
 
-  test("Copy puts the address for tools on the clipboard", async ({ page, context }) => {
+  test("Copy puts the base URL for the API a tool speaks on the clipboard", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await openPanel(page, core);
     await signIn(page, core);
-    await expect(page.getByText("Address for tools", { exact: true })).toBeVisible();
-    await expect(page.locator(".home-address code")).toHaveText(core.base);
+    const card = page.locator('[data-part="connection-card"]');
+    await expect(card.getByRole("heading", { name: "Point a tool at pluxy" })).toBeVisible();
+    await expect(card.getByText("Base URL", { exact: true })).toBeVisible();
+    // OpenAI first: its base URL ends in /v1. Claude's is the address itself.
+    await expect(card.locator(".home-address code")).toHaveText(`${core.base}/v1`);
+    await card.getByRole("radio", { name: "Claude", exact: true }).check();
+    await expect(card.locator(".home-address code")).toHaveText(core.base);
     await page.getByRole("button", { name: "Copy", exact: true }).click();
     await expect(page.getByRole("button", { name: "Copied", exact: true })).toBeVisible();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(core.base);

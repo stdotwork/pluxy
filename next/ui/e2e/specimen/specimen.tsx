@@ -6,6 +6,10 @@ import { render } from "preact";
 import type { Account, QuotaLimit, SetupClient, UsageEvent } from "../../kit/api";
 import {
   AccountRow,
+  ConnectionCard,
+  PoolCard,
+  ProviderMark,
+  poolOf,
   RequestRow,
   SettingRow,
   StaleNotice,
@@ -183,6 +187,62 @@ function SavingSetting() {
 }
 
 /** A section's heading, with room above it. */
+const RUNNING = new Set(["pluxy/claude", "pluxy/codex", "pluxy/gemini", "pluxy/kimi"]);
+
+/** Pools over the specimen's accounts: Claude's and Codex's from the rows above, and three made up. */
+const windowsOf = new Map(ACCOUNTS.filter((x) => x.w).map((x) => [x.a.id, x.w as Windows]));
+const POOLS = [
+  poolOf(
+    "pluxy/claude",
+    ACCOUNTS.filter((x) => x.a.extension === "pluxy/claude").map((x) => x.a),
+    windowsOf,
+    RUNNING,
+  ),
+  poolOf(
+    "pluxy/codex",
+    ACCOUNTS.filter((x) => x.a.extension === "pluxy/codex").map((x) => x.a),
+    windowsOf,
+    RUNNING,
+  ),
+  poolOf(
+    "pluxy/gemini",
+    [account("g1", { extension: "pluxy/gemini" }), account("g2", { extension: "pluxy/gemini" })],
+    new Map([
+      ["g1", read(85, 40)],
+      ["g2", read(10, 5)],
+    ]),
+    RUNNING,
+  ),
+  poolOf(
+    "pluxy/xai",
+    [account("x1", { extension: "pluxy/xai" })],
+    new Map([
+      ["x1", { state: "read", limits: [{ id: "prepaid", unit: "usd", remaining: 42.1 }] } as Windows],
+    ]),
+  ),
+  poolOf(
+    "demo/a-provider-with-a-long-name",
+    [account("d1", { extension: "demo/a-provider-with-a-long-name" })],
+    new Map(),
+  ),
+];
+
+const TOOLS = [
+  tool({}),
+  tool({ id: "codex", name: "Codex" }),
+  tool({ id: "opencode", name: "OpenCode", state: "not-configured" }),
+];
+
+const MARKS = [
+  "pluxy/claude",
+  "pluxy/codex",
+  "pluxy/gemini",
+  "pluxy/xai",
+  "pluxy/kimi",
+  "pluxy/openai-compatible",
+  "demo/aurora",
+];
+
 const Head = (props: { children: string }) => <h2 style={{ margin: "24px 0 8px" }}>{props.children}</h2>;
 
 function Specimen() {
@@ -214,6 +274,41 @@ function Specimen() {
             onClearCooldown={fine}
           />
         ))}
+      </section>
+      <section aria-label="Pools">
+        <Head>Pools</Head>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(12.5em, 1fr))",
+            gap: "12px",
+          }}
+        >
+          {POOLS.map((p) => (
+            <PoolCard key={p.extension} pool={p} />
+          ))}
+        </div>
+      </section>
+      <section aria-label="Connection">
+        <Head>Point a tool at pluxy</Head>
+        <div style={{ maxWidth: "380px" }}>
+          <ConnectionCard
+            address="http://127.0.0.1:8317"
+            keys={[{ id: "k1", masked: "sk-pluxy-****3f9a", label: "Claude Code" }]}
+            clients={TOOLS}
+          />
+        </div>
+      </section>
+      <section aria-label="Marks">
+        <Head>Provider marks</Head>
+        <p style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          {MARKS.map((m) => (
+            <ProviderMark key={m} extension={m} />
+          ))}
+          {MARKS.map((m) => (
+            <ProviderMark key={`${m}-small`} extension={m} size="small" />
+          ))}
+        </p>
       </section>
       <section aria-label="Requests">
         <Head>Requests</Head>
