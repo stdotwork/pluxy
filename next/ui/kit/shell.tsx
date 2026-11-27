@@ -168,7 +168,7 @@ export function SignIn(props: { host: Host; onDone: () => void; reason?: string;
       }
     >
       <form
-        class="signin"
+        class="signin-form"
         onSubmit={async (e) => {
           e.preventDefault();
           setBusy(true);

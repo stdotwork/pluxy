@@ -757,21 +757,14 @@
     padding: calc(var(--s) * 4) calc(var(--s) * 4) calc(var(--s) * 10);
   }
 
-  /* Signing in */
-
-  .signin {
-    min-height: 100vh;
+  /* Signing in: the focused window's card (focus.css) holds the form. */
+  .signin-form {
     display: grid;
-    place-items: center;
-    padding: calc(var(--s) * 4);
-  }
-
-  .signin form {
-    width: min(100%, 24em);
     gap: calc(var(--s) * 4);
   }
 
-  .signin p {
-    margin: 0;
+  .signin-form > .btn {
+    width: 100%;
+    min-height: var(--px-size-control-main);
   }
 }

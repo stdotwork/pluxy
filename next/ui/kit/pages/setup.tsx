@@ -49,8 +49,7 @@ const t = strings("setup", {
   step1: "Your AI accounts",
   step2: "Your coding tool",
   step3: "Check it works",
-  lead1:
-    "Tick the kinds of account you have, then sign in to one. pluxy sends your tools' requests through it.",
+  lead1: "Your coding tools' requests go through these accounts. Add the kinds you have, then sign in.",
   lead2: "Point a coding tool at pluxy, so its requests go through your accounts.",
   lead3: "Send one short request through an account to see that it answers.",
   stepOf: "Step {n} of 3",

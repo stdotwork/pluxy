@@ -149,6 +149,7 @@
   .focus-foot {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     flex-wrap: wrap;
     gap: calc(var(--s) * 2);
     padding-top: calc(var(--s) * 4);

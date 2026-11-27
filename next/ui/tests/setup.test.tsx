@@ -17,6 +17,7 @@ import {
   client,
   descend,
   flush,
+  goTo,
   hasButton,
   heading,
   IMPORT,
@@ -30,6 +31,7 @@ import {
   press,
   step,
   steps,
+  stepTitles,
   tick,
   withPart,
   world,
@@ -65,11 +67,12 @@ test("three steps in order, and nothing a scan found is a step of its own", asyn
     ],
   });
   const m = await w.mount(<SetupPage />);
-  expect(steps(m.root).map((s) => all(s, "h2")[0]?.textContent)).toEqual([
-    "Your AI accounts",
-    "Your coding tool",
-    "Check it works",
-  ]);
+  const three = ["Your AI accounts", "Your coding tool", "Check it works"];
+  expect(stepTitles(m.root)).toEqual(three);
+  // A first run shows one step at a time: the row of steps, and step 1 under it.
+  expect(withPart(m.root, "setup-step")).toHaveLength(1);
+  expect(all(step(m.root, 1), "h2")[0]?.textContent).toBe("Your AI accounts");
+  expect(step(m.root, 1).textContent).toContain("Step 1 of 3");
   expect(withPart(m.root, "setup-import")).toHaveLength(0);
   expect(m.text()).not.toContain("Found on");
   expect(m.text()).toContain(
@@ -77,7 +80,7 @@ test("three steps in order, and nothing a scan found is a step of its own", asyn
   );
 });
 
-test("the import line is above the steps, and only when core found a CLIProxyAPI setup", async () => {
+test("the import line is in step 1 under the kinds on a first run, above the steps afterwards, and only when core found a CLIProxyAPI setup", async () => {
   const w = world({ imports: [IMPORT] });
   const m = await w.mount(<SetupPage />);
   const line = withPart(m.root, "setup-import")[0];
@@ -86,7 +89,16 @@ test("the import line is above the steps, and only when core found a CLIProxyAPI
   );
   expect(line?.textContent).toContain("~/.cli-proxy-api/config.yaml");
   const order = descend(m.root);
-  expect(order.indexOf(line as never)).toBeLessThan(order.indexOf(step(m.root, 1)));
+  expect(descend(step(m.root, 1))).toContain(line as never);
+  expect(order.indexOf(line as never)).toBeGreaterThan(order.indexOf(must(kindRows(m.root)[0])));
+  await goTo(m.root, 2);
+  expect(withPart(m.root, "setup-import")).toHaveLength(0);
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  const later = await world({ imports: [IMPORT], firstRun: false }).mount(<SetupPage />);
+  const above = must(withPart(later.root, "setup-import")[0]);
+  const all2 = descend(later.root);
+  expect(all2.indexOf(above)).toBeLessThan(all2.indexOf(step(later.root, 1)));
 });
 
 test("a first run opens the first step not done", async () => {
@@ -114,8 +126,12 @@ test("after the first run every step is folded, with what each came to, and Back
   expect(step(m.root, 3).textContent).toContain("Not tested yet.");
   expect(steps(m.root).map((s) => attribute(s, "data-state"))).toEqual(["done", "done", "todo"]);
   expect(attribute(linkIn(m.root, "Back to Home"), "href")).toBe("#/");
-  expect(hasButton(m.root, "Leave setup for now")).toBe(false);
+  expect(hasButton(m.root, "Finish later")).toBe(false);
   expect(m.text()).not.toContain("Set up pluxy");
+  // The checklist has no row of steps and no Back.
+  expect(withPart(m.root, "setup-stepper")).toHaveLength(0);
+  await goTo(m.root, 2);
+  expect(hasButton(step(m.root, 2), "Back")).toBe(false);
 });
 
 test("folded summaries when nothing is done yet", async () => {
@@ -166,10 +182,11 @@ test("a scan ending or an account appearing does not move the open step", async 
   await tickTimers();
   expect(step(m.root, 1).textContent).toContain("1 account connected.");
   expect(openStep(m.root)).toBe(1);
-  expect(step(m.root, 2).textContent).toContain("Claude Code uses pluxy.");
+  // The row of steps marks step 2 done: a tool uses pluxy now.
+  expect(steps(m.root).map((s) => attribute(s, "data-state"))).toEqual(["open", "done", "todo"]);
 });
 
-test("Skip and Continue open the next step and move focus to its heading; Open opens that step", async () => {
+test("Skip and Continue open the next step and move focus to its heading; a step in the row of steps opens that step", async () => {
   const w = world();
   const m = await w.mount(<SetupPage />);
   await press(buttonIn(step(m.root, 1), "Skip"));
@@ -178,7 +195,21 @@ test("Skip and Continue open the next step and move focus to its heading; Open o
   await press(buttonIn(step(m.root, 2), "Skip"));
   expect(openStep(m.root)).toBe(3);
   expect(m.document.activeElement).toBe(heading(m.root, 3));
-  await press(buttonIn(step(m.root, 1), "Open"));
+  await goTo(m.root, 1);
+  expect(openStep(m.root)).toBe(1);
+  expect(m.document.activeElement).toBe(heading(m.root, 1));
+  expect(attribute(all(steps(m.root)[0] as never, "button")[0] as never, "aria-current")).toBe("step");
+});
+
+test("Back goes to the step before and moves focus to its heading; step 1 has none", async () => {
+  const m = await world().mount(<SetupPage />);
+  expect(hasButton(step(m.root, 1), "Back")).toBe(false);
+  await press(buttonIn(step(m.root, 1), "Skip"));
+  await press(buttonIn(step(m.root, 2), "Skip"));
+  await press(buttonIn(step(m.root, 3), "Back"));
+  expect(openStep(m.root)).toBe(2);
+  expect(m.document.activeElement).toBe(heading(m.root, 2));
+  await press(buttonIn(step(m.root, 2), "Back"));
   expect(openStep(m.root)).toBe(1);
   expect(m.document.activeElement).toBe(heading(m.root, 1));
 });
@@ -190,13 +221,13 @@ test("every step can be skipped: Skip on steps 1 and 2, Finish without testing o
   expect(hasButton(step(m.root, 2), "Skip")).toBe(true);
   await press(buttonIn(step(m.root, 2), "Skip"));
   expect(hasButton(step(m.root, 3), "Finish without testing")).toBe(true);
-  expect(hasButton(m.root, "Leave setup for now")).toBe(true);
-  expect(m.text()).toContain("It won't open by itself again; it stays under Settings.");
+  expect(hasButton(m.root, "Finish later")).toBe(true);
+  expect(m.text()).toContain("Finish later leaves a reminder on Home. Setup stays under Settings.");
 });
 
 test("Continue, not Skip, once a step is done", async () => {
   const m = await world({ accounts: [ACC], clients: [CONNECTED] }).mount(<SetupPage />);
-  await press(buttonIn(step(m.root, 1), "Open"));
+  await goTo(m.root, 1);
   expect(attribute(buttonIn(step(m.root, 1), "Continue"), "data-variant")).toBe("primary");
   await press(buttonIn(step(m.root, 1), "Continue"));
   expect(attribute(buttonIn(step(m.root, 2), "Continue"), "data-variant")).toBe("primary");
@@ -388,16 +419,16 @@ test("step 2 is the Tools list: Set up shows the steps, and Make key puts a key 
   expect(all(row, "pre")[0]?.textContent).toContain('"key": "sk-secret-1"');
 });
 
-test("a key made in step 2 is gone once the step folds: reopened, the text has no key and Make key is back", async () => {
+test("a key made in step 2 is gone once the person leaves the step: back on it, the text has no key and Make key is back", async () => {
   const w = world({ accounts: [ACC] });
   const m = await w.mount(<SetupPage />);
   await press(buttonIn(must(withPart(step(m.root, 2), "tool-row")[0]), "Set up"));
   await press(buttonIn(must(withPart(step(m.root, 2), "tool-row")[0]), "Make key"));
   expect(m.text()).toContain("sk-secret-1");
-  // Fold step 2 by opening step 1, then open step 2 again.
-  await press(buttonIn(step(m.root, 1), "Open"));
+  // Leave step 2 for step 1, then open step 2 again.
+  await goTo(m.root, 1);
   expect(m.text()).not.toContain("sk-secret-1");
-  await press(buttonIn(step(m.root, 2), "Open"));
+  await goTo(m.root, 2);
   const row = must(withPart(step(m.root, 2), "tool-row")[0]);
   if (hasButton(row, "Set up")) await press(buttonIn(row, "Set up"));
   expect(m.text()).not.toContain("sk-secret-1");
@@ -449,8 +480,8 @@ test("the host's tool button and its own tools are used in step 2", async () => 
       options={{ toolAction: (c) => <a href={`#/${c.id}`}>Open {c.name}</a>, extraTools: [extra] }}
     />,
   );
-  await press(buttonIn(step(m.root, 1), "Open"));
-  await press(buttonIn(step(m.root, 2), "Open"));
+  await goTo(m.root, 1);
+  await goTo(m.root, 2);
   const two = step(m.root, 2);
   expect(attribute(linkIn(two, "Open Claude Code"), "href")).toBe("#/claude-code");
   expect(two.textContent).toContain("Hermes Agent");
@@ -463,8 +494,8 @@ test("the host's notes are shown in step 2", async () => {
       options={{ notes: () => ({ above: <p>Above the list.</p>, below: <p>Under the list.</p> }) }}
     />,
   );
-  await press(buttonIn(step(m.root, 1), "Open"));
-  await press(buttonIn(step(m.root, 2), "Open"));
+  await goTo(m.root, 1);
+  await goTo(m.root, 2);
   const two = step(m.root, 2);
   expect(two.textContent).toContain("Above the list.");
   expect(two.textContent).toContain("Under the list.");
@@ -494,13 +525,14 @@ test("no developer command and no 'this machine' anywhere on the page", async ()
   const m = await w.mount(<SetupPage />);
   const seen: string[] = [m.text()];
   for (const n of [1, 2, 3]) {
-    if (hasButton(step(m.root, n), "Open")) await press(buttonIn(step(m.root, n), "Open"));
+    await goTo(m.root, n);
     seen.push(m.text());
   }
-  await press(buttonIn(step(m.root, 2), "Open"));
+  await goTo(m.root, 2);
   await press(buttonIn(must(withPart(m.root, "tool-row")[0]), "Set up"));
   seen.push(m.text());
   // The import preview, with its lists: text in a closed <details> is in textContent too.
+  await goTo(m.root, 1);
   await press(buttonIn(line(m.root), "Preview import"));
   expect(withPart(m.root, "setup-report")).toHaveLength(1);
   seen.push(m.text());
@@ -535,9 +567,17 @@ test("the test sends no model by default, says what passed, and offers Finish se
   expect(passed?.textContent).toContain("It works: Work replied in 420 ms using model-a.");
   expect(descend(must(passed)).some((n) => attribute(n, "aria-label") === "Succeeded")).toBe(true);
   expect(attribute(buttonIn(step(m.root, 3), "Finish setup"), "data-variant")).toBe("primary");
-  // Folded, the step says what passed.
-  await press(buttonIn(step(m.root, 1), "Open"));
-  expect(step(m.root, 3).textContent).toContain("Passed: model-a in 420 ms.");
+  // Left for another step, the row of steps marks it done.
+  await goTo(m.root, 1);
+  expect(attribute(must(steps(m.root)[2]), "data-state")).toBe("done");
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  // Afterwards, folded in the checklist, the step says what passed.
+  const later = await world({ accounts: [ACC], clients: [CONNECTED], firstRun: false }).mount(<SetupPage />);
+  await goTo(later.root, 3);
+  await press(buttonIn(step(later.root, 3), "Send a test request"));
+  await goTo(later.root, 1);
+  expect(step(later.root, 3).textContent).toContain("Passed: model-a in 420 ms.");
 });
 
 test("a chosen model is sent; excluded models are not offered", async () => {
@@ -713,7 +753,7 @@ test("no account that can take a test: Add an account opens step 1, or finish wi
   const m = await w.mount(<SetupPage />);
   // Neither account can take requests, so step 1 is not done and opens first.
   expect(openStep(m.root)).toBe(1);
-  await press(buttonIn(step(m.root, 3), "Open"));
+  await goTo(m.root, 3);
   const three = step(m.root, 3);
   expect(three.textContent).toContain("There is no account to test yet.");
   expect(hasButton(three, "Finish without testing")).toBe(true);
@@ -742,7 +782,7 @@ test("every finish button sends POST /setup/done, tells the host, and goes Home"
     Parameters<typeof world>[0],
     (m: Awaited<ReturnType<ReturnType<typeof world>["mount"]>>) => Promise<void>,
   ][] = [
-    ["Leave setup for now", {}, async () => {}],
+    ["Finish later", {}, async () => {}],
     ["Finish without testing", { accounts: [ACC], clients: [CONNECTED] }, async () => {}],
     [
       "Finish setup",
@@ -765,11 +805,18 @@ test("every finish button sends POST /setup/done, tells the host, and goes Home"
   for (const [label, init, before] of cases) {
     place.hash = "#/setup";
     let finished = 0;
-    const w = world(init);
+    // A note from an earlier Finish later: only Finish later keeps one.
+    const w = world({ ...init, prefs: { "setup-later": "http://127.0.0.1:8317" } });
     const m = await w.mount(<SetupPage options={{ onFinish: () => finished++ }} />);
     await before(m);
     await press(buttonIn(m.root, label));
     expect([label, w.sent("POST", "/setup/done").length, finished, place.hash]).toEqual([label, 1, 1, "#/"]);
+    // The shell is told the first run is over, and Home's card is left only by Finish later.
+    expect([label, w.firstRun.at(-1), w.prefs.get("setup-later")]).toEqual([
+      label,
+      false,
+      label === "Finish later" ? "http://127.0.0.1:8317" : undefined,
+    ]);
     restoreDom();
     Object.defineProperty(globalThis, "location", { configurable: true, value: place });
   }
@@ -784,10 +831,12 @@ test("a finish that fails stays, with why", async () => {
         : undefined,
   });
   const m = await w.mount(<SetupPage options={{ onFinish: () => finished++ }} />);
-  await press(buttonIn(m.root, "Leave setup for now"));
+  await press(buttonIn(m.root, "Finish later"));
   expect(m.text()).toContain("Could not finish setup: disk full.");
   expect(finished).toBe(0);
   expect(place.hash).toBe("#/setup");
+  expect(w.firstRun).toEqual([true]);
+  expect(w.prefs.get("setup-later")).toBeUndefined();
 });
 
 test("a 401 from any call signs out", async () => {
@@ -796,7 +845,7 @@ test("a 401 from any call signs out", async () => {
       c.path === "/setup/done" ? { status: 401, error: { code: "auth", message: "no" } } : undefined,
   });
   const m = await w.mount(<SetupPage />);
-  await press(buttonIn(m.root, "Leave setup for now"));
+  await press(buttonIn(m.root, "Finish later"));
   expect(w.signedOut.times).toBe(1);
 });
 
@@ -838,8 +887,10 @@ const REPORT: ImportReport = {
 
 const importing = (
   answer?: (dry: boolean) => { status: number; body?: unknown; error?: { code: string; message: string } },
+  init: Parameters<typeof world>[0] = {},
 ) =>
   world({
+    ...init,
     imports: [IMPORT],
     reply: (c) => {
       if (c.path !== "/setup/import") return undefined;
@@ -968,7 +1019,8 @@ test("after a lost reply to Import now, Refresh shows core's record when the imp
 });
 
 test("a preview is dropped when the auth folder changes under it: Import now cannot send the old one", async () => {
-  const w = importing();
+  // The checklist keeps the import line above the steps while step 2 is open.
+  const w = importing(undefined, { firstRun: false });
   const m = await w.mount(<SetupPage />);
   await press(buttonIn(line(m.root), "Preview import"));
   expect(hasButton(line(m.root), "Import now")).toBe(true);

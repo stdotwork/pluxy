@@ -290,7 +290,9 @@
     color: var(--px-color-text-muted);
     font: inherit;
     cursor: pointer;
-    transition: background var(--t), color var(--t);
+    transition:
+      background var(--t),
+      color var(--t);
   }
 
   .setup-stepper button:hover {

@@ -85,6 +85,8 @@ export interface WorldInit {
   /** Login methods by extension; by default one browser method for each provider pick. */
   methods?: { extension: string; methods: { method: string; kind: string; label: string }[] }[];
   address?: string;
+  /** The host's prefs at the start. */
+  prefs?: Record<string, string>;
   /** An answer to any call first; undefined leaves it to the defaults. */
   reply?: (call: Call) => Reply<unknown> | Promise<Reply<unknown>> | undefined;
 }
@@ -118,6 +120,7 @@ export function world(init: WorldInit = {}) {
       ...state.setup.picks.filter((p) => p.installed).map((p) => p.id),
       ...state.packages.filter((p) => p.enabled).map((p) => p.id),
     ];
+  const prefs = new Map<string, string>(Object.entries(init.prefs ?? {}));
   const answer = async (call: Call): Promise<Reply<unknown>> => {
     calls.push(call);
     const given = await init.reply?.(call);
@@ -212,12 +215,20 @@ export function world(init: WorldInit = {}) {
     signedIn: () => true,
     signIn: async () => undefined,
     signOut: () => {},
-    prefs: { get: () => null, set: () => {} },
+    prefs: {
+      get: (name) => prefs.get(name) ?? null,
+      set: (name, value) => {
+        if (value === null) prefs.delete(name);
+        else prefs.set(name, value);
+      },
+    },
     features: new Set<Feature>(["signOut"]),
     address: init.address ?? "http://127.0.0.1:8317",
   };
   const signedOut = { times: 0 };
   const changed = { times: 0 };
+  /** What the page told the shell about the first run, in order. */
+  const firstRun: boolean[] = [];
   const kit = {
     host,
     api: api(host),
@@ -227,6 +238,9 @@ export function world(init: WorldInit = {}) {
     extensionsChanged: () => {
       changed.times++;
     },
+    setupFirstRun: (first: boolean) => {
+      firstRun.push(first);
+    },
   } as Kit;
   const mount = async (tree: ComponentChildren) => {
     const m = await mountIn(<KitContext.Provider value={kit}>{tree}</KitContext.Provider>);
@@ -234,7 +248,7 @@ export function world(init: WorldInit = {}) {
     return m;
   };
   const sent = (method: Method, path: string) => calls.filter((c) => c.method === method && c.path === path);
-  return { calls, state, signedOut, changed, mount, sent };
+  return { calls, state, signedOut, changed, firstRun, prefs, host, mount, sent };
 }
 
 // ---- reading the page ---------------------------------------------------------------------------
@@ -245,10 +259,38 @@ export const descend = (node: FakeNode): FakeNode[] => [node, ...node.childNodes
 export const withPart = (root: FakeNode, part: string) =>
   descend(root).filter((n) => attribute(n, "data-part") === part);
 
-/** The three steps, in order. */
-export const steps = (root: FakeNode) => withPart(root, "setup-step");
+/** The row of steps on a first run, or undefined afterwards. */
+const stepper = (root: FakeNode) => withPart(root, "setup-stepper")[0];
 
+/**
+ * The three steps, in order: on a first run the items of the row of steps, each with its state;
+ * afterwards the checklist's rows.
+ */
+export const steps = (root: FakeNode) => {
+  const row = stepper(root);
+  return row ? all(row, "li") : withPart(root, "setup-step");
+};
+
+/** The steps' titles, in order, as the row of steps or the checklist shows them. */
+export const stepTitles = (root: FakeNode) =>
+  stepper(root)
+    ? steps(root).map(
+        (li) =>
+          descend(li).find((n) => attribute(n, "class") === "setup-stepper-title")?.childNodes[0]
+            ?.textContent,
+      )
+    : steps(root).map((s) => all(s, "h2")[0]?.childNodes[0]?.textContent);
+
+/**
+ * Step n's content: on a first run the step on screen (it must be step n), afterwards its row in
+ * the checklist.
+ */
 export function step(root: FakeNode, n: number): FakeNode {
+  if (stepper(root)) {
+    const shown = withPart(root, "setup-step").find((s) => attribute(s, "data-step") === String(n));
+    if (!shown) throw new Error(`step ${n} is not on screen`);
+    return shown;
+  }
   const found = steps(root)[n - 1];
   if (!found) throw new Error(`no step ${n}`);
   return found;
@@ -259,6 +301,15 @@ export const openStep = (root: FakeNode) => {
   const at = steps(root).findIndex((s) => attribute(s, "data-state") === "open");
   return at < 0 ? undefined : at + 1;
 };
+
+/** Opens step n as the person would: its item in the row of steps, or its row's Open. */
+export async function goTo(root: FakeNode, n: number) {
+  const row = stepper(root);
+  if (row) {
+    const item = all(row, "li")[n - 1];
+    await press(must(item && all(item, "button")[0], `step ${n} in the row of steps`));
+  } else await press(buttonIn(step(root, n), "Open"));
+}
 
 export const heading = (root: FakeNode, n: number) => {
   const h = all(step(root, n), "h2")[0];
