@@ -242,6 +242,54 @@ test("opening a key menu does not cover the next key row or the last-key note", 
   expect((firstMenuBox?.y ?? 0) + (firstMenuBox?.height ?? 0)).toBeLessThanOrEqual((secondBox?.y ?? 0) + 1);
 });
 
+test("key row menu supports Arrow keys, closes when focus leaves, and Cancel returns focus to the menu button", async ({
+  page,
+}) => {
+  await keys(page).getByRole("button", { name: "New key", exact: true }).click();
+  await keys(page).getByLabel("Name", { exact: true }).fill("Script");
+  await keys(page).getByRole("button", { name: "Make key", exact: true }).click();
+  const row = keyRow(page, "Script");
+  await expect(row).toBeVisible();
+  const trigger = row.locator('button[aria-haspopup="menu"]');
+
+  // Enter opens the menu on Rename; Arrow keys move between items; Escape returns to trigger.
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  await expect(row.getByRole("menuitem", { name: "Rename", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(row.getByRole("menuitem", { name: "Delete", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(row.getByRole("menuitem", { name: "Rename", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(row.getByRole("menu")).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+
+  // ArrowDown / ArrowUp open the menu from the trigger on the first / last item.
+  await page.keyboard.press("ArrowDown");
+  await expect(row.getByRole("menuitem", { name: "Rename", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ArrowUp");
+  await expect(row.getByRole("menuitem", { name: "Delete", exact: true })).toBeFocused();
+
+  // Tabbing past the menu closes it.
+  await page.keyboard.press("Tab");
+  await expect(row.getByRole("menu")).toHaveCount(0);
+
+  // Cancel on Rename and Cancel on Delete confirm both return focus to the menu button.
+  await trigger.focus();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(row.getByLabel("Name", { exact: true })).toBeFocused();
+  await row.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(trigger).toBeFocused();
+
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Enter");
+  await expect(row.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(trigger).toBeFocused();
+});
+
 test("Refresh scans again", async ({ page }) => {
   const scan = page.waitForResponse(
     (r) => r.request().method() === "POST" && r.url().endsWith("/setup/scan"),

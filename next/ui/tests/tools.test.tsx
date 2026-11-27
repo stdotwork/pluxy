@@ -895,6 +895,54 @@ test("every tool row renders a mark beside its name, and the key row menu toggle
   expect(descend(first).filter((n) => attribute(n, "role") === "menu")).toHaveLength(0);
 });
 
+test("opening the key menu focuses the first item, Arrow keys move in it, and Cancel returns focus to the menu button", async () => {
+  const w = world({
+    keys: [
+      { id: "k1", masked: "sk-***11", label: "Script" },
+      { id: "k2", masked: "sk-***22" },
+    ],
+  });
+  const m = await w.mount(<ToolsPage />);
+  const first = keyRows(m.root)[0] as FakeNode;
+  const keyDown = async (node: FakeNode, key: string) => {
+    await act(async () => {
+      node.dispatchEvent(Object.assign(new Event("keydown"), { key }));
+    });
+    await settle();
+  };
+
+  // Opening with click focuses the first enabled menuitem (Rename).
+  await openKeyMenu(first);
+  expect(m.document.activeElement).toBe(buttonIn(first, "Rename"));
+  // ArrowDown moves to Delete; ArrowUp returns to Rename.
+  const menu = descend(first).find((n) => attribute(n, "role") === "menu") as FakeNode;
+  await keyDown(menu, "ArrowDown");
+  expect(m.document.activeElement).toBe(buttonIn(first, "Delete"));
+  await keyDown(menu, "ArrowUp");
+  expect(m.document.activeElement).toBe(buttonIn(first, "Rename"));
+  await keyDown(menu, "Escape");
+  expect(descend(first).filter((n) => attribute(n, "role") === "menu")).toHaveLength(0);
+  expect(m.document.activeElement).toBe(keyMenuButton(first));
+
+  // ArrowUp on the trigger opens the menu on its last item (Delete).
+  await keyDown(keyMenuButton(first), "ArrowUp");
+  expect(m.document.activeElement).toBe(buttonIn(first, "Delete"));
+
+  // Cancelling Delete confirm returns focus to the remounted menu button.
+  await press(buttonIn(first, "Delete"));
+  expect(m.document.activeElement).toBe(buttonIn(first, "Cancel"));
+  await press(buttonIn(first, "Cancel"));
+  expect(m.document.activeElement).toBe(keyMenuButton(first));
+
+  // ArrowDown on the trigger opens on Rename; cancelling Rename returns focus to the menu button.
+  await keyDown(keyMenuButton(first), "ArrowDown");
+  expect(m.document.activeElement).toBe(buttonIn(first, "Rename"));
+  await press(buttonIn(first, "Rename"));
+  expect(m.document.activeElement).toBe(all(first, "input")[0] as FakeNode);
+  await press(buttonIn(first, "Cancel"));
+  expect(m.document.activeElement).toBe(keyMenuButton(first));
+});
+
 test("a 401 anywhere signs the person out", async () => {
   const w = world({ make: () => ({ status: 401, error: { code: "unauthorized", message: "no" } }) });
   const m = await w.mount(<ToolsPage />);

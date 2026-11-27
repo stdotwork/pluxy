@@ -895,7 +895,12 @@ function KeyRow(props: {
   const [lastKey, setLastKey] = useState(false);
   const menuList = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const renameItemRef = useRef<HTMLButtonElement>(null);
+  const deleteItemRef = useRef<HTMLButtonElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const cancelDeleteRef = useRef<HTMLButtonElement>(null);
+  const menuTarget = useRef<"first" | "last">("first");
+  const returnFocus = useRef(false);
   const questionId = useId();
   const menuId = useId();
   const lastKeyId = useId();
@@ -903,9 +908,26 @@ function KeyRow(props: {
   const insideMenu = (target: Node | null) =>
     Boolean(triggerRef.current?.contains(target) || menuList.current?.contains(target));
 
+  const enabledMenuItems = (): HTMLButtonElement[] =>
+    [renameItemRef.current, deleteItemRef.current].filter((el): el is HTMLButtonElement =>
+      Boolean(el && !el.disabled),
+    );
+
+  const focusMenuItem = (which: "first" | "last") => {
+    const items = enabledMenuItems();
+    if (items.length === 0) {
+      menuList.current?.focus();
+      return;
+    }
+    (which === "last" ? items[items.length - 1] : items[0])?.focus();
+  };
+
   useLayoutEffect(() => {
     if (!menuOpen) return;
     const onPointerDown = (e: Event) => {
+      if (!insideMenu(e.target as Node | null)) setMenuOpen(false);
+    };
+    const onFocusIn = (e: Event) => {
       if (!insideMenu(e.target as Node | null)) setMenuOpen(false);
     };
     const onKeyDown = (e: Event) => {
@@ -915,16 +937,34 @@ function KeyRow(props: {
       }
     };
     document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("focusin", onFocusIn);
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("focusin", onFocusIn);
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [menuOpen]);
 
   useEffect(() => {
+    if (!menuOpen) return;
+    focusMenuItem(menuTarget.current);
+  }, [menuOpen]);
+
+  useEffect(() => {
     if (confirming) cancelDeleteRef.current?.focus();
   }, [confirming]);
+
+  useEffect(() => {
+    if (renaming) renameInputRef.current?.focus();
+  }, [renaming]);
+
+  useEffect(() => {
+    if (!renaming && !confirming && returnFocus.current) {
+      returnFocus.current = false;
+      triggerRef.current?.focus();
+    }
+  }, [renaming, confirming]);
 
   const rename = async (e: Event) => {
     e.preventDefault();
@@ -932,11 +972,13 @@ function KeyRow(props: {
     const reply = await api.renameClientKey(key.id, draft);
     if (reply.status === 401) return unauthorized();
     if (reply.status === 405) {
+      returnFocus.current = true;
       setRenaming(false);
       return props.onNoRename();
     }
     const why = problem(reply);
     if (why) return setRenameError(t("renameFailed", { reason: why }));
+    returnFocus.current = true;
     setRenaming(false);
     props.onRenamed();
   };
@@ -948,6 +990,7 @@ function KeyRow(props: {
     setDeleting(true);
     const reply = await api.deleteClientKey(key.id);
     setDeleting(false);
+    returnFocus.current = true;
     setConfirming(false);
     if (reply.status === 401) return unauthorized();
     if (reply.status === 409) return setLastKey(true);
@@ -964,12 +1007,18 @@ function KeyRow(props: {
       triggerRef.current?.focus();
       return;
     }
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    const items = menuList.current
-      ? [...menuList.current.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')]
-      : [];
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
+    const items = enabledMenuItems();
     if (items.length === 0) return;
     e.preventDefault();
+    if (e.key === "Home") {
+      items[0]?.focus();
+      return;
+    }
+    if (e.key === "End") {
+      items[items.length - 1]?.focus();
+      return;
+    }
     const at = items.indexOf(document.activeElement as HTMLButtonElement);
     const next = e.key === "ArrowDown" ? (at + 1) % items.length : (at <= 0 ? items.length : at) - 1;
     items[next]?.focus();
@@ -1006,8 +1055,19 @@ function KeyRow(props: {
             aria-expanded={menuOpen ? "true" : "false"}
             aria-controls={menuOpen ? menuId : undefined}
             aria-label={t("keyActions", { name: name.text })}
-            onClick={() => setMenuOpen((o) => !o)}
+            onClick={() => {
+              menuTarget.current = "first";
+              setMenuOpen((o) => !o);
+            }}
             onKeyDown={(e) => {
+              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                const target = e.key === "ArrowUp" ? "last" : "first";
+                menuTarget.current = target;
+                if (menuOpen) focusMenuItem(target);
+                else setMenuOpen(true);
+                return;
+              }
               if (menuOpen && e.key === "Escape") {
                 e.preventDefault();
                 setMenuOpen(false);
@@ -1025,11 +1085,13 @@ function KeyRow(props: {
             id={menuId}
             class="tool-key-menu"
             role="menu"
+            tabIndex={-1}
             aria-label={t("keyActions", { name: name.text })}
             onKeyDown={onMenuKeyDown}
           >
             {props.canRename && (
               <button
+                ref={renameItemRef}
                 type="button"
                 role="menuitem"
                 class="tool-key-menu-item"
@@ -1044,6 +1106,7 @@ function KeyRow(props: {
               </button>
             )}
             <button
+              ref={deleteItemRef}
               type="button"
               role="menuitem"
               class="tool-key-menu-item"
@@ -1073,8 +1136,8 @@ function KeyRow(props: {
             buttonRef={cancelDeleteRef}
             describedBy={questionId}
             onClick={() => {
+              returnFocus.current = true;
               setConfirming(false);
-              triggerRef.current?.focus();
             }}
           >
             {t("cancel")}
@@ -1086,13 +1149,12 @@ function KeyRow(props: {
           <label>
             <span class="sr-only">{t("name")}</span>
             <input
+              ref={renameInputRef}
               type="text"
               value={draft}
               maxLength={64}
               placeholder={t("namePlaceholder")}
               onInput={(e) => setDraft(e.currentTarget.value)}
-              // biome-ignore lint/a11y/noAutofocus: the field opens because the person pressed Rename
-              autoFocus
             />
           </label>
           <Button variant="primary" type="submit">
@@ -1100,8 +1162,8 @@ function KeyRow(props: {
           </Button>
           <Button
             onClick={() => {
+              returnFocus.current = true;
               setRenaming(false);
-              triggerRef.current?.focus();
             }}
           >
             {t("cancel")}
