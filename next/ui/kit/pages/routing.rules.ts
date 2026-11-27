@@ -1,6 +1,6 @@
 // The rules of Order & fallback: the routing settings it shows, in words for a person, and how each
-// one's value is read from and written to core's settings. This is the page's own list of routing
-// fields: Config's list (settingsFields.tsx) still holds the same keys until Config drops them.
+// one's value is read from and written to core's settings. Only this page shows the routing
+// settings: Config links here.
 
 import type { CoreSettings, SettingsChange } from "../api/settings";
 import { strings } from "../strings";

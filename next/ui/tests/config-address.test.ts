@@ -1,11 +1,29 @@
 import { expect, test } from "bun:test";
-import { configAddress, findAccount, parseConfigAddress } from "../kit/pages/configSource.helpers";
+import {
+  configAddress,
+  findAccount,
+  HIDDEN,
+  hideSecrets,
+  parseConfigAddress,
+} from "../kit/pages/configSource.helpers";
 
-test("parseConfigAddress reads the tab and the account of a config address", () => {
-  expect(parseConfigAddress("#/config")).toEqual({ tab: "common" });
-  expect(parseConfigAddress("#/config/")).toEqual({ tab: "common" });
-  expect(parseConfigAddress("#/config/network")).toEqual({ tab: "network" });
+test("the old tabs' addresses open the Settings tab where their settings now are", () => {
+  expect(parseConfigAddress("#/config")).toEqual({ tab: "settings" });
+  expect(parseConfigAddress("#/config/")).toEqual({ tab: "settings" });
+  expect(parseConfigAddress("#/config/common")).toEqual({ tab: "settings", section: "network" });
+  expect(parseConfigAddress("#/config/network")).toEqual({ tab: "settings", section: "network" });
+  expect(parseConfigAddress("#/config/logging")).toEqual({ tab: "settings", section: "logging" });
+  expect(parseConfigAddress("#/config/connectivity")).toEqual({ tab: "settings", section: "keys" });
+  expect(parseConfigAddress("#/config/advanced")).toEqual({ tab: "settings", section: "keys" });
   expect(parseConfigAddress("#/config/source")).toEqual({ tab: "source" });
+  expect(parseConfigAddress("#/config/nope")).toEqual({ tab: "settings" });
+  // Another page's address is none of Config's.
+  expect(parseConfigAddress("#/configuration")).toBeUndefined();
+  expect(parseConfigAddress("#/routing")).toBeUndefined();
+});
+
+// Unchanged by the Settings and Settings file tabs: the account part of the Settings file address.
+test("parseConfigAddress still reads the account the settings file opens at", () => {
   expect(parseConfigAddress("#/config/source?account=alpha-1")).toEqual({
     tab: "source",
     account: "alpha-1",
@@ -14,9 +32,6 @@ test("parseConfigAddress reads the tab and the account of a config address", () 
     tab: "source",
     account: "a b/c",
   });
-  expect(parseConfigAddress("#/config?account=x")).toEqual({ tab: "common", account: "x" });
-  // A tab the page does not have opens the first one; a malformed escape stays text.
-  expect(parseConfigAddress("#/config/nope")).toEqual({ tab: "common" });
   expect(parseConfigAddress("#/config/source?account=%E0%A4%A")).toEqual({
     tab: "source",
     account: "%E0%A4%A",
@@ -24,23 +39,14 @@ test("parseConfigAddress reads the tab and the account of a config address", () 
   expect(parseConfigAddress("#/config/source?account=")).toEqual({ tab: "source" });
 });
 
-test("parseConfigAddress is undefined for another page", () => {
-  expect(parseConfigAddress("#/logs/config")).toBeUndefined();
-  expect(parseConfigAddress("#/configuration")).toBeUndefined();
-  expect(parseConfigAddress("")).toBeUndefined();
-});
-
-test("configAddress writes what parseConfigAddress reads; the first tab keeps the plain address", () => {
-  expect(configAddress("common")).toBe("#/config");
-  expect(configAddress("network")).toBe("#/config/network");
+test("configAddress writes what parseConfigAddress reads; Settings keeps the plain address", () => {
+  expect(configAddress("settings")).toBe("#/config");
+  expect(configAddress("source")).toBe("#/config/source");
   expect(configAddress("source", "alpha-1")).toBe("#/config/source?account=alpha-1");
   expect(configAddress("source", "a b/c")).toBe("#/config/source?account=a%20b%2Fc");
-  for (const [tab, account] of [
-    ["common", undefined],
-    ["logging", undefined],
-    ["source", "a b/c"],
-  ] as const)
+  for (const [tab, account] of [["settings"], ["source"], ["source", "a b/c"]] as const) {
     expect(parseConfigAddress(configAddress(tab, account))).toEqual(account ? { tab, account } : { tab });
+  }
 });
 
 const at = (content: string, id: string) => {
@@ -127,4 +133,47 @@ test("findAccount finds nothing for an account of a provider section, whose id t
   ].join("\n");
   expect(findAccount(yaml, "claude-api-key-1")).toBeUndefined();
   expect(findAccount(yaml, "openrouter")).toBeUndefined();
+});
+
+test("hideSecrets hides keys and passwords typed into a config.yaml, and leaves placeholders and other settings", () => {
+  const placeholder = "pluxy-redacted-0123456789abcdef01234567";
+  const yaml = [
+    "management-key: brand-new-1234567890",
+    "client-keys:",
+    "  - sk-abc123456789",
+    `  - ${placeholder}`,
+    "requests:",
+    "  proxy-url: http://u:p4ss@proxy.example:3128",
+    "claude-api-key:",
+    '  - api-key: "sk-ant-xyz"',
+    "    base-url: https://api.example.com",
+    "    prefix: team",
+    "observability:",
+    "  logs:",
+    "    request-log: true",
+    "",
+  ].join("\n");
+  expect(hideSecrets(yaml, "yaml")).toEqual([
+    `management-key: ${HIDDEN}\n`,
+    "client-keys:\n",
+    `  - ${HIDDEN}\n`,
+    `  - ${placeholder}\n`,
+    "requests:\n",
+    `  proxy-url: http://${HIDDEN}@proxy.example:3128\n`,
+    "claude-api-key:\n",
+    `  - api-key: "${HIDDEN}"\n`,
+    "    base-url: https://api.example.com\n",
+    "    prefix: team\n",
+    "observability:\n",
+    "  logs:\n",
+    "    request-log: true\n",
+  ]);
+});
+
+test("hideSecrets hides each secret value in the JSON core writes on one line", () => {
+  const json =
+    '{"management_key":"brand-new-1234567890","client_keys":["sk-1aaaaaaaa",{"key":"sk-2bbbbbbbb"}],"logs":{"to_file":true}}';
+  expect(hideSecrets(json, "json")).toEqual([
+    `{"management_key":"${HIDDEN}","client_keys":["${HIDDEN}",{"key":"${HIDDEN}"}],"logs":{"to_file":true}}`,
+  ]);
 });

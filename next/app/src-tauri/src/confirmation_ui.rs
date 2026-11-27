@@ -43,6 +43,7 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
         summary,
         page,
         own,
+        confirm,
     } = begin(app, &id)?;
     let handle = app.clone();
     app.run_on_main_thread(move || {
@@ -52,7 +53,7 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
             gtk::DialogFlags::MODAL,
             &[
                 (text::CANCEL, gtk::ResponseType::Cancel),
-                (text::CONFIRM, gtk::ResponseType::Accept),
+                (confirm, gtk::ResponseType::Accept),
             ],
         );
         dialog.set_default_response(gtk::ResponseType::Cancel);

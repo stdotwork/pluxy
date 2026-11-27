@@ -1,195 +1,77 @@
-import type { CoreSettings, SettingsChange } from "../api/settings";
-import { Switch } from "../ui";
+// The settings the Config page shows as rows: what each is called, what it does, and where it is
+// in core's settings (GET and PATCH /settings) and in the settings file. The routing settings are
+// Order & fallback's (routing.rules.ts); the token-count estimate is set in the settings file only.
+
+import type { ConfigDocument } from "../api/config";
 import { configText as t } from "./configStrings";
 
-export type SettingsTab = "common" | "network" | "logging" | "advanced";
-export type Value = string | number | boolean | null;
 export interface Field {
+  /** The setting, by its path in core's settings. */
   key: string;
-  label: string;
-  kind: "switch" | "number" | "text" | "strategy" | "quota";
-  hint?: string;
-  min?: number;
-  step?: "any";
+  kind: "switch" | "number" | "text";
+  name: string;
+  about: string;
+  /** Where the setting is in the settings file, by the file's format. */
+  file: Record<ConfigDocument["format"], string>;
   placeholder?: string;
-  /** A text field that may be empty (empty is a value core takes). */
-  optional?: boolean;
+  /** A note under the row, after what the setting does. */
+  note?: string;
 }
-export const fields = (): Record<SettingsTab, Field[]> => {
-  const log: Field = { key: "observability.logs.logging-to-file", label: t("logToFile"), kind: "switch" };
-  return {
-    common: [log],
-    network: [
-      {
-        key: "proxy-url",
-        label: t("proxyUrl"),
-        kind: "text",
-        optional: true,
-        placeholder: "socks5://user:pass@127.0.0.1:1080/",
-      },
-      { key: "routing.strategy", label: t("strategy"), kind: "strategy" },
-      { key: "routing.retry.request-retry", label: t("retry"), kind: "number", min: 0 },
-      { key: "routing.retry.max-retry-credentials", label: t("maxCredentials"), kind: "number", min: 0 },
-      {
-        key: "routing.retry.max-retry-interval",
-        label: t("maxInterval"),
-        kind: "number",
-        min: 0,
-        step: "any",
-      },
-      { key: "routing.session-affinity", label: t("affinity"), kind: "switch" },
-      { key: "routing.session-affinity-ttl", label: t("ttl"), kind: "text", hint: t("ttlHint") },
-      { key: "routing.force-model-prefix", label: t("prefix"), kind: "switch" },
-      { key: "routing.cooldown.disable-cooling", label: t("disableCooling"), kind: "switch" },
-      {
-        key: "routing.cooldown.transient-error-cooldown-seconds",
-        label: t("transient"),
-        step: "any",
-        kind: "number",
-        min: -1,
-      },
-      { key: "routing.cooldown.quota-response-mode", label: t("quota"), kind: "quota" },
-    ],
-    logging: [
-      log,
-      { key: "observability.logs.logs-max-total-size-mb", label: t("size"), kind: "number", min: 0 },
-      { key: "observability.logs.error-logs-max-files", label: t("retained"), kind: "number", min: 0 },
-      { key: "observability.usage.usage-statistics-enabled", label: t("usage"), kind: "switch" },
-      {
-        key: "observability.logs.request-log",
-        label: t("requestLog"),
-        kind: "switch",
-        hint: t("requestWarning"),
-      },
-    ],
-    advanced: [{ key: "token_count_estimate", label: t("estimate"), kind: "switch" }],
-  };
+
+/** The rows of the Settings tab's Network and Logging sections, in the order they show. */
+export const fields = (): { network: Field[]; logging: Field[] } => ({
+  network: [
+    {
+      key: "proxy-url",
+      kind: "text",
+      name: t("proxy"),
+      about: t("proxyAbout"),
+      file: { json: "proxy_url", yaml: "requests.proxy-url" },
+      placeholder: t("proxyPlaceholder"),
+    },
+  ],
+  logging: [
+    {
+      key: "observability.logs.logging-to-file",
+      kind: "switch",
+      name: t("logToFile"),
+      about: t("logToFileAbout"),
+      file: { json: "logs.to_file", yaml: "observability.logs.logging-to-file" },
+    },
+    {
+      key: "observability.logs.logs-max-total-size-mb",
+      kind: "number",
+      name: t("size"),
+      about: t("sizeAbout"),
+      file: { json: "logs.max_total_size_mb", yaml: "observability.logs.logs-max-total-size-mb" },
+    },
+    {
+      key: "observability.logs.error-logs-max-files",
+      kind: "number",
+      name: t("kept"),
+      about: t("keptAbout"),
+      file: { json: "logs.error_logs_max_files", yaml: "observability.logs.error-logs-max-files" },
+    },
+    {
+      key: "observability.usage.usage-statistics-enabled",
+      kind: "switch",
+      name: t("usage"),
+      about: t("usageAbout"),
+      file: { json: "usage.enabled", yaml: "observability.usage.usage-statistics-enabled" },
+    },
+    {
+      key: "observability.logs.request-log",
+      kind: "switch",
+      name: t("requestLog"),
+      about: t("requestLogAbout"),
+      file: { json: "logs.request_log", yaml: "observability.logs.request-log" },
+      note: t("requestLogNote"),
+    },
+  ],
+});
+
+/** Where the management key is in the settings file, by the file's format. */
+export const managementKeyFile: Record<ConfigDocument["format"], string> = {
+  json: "management_key",
+  yaml: "management.secret-key",
 };
-export const get = (settings: CoreSettings, key: string): Value =>
-  key.split(".").reduce<unknown>((v, k) => (v as Record<string, unknown>)[k], settings) as Value;
-export function changeSetting(settings: CoreSettings, key: string, value: Value): CoreSettings {
-  const copy = structuredClone(settings);
-  const path = key.split(".");
-  const last = path.pop();
-  const obj = path.reduce<unknown>((v, k) => (v as Record<string, unknown>)[k], copy) as Record<
-    string,
-    unknown
-  >;
-  if (last) obj[last] = value;
-  return copy;
-}
-/** Send only edited fields, so another page's changes to other settings survive. */
-export function settingsChange(base: CoreSettings, draft: CoreSettings): SettingsChange {
-  const change: Record<string, unknown> = {};
-  for (const field of Object.values(fields()).flat()) {
-    const value = get(draft, field.key);
-    if (value === get(base, field.key)) continue;
-    if (field.kind === "number" && (typeof value !== "number" || !Number.isFinite(value))) {
-      throw new Error(t("numberRequired", { label: field.label }));
-    }
-    const path = field.key.split(".");
-    const last = path.pop();
-    let obj = change;
-    for (const k of path) {
-      obj[k] ??= {};
-      obj = obj[k] as Record<string, unknown>;
-    }
-    if (last) obj[last] = value;
-  }
-  return change as SettingsChange;
-}
-export function SettingControl({
-  field,
-  settings,
-  set,
-  immediate = false,
-  strategies,
-  invalid,
-}: {
-  field: Field;
-  settings: CoreSettings;
-  set: (value: Value) => void;
-  immediate?: boolean;
-  strategies?: Partial<Record<CoreSettings["routing"]["strategy"], string>>;
-  /** With `immediate`: called with the reason when an entered value is refused; the saved value comes back. */
-  invalid?: (reason: string) => void;
-}) {
-  const value = get(settings, field.key);
-  const refuse = (input: HTMLInputElement, saved: string) => {
-    if (input.validity.valid) return false;
-    const reason = input.validationMessage;
-    input.value = saved;
-    invalid?.(reason);
-    return true;
-  };
-  return (
-    <>
-      {field.kind === "switch" || field.kind === "quota" ? (
-        <Switch
-          label={field.label}
-          hint={field.hint}
-          checked={field.kind === "quota" ? value === "usage-limit" : value === true}
-          onChange={(v) => set(field.kind === "quota" ? (v ? "usage-limit" : "retryable") : v)}
-        />
-      ) : (
-        <label class="field" data-part="field" for={field.key}>
-          <span class="label">{field.label}</span>
-          {field.kind === "strategy" ? (
-            <select
-              data-slot="select-trigger"
-              id={field.key}
-              value={String(value)}
-              onChange={(e) => set(e.currentTarget.value)}
-            >
-              <option value="round-robin">{strategies?.["round-robin"] ?? t("roundRobin")}</option>
-              <option value="weighted-round-robin">
-                {strategies?.["weighted-round-robin"] ?? t("weighted")}
-              </option>
-              <option value="fill-first">{strategies?.["fill-first"] ?? t("fillFirst")}</option>
-              <option value="least-active">{strategies?.["least-active"] ?? t("leastActive")}</option>
-            </select>
-          ) : field.kind === "number" ? (
-            <input
-              data-slot="input"
-              id={field.key}
-              type="number"
-              min={field.min}
-              step={field.step ?? 1}
-              required={field.key !== "routing.retry.request-retry" || value !== null}
-              value={value === null ? "" : String(value)}
-              onInput={(e) => {
-                if (!immediate) set(e.currentTarget.value === "" ? "" : Number(e.currentTarget.value));
-              }}
-              onChange={(e) => {
-                if (!immediate) return;
-                const input = e.currentTarget;
-                if (refuse(input, value === null ? "" : String(value))) return;
-                set(input.value === "" ? "" : Number(input.value));
-              }}
-            />
-          ) : (
-            <input
-              data-slot="input"
-              id={field.key}
-              type="text"
-              required={!field.optional}
-              placeholder={field.placeholder}
-              disabled={field.key === "routing.session-affinity-ttl" && !settings.routing["session-affinity"]}
-              value={String(value)}
-              onInput={(e) => {
-                if (!immediate) set(e.currentTarget.value);
-              }}
-              onChange={(e) => {
-                if (!immediate) return;
-                const input = e.currentTarget;
-                if (refuse(input, String(value))) return;
-                set(input.value);
-              }}
-            />
-          )}
-          {field.hint && <small class="hint">{field.hint}</small>}
-        </label>
-      )}
-    </>
-  );
-}

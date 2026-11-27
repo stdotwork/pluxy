@@ -39,6 +39,8 @@ export const t = strings("logs", {
 
   // Failed requests
   intro: "pluxy keeps the full log of its latest failed requests.",
+  everyRequest:
+    "Log every request is on, so failed requests are not listed here. Open a request's log by its trace ID.",
   traceId: "Trace ID",
   open: "Open",
   copyTrace: "Copy trace ID",
