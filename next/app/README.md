@@ -1069,9 +1069,12 @@ source/digest/signer/contract/generation, selected and resolved file identities,
 where applicable. The main window can ask to review that preparation's opaque ID. A native dialog
 (GTK on Linux, Win32 on Windows, AppKit on macOS), titled "pluxy needs your OK", says first what
 will happen in plain words, which native code writes from the records it checked (an add-on by
-its manifest's title and summary, an operation by its manifest's description, a secret by its
-vault label, who asked when it was not the window, and for a native tool that it has “full access
-to your user account”), and shows the exact action below it under **Details**: the same text it
+its manifest's title and summary; a call by what its operation's effect does, such as "will make
+changes on this computer", and for a launch the program it starts; a secret by its vault label;
+who asked when it was not the window; and for a native tool that it has “full access to your
+user account”). An operation's description comes after the app's own words, quoted as the
+add-on's ("The add-on says: …"), since the manifest wrote it and nothing checks it against the
+effect. The dialog shows the exact action below it under **Details**: the same text it
 showed before, nothing left out. The plain words bind nothing; what is confirmed and remembered is
 the exact action. Only its native response handler issues approval. No IPC command accepts an
 approval result, gesture flag or token consumption request. Page webviews have no confirmation
@@ -1123,7 +1126,9 @@ is private to native handlers and fixtures, and a gesture expires after five sec
 
 Page Start uses the separate native entry point, always opens a fresh dialog, permits one pending
 confirmation per original package and one attempt per second, and shows a native notice ("pluxy
-notice", with a Close button) with requester, action and outcome, including refusals. Every
+notice"; on Linux with a Close button, on Windows and macOS the window's close box) with
+requester, action and outcome, including refusals; a call's notice keeps its exact action under
+"Details", below the plain words. Every
 answer to a page's or a tool's request gets that notice too; an answer to one the window, the tray
 or native UI asked for does not, as those show their own outcome, unless remembering it failed. Page/Import pending entries have their own
 limit of 16; trusted requests have a separate limit of 64. Page dialogs focus Cancel and keep
@@ -1139,7 +1144,8 @@ The launcher ([The launcher](#the-launcher)) is a caller of this module. Host
 callers must invalidate pending preparations/tokens when package, contract, environment or secret
 policy records change, and prepare a new action. A pending review lapses if its dialog has not
 shown within 60 seconds; once shown, it stays open for 10 minutes, the person's time to read it
-(every answer checks the action again, and a changed record withdraws it), and then closes as
+(an answer checks the action's files and program again and refuses one that changed; quitting
+the app or closing its window withdraws the dialog), and then closes as
 cancelled. A token lapses 60 seconds after the confirmation; native code spends it at once. Each
 works once for its preparation, and fails on changed file identity or executable metadata.
 Revoking a remembered approval also invalidates its outstanding tokens.
@@ -1224,7 +1230,7 @@ the page.
   reading's pin of the plugin's folder: the add-on refuses them when that folder, or the agent
   folder holding it, changed since, and otherwise acts only in that agent folder (see [Pi](#pi)). While a write or its confirmation waits, the
   file and environment choices are locked. Each write's `program_call` carries a ticket, and leaving
-  the page withdraws a confirmation still open (`program_cancel`); a Connect whose key window closes
+  the page withdraws a confirmation still open (`program_cancel`); a Connect that finishes making its key
   after the page was left writes nothing.
 - **Connect {tool}** is one press. It uses the vault's key bound to this add-on and to the pluxy the
   app is connected to (or the one the person chose); with none, it makes one with

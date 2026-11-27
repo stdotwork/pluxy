@@ -223,6 +223,72 @@ fn notice_fits(app: &tauri::AppHandle) -> Result<(), String> {
     })
 }
 
+/// A confirmation whose plain words are long, as an operation's description at its longest and
+/// more gives: it opens at a size a screen holds, with Confirm and Cancel in it, and its Cancel
+/// cancels it.
+#[cfg(target_os = "linux")]
+fn words_fit(app: &tauri::AppHandle, main: &Webview, a: &Action) -> Result<(), String> {
+    use gtk::prelude::*;
+    let mut p = prepare(app, a)?;
+    p.set_headline(format!(
+        "The fixture add-on will make changes on this computer.\nThe add-on says: \u{201c}{}\u{201d}\n\n{}",
+        "Write the fixture's settings file, keeping a backup to undo it. ".repeat(60),
+        text::FULL_ACCESS
+    ));
+    let id = app
+        .state::<crate::App>()
+        .confirmations
+        .lock()
+        .unwrap()
+        .queue(p)?;
+    main.eval(format!("window.__TAURI_INTERNALS__.invoke('confirmation_request', {{action: {}}}).catch(e => console.error(e))", serde_json::json!(id))).map_err(|e| e.to_string())?;
+    ui::wait_shown(app, text::CONFIRM_TITLE)?;
+    std::thread::sleep(Duration::from_millis(300));
+    // The labels of the dialog's buttons that GTK has drawn inside the window.
+    fn buttons(w: &gtk::Widget, height: i32, out: &mut Vec<String>) {
+        if let Some(b) = w.downcast_ref::<gtk::Button>() {
+            let top = b
+                .translate_coordinates(&b.toplevel().unwrap(), 0, 0)
+                .map(|(_, y)| y)
+                .unwrap_or(i32::MAX);
+            if b.is_mapped() && top + b.allocated_height() <= height {
+                out.push(b.label().unwrap_or_default().to_string());
+            }
+        }
+        if let Some(c) = w.downcast_ref::<gtk::Container>() {
+            for child in c.children() {
+                buttons(&child, height, out);
+            }
+        }
+    }
+    let (width, height, shown) = crate::native_test::on_main(app, || {
+        gtk::Window::list_toplevels()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Window>().ok())
+            .find(|w| w.title().as_deref() == Some(text::CONFIRM_TITLE) && w.is_visible())
+            .map(|w| {
+                let (width, height) = w.size();
+                let mut shown = Vec::new();
+                buttons(w.upcast_ref(), height, &mut shown);
+                (width, height, shown)
+            })
+    })
+    .flatten()
+    .ok_or("no confirmation window")?;
+    require(
+        height <= 700
+            && width <= 1000
+            && shown.iter().any(|l| l == text::CANCEL)
+            && shown.iter().any(|l| l == text::CONFIRM),
+        &format!("the confirmation with long words is {width}x{height}, buttons in it {shown:?}"),
+    )?;
+    ui::press(app, text::CONFIRM_TITLE, access(text::CANCEL))?;
+    require(
+        result(app, &id)?.is_none(),
+        "the cancel of the long confirmation issued a token",
+    )
+}
+
 pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!(
         "pluxy-native-confirm-{}",
@@ -372,6 +438,8 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         )?;
         #[cfg(target_os = "linux")]
         notice_fits(app)?;
+        #[cfg(target_os = "linux")]
+        words_fit(app, main, &a)?;
         let (remembered, t) = trusted_start(app, &a)?;
         require(remembered, "exact native gesture did not remember")?;
         require(

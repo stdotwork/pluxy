@@ -1198,7 +1198,11 @@ fn authorize(
         launch,
     );
     let secrets: Vec<(&str, bool)> = filled.iter().map(|f| (f.label.as_str(), f.value)).collect();
-    let headline = grant.headline(&secrets, &action.chain);
+    let program = action
+        .launch
+        .as_ref()
+        .map(|l| (l.executable.as_path(), l.program.as_deref()));
+    let headline = grant.headline(&secrets, &action.chain, program);
     let refuse = |e: String| fail("permission", e);
     let st = app.state::<App>();
     // A page's or an import's confirmation is queued with the page limits and never remembered.

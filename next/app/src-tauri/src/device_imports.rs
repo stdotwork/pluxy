@@ -136,24 +136,41 @@ pub struct Grant {
 }
 
 impl Grant {
-    /// What the native confirmation of a call of its operation says first, in plain words, from
-    /// the checked records: the add-on by its name and what the operation does (its manifest's
-    /// description); each secret it gets from the vault, by its label (label, whether the tool
-    /// gets the value itself); that a launch starts a program; who asked, when that is not the
-    /// main window (chain, the requester first); and that the add-on has full access to the user
-    /// account. The exact call (its input, chain, executor and launch) follows below it.
+    /// What the native confirmation of a call of its operation says first, in plain words. The
+    /// first sentence is the app's own, from checked fields only: the add-on by its name and what
+    /// the call does by its effect (for a launch, the program the confirmation opened, program;
+    /// as `launch.program` and `launch.executable`). Then each secret it gets from the vault, by
+    /// its label (label, whether the tool gets the value itself); who asked, when that is not the
+    /// main window (chain, the requester first); the operation's description, quoted as the
+    /// add-on's own words, since its manifest wrote it and nothing checks it against the effect;
+    /// and that the add-on has full access to the user account. The exact call (its input, chain,
+    /// executor and launch) follows below it.
     #[cfg(native_stack)]
     pub fn headline(
         &self,
         secrets: &[(&str, bool)],
         chain: &[crate::confirmation::Package],
+        program: Option<(&std::path::Path, Option<&std::path::Path>)>,
     ) -> String {
         use crate::confirmation::one_line;
-        let mut s = format!(
-            "{} add-on: {}",
-            one_line(self.target.name()),
-            one_line(&self.op.description)
-        );
+        let name = one_line(self.target.name());
+        let what = match (self.op.effect.as_str(), program) {
+            ("launch", Some((executable, Some(runs)))) => format!(
+                "start {} on this computer, in {}",
+                one_line(&runs.display().to_string()),
+                one_line(&executable.display().to_string())
+            ),
+            ("launch", Some((executable, None))) => format!(
+                "start {} on this computer",
+                one_line(&executable.display().to_string())
+            ),
+            ("launch", None) => "start a program on this computer".into(),
+            ("disclose", _) => "read content on this computer and show it".into(),
+            ("read", _) => "read from this computer".into(),
+            // write, and any other effect (every effect but an exact read asks, as a write does).
+            _ => "make changes on this computer".into(),
+        };
+        let mut s = format!("The {name} add-on will {what}.");
         for (label, value) in secrets {
             s.push_str(&format!(
                 "\nIt gets \"{}\" from this device's vault{}.",
@@ -166,15 +183,17 @@ impl Grant {
             ));
         }
         if self.op.effect == "launch" {
-            s.push_str(
-                "\nIt starts a program: the details below name it, with its arguments and folder.",
-            );
+            s.push_str("\nThe details below name its arguments and folder.");
         }
         if chain.first().map(|p| p.id.as_str()) != Some(super::admission::main_window().id.as_str())
         {
             let ids: Vec<String> = chain.iter().map(|p| one_line(&p.id)).collect();
             s.push_str(&format!("\nAsked by: {}.", ids.join(" → ")));
         }
+        s.push_str(&format!(
+            "\nThe add-on says: \u{201c}{}\u{201d}",
+            one_line(&self.op.description)
+        ));
         s.push_str(&format!("\n\n{}", crate::confirmation::text::FULL_ACCESS));
         s
     }

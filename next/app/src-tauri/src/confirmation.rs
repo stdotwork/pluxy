@@ -21,9 +21,9 @@ const SETTINGS_VERSION: u32 = 1;
 /// native code shows the dialog, and spends the token, at once.
 const LIFETIME: Duration = Duration::from_secs(60);
 /// How long a confirmation's dialog stays open once it shows: the person's time to read it, not a
-/// freshness check (every answer checks the action's files, program and records again, and a
-/// changed record withdraws it). A dialog nobody answers in that time closes as cancelled, so the
-/// call waiting for it ends.
+/// freshness check (an answer checks the action's files and program again and refuses one that
+/// changed; quitting the app or closing its window withdraws the dialog). A dialog nobody answers
+/// in that time closes as cancelled, so the call waiting for it ends.
 pub(crate) const SHOWN_LIFETIME: Duration = Duration::from_secs(10 * 60);
 /// How long a native caller waits for a confirmation's answer: its time to show, its time shown,
 /// and a little more for the answer to arrive.
@@ -325,7 +325,8 @@ pub struct Prepared {
     /// its description alone, and no launch notice follows it.
     own: bool,
     /// An action native code built and described in full, in plain words (`prepare_plain`): its
-    /// review is that description alone, as an own action's; a launch notice still follows it.
+    /// review is that description alone, as an own action's. It is the window's own (`Main`), so
+    /// no notice follows its answer either (`Review::quiet`).
     plain: bool,
     exact: ExactAction,
     files: Vec<OpenTarget>,
@@ -410,10 +411,17 @@ impl Prepared {
             .map(|l| l.environment_revision.as_str())
     }
     /// Requester and action, for the launch notice: each on its own line. Only a description
-    /// native code wrote keeps its own lines; any other shows its line breaks escaped.
+    /// native code wrote keeps its own lines; any other shows its line breaks escaped. With plain
+    /// words (`set_headline`), the exact action follows them under `text::DETAILS`: the plain words
+    /// name no input, and the notice is what stays once the dialog has closed.
     pub(crate) fn notice(&self) -> String {
         let what = match &self.headline {
-            Some(h) => escape_lines(h),
+            Some(h) => format!(
+                "{}\n{}: {}",
+                escape_lines(h),
+                text::DETAILS,
+                escape_format_characters(&self.exact.what)
+            ),
             None if self.own || self.plain => escape_lines(&self.exact.what),
             None => escape_format_characters(&self.exact.what),
         };
@@ -1632,8 +1640,8 @@ pub(crate) mod text {
     pub(crate) const CONFIRM_TITLE: &str = "pluxy needs your OK";
     pub(crate) const SETTINGS_TITLE: &str = "pluxy remembered launches";
     pub(crate) const NOTICE_TITLE: &str = "pluxy notice";
-    /// Above a confirmation's exact details, below what it says in plain words.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    /// Above a confirmation's exact details, below what it says in plain words, and before them
+    /// in its notice.
     pub(crate) const DETAILS: &str = "Details";
     /// What a native tool's confirmation says when its caller wrote no headline of its own.
     pub(crate) const FULL_ACCESS: &str =

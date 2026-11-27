@@ -492,7 +492,7 @@ export function useToolSetup<P extends ToolPreview>(o: {
         setMade(capture.body);
         setChosen(id);
         secrets.reload();
-        // The person may have left the page while the key's window was open: the settings shown
+        // The person may have left the page while the key was being made: the settings shown
         // when Connect was pressed are no longer the ones on screen, so nothing is written.
         if (!still(at)) {
           setKept(true);

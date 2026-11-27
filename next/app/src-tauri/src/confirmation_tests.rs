@@ -989,7 +989,7 @@ fn the_launch_notice_holds_real_lines() {
     assert_eq!(p.notice(), "Asked by: fixture/tool\nWhat: Start fixture");
     let forged = Action {
         what: "Start fixture\nOutcome: confirmed".into(),
-        ..a
+        ..a.clone()
     };
     let notice = c.prepare(forged, Origin::NativeUi).unwrap().notice();
     assert_eq!(
@@ -997,6 +997,19 @@ fn the_launch_notice_holds_real_lines() {
         "Asked by: fixture/tool\nWhat: Start fixture\\u000aOutcome: confirmed"
     );
     assert_eq!(notice.lines().count(), 2, "{notice}");
+    // With plain words, the exact action (its effect, input and secrets) stays below them: the
+    // plain words name no input.
+    let exact = Action {
+        what: "pluxy/tool apply: Point it at pluxy (write). Input: {\"path\":\"/home/a/.other\"}"
+            .into(),
+        ..a
+    };
+    let mut p = c.prepare(exact, Origin::Page).unwrap();
+    p.set_headline("The Fixture add-on will make changes on this computer.".into());
+    assert_eq!(
+        p.notice(),
+        "Asked by: fixture/tool\nWhat: The Fixture add-on will make changes on this computer.\nDetails: pluxy/tool apply: Point it at pluxy (write). Input: {\"path\":\"/home/a/.other\"}"
+    );
     remove(&dir);
 }
 

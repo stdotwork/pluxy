@@ -172,6 +172,8 @@ fn ns(s: &str) -> Retained<NSString> {
 const MARGIN: f64 = 20.0;
 const LINE: f64 = 17.0;
 const GAP: f64 = 10.0;
+/// The tallest the top text gets, in points, before it scrolls.
+const MAX_TEXT: f64 = 260.0;
 
 /// The height text takes at width points (a character is about 7 points wide), at least a line.
 fn height(text: &str, width: f64) -> f64 {
@@ -253,12 +255,24 @@ pub(crate) fn show(
     let panel = DialogPanel::new(mtm, serial, NSSize::new(width, 100.0), owner.is_none());
     if let Some(t) = &spec.text {
         let h = height(t, inner);
-        let l = label(
-            mtm,
-            t,
-            NSRect::new(NSPoint::new(MARGIN, y), NSSize::new(inner, h)),
-        );
-        parts.push((Retained::into_super(Retained::into_super(l)), false));
+        // Text taller than `MAX_TEXT` (a long confirmation or notice) scrolls in an area that
+        // tall, so the buttons below it stay on the screen.
+        if h > MAX_TEXT {
+            let s = scrolled(
+                mtm,
+                t,
+                NSRect::new(NSPoint::new(MARGIN, y), NSSize::new(inner, MAX_TEXT)),
+            );
+            parts.push((Retained::into_super(s), false));
+        } else {
+            let l = label(
+                mtm,
+                t,
+                NSRect::new(NSPoint::new(MARGIN, y), NSSize::new(inner, h)),
+            );
+            parts.push((Retained::into_super(Retained::into_super(l)), false));
+        }
+        let h = h.min(MAX_TEXT);
         #[cfg(feature = "native-test")]
         texts.push(t.clone());
         y += h + GAP;

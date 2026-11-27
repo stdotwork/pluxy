@@ -1485,6 +1485,12 @@ impl App {
             {
                 return Err("app.operations require unique IDs and descriptions".into());
             }
+            // Shown in its call's confirmation, which must keep Confirm and Cancel on screen.
+            one_line_within(
+                &op.description,
+                &format!("app.operations {} description", op.id),
+                MAX_DESCRIPTION,
+            )?;
             if !op.input_schema.is_object() || !op.output_schema.is_object() {
                 return Err("app.operations schemas must be JSON objects".into());
             }
@@ -1515,6 +1521,9 @@ impl App {
 /// The longest manifest title and summary, in characters (the protocol's manifest).
 const MAX_TITLE: usize = 80;
 const MAX_SUMMARY: usize = 300;
+/// The longest operation description, in characters: a short paragraph (the app-host's manifest
+/// format).
+const MAX_DESCRIPTION: usize = 800;
 
 /// Refused unless value (a manifest's field name) is one line of at most max characters: no
 /// control character, line or paragraph separator, as the protocol's manifest rules say.

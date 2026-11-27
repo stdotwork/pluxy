@@ -21,15 +21,11 @@ fn text_view_of(text: &str, height: i32) -> gtk::ScrolledWindow {
 }
 
 /// A confirmation's plain words above its exact details: the words wrapped at the dialog's width,
-/// then `text::DETAILS` and the details in a scrolled area of their own.
+/// in an area as tall as they are up to `WORDS_MAX_HEIGHT` (scrolled past that, so a long
+/// description cannot push Confirm and Cancel off the screen), then `text::DETAILS` and the
+/// details in a scrolled area of their own.
 fn review_view(review: &str, details: &str) -> gtk::Box {
-    let words = gtk::Label::new(Some(review));
-    words.set_selectable(true);
-    words.set_xalign(0.0);
-    words.set_line_wrap(true);
-    words.set_line_wrap_mode(gtk::pango::WrapMode::WordChar);
-    words.set_width_chars(72);
-    words.set_max_width_chars(72);
+    let words = wrapped(review, WORDS_WIDTH_CHARS, WORDS_MAX_HEIGHT);
     let heading = gtk::Label::new(Some(text::DETAILS));
     heading.set_xalign(0.0);
     let b = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -39,17 +35,22 @@ fn review_view(review: &str, details: &str) -> gtk::Box {
     b.pack_start(&text_view_of(details, 200), true, true, 0);
     b
 }
+/// The plain words' width, in characters.
+const WORDS_WIDTH_CHARS: i32 = 72;
+/// The most the plain words' area grows to, in pixels; longer words scroll.
+const WORDS_MAX_HEIGHT: i32 = 240;
 
-/// The notice's text: wrapped at a readable width, so the window is measured at that width (a
+/// text, selectable, wrapped at width characters, so the window is measured at that width (a
 /// wrapped label with no width of its own asks for its height at one word a line, taller than any
-/// screen), in an area as tall as its lines up to `NOTICE_MAX_HEIGHT`, scrolled past that. (A
-/// scrolled area does not take its text's height here by itself, so the lines are counted.)
-fn notice_body(text: &str) -> gtk::ScrolledWindow {
+/// screen), in an area as tall as its lines up to max_height pixels, scrolled past that. (A
+/// scrolled area does not take its text's height here by itself, so the lines are counted.) The
+/// notice's text and a confirmation's plain words.
+fn wrapped(text: &str, width: i32, max_height: i32) -> gtk::ScrolledWindow {
     let label = gtk::Label::new(Some(text));
     label.set_line_wrap(true);
     label.set_line_wrap_mode(gtk::pango::WrapMode::WordChar);
-    label.set_width_chars(NOTICE_WIDTH_CHARS);
-    label.set_max_width_chars(NOTICE_WIDTH_CHARS);
+    label.set_width_chars(width);
+    label.set_max_width_chars(width);
     label.set_xalign(0.0);
     label.set_yalign(0.0);
     label.set_selectable(true);
@@ -57,7 +58,7 @@ fn notice_body(text: &str) -> gtk::ScrolledWindow {
     scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     let line = label.create_pango_layout(Some("Xg")).pixel_size().1.max(1);
     // Lines a little shorter than the width, as wrapping breaks between words.
-    let per_line = (NOTICE_WIDTH_CHARS - 5) as usize;
+    let per_line = (width - 5).max(1) as usize;
     let lines: usize = text
         .split('\n')
         .map(|l| l.chars().count().div_ceil(per_line).max(1))
@@ -65,8 +66,8 @@ fn notice_body(text: &str) -> gtk::ScrolledWindow {
     let height = i32::try_from(lines)
         .unwrap_or(i32::MAX)
         .saturating_mul(line);
-    scroll.set_min_content_height(height.min(NOTICE_MAX_HEIGHT));
-    scroll.set_max_content_height(NOTICE_MAX_HEIGHT);
+    scroll.set_min_content_height(height.min(max_height));
+    scroll.set_max_content_height(max_height);
     scroll.add(&label);
     scroll
 }
@@ -93,7 +94,12 @@ fn fill_notice(window: &gtk::Window, text: &str) -> gtk::Button {
     buttons.add(&close);
     let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
     body.set_border_width(12);
-    body.pack_start(&notice_body(text), true, true, 0);
+    body.pack_start(
+        &wrapped(text, NOTICE_WIDTH_CHARS, NOTICE_MAX_HEIGHT),
+        true,
+        true,
+        0,
+    );
     body.pack_start(&buttons, false, false, 0);
     window.add(&body);
     // Back to the size the new text asks for, not the last one's.

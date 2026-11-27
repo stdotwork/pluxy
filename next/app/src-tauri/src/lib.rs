@@ -2968,9 +2968,10 @@ fn vault_secret_remove(webview: Webview, id: String) -> Result<(), String> {
     }
 }
 
-/// Asks core for a new client key for native tool client, after a native confirmation, and keeps
-/// it in the vault as label; gives its secret's ID, label and binding. The key itself never
-/// passes through the window.
+/// Asks core for a new client key for native tool client and keeps it in the vault as label, with
+/// no native confirmation: the window can already have core make a client key through its
+/// management calls, and the key reaches the tool only in a call the person confirms. Gives its
+/// secret's ID, label and binding. The key itself never passes through the window.
 #[tauri::command]
 async fn client_key_capture(
     webview: Webview,
