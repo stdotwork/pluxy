@@ -1,8 +1,8 @@
-// Beginner Mode's package list (src/easyModeItems.ts): which clients and launcher it shows, in which
-// state, and where an install comes from.
+// The add-ons the tool rows need (src/addonItems.ts): which of the tools' and the launcher's packages
+// this device has, in which state, and where an install comes from.
 import { describe, expect, test } from "bun:test";
+import { items } from "../src/addonItems";
 import type { DeviceCatalog, DevicePackage } from "../src/device";
-import { items } from "../src/easyModeItems";
 
 const pkg = (id: string, enabled: boolean, authorized: boolean, tier: "native" | "web" = "native") =>
   ({ id, enabled, authorized, tier }) as unknown as DevicePackage;

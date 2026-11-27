@@ -89,7 +89,7 @@ keeps a manual backup, starts a stand-in client through the launcher with no key
 or environment, removes the tool leaving no process, and checks that the key and a login canary
 never reach a webview, a confirmation or the app's output. Beyond that:
 
-- `claude-code` also runs Beginner Mode (its `easy` step);
+- `claude-code` also runs the Tools page's row for it (its `tools` step);
 - `codex` also imports the core's models into the catalog and starts Codex App and the CLI service
   restart (its `import`, `app` and `service` steps);
 - `claude-desktop` also creates Claude Desktop's missing configuration folder and a model alias in
@@ -127,7 +127,7 @@ so that is not support.
 
 | Feature | Where it lives | Native session |
 | --- | --- | --- |
-| Beginner Mode (the old app's Easy mode) | The window's Beginner Mode page ([README](README.md#beginner-mode)) | `claude-code`, its `easy` step; the list of client pages also has unit tests in `tests/` |
+| Beginner Mode (the old app's Easy mode) | Step 2 of the guided setup and the Tools page: each tool's row installs and turns on its add-on, then opens its page ([README](README.md#tools-and-the-guided-setup)) | `claude-code`, its `tools` step, and `setup`; the rows also have unit tests in `tests/` |
 | Launcher: terminals, direct launches, remembered one-click starts, the tray's Start… menu | The Launcher page and `pluxy/execution` ([README](README.md#the-launcher)) | `launcher`, `spawn` |
 | Opening a tool's file in your own app (the old app's "Edit with local app") | `pluxy/execution`'s open launch; the Codex session reader's `open` | `open`, `sessions` |
 | Saving a file a tool hands over | The host's save dialog ([app-host README](app-host/README.md#saving-files)) | `save`, `sessions` |
@@ -136,10 +136,9 @@ so that is not support.
 
 ## What an optional tool costs
 
-- **Not installed:** none of its code is on disk. The client pages and Beginner Mode are part of the
-  window. The navigation lists a client's page by default only when its tool is installed (the Manage
-  Clients page can list any, and Beginner Mode offers them all), and a client page whose tool is
-  missing only says how to install it.
+- **Not installed:** none of its code is on disk. The client pages and the rows that offer them are part of
+  the window. Every tool's row is on Tools, and a row whose tool is not installed offers to install
+  it, and a client page whose tool is missing only says how to install it.
 - **Installed, disabled:** its files sit in the app's package store. Nothing runs, and a call to it
   is refused.
 - **Enabled:** no process until something calls it. The app starts it for a call and stops it 30
@@ -169,7 +168,7 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Kimi Code, OpenClaw, ZCode, DeepSeek Harness, WorkBuddy, Antigravity CLI, Copilot CLI and VSCode Copilot setup and launch | Deferred | The rebuild covers the main clients first; these follow later | Not in the app yet |
 | Client setup inside WSL distributions | Deferred | Part of the later Windows work; the Claude Code page is the first, in part | On the Claude Code page: its Linux build runs in a WSL distribution and user the app knows (`pluxy/wsl` lists, checks and prepares them), and **Start Claude Code** starts it there; **Connect** makes and keeps the key on Windows, and the tool's write in the distribution gets it after its confirmation; the other clients follow later ([README](README.md), "In WSL") |
 | Executable and folder overrides, terminal choice and recent working folders | Kept | They let a launch use the person's own install and folders | Each tool page's Start section and the Launcher page |
-| Showing, hiding, searching and resetting the list of clients | Kept | The person chooses which clients the navigation shows | The Manage Clients page ([README](README.md#manage-clients)): by default the navigation lists the clients whose tool is installed |
+| Showing, hiding, searching and resetting the list of clients | Dropped | All eight tools are rows on Tools, so there is no list to choose from, and the navigation has five entries | Tools ([README](README.md#tools-and-the-guided-setup)) |
 | Codex's OAuth sign-in method and its OpenAI provider-identity switch | Deferred | Not built now: the core takes no ChatGPT login from a client, so the sign-in could not reach it. A later change could add a separate Codex profile for it | Codex uses a client key |
 | Codex model catalog fetched silently | Dropped | The catalog changes only when the person asks | **Import models from pluxy** on the Codex page |
 | Pi's provider plugin installed with `pi install` from npm | Replaced | npm serves whatever is published at that moment | A reviewed copy carried by `pluxy/pi-setup` |
@@ -193,7 +192,7 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 
 | Old app feature | Decision | Why | Where now |
 | --- | --- | --- | --- |
-| Easy mode, shown as Beginner Mode: sign in, then set up an agent | Kept | The guided workflow is useful | The window's Beginner Mode page |
+| Easy mode, shown as Beginner Mode: sign in, then set up an agent | Kept | The guided workflow is useful | The guided setup, whose step 2 is the Tools rows ([README](README.md#tools-and-the-guided-setup)) |
 | Its spotlight tour | Dropped | It pointed at elements of pages the guide now shares with the rest of the app | Each step shows its own short text |
 | Its "API Access" form | Dropped | It sent the API key through the core's request proxy; API-key sign-in is part of Add an account | Step 1 is Add an account |
 | Its full-screen mode, Exit button and own theme and language switchers | Dropped | The app's shell owns navigation, themes and language | — |
@@ -245,7 +244,7 @@ with the same results). Its four native jobs each ended with their shard's pass 
 In the same run the browser tests, the panel's in Chromium and the extension pages test in
 Chromium, Firefox and WebKit, passed 90 and skipped 1: `screenshots in two themes`, which runs
 only when `PANEL_SHOTS_DIR` is set. They test the shared kit and core's extension pages, not the
-app's own pages, which the native sessions above check. Beginner Mode's own merge ran in
+app's own pages, which the native sessions above check. The merge that added the old Beginner Mode ran in
 [43829776833](https://github.com/stdotwork/pluxy/actions/runs/43829776833), and the shared TOML and
 YAML editing's in [43823480514](https://github.com/stdotwork/pluxy/actions/runs/43823480514), both
 green.

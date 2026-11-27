@@ -11,6 +11,7 @@ import { useId, useState } from "preact/hooks";
 import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { strings } from "../../ui/kit/strings";
 import { PageHead, Switch } from "../../ui/kit/ui";
+import type { AgentPage } from "./addonItems";
 import { Backups } from "./backups";
 import {
   CLIENT,
@@ -42,7 +43,6 @@ import {
   useStart,
   useToolSetup,
 } from "./clientPage";
-import type { AgentPage } from "./easyMode";
 import { inHome } from "./environment";
 import { EnvironmentBlock, LinuxBuildOffer, PathText, plainPath, useEnvironment } from "./environmentBlock";
 import { useShown } from "./toolWords";
@@ -313,7 +313,6 @@ export const claudeCodePage = (): AgentPage => ({
   id: "claude-code",
   package: PACKAGE,
   dest: "tools",
-  kind: "topic",
   under: "tools",
   title: t("title"),
   tip: t("tip"),

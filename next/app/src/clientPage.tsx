@@ -14,9 +14,9 @@ import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { toolState } from "../../ui/kit/parts/toolRow";
 import { strings } from "../../ui/kit/strings";
 import { Button, Choices, Notice, StateBadge, useAction, useKit, useLoad } from "../../ui/kit/ui";
+import { LAUNCHER } from "./addonItems";
 import { folderWait } from "./clientHelp";
 import { type DeviceCatalog, device } from "./device";
-import { LAUNCHER } from "./easyMode";
 import { historyKey } from "./environment";
 import { type Environment, PathText, plainPath } from "./environmentBlock";
 import { type Connection, connectionGet, reply } from "./host";
@@ -159,7 +159,7 @@ export const cancelled = (e: string | undefined) => !!e && (e === "cancelled" ||
 
 /** A native error as the second sentence of a line: its first letter a capital (pluxy keeps its
  * own lower-case name). */
-const sentence = (s: string) => (s.startsWith("pluxy") ? s : s.charAt(0).toUpperCase() + s.slice(1));
+export const sentence = (s: string) => (s.startsWith("pluxy") ? s : s.charAt(0).toUpperCase() + s.slice(1));
 
 /** What a restore refuses with when pluxy never changed the files. */
 const NOT_APPLIED = "is not applied to these targets";

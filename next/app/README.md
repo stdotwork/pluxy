@@ -2,8 +2,8 @@
 
 The desktop app is the UI kit's second build ([`../ui`](../ui/README.md)), in a Tauri 2 window,
 with a tray icon. It shows core's pages in the same places and with the same themes as the web
-panel, then adds its own: Beginner Mode, Manage Clients and the client pages as topics beside the Tools page, and Where pluxy runs, Updates, Add-ons
-and Launcher among the Settings topics. Extension pages, from core and
+panel, then adds its own: the eight coding tools' pages, which open from the rows of Tools and of the
+guided setup, and Where pluxy runs, Updates, Add-ons and Launcher among the Settings topics. Extension pages, from core and
 from packages installed on this device, open in webviews of their own.
 
 Linux is the only platform the app supports now; Windows, macOS and WSL are later work
@@ -1480,49 +1480,50 @@ and one test request. It opens once the app is connected and signed in, so the f
 still comes first. After it is finished the page stays among the Settings topics, every step
 folded.
 
-The app adds one thing to the page, through `SetupOptions.toolAction`. In step 2, a coding tool
-core found gets a **Set up** link at the end of its row when the window has a page for it and its
-optional tool is installed on this device or offered by a registry, which is the list Beginner
-Mode offers. Set up opens the tool's own page, where the app writes the tool's settings itself
-after its native confirmation; a tool that is not installed or enabled yet is named there. A tool
-whose settings file pluxy would not change gets no link, and its row keeps the panel's own steps,
-as every other row does. With a remote core the link is left out: the page then lists the tools on
-core's machine, and the app sets a tool up on this computer only.
+The app adds to step 2, and to the Tools page (`#/tools`), which shows the same rows, through the
+kit's `SetupOptions` and `ToolsOptions` (`src/toolHooks.ts` gives both the same tools, links and
+refresh; only Tools also gets `keyOwners`).
 
-`SETUP_CLIENT_PAGES` in `src/agentPages.ts` maps core's ID for each tool to the ID of its
-page here, and `setupClientPage` beside it decides which tools get the link. Beginner Mode
-is still there and unchanged.
+## Tools and the guided setup
 
-## Beginner Mode
+Each coding tool is a row, on Tools and in step 2 of the guided setup: the five tools core scans, and
+Claude Desktop, Grok Build and Hermes Agent, which the app reads itself (`readExtraTools` in
+`src/clientPage.tsx`, passed as `extraTools` as Tools or the setup opens, when this device's add-ons
+change, and on Refresh). Each tool has a page in this window (`#/claude-code`, `#/codex`,
+`#/claude-desktop`, `#/opencode`, `#/omp`, `#/grok-build`, `#/hermes`, `#/pi`). It opens as
+`Tools / {Tool}`, is not in the navigation, and writes the tool's settings itself after its native
+confirmation.
 
-Beginner Mode (`src/easyMode.tsx`, a topic of Tools; the Tools entry itself opens the kit's Tools page) is the guided setup of the old app's Easy
-mode, in its two steps. **Connect a model** is the Add an account page's own sign-in (every browser,
-device code and API-key method core's extensions offer); it counts core's accounts, and **Next:
-connect an agent** stays off until there is one. **Connect an agent** lists the agent clients this
-window can set up (the eight client pages above, Claude Code to Pi) whose optional tool is
-installed on this device or offered by a registry, and the launcher (`pluxy/execution`) that each
-page's **Start** runs through: **Install** installs a tool from its registry, **Enable** opens the
-tool's native confirmation ("full access to your user account"), answered in that dialog only,
-and **Set up** shows the client's own page below, where its configuration is applied and the
-client started as on that page. The guide writes nothing itself and keeps no draft: a cancelled
-confirmation, or leaving the guide, leaves files and packages as they were; Disconnect and Restore backup on the client's page undo an
-apply.
+One function, `toolAction` in `src/agentPages.ts`, gives a row its one button, by the tool's add-on
+(`items` in `src/addonItems.ts`: each add-on is on, installed but off, or offered by a registry):
 
-A client joins the list by being an agent page: a window page that names the package it drives
-(`AgentPage` in `src/easyMode.tsx`), listed in `agentPages` in `src/agentPages.ts`. The list itself
-(`src/easyModeItems.ts`) has no per-client code.
+| The tool's add-on | The row's button |
+| --- | --- |
+| On | **Open** when the tool is Connected, else **Set up**; both open the tool's page |
+| Installed, off | **Turn on add-on**: the native confirmation (it names "full access to your user account"), answered in that dialog only; meanwhile "Answer the confirmation window to go on." |
+| Offered by a registry | **Install add-on** (quiet), then **Installing…**, then **Turn on add-on** |
+| Still being read | "Checking add-ons…" |
+| None to be had | no app button: the row keeps the kit's own **Set up** or **Needs its add-on** |
 
-### Manage Clients
+In safe mode, or when this device's add-ons cannot be read, a row offers **Open** or **Set up** only,
+and a warning above the list says tool add-ons are paused. A failed step says why in one line under
+its row (`Could not install the add-on.` or `Could not turn on the add-on.`) and can be pressed again; a
+cancelled confirmation says nothing. One step runs at a time for each add-on (`src/toolRows.tsx`).
+Lines under the list (`toolNotes`) say when a listed tool has no add-on to be had and when the
+Launcher add-on is not on. Add-ons are read as the window opens (`src/main.tsx`); registries are read
+only for a pluxy on this computer (`setupOffersNeeded`).
 
-Tools lists a client's page among its topics only while the person wants it there. By default (automatic) it
-lists the clients whose tool is installed on this device, enabled or not, with the installed ones
-first; a tool a registry only offers is not listed, since Beginner Mode is where it is installed. The
-**Manage Clients** page (a topic of Tools) has a checkbox for every client with a search box, **Restore
-automatic display** and **Save**; Save is off for an empty selection ("Keep at least one client
-visible."). The choice is kept in the window's prefs (`pluxy.agent-clients`, on this device, like the
-Themes page's layout choices), and saving automatic removes it. Whichever client page is open stays listed while it is
-open, so hiding it never strands the person. Beginner Mode still offers every client, and the list
-logic is in `src/clientListItems.ts`.
+From step 2, **Set up** or **Open** opens the tool's page with a strip above it, "Setting up pluxy."
+and **Back to setup**; the strip is kept in memory only and goes once the person leaves the page.
+Connected to a pluxy on another computer (`isRemote`), the list is that computer's tools, with the
+kit's own steps on each row, no add-on button, no extra rows, and links to the eight pages for this
+computer under the list. `keyOwners` (`src/keyOwners.ts`) names each key the app made for a tool
+from the vault's list (names only, never a key's value), for keys of the connected pluxy only.
+
+`SETUP_CLIENT_PAGES` in `src/agentPages.ts` maps core's ID for each tool to the ID of its page. A
+tool joins the list by being an agent page: a window page that names the add-on it drives
+(`AgentPage` in `src/addonItems.ts`), listed in `agentPages`. The old addresses `#/easy-mode` and
+`#/clients` go to `#/setup` and `#/tools`.
 
 ## Build and check
 
