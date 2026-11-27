@@ -115,8 +115,8 @@ set a block, below). Then:
 
 - If the extension reports the refusal as **retry-safe**, meaning the upstream certainly did not
   run the request (for example a 429 or a 401), the request moves on to another eligible account.
-- When the upstream refuses the credential of an account added by sign-in, core first renews the
-  credential and tries the same account again, once per request. Only when the renewal gives no
+- When the upstream refuses the credential of an account added by sign-in (a 401), core first
+  renews the credential and tries the same account again, once per request and account. Only when the renewal gives no
   newer credential does the request move on.
 - An account that cannot serve this request moves it on too: its upstream speaks another format and
   the request cannot be translated to it, or the upstream says it does not have the model.
@@ -375,7 +375,7 @@ the provider only when it is an extension's ID (`publisher/name`), so `claude-op
 a model. A model whose name holds a colon ends with an `@`: `llama3:8b@`, or
 `llama3:8b@pluxy/openai-compatible:a1` with a provider and an account.
 
-Setting a chain fails with 422 (the error names the step) for:
+Setting a chain fails with 422, and the error names the step at fault, for:
 
 - no steps, or more than 8;
 - a step with no model, a `provider` that is not an extension ID, or an empty account ID;
@@ -444,8 +444,8 @@ accounts change.
 
 From each reading it takes the windows to start: every usage window of five hours, whether it
 counts all the account's requests or those of one group of models. A provider with only one usage
-window has that one started, whatever its length. A weekly window, or one model family's, is never
-started. An extension's `windows` narrows this: it maps window IDs to models, and when it is set,
+window has that one started, whatever its length. When the reading has more than one window, a
+window of any other length, such as a weekly one, is never started. An extension's `windows` narrows this: it maps window IDs to models, and when it is set,
 only the windows it lists among those are started. A window's ID is the `id` of its limit in
 `pluxy account quota <id> --json` (for example `five_hour` for Claude and Codex).
 
@@ -493,7 +493,8 @@ With none set, core picks a small model from the models the account serves (as
 3. With none of those words, it takes the first model left.
 
 When the account's models cannot be listed, the ignition fails. When no model is left to choose,
-the window is paused until a model is set.
+the window is paused at once (see [Failures and pauses](#failures-and-pauses)); setting a model
+clears the pause.
 
 ### Seeing what ignition does
 
@@ -771,8 +772,7 @@ request:
 
 A list holds each model the accounts list, once under each name a client can ask for it by, and
 the name of each fallback chain no account serves, sorted by name. A name whose accounts are all
-turned off, waiting for a sign-in or banned is not listed, since no request for it can be served
-now, and an account with `weight` 0 under the `weighted` strategy adds nothing. `pluxy model list`
+turned off or waiting for a sign-in is not listed, since no request for it can be served now, and an account with `weight` 0 under the `weighted` strategy adds nothing. `pluxy model list`
 shows the same models with the accounts that serve each.
 
 ### Where an account's models come from
