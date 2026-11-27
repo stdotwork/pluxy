@@ -27,23 +27,21 @@ Words used throughout:
   refused with a 400 that names the dropped parts. An *approximated* loss never refuses a request. See
   [`drop_policy`](#drop_policy) and [Config](config.md#top-level).
 
-In the table below, a cell says what happens to that feature on that provider:
+In the table below, each cell is for a request that has to be translated from another client format,
+on the provider's default host. A cell means:
 
 | Cell | Meaning |
 | --- | --- |
-| **works** | The feature reaches the upstream with the same meaning. |
-| **changed** | It is carried, but rewritten or mapped to a different feature. The provider's section says how. |
-| **dropped** | The extension leaves it out and sends the rest. The loss is in the translation report. With `drop_policy: "reject"` the request is refused. |
-| **refused** | The request fails with an error whatever `drop_policy` says. |
-| **not supported** | The extension has no code for it. For an endpoint call, core tries the model's next account. For a token count, core answers with its own estimate unless `token_count_estimate` is `false`. |
+| **works** | The feature is carried with the same meaning. |
+| **changed** | The feature is carried in another form or only under conditions. The provider's section lists what is left out. |
+| **dropped** | The extension does not send it. The loss is reported, except where the provider's section says it is not. With `drop_policy: "reject"` a reported loss refuses the request. |
+| **not supported** | The extension has no code for it. An endpoint call is skipped for it: core tries the model's next account. A token count is estimated by core unless `token_count_estimate` is `false`. |
 
-Each cell is the outcome for a request that has to be translated, and where a feature has several
-settings it shows the strongest outcome among them (for example `dropped` when any setting is
-dropped). A request whose client format is the provider's own passes as written, so most of these
-features reach the upstream as the client wrote them; each provider's section lists the changes that
-still apply. No cell says **refused**, because a refusal depends on the request (an empty turn, a
-streamed compaction, a request body over the size limit) or on `drop_policy`: those are in the shared
-rules below and in each provider's section.
+A request whose client format is the provider's own passes as written, so most of these features
+reach the upstream as the client wrote them; each provider's section lists the changes that still
+apply. A refusal is not a cell, because it depends on the request (an empty turn, a streamed
+compaction, a request body over the size limit) or on `drop_policy`: those are in the shared rules
+below and in each provider's section.
 
 ## Feature by provider
 
@@ -58,17 +56,17 @@ rules below and in each provider's section.
 | Reasoning and thinking | changed | changed | changed | changed | changed | changed | changed | changed |
 | Sampling settings | dropped | dropped | dropped | dropped | dropped | dropped | dropped | dropped |
 | Images in | changed | works | changed | works | works | works | works | changed |
-| Files and documents in | changed | changed | changed | changed | changed | dropped | works | dropped |
-| Audio in | dropped | changed | works | works | changed | works | works | dropped |
+| Files and documents in | changed | changed | changed | changed | changed | dropped | changed | dropped |
+| Audio in | dropped | works | works | works | works | works | works | dropped |
 | Speech and transcription | not supported | not supported | changed | works | not supported | not supported | not supported | not supported |
 | Images out (Images API) | not supported | works | changed | works | not supported | not supported | not supported | not supported |
 | Web search | changed | changed | changed | dropped | dropped | dropped | dropped | dropped |
 | Code execution | changed | dropped | changed | dropped | dropped | dropped | dropped | dropped |
-| Citations | changed | changed | changed | dropped | dropped | works | dropped | not supported |
+| Citations | changed | changed | changed | dropped | dropped | changed | dropped | dropped |
 | Structured output | changed | changed | changed | changed | changed | changed | changed | dropped |
-| Service tier | changed | dropped | changed | dropped | dropped | dropped | dropped | dropped |
+| Service tier | changed | changed | changed | dropped | dropped | dropped | dropped | dropped |
 | Verbosity | dropped | dropped | dropped | dropped | dropped | dropped | dropped | dropped |
-| Prompt caching | changed | changed | dropped | dropped | dropped | works | dropped | dropped |
+| Prompt caching | changed | changed | dropped | dropped | dropped | dropped | dropped | dropped |
 | Multiple candidates (`n`) | dropped | dropped | changed | dropped | dropped | dropped | dropped | dropped |
 | Embeddings | not supported | not supported | changed | works | not supported | not supported | not supported | not supported |
 | Compaction | changed | changed | changed | changed | changed | not supported | not supported | not supported |
@@ -78,17 +76,35 @@ rules below and in each provider's section.
 Notes to the table:
 
 - **Sampling settings** are `temperature`, `top_p`, output token limit, stop sequences, `top_k`, seed
-  and the penalties. `top_k`, seed and the penalties are dropped everywhere. The others work, except
-  where a provider's section says it removes them (Codex removes `temperature` and `top_p`; Kimi
-  removes a `temperature` other than 1.0; Devin drops `top_p` and stop sequences).
+  and the penalties. The row says `dropped` because every provider drops `top_k`, seed and the
+  penalties. Stop sequences are also dropped for Codex, xAI and Meta (and for OpenAI-compatible on a
+  `responses` wire). The others are sent, except where a provider's section says it removes or
+  changes them: Claude drops `temperature` and `top_p` for models that refuse them; Codex removes
+  `temperature` and `top_p` and sends the output limit as `max_output_tokens`, raised to 16 when it
+  is lower; Gemini drops a Messages client's `max_tokens`; Kimi keeps only the `temperature` it takes
+  (1.0, or 0.6 with thinking off); Devin drops `top_p` and stop sequences and lowers a `max_tokens`
+  of 64000 or more to 64000.
+- **Function tools**: Gemini and Devin drop `strict` (Devin only `strict: true`).
+- **Service tier and verbosity**: Devin neither sends nor reports them, so `drop_policy: "reject"`
+  does not refuse them. Codex's service tier is `changed` because what it takes depends on the
+  routed model's catalog entry and on the host.
 - **Verbosity, service tier, web search, code execution and `n`** from another format are sent only to
   the hosts the provider's section names ("Service tier, verbosity and gated features" in the shared
   rules). A client whose format is the provider's own sends them as written.
-- **Citations** for the providers marked `dropped` are carried to Responses clients, to Gemini clients
-  and to non-streamed Chat Completions clients, and dropped for Messages clients and streamed Chat
-  Completions clients.
+- **Citations** for xAI, Meta and OpenAI-compatible (marked `dropped`) are carried to Responses
+  clients, to Gemini clients and to non-streamed Chat Completions clients, and dropped for Messages
+  clients and streamed Chat Completions clients. Kimi is `changed`: only a Gemini client is
+  translated, and a `url_citation` annotation in Kimi's Chat Completions reply becomes the Gemini
+  client's `groundingMetadata`. Devin has no code for citations, so it carries none.
+- **Rate-limit headers**: no header is rewritten. A header goes only to a client whose format
+  documents it (Messages clients: `anthropic-*`; Chat Completions and Responses clients:
+  `x-ratelimit-*`; see "Rate-limit headers" below). So a Claude account's `anthropic-*` headers
+  reach only Messages clients, and the `x-ratelimit-*` headers of Codex and OpenAI-compatible reach
+  only Chat Completions and Responses clients. A header that does not reach the client is not
+  reported as a loss.
 - **Token counting**: Claude counts upstream only on `https://api.anthropic.com`; OpenAI-compatible
-  counts upstream only on the `messages` and `gemini` wires; Codex counts only the Responses
+  counts upstream only on the `messages` and `gemini` wires, and also counts
+  `/v1/responses/input_tokens` on a `responses` wire; Codex counts only the Responses
   `input_tokens` route, on an API-key account.
 - **OpenAI-compatible** cells are for the default `chat` wire. Each section tells where another
   `wire_api` differs.
@@ -135,7 +151,9 @@ Terms used below:
   extension writes the reply. An extension that does not serve it answers `unsupported`, and
   routing tries the next account. When every account answered `unsupported`, the client gets
   `503` with code `auth_not_found` and message `no auth available`, unless a refusal carried status
-  400 or was about the request itself. `drop_policy` is not applied to endpoint calls.
+  400 or was about the request itself. `/v1/responses/input_tokens` is answered with core's own
+  estimate when no account can count and `token_count_estimate` is on (see "Token counts and
+  `token_count_estimate`"). `drop_policy` is not applied to endpoint calls.
 - A request body may be up to 24 MiB. A larger body gets `413` (`request body is too large`).
   Core decodes a `gzip` body; any other `Content-Encoding` gets `415`.
 - A reply that is not streamed is collected up to 64 MiB. A larger one fails with an `upstream`
@@ -172,7 +190,8 @@ Terms used below:
   without a limit gets `max_tokens` 32000 (a provider may use the model's own limit instead).
 - Passthrough: when the client format is the upstream format, the extension sends the client's
   body (kept as `native`) instead of rebuilding it from the model. The extension may still change
-  that body, and each change is a loss in the report. Providers and formats that pass through:
+  that body. The report lists only some of those changes; the others are not reported (see "Changes
+  that are not reported"). Providers and formats that pass through:
   Claude (Messages), Codex (Responses), Gemini (GenerateContent), xAI and Meta (Responses),
   OpenAI-compatible (the format its `wire_api` names), Kimi (Chat Completions, Responses and
   Messages, each to its own API). Devin never passes through: every client format is rebuilt as
@@ -185,11 +204,14 @@ Terms used below:
 ### The translation report
 
 - Each extension adds a report (`from`, `to`, `passthrough`, `losses`) to the reply's
-  `response.start` event. A passthrough report lists what the extension changed in the client's
-  body (for example a thinking-suffix effort or a history repair).
-- Core writes the report to its log only; no client format carries it. One line per request:
-  `translation: request dropped <path> (<detail>); reply dropped <path> (<detail>)`. It names at most
-  20 losses and says how many more there were; a path or detail is cut at 200 bytes.
+  `response.start` event. A passthrough report lists some of what the extension changed in the
+  client's body, for example a history repair, or a thinking setting that came out different from the
+  one asked.
+- Core writes the report to its log only; no client format carries it. It writes one line for each
+  HTTP generate request that lost something: `translation: request <kind> <path> (<detail>); reply <kind> <path> (<detail>)`,
+  where `<kind>` is `dropped` or `approximated`. A Responses WebSocket turn logs only its reply
+  losses. Token counts and endpoint calls log none. A line names at most 20 losses and says how many
+  more there were; a path or detail is cut at 200 bytes.
 - Reply-side losses (what the client format cannot show) are collected by the client format's
   writer and logged when the reply ends.
 - A report lists at most 100 losses; one more entry says that more were left out.
@@ -200,6 +222,26 @@ Terms used below:
   the tool messages; a Messages plain-text document sent as text; `parallel_tool_calls: false` on
   Gemini; a `defer_loading` tool declared from the start. Reply-side losses are all `dropped`,
   except an unreadable `tool_search` call's arguments (`approximated`).
+
+### Changes that are not reported
+
+An extension changes a body sent as written in more ways than its report lists. A report with
+`passthrough: true` and no losses does not mean the body went out as the client wrote it, and
+`drop_policy: "reject"` does not refuse these changes. The main ones that are not reported:
+
+| Provider | Changes to a body sent as written that are not in the report |
+| --- | --- |
+| Claude | Empty `allowed_domains` and `blocked_domains` removed from web search tools; tool-call IDs outside `[A-Za-z0-9_-]{1,64}` rewritten; with `rebuild_mid_system_message`, system messages moved into `system`; a thinking suffix applied exactly as asked |
+| Codex | `temperature`, `top_p`, `max_tokens`, `max_completion_tokens`, `truncation`, `user`, `metadata`, `prompt_cache_options`, `safety_identifier` and a few more fields removed; `max_output_tokens` under 16 raised to 16; `store`, `stream`, `include` and `service_tier` set or filtered; empty `instructions` added; the `system` role sent as `developer`; input item IDs, call IDs and function names shortened |
+| Gemini | Tool schemas cleaned (`$ref` inlined, keywords removed, unions flattened); an empty user turn added where one is needed; on Vertex AI, thought-only model turns dropped; a reply that ends in `MALFORMED_FUNCTION_CALL` sent again |
+| OpenAI-compatible | A thinking suffix's effort written into the body; the `developer` role changed to `system` (`developer_role`); text parts joined into a string (`string_content`); `reasoning_content` removed (`reasoning_passback: false`); a suffix applied to a body on a `messages` or `gemini` wire |
+| xAI | `stop`, `previous_response_id`, `prompt_cache_retention`, `safety_identifier` and `stream_options` removed; `store: false` and `reasoning.encrypted_content` added; tool schemas inlined; more than 200 tools cut to the first 200 |
+| Kimi | A `temperature` Kimi does not take removed; the model name rewritten; tool schemas inlined; `stream_options.include_usage` added; `reasoning_effort` replaced by `thinking`; empty assistant messages dropped; `reasoning_content` filled in on assistant tool calls |
+| Meta | `stream: true` forced; `generate`, `prompt_cache_retention`, `safety_identifier`, `stream_options` and `client_metadata` removed; `store: false` and `reasoning.encrypted_content` added; Muse Code's `muse` tool namespace added when the request has tools |
+| Devin | Never sent as written. In the rebuilt request, service tier and verbosity are not read, and a `max_tokens` of 64000 or more is lowered to 64000 |
+
+Config `payload` rules, if any are set, are applied to the body after the extension has finished,
+and they are never in the report either.
 
 ### `drop_policy`
 
@@ -246,8 +288,11 @@ The error carries a `pluxy` member that lists the accounts tried, with result `u
 
 Core also refuses under `reject` when an extension that implements an older protocol minor version
 would lose a tool result's parts or error flag, a service tier, a verbosity or a candidate count:
-the message names the protocol versions and the paths. Core narrows a tool choice's allowed list
-for such an extension without reporting a loss.
+the message names the protocol versions and the paths. For an extension older than protocol minor
+version 26, core also narrows a tool choice's allowed list: it keeps only the function tools the list
+names, removes every other tool (hosted and native ones too), and reports no loss. When the list
+names no function tool the request defines, core refuses the request with `400`
+`tool_choice allows no function tool this request defines: <names>`.
 
 ### Tools
 
@@ -318,16 +363,26 @@ for such an extension without reporting a loss.
   also removes it from the model in the client's body (not for GenerateContent, whose model is in
   the path). This holds on every route that names a model: generate, token counts, endpoint calls
   and both kinds of WebSocket turn.
-- The suffix wins over any reasoning setting in the request. As an effort, a budget is the level it
-  falls in: `0` `none`, up to 512 `minimal`, up to 1024 `low`, up to 8192 `medium`, up to 24576
-  `high`, more `xhigh`.
-- Where it is applied: Claude and Gemini apply a budget as a budget on models that take one (and
-  the level otherwise); Codex and OpenAI-compatible apply the level (OpenAI-compatible also
-  passes it to Messages and GenerateContent upstreams in Claude's and Gemini's way); Kimi sends
-  the level as `thinking: {type, effort}` on its Chat Completions API (the level `minimal` or
-  `low` is `low`, `xhigh` or `max` is `max`, anything else `high`); Devin picks the model variant
-  by level. xAI and Meta do not read the suffix: in a request translated to Responses the level
-  appears as `reasoning.effort`, and a Responses client's own body keeps its own setting.
+- Where an extension reads the suffix, it wins over any reasoning setting in the request. As an
+  effort, a budget is the level it falls in: `0` `none`, up to 512 `minimal`, up to 1024 `low`, up to
+  8192 `medium`, up to 24576 `high`, more `xhigh`.
+- Where it is applied:
+  - Claude and Gemini apply it to their own format too. A budget stays a budget on a model that takes
+    one (a Claude model before 4.6, a Gemini model without levels) and is above 0; otherwise it
+    becomes a level. A model name that is not a Claude model (or not a thinking Gemini model) keeps
+    the body's own settings.
+  - Codex applies the level to every body and moves it to a level the model has (reported as
+    `approximated`).
+  - OpenAI-compatible applies it to every body. On a Chat or Responses wire it is the level, moved to
+    a level the account takes (reported as `approximated`). On a Messages or GenerateContent wire it
+    goes by Claude's or Gemini's rule.
+  - Kimi applies it only on its Chat Completions API (a Chat client's body as written and a Gemini
+    client's rebuilt body), as `thinking: {type, effort}`: `none` is `{"type":"disabled"}`, `minimal`
+    or `low` is `low`, `xhigh` or `max` is `max`, anything else (`auto` included) `high`. A Responses
+    or Messages client's body keeps its own settings.
+  - Devin picks the model variant by level.
+  - xAI and Meta do not read the suffix: in a request translated to Responses the level appears as
+    `reasoning.effort`, and a Responses client's own body keeps its own setting.
 - To Messages and GenerateContent the encoders drop the client's effort (`reasoning_effort`), because
   thinking budgets depend on the model; Claude and Gemini remove that loss when they apply the
   setting themselves.
@@ -531,13 +586,14 @@ Every error is one internal error with a code and a status. The client format de
 | Client format | Shape | Status when the error has none |
 | --- | --- | --- |
 | Chat Completions, Responses | `{"error":{"message","type","code", "param"?, "pluxy"?}}`; `type` is `authentication_error` (401), `permission_error` (403), `rate_limit_error` (429), `invalid_request_error` (other 4xx), `server_error` (5xx); `code` is the upstream's code, else the internal code | see below |
-| Messages | `{"type":"error","error":{"type","message","details"?,"pluxy"?},"request_id"?}`; `type` follows the status (`invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `conflict_error`, `request_too_large`, `rate_limit_error`, `timeout_error`, `overloaded_error` for 529, `api_error`) | see below |
+| Messages | `{"type":"error","error":{"type","message","details"?,"pluxy"?},"request_id"?}`; `type` follows the status (`invalid_request_error`, `authentication_error`, `permission_error`, `not_found_error`, `billing_error` for 402, `conflict_error`, `request_too_large`, `rate_limit_error`, `timeout_error`, `overloaded_error` for 529, `api_error`) | see below |
 | GenerateContent | `{"error":{"code","message","status","details"?,"pluxy"?}}`; `status` is Google's name for the code (`INVALID_ARGUMENT`, `UNAUTHENTICATED`, `PERMISSION_DENIED`, `NOT_FOUND`, `RESOURCE_EXHAUSTED`, `UNAVAILABLE`, `INTERNAL`, ...) | see below |
 | Responses WebSocket | `{"type":"error","status","error":{...}}` | see below |
 
 - Status when the error has none: `invalid_request` and `unsupported` 400; `auth` 401; `permission` and
-  `account_closed` 403; `not_found` 404; `rate_limit` and `quota` 429; `unavailable` 503;
-  `internal` 500; anything else 502.
+  `account_closed` 403; `not_found` 404; `rate_limit` and `quota` 429; `unavailable` and
+  `extension_unavailable` 503; `internal` 500; anything else 502. A cancelled error is 499 for
+  GenerateContent clients and 502 for the others.
 - An upstream's error keeps the fields its format shares with the client's: a Messages client keeps
   `request_id` and the text `error_code` of `details` from a Messages upstream; a Chat or Responses
   client keeps `param` from an OpenAI-format upstream; a GenerateContent client keeps `details`
@@ -554,9 +610,10 @@ Every error is one internal error with a code and a status. The client format de
   Chat Completions, Responses and the WebSocket; `invalid_request_error` with a message that
   contains `prompt is too long` on Messages; `INVALID_ARGUMENT` on GenerateContent. It fails that
   request only: no account or model is blocked and no other account is tried. The Claude, Codex,
-  Gemini and OpenAI-compatible extensions recognise it (by the code or by the message list in
-  `llm/overflow.go`, and Gemini also by a `500` that says `input context is too long`); Kimi, xAI,
-  Meta and Devin do not.
+  Gemini and OpenAI-compatible extensions recognise it; Kimi, xAI, Meta and Devin do not. Claude,
+  Gemini and OpenAI-compatible go by the code or by the message list in `llm/overflow.go` (Gemini
+  also by a `500` that says `input context is too long`); Codex goes only by the code or type
+  `context_length_exceeded`, not by the message list.
 - When routing settings turn on the usage-limit reply (`routing.quota_response_mode`
   `usage-limit`) and every account is out of quota for more than 5 minutes, the client gets `429`:
   Chat, Responses and GenerateContent clients an error with `type` `usage_limit_reached` and
@@ -576,8 +633,9 @@ Every error is one internal error with a code and a status. The client format de
 | Claude | only when `base_url` is `https://api.anthropic.com` (port 443, no user info) |
 | Gemini | yes (Gemini API and Vertex AI) |
 | Kimi | yes, with Kimi's Messages count endpoint |
-| OpenAI-compatible | `wire_api` `messages` (`/messages/count_tokens`) and `gemini` (`:countTokens`); `chat` and `responses` cannot |
-| Codex, xAI, Meta, Devin | cannot (no count operation) |
+| OpenAI-compatible | `messages` wire: Messages `count_tokens`; `gemini` wire: `:countTokens`; `responses` wire: `/v1/responses/input_tokens`; `chat` wire: none |
+| Codex | `/v1/responses/input_tokens` on an API-key account; not Messages `count_tokens` or Gemini `countTokens` |
+| xAI, Meta, Devin | cannot (no count operation) |
 
   For `/v1/responses/input_tokens`, Codex API-key accounts and OpenAI-compatible `responses` accounts count
   upstream; the others answer `unsupported`.
@@ -589,7 +647,10 @@ Every error is one internal error with a code and a status. The client format de
   could count, an upstream's error stays an error. A refusal under `drop_policy` `"reject"` is not
   a "cannot count" answer: it stays an error.
 - `token_count_estimate` (top level, default `true`): `false` answers the error of the last account
-  instead of an estimate (status `400`, a message such as `extension <id> does not count tokens`).
+  instead of an estimate. For `count_tokens` and `countTokens` that is status `400` with a message
+  such as `extension <id> does not count tokens`. `/v1/responses/input_tokens` is an endpoint call,
+  so with the estimate off and every account `unsupported` its client gets `503` `auth_not_found`
+  (`no auth available`), as for the other endpoint calls above.
 - A count from an upstream of the client's own format is passed on as the upstream sent it;
   from another format, core writes the number in the client's shape.
 - The estimate is one function for every provider. It is a heuristic, not a tokenizer: it splits
@@ -1437,12 +1498,13 @@ name a missing model on an endpoint call blocks no model.
 
 The Gemini extension (`pluxy/gemini`) serves Google's Gemini models through the Gemini API (an API key) and through
 Vertex AI (a service account key or an express mode API key). Sign-in and account options are in
-[`providers.md#gemini`](providers.md#gemini). Two account settings change how requests are translated:
+[`providers.md#gemini`](providers.md#gemini). These account settings change how requests are translated:
 
 | Setting | Effect on translation |
 | --- | --- |
 | `base_url` | Where the API is. Default `https://generativelanguage.googleapis.com`: requests go to `{base_url}/v1beta/models/{model}:generateContent`, or `:streamGenerateContent?alt=sse` for a stream. On Vertex AI it replaces Google's host. |
 | `interactions` | `true` serves Gemini's Interactions API to Interactions clients. Default `false`. |
+| `vertex` (`project`, `location`) | Sends the account's requests to Vertex AI instead of the Gemini API. `location` defaults to `global`. The rules below that name Vertex AI apply. |
 
 Google's own hosts are `generativelanguage.googleapis.com` for the Gemini API, and for Vertex AI the default host,
 `aiplatform.googleapis.com`, `aiplatform.us.rep.googleapis.com`, `aiplatform.eu.rep.googleapis.com` and
@@ -1471,10 +1533,13 @@ parameter.
   - Local `$ref` is inlined from `$defs` or `definitions` (at most 16 levels; a ref cycle, a deeper ref or one past the
     size budget of 4 MiB per request is replaced by a `See: <name>` hint in the description, keeping the target's short
     `type`, `nullable` and `description`). A ref that is not local is replaced the same way.
-  - These keywords are removed: `$schema`, `$defs`, `definitions`, `$id`, `$ref` leftovers, `propertyNames`,
-    `patternProperties`, `dependentRequired`, `dependentSchemas`, `not`, `unevaluatedProperties`, `additionalItems`,
-    `contentSchema`, `contentMediaType`, `contentEncoding`, `readOnly`, `writeOnly`, `deprecated`, `discriminator`, and
-    every `x-` key. `if`/`then`/`else` and `allOf` are merged into the parent object.
+  - These keywords are removed: `$schema`, `$defs`, `definitions`, `$id`, `id`, `$anchor`, `$vocabulary`,
+    `$dynamicRef`, `$dynamicAnchor`, `$comment`, `$ref` leftovers, `propertyNames`, `patternProperties`,
+    `dependentRequired`, `dependentSchemas`, `dependencies`, `not`, `unevaluatedProperties`, `unevaluatedItems`,
+    `additionalItems`, `contentSchema`, `contentMediaType`, `contentEncoding`, `readOnly`, `writeOnly`, `deprecated`,
+    `discriminator`, `enumDescriptions`, `enumTitles`, `prefill`, `encrypted`, and every `x-` key. `if` is removed; the
+    properties of `then` and `else` are added to the parent object (a property the parent has keeps its own), and the
+    branches of `allOf` are merged into it.
   - A union at the root (`anyOf` or `oneOf`) is flattened into the root's properties, keeping only the `required` names
     every branch shares. Elsewhere a union with one non-null branch collapses to that branch; a `null` branch becomes
     nullability.
@@ -1535,7 +1600,7 @@ name Gemini's safety settings. A Gemini client's own `safetySettings` go as writ
 | Parallel tool calls | Gemini cannot limit a reply to one call, so `parallel_tool_calls: false` (or Messages `disable_parallel_tool_use: true`) sends `mode: NONE`, which turns function calling off, over any other tool choice; reported approximated. `true` sends nothing. |
 | Forced built-in tool | `toolConfig` is written only when there are function declarations. Forcing `codeExecution`, or forcing a tool when only built-in tools are sent, is reported dropped. |
 | Custom, namespace and `tool_search` tools (Responses client) | Sent as plain functions; see Shared rules: Tools. |
-| Other tool types | A custom Chat tool type, a Responses tool of another type and a replayed call to a tool Gemini does not have are reported dropped (`GenerateContent has no such tool`). A replayed custom call that is not lowered is reported dropped. |
+| Other tool types | A custom Chat tool type, a Responses tool of another type and a native tool Gemini does not have are reported dropped (`GenerateContent has no such tool`). A replayed call to such a tool is reported dropped (`GenerateContent has no such item`), and so is a replayed custom call that is not lowered. |
 | Function call signature | A function call that has no thought signature of its own and no replayed signature waiting gets `skip_thought_signature_validator`, the value Google documents for calls it did not issue (Gemini 3 refuses a call in the current turn without a signature). |
 
 **Reasoning and thinking.** Gemini takes thinking as a level (`thinkingConfig.thinkingLevel`, Gemini 3 and later) or a
@@ -1549,19 +1614,24 @@ token budget (`thinkingBudget`, Gemini 2.5). The extension decides which from th
 | `gemini-2.5-flash-lite` | budget 512 to 24576; 0 turns thinking off |
 | `gemini-pro-latest`, `gemini-flash-latest`, `gemini-flash-lite-latest` | the same ranges as 2.5 pro, flash, flash-lite |
 | `gemini-robotics-er-1.6` | budget 0 to 24576; version 2 and later take levels `minimal`, `low`, `medium`, `high` |
-| `gemini-3-*` pro (3.0) | levels `low`, `high` |
-| Gemini 3.x pro, and 3.8 and later | levels `low`, `medium`, `high` |
-| Gemini 3.x `-image` | levels `minimal`, `high` |
-| other Gemini 3.x | levels `minimal`, `low`, `medium`, `high` |
+| `gemini-3-pro…` and `gemini-3.0-pro…` (any 3.0 name with `-pro`, `-pro-image` included) | levels `low`, `high` |
+| other names with `-pro` (3.1 and later), and every 3.x model from 3.8 (any family, image included) | levels `low`, `medium`, `high` |
+| other 3.x names with `-image` (3.1 to 3.7) | levels `minimal`, `high` |
+| all other 3.x names | levels `minimal`, `low`, `medium`, `high` |
 | Gemini 4 | levels `low`, `medium`, `high`; the `-neon` and `-hydrogen` models also take `xhigh` |
 | any other name (Gemini 2.0 and 1.x, Gemma, unknown names) | no thinking settings are sent |
 
-The effort comes from the client (Chat `reasoning_effort`; Responses `reasoning.effort`; Messages `output_config.effort`
-or `thinking`) or from a suffix on the model name, which wins. A Messages `thinking` becomes an effort: enabled with
-`budget_tokens` is the effort the budget falls in (up to 512 `minimal`, 1024 `low`, 8192 `medium`, 24576 `high`, above
-that `xhigh`; 0 is `none`), enabled with no budget is `auto`, adaptive with no effort is `xhigh`, disabled is `none`. The
-exact `budget_tokens` is not sent; it stays in `thinking` and is reported dropped. Only a suffix with a number
-(`(16000)`) sends an exact budget.
+A name counts as Gemini 3 only when it starts `gemini-3-` or `gemini-3.<minor>-` (with the dash after the version); the
+four Gemini 3 rows are checked in the order shown, and the first that fits applies.
+
+The effort comes from the client (Chat `reasoning_effort`; Responses `reasoning.effort`; Messages `thinking`, with
+`output_config.effort` read only beside it) or from a suffix on the model name, which wins. A Messages `thinking`
+becomes an effort: enabled with `budget_tokens` is the effort the budget falls in (up to 512 `minimal`, 1024 `low`, 8192
+`medium`, 24576 `high`, above that `xhigh`; 0 is `none`; the `output_config.effort` is then ignored); enabled with no
+budget is the `output_config.effort` when one is given, else `auto`; adaptive is the `output_config.effort` when given,
+else `xhigh`; disabled is `none`. An `output_config.effort` without a `thinking` object is not read. The exact
+`budget_tokens` is not sent; it stays in `thinking` and is reported dropped. Only a suffix with a number (`(16000)`)
+sends an exact budget.
 
 | Effort | Model with levels | Model with a budget |
 | --- | --- | --- |
@@ -1583,8 +1653,9 @@ reasoning (Chat `reasoning_content`, a Responses reasoning item, a Messages thin
 *Replay.* A Gemini thought signature reaches a Messages client as a thinking block's `signature` and a Responses client as
 a reasoning item's `encrypted_content` (a signature on a part that is not a thought becomes an empty reasoning item just
 before that part). When the client replays the item, the signature goes back on the part that follows it, so Gemini 3's
-function calls keep their reasoning between turns; the thought text itself is not replayed. A Messages signature counts
-as Gemini's only when it has the shape of one (base64 of a protocol buffer starting with field 1); reasoning from another
+function calls keep their reasoning between turns; the thought text itself is not replayed. A Messages signature and a
+Responses reasoning item's `encrypted_content` count as Gemini's only when they have the shape of one (base64 of a
+protocol buffer starting with field 1, which makes the text start with `C`); reasoning from another
 provider (a Claude signature, OpenAI encrypted reasoning, a Chat `reasoning_content`) is reported dropped. A Chat client
 has no field for a signature, so its replayed function calls carry `skip_thought_signature_validator`.
 
@@ -1644,13 +1715,15 @@ reported dropped. The reply's `cachedContentTokenCount` is reported as cached in
 - **Reasoning.** Thought parts become reasoning (see "Reasoning and thinking").
 - **Function calls** arrive whole. A call that has no ID gets `call_<responseId>_<n>` (`responseId` reduced to letters,
   digits, `-` and `_`, at most 64 characters; random when Gemini sent none); a call in a candidate after the first gets
-  `call_<prefix>_c<candidate>_<n>`. A call with no name in a later candidate is reported dropped.
+  `call_<prefix>_c<candidate>_<n>`. `n` is the position of the call's item in the reply, counting text and reasoning
+  items before it (in a later candidate, that candidate's own items). A call with no name in a later candidate is reported dropped.
 - **Integer arguments.** Gemini's arguments are a protobuf Struct, so an integer parameter can come back as `2500.0`. In
   a rebuilt reply the extension writes it as `2500` where the request's tool schema declares that property `integer`
   (nested objects and array items included); a number under an unknown schema, a value with a fraction and a value beyond
   2^53 are left as they came. A Gemini client's reply is not changed.
 - **Finish reasons.** `STOP` is a stop, or a tool-call stop when the reply has calls; `MAX_TOKENS` is length; `SAFETY`,
-  `RECITATION`, `LANGUAGE`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII` and the `IMAGE_*` safety reasons are content filter;
+  `RECITATION`, `LANGUAGE`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII`, `IMAGE_SAFETY`, `IMAGE_PROHIBITED_CONTENT` and
+  `IMAGE_RECITATION` are content filter;
   a prompt blocked before any candidate (`promptFeedback.blockReason`) is content filter too. Any other reason is
   "other": a Chat client gets Gemini's own word as `finish_reason`, a Messages client gets `end_turn`. A non-streamed
   reply with no finish reason counts as finished with "other"; a stream that ends before any finish reason is an
