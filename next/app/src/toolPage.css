@@ -53,7 +53,7 @@
     flex-wrap: wrap;
     align-items: center;
     gap: calc(var(--s) * 2.5);
-    font-size: 16px;
+    font-size: var(--px-font-size-title);
     line-height: 1.25;
   }
 
