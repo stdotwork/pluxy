@@ -106,13 +106,14 @@ test("Make key puts a real key in the text and names it for the tool; Close take
   await expect(value).toHaveCount(0);
   await expect(claude.locator("pre")).toContainText("<client-key>");
   await expect(claude.locator("pre")).not.toContainText(key);
-  await expect(claude.getByRole("button", { name: "Make key", exact: true })).toBeVisible();
+  await expect(claude.getByRole("button", { name: "Make another key", exact: true })).toBeVisible();
+  await expect(claude).toContainText("pluxy already has a key named Claude Code");
   // The key is still a key core accepts: only its value is gone from the page.
   expect(
     (await fetch(`${core.base}/v1/models`, { headers: { Authorization: `Bearer ${key}` } })).status,
   ).toBe(200);
   // And leaving the page forgets it too.
-  await claude.getByRole("button", { name: "Make key", exact: true }).click();
+  await claude.getByRole("button", { name: "Make another key", exact: true }).click();
   await expect(keys(page).locator('[data-part="key-value"]')).toBeVisible();
   await page.goto(`${core.base}/panel/#/status`);
   await goTo(page, "Tools");

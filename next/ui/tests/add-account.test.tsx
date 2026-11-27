@@ -774,3 +774,105 @@ test("with privacy on, another failure's reason hides the ID of the account that
   expect(page.text()).toContain("Sign-in did not finish");
   expect(page.text()).not.toContain("acc_1a2b3c4d");
 });
+
+// ---- what a new account came to: the check, the name, the sentence ---------------------------------
+
+const loginDone = (c: Call) =>
+  c.method === "POST" && c.path === "/accounts" ? ok({ login: login("done") }) : undefined;
+
+test("a new account says pluxy checked it with the service, once the check has passed", async () => {
+  const w = world({
+    accounts: [account({ check: { state: "ok", detail: "the upstream lists 2 models" } })],
+    reply: loginDone,
+  });
+  const page = await w.mount(<AddAccountPage />);
+  await click(start(page.root, "Claude subscription"));
+  expect(page.text()).toContain("pluxy checked it with the service, and it works.");
+  expect(page.text()).not.toContain("upstream");
+});
+
+test("a new account whose check failed says why, and one still being checked says so and asks again", async () => {
+  const failed = world({
+    accounts: [
+      account({
+        check: { state: "failed", error: { code: "unauthorized", message: "the service refused the key" } },
+      }),
+    ],
+    reply: loginDone,
+  });
+  const page = await failed.mount(<AddAccountPage />);
+  await click(start(page.root, "Claude subscription"));
+  expect(page.text()).toContain("pluxy could not check it with the service: the service refused the key");
+  expect(page.text()).not.toContain("and it works");
+  restoreDom();
+
+  jest.useFakeTimers();
+  let asked = 0;
+  const w = world({
+    accounts: [account()],
+    reply: (c) => {
+      if (c.method === "GET" && c.path === "/accounts") {
+        asked++;
+        return ok({
+          accounts: [account({ check: { state: asked < 3 ? "checking" : "ok" } })],
+        });
+      }
+      return loginDone(c);
+    },
+  });
+  const later = await w.mount(<AddAccountPage />);
+  await click(start(later.root, "Claude subscription"));
+  expect(later.text()).toContain("Checking it with the service…");
+  expect(later.text()).not.toContain("and it works");
+  // Each second the page asks again, until the check answers.
+  await advance(1000);
+  await advance(1000);
+  await advance(1000);
+  expect(later.text()).toContain("pluxy checked it with the service, and it works.");
+  expect(later.text()).not.toContain("Checking it with the service…");
+});
+
+test("an account with an address and no name is offered the address as its name, which Save name saves", async () => {
+  const w = world({
+    accounts: [
+      account({ extension: "pluxy/openai-compatible", settings: { base_url: "http://127.0.0.1:18500/v1" } }),
+    ],
+    reply: loginDone,
+  });
+  const page = await w.mount(<AddAccountPage />);
+  await click(start(page.root, "Claude subscription"));
+  const name = field(page.root, "Name");
+  expect(name.value).toBe("127.0.0.1:18500");
+  expect(labelled(page.root, "Save name")?.disabled).toBe(false);
+  // Offered, not saved: nothing was sent until Save name.
+  expect(w.changes()).toEqual(["POST /accounts"]);
+  await submit(must(all(page.root, "form")[0], "form"));
+  expect(w.calls.find((c) => c.method === "PATCH")?.body).toEqual({ label: "127.0.0.1:18500" });
+});
+
+test("the sentence for an unnamed account in a long-named kind reads as English: Added your account for another service", async () => {
+  const w = world({
+    accounts: [account({ extension: "pluxy/gemini" })],
+    reply: (c) =>
+      c.method === "POST" && c.path === "/accounts"
+        ? ok({ login: login("done", { extension: "pluxy/gemini", method: "api_key" }) })
+        : undefined,
+  });
+  const page = await w.mount(
+    <AddAccountPage
+      embedded
+      providers={[
+        {
+          id: "pluxy/gemini",
+          title: "Another service with an API key",
+          account: "account for another service",
+        },
+      ]}
+    />,
+  );
+  await click(start(page.root, "API key"));
+  await type(field(page.root, "API key"), "k");
+  await submit(must(all(page.root, "form")[0], "form"));
+  expect(page.text()).toContain("Added your account for another service.");
+  expect(page.text()).not.toContain("Another service with an API key account");
+});

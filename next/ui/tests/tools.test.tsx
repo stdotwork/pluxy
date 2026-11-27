@@ -548,7 +548,7 @@ test("a key that could not be made says why, and step 1 stays", async () => {
   expect(preText(m.root)).toContain("<client-key>");
 });
 
-test("closing the key's notice takes it out of the text and offers Make key again", async () => {
+test("closing the key's notice takes it out of the text and offers a new key, saying the old one stays", async () => {
   const w = world();
   const m = await w.mount(<ToolsPage />);
   await press(buttonIn(rowOf(m.root, "Claude Code"), "Set up"));
@@ -559,7 +559,9 @@ test("closing the key's notice takes it out of the text and offers Make key agai
   expect(preText(m.root)).not.toContain("sk-secret-1");
   expect(preText(m.root)).toContain("<client-key>");
   expect(m.text()).not.toContain("sk-secret-1");
-  expect(hasButton(rowOf(m.root, "Claude Code"), "Make key")).toBe(true);
+  // The key is made and its value gone: Make key would add a second one, and says so.
+  expect(hasButton(rowOf(m.root, "Claude Code"), "Make another key")).toBe(true);
+  expect(rowOf(m.root, "Claude Code").textContent).toContain("pluxy already has a key named Claude Code");
 });
 
 test("deleting the key a row's text holds takes it out of the text", async () => {
@@ -891,4 +893,33 @@ test("no word on the page is one of the words it must not use", async () => {
   ]) {
     expect(own).not.toMatch(banned);
   }
+});
+
+test("Make key says what it does when pluxy already has a key named for the tool: another one, the old one stays", async () => {
+  const w = world({ keys: [{ id: "key-old", masked: "sk-***48", label: "Claude Code" }] });
+  const m = await w.mount(<ToolsPage />);
+  await press(buttonIn(rowOf(m.root, "Claude Code"), "Set up"));
+  const row = rowOf(m.root, "Claude Code");
+  expect(row.textContent).toContain(
+    "pluxy already has a key named Claude Code, but a key is shown only once, when it is made, so its value cannot be shown again.",
+  );
+  expect(row.textContent).toContain(
+    "The old one keeps working until you delete it in Keys on the Tools page.",
+  );
+  expect(hasButton(row, "Make key")).toBe(false);
+  // Nothing was made by opening the steps; the button makes one more key.
+  expect(posts(w.calls)).toHaveLength(0);
+  await press(buttonIn(row, "Make another key"));
+  expect(posts(w.calls).map((c) => c.body)).toEqual([{ label: "Claude Code" }]);
+  expect(preText(rowOf(m.root, "Claude Code"))).toContain("sk-secret-1");
+});
+
+test("a tool with no key of its name still says Make key, with no warning", async () => {
+  const w = world({ keys: [{ id: "key-a", masked: "sk-***48", label: "Codex" }] });
+  const m = await w.mount(<ToolsPage />);
+  await press(buttonIn(rowOf(m.root, "Claude Code"), "Set up"));
+  const row = rowOf(m.root, "Claude Code");
+  expect(hasButton(row, "Make key")).toBe(true);
+  expect(row.textContent).not.toContain("already has a key");
+  expect(hasButton(row, "Make another key")).toBe(false);
 });

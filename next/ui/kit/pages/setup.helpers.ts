@@ -22,18 +22,35 @@ export type Results = Record<string, { status: "done" | "error"; error?: string 
 
 /**
  * The four kinds of account v0.1 serves fully, in the order step 1 offers them, each under the
- * plain name a person knows it by.
+ * plain name a person knows it by. phrase and account are for a name that does not read in a
+ * sentence as it does in a list: "Add Claude and another service", "Added your account for
+ * another service".
  */
-export const MAIN_KINDS: readonly { id: string; title: string }[] = [
+export const MAIN_KINDS: readonly { id: string; title: string; phrase?: string; account?: string }[] = [
   { id: "pluxy/claude", title: "Claude" },
   { id: "pluxy/codex", title: "ChatGPT (Codex)" },
   { id: "pluxy/gemini", title: "Gemini" },
-  { id: "pluxy/openai-compatible", title: "Another service with an API key" },
+  {
+    id: "pluxy/openai-compatible",
+    title: "Another service with an API key",
+    phrase: "another service",
+    account: "account for another service",
+  },
 ];
 
 /** A kind of account's name: the plain name of a main kind, else the pick's own title. */
 export function kindTitle(pick: Pick<SetupPick, "id" | "title">): string {
   return MAIN_KINDS.find((kind) => kind.id === pick.id)?.title ?? (pick.title || pick.id);
+}
+
+/** A kind's name inside a sentence: its title, but for a kind whose title is a label, not a name. */
+export function kindPhrase(pick: Pick<SetupPick, "id" | "title">): string {
+  return MAIN_KINDS.find((kind) => kind.id === pick.id)?.phrase ?? kindTitle(pick);
+}
+
+/** What an account of the kind is called in a sentence, after "your": "Claude account". */
+export function kindAccount(pick: Pick<SetupPick, "id" | "title">): string {
+  return MAIN_KINDS.find((kind) => kind.id === pick.id)?.account ?? `${kindTitle(pick)} account`;
 }
 
 /** The picks step 1 offers: providers only. A tool package (kind client) never shows there. */
@@ -175,13 +192,18 @@ export function runningKinds(
   results: Results,
   packages: Package[] = [],
   needed?: ReadonlySet<string>,
-): { id: string; title?: string }[] {
+): { id: string; title?: string; phrase?: string; account?: string }[] {
   const picked = new Set(setup.picks.map((pick) => pick.id));
   const statuses = new Map(pickStatuses(setup, results, packages).map((s) => [s.pick.id, s.status]));
   return [
     ...orderedKinds(setup, needed)
       .filter((pick) => statuses.get(pick.id)?.state === "running")
-      .map((pick) => ({ id: pick.id, title: kindTitle(pick) })),
+      .map((pick) => ({
+        id: pick.id,
+        title: kindTitle(pick),
+        phrase: kindPhrase(pick),
+        account: kindAccount(pick),
+      })),
     ...packages.filter((p) => !picked.has(p.id) && packageRuns(p)).map((p) => ({ id: p.id })),
   ];
 }
@@ -244,6 +266,14 @@ export function defaultTestAccount(
     usable.find((a) => accountCondition(a, running).kind === "serving") ??
     usable[0]
   );
+}
+
+/**
+ * Core's words about what it found on "this computer", for a person looking at another one: the
+ * page is on pluxy's computer only when it is not remote, and a found tool or sign-in is on pluxy's.
+ */
+export function onComputer(text: string, remote: boolean): string {
+  return remote ? text.replace(/\bthis computer\b/g, "the computer pluxy runs on") : text;
 }
 
 /** Whether address (scheme, host and port) names the machine the browser runs on. Unknown counts as yes. */

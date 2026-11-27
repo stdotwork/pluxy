@@ -15,7 +15,7 @@
 //!   above it, which goes back to `#/setup`; a later visit to the page by its address has no way
 //!   back; "Leave setup for now" lands on Home and `GET /setup` has `first_run` false.
 //! - `second`: the next launch opens on Home, not Setup; Setup, opened, is titled "Setup" with
-//!   every step folded and no "Leave setup for now"; step 1, opened, says Claude is added; the stage
+//!   every step folded and no "Leave setup for now"; step 1, opened, says pluxy can connect to Claude; the stage
 //!   stays on it, then switches GTK to its dark variant and stays again, so the session's last
 //!   screenshot shows it dark.
 //!
@@ -217,7 +217,7 @@ fn first(c: &mut Checks, app: &AppHandle) {
     let added = until(
         app,
         90,
-        "document.body.innerText.includes('Added: Claude.')",
+        "document.body.innerText.includes('pluxy can now connect to Claude.')",
     );
     let notices = main_eval(
         app,
@@ -226,7 +226,7 @@ fn first(c: &mut Checks, app: &AppHandle) {
     .unwrap_or(Value::Null);
     c.check(
         added,
-        format!("after Add, step 1 says \"Added: Claude.\" (notices: {notices})"),
+        format!("after Add, step 1 says \"pluxy can now connect to Claude.\" (notices: {notices})"),
     );
     let r = core(app, "GET", "/packages");
     let listed = r["body"]["packages"]
@@ -441,9 +441,9 @@ fn second(c: &mut Checks, app: &AppHandle) {
             && until(
                 app,
                 15,
-                "document.body.innerText.includes('Added: Claude.')",
+                "document.body.innerText.includes('pluxy can now connect to Claude.')",
             ),
-        "step 1, opened, says \"Added: Claude.\"",
+        "step 1, opened, says \"pluxy can now connect to Claude.\"",
     );
 
     // The same page in GTK's dark variant, which WebKitGTK reports as prefers-color-scheme: dark

@@ -391,11 +391,14 @@ type Totals struct {
 	Failure  int64 `json:"failure_count"`
 	// SuccessRate is Success over Requests, from 0 to 1; 0 with no requests.
 	SuccessRate float64 `json:"success_rate"`
-	// AverageLatencyMS is the mean latency; 0 with no requests.
+	// AverageLatencyMS is the mean latency of the requests that reached an account; 0 when none
+	// did. A request refused before any account was tried (no account serves its model, a bad
+	// key) took no time on any account, and is left out of the mean.
 	AverageLatencyMS int64       `json:"average_latency_ms"`
 	Tokens           TokenTotals `json:"tokens"`
 
-	latency int64
+	// latency adds the latency of the timed requests, those that reached an account.
+	latency, timed int64
 }
 
 // TokenTotals adds up the tokens events reported; one that reported none adds nothing.
@@ -415,7 +418,10 @@ func (t *Totals) add(e *Event) {
 	} else {
 		t.Success++
 	}
-	t.latency += e.LatencyMS
+	if e.Account != "" {
+		t.latency += e.LatencyMS
+		t.timed++
+	}
 	k := e.Tokens
 	t.Tokens.Input += deref(k.Input)
 	t.Tokens.Output += deref(k.Output)
@@ -432,7 +438,10 @@ func (t *Totals) addRow(r summaryRow) {
 	} else {
 		t.Success += r.Requests
 	}
-	t.latency += r.LatencyMS
+	if r.Account != "" {
+		t.latency += r.LatencyMS
+		t.timed += r.Requests
+	}
 	t.Tokens.Input += r.Input
 	t.Tokens.Output += r.Output
 	t.Tokens.Reasoning += r.Reasoning
@@ -444,7 +453,9 @@ func (t *Totals) addRow(r summaryRow) {
 func (t *Totals) finish() {
 	if t.Requests > 0 {
 		t.SuccessRate = float64(t.Success) / float64(t.Requests)
-		t.AverageLatencyMS = t.latency / t.Requests
+	}
+	if t.timed > 0 {
+		t.AverageLatencyMS = t.latency / t.timed
 	}
 }
 
