@@ -3,7 +3,7 @@
 // leaving the field. Each save sends only its own setting, so a change made elsewhere survives.
 
 import type { ComponentChildren } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import type { ConfigDocument } from "../api/config";
 import type { CoreSettings } from "../api/settings";
 import { SettingRow, useSetting } from "../parts";
@@ -63,19 +63,27 @@ function SwitchRow(props: RowProps) {
 function FieldRow(props: RowProps) {
   const f = props.field;
   const save = useSave(props.saved);
-  const value = settingAt(props.settings, f.key);
-  const s = useSetting<string>(String(value ?? ""), (text) => {
+  // What core holds, as the field shows it. A proxy address comes back with its password hidden.
+  const saved = String(settingAt(props.settings, f.key) ?? "");
+  const s = useSetting<string>(saved, (text) => {
     if (f.kind === "text") return save(f.key, text.trim());
     const n = parseNumber({ key: f.key, kind: "number", more: false, min: 0, whole: true }, text);
     return "error" in n ? n.error : save(f.key, n.value);
   });
-  const [draft, setDraft] = useState(s.value);
-  // The field shows what core holds when it changes and after each save, also one that was refused
-  // and went back to the value it had.
+  const [draft, setDraft] = useState(saved);
+  // The field shows what core holds when that changes and after each save: core's own form of a
+  // value that was taken, and the value it had for one that was refused.
+  // Not when the row first shows: an effect runs after the first paint, and would undo what was
+  // typed in that moment.
   const [round, setRound] = useState(0);
-  useEffect(() => setDraft(s.value), [s.value, round]);
+  const shown = useRef({ saved, round });
+  useEffect(() => {
+    if (shown.current.saved === saved && shown.current.round === round) return;
+    shown.current = { saved, round };
+    setDraft(saved);
+  }, [saved, round]);
   const commit = () => {
-    if (draft !== s.value) void s.set(draft).then(() => setRound((n) => n + 1));
+    if (draft !== saved) void s.set(draft).then(() => setRound((n) => n + 1));
   };
   const input = {
     "aria-label": f.name,

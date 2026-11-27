@@ -22,8 +22,10 @@
   .config-rows > .config-key-notice {
     margin: calc(var(--s) * 2) calc(var(--s) * 2) 0;
   }
+  /* A fixed width: the row's control column fits its content, so a share of it would be no width. */
   .config-text {
-    width: min(24em, 100%);
+    width: 22em;
+    max-width: 100%;
     font-family: var(--px-font-mono);
   }
   .config-number {

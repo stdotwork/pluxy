@@ -55,6 +55,16 @@ export function ConfigSource(props: ConfigSourceProps) {
   const [query, setQuery] = useState("");
   const [match, setMatch] = useState({ query: "", text: "", index: -1 });
   const editor = useRef<HTMLTextAreaElement>(null);
+  const diff = useRef<HTMLPreElement>(null);
+  // The review opens at the first line that changed, which may be far down a long file.
+  useEffect(() => {
+    const first = diff.current?.querySelector<HTMLElement>("[data-change]");
+    if (review && first && diff.current)
+      diff.current.scrollTop = Math.max(
+        0,
+        first.offsetTop - diff.current.offsetTop - diff.current.clientHeight / 3,
+      );
+  }, [review]);
   const dirty = props.text !== props.base.content;
   const matches = useMemo(() => {
     const found: number[] = [];
@@ -223,7 +233,7 @@ export function ConfigSource(props: ConfigSourceProps) {
             <span data-change="remove">− {t("removed")}</span>
             <span data-change="add">+ {t("added")}</span>
           </div>
-          <pre data-part="diff" class="config-diff">
+          <pre data-part="diff" class="config-diff" ref={diff}>
             {lineDiff(props.base.content, props.text).map((line, i) => (
               <span
                 key={i}

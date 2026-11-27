@@ -224,6 +224,7 @@ test("the old tabs' addresses open the Settings tab at their section", async ({ 
 test("the outbound proxy saves on Enter, keeps its password unless a new one is typed, and clears", async ({
   page,
 }) => {
+  await core.mgmt("PATCH", "/settings", { observability: { logs: { "error-logs-max-files": 10 } } });
   await prettyFile();
   expect((await settings())["proxy-url"]).toBe("");
   const sent = patches(page);
@@ -543,25 +544,23 @@ for (const theme of THEMES) {
         await expect(logToFile).toBeChecked({ checked: was });
         await fits(page);
         await shot(page, "config-refused");
-        // Replace key: the question, the new key (a made-up reply: core's key stays), the app's
-        // outcome, and no answer.
-        let reply: { status: number; json?: unknown } = {
-          status: 200,
-          json: { value: "made-up-key-for-a-screenshot" },
-        };
-        await page.route("**/management-key/rotate", (route) =>
-          reply.status === 0 ? route.abort("failed") : route.fulfill(reply),
-        );
+        // Replace key: the question, a new key (core's key is replaced: the panel signs in with the
+        // new one by itself), then the app's outcome and no answer, made up so core's key stays.
         const keys = page.getByRole("region", { name: "Keys", exact: true });
         await keys.getByRole("button", { name: "Replace key", exact: true }).click();
         await fits(page);
         await shot(page, "config-replace-ask");
         await keys.getByRole("button", { name: "Yes, replace key", exact: true }).click();
-        await expect(keys.locator('[data-part="key-notice"]')).toBeVisible();
+        const notice = keys.locator('[data-part="key-notice"]');
+        await expect(notice).toBeVisible();
+        core.key = (await notice.locator('[data-part="key-value"]').textContent()) ?? "";
         await fits(page);
         await shot(page, "config-new-key");
         await keys.getByRole("button", { name: "Close", exact: true }).click();
-        reply = { status: 200, json: { kept: "device" } };
+        let reply: { status: number; json?: unknown } = { status: 200, json: { kept: "device" } };
+        await page.route("**/management-key/rotate", (route) =>
+          reply.status === 0 ? route.abort("failed") : route.fulfill(reply),
+        );
         await keys.getByRole("button", { name: "Replace key", exact: true }).click();
         await keys.getByRole("button", { name: "Yes, replace key", exact: true }).click();
         await expect(keys).toContainText("Replaced. The app uses the new key");
@@ -580,7 +579,7 @@ for (const theme of THEMES) {
         await fits(page);
         await shot(page, "config-file");
         const text = await editor(page).inputValue();
-        await editor(page).fill(text.replace(/("error_logs_max_files":\s*)\d+/, "$199"));
+        await editor(page).fill(`${text}\n`);
         await page.getByRole("searchbox", { name: "Find in file" }).fill("logs");
         await fits(page);
         await shot(page, "config-file-edited");
