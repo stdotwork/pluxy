@@ -1,6 +1,6 @@
 // Activity's own text is readable (WCAG AA, 4.5:1) in every built-in theme, in light and in dark:
 // the day headings and the end of the Requests list, the failure and detour chips, the Usage
-// tiles, and the Usage chart's labels, readout and legend.
+// tiles, the Usage chart's labels, readout and legend, and the Logs warning and error lines.
 import { expect, type Page, test } from "@playwright/test";
 import { measureContrast } from "./contrast";
 import { openPanel, signIn, useCore } from "./support";
@@ -71,6 +71,29 @@ for (const theme of THEMES) {
     test(`the Requests list's chips and headings are readable: ${name}`, async ({ page }) => {
       await open(page, theme, appearance, "activity");
       expect(await unreadable(page, ".word-chip, .requests-table thead th, .req-time")).toEqual([]);
+    });
+
+    test(`the Logs warning and error lines are readable: ${name}`, async ({ page }) => {
+      await page.route("**/v0/management/logs*", (route) =>
+        route.fulfill({
+          json: {
+            lines: [
+              "[2026-11-27 12:00:00.000] [info ] server started",
+              "[2026-11-27 12:00:01.000] [warn ] account cooling down",
+              "[2026-11-27 12:00:02.000] [error] upstream failed",
+            ],
+            "line-count": 3,
+            "latest-timestamp": 3,
+          },
+        }),
+      );
+      await open(page, theme, appearance, "logs");
+      expect(
+        await unreadable(
+          page,
+          '.logs-core [data-part="log-line"][data-level="warn"], .logs-core [data-part="log-line"][data-level="error"]',
+        ),
+      ).toEqual([]);
     });
   }
 }

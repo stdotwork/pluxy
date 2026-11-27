@@ -85,7 +85,8 @@
   }
 
   .logs-core [data-level="warn"] {
-    color: var(--px-color-warn);
+    /* Mixed towards the text colour, as warn badges are, so light themes clear 4.5:1 on the tint. */
+    color: color-mix(in srgb, var(--px-color-warn) 75%, var(--px-color-text));
     background: var(--px-color-warn-surface);
     box-shadow: inset 2px 0 0 var(--px-color-warning);
   }
