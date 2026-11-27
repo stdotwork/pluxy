@@ -375,27 +375,32 @@ the provider only when it is an extension's ID (`publisher/name`), so `claude-op
 a model. A model whose name holds a colon ends with an `@`: `llama3:8b@`, or
 `llama3:8b@pluxy/ollama:a1` with a provider and an account.
 
-Setting a chain fails with 422 for more than 8 steps, a step that names another chain, a step that
-repeats another, a step no account serves now, or a step that names an account core does not know
-or one that does not serve the step (the error names it). An account that serves the step but waits
-for a sign-in or is turned off is accepted. Under the `weighted` strategy an account with `weight`
-0 serves no step. A `config.yaml` cannot hold chains, so setting one there fails with 409.
+Setting a chain fails with 422 (the error names the step) for:
+
+- no steps, or more than 8;
+- a step with no model, a `provider` that is not an extension ID, or an empty account ID;
+- a step that names another chain, or repeats another step;
+- a step that no account in service serves now;
+- a step that names an account core does not know, or one that does not serve the step.
+
+A named account that serves the step but waits for a sign-in or is turned off is accepted, as long
+as an account in service serves the step too. Under the `weighted` strategy an account with
+`weight` 0 serves no step. A `config.yaml` cannot hold chains, so setting one there fails with 409.
 
 The reply of a request served through a chain names the account, provider and model of the step
-that served it (the `X-Pluxy-*` headers), and its usage record names the step (`chain_step`,
-counted from 1). An error's `left_out` entries then also name each account's `provider` and
-`model`, since one account can serve two steps. `pluxy route` shows the chain and the step of each
-account.
+that served it (the `X-Pluxy-*` headers, when `routing.explain` is on), and its usage record names
+the step (`chain_step`, counted from 1). An error's `left_out` entries then also name each
+account's `provider` and `model`, since one account can serve two steps. `pluxy route` shows the
+chain and the step of each account.
 
 ## Window ignition
 
-Some subscriptions count usage in 5-hour windows that start at the first request. Window ignition
-starts an account's next 5-hour window right after the last one resets, instead of at the first
-real request, so the window's reset comes sooner. Core sends the account one small request for
-this: the one `pluxy account test` sends (`Hi`, at most 16 output tokens), straight to the
-account's extension, leaving routing and its state alone. Ignition runs only between set hours. It
-is off by default, and turned on for the accounts of the extensions it lists in
-[`routing.ignition`](config.md):
+A 5-hour usage window starts with the account's first request after the last window reset.
+Window ignition starts an account's next 5-hour window right after the last one resets, instead of
+at the first real request, so the window's reset comes sooner. Core sends the account one small
+request for this: the one `pluxy account test` sends (`Hi`, at most 16 output tokens), straight to
+the account's extension, leaving routing and its state alone. Ignition runs only between set
+hours. It is off by default, and set in [`routing.ignition`](config.md):
 
 ```json
 {"routing": {"ignition": {
@@ -403,8 +408,7 @@ is off by default, and turned on for the accounts of the extensions it lists in
   "start_hour": 7, "end_hour": 22,
   "extensions": {
     "pluxy/claude": {},
-    "pluxy/codex": {"model": "gpt-6-luna"},
-    "pluxy/antigravity": {"windows": {"claude_and_gpt_models_five_hour": "gpt-oss-120b-medium", "gemini_models_five_hour": ""}}
+    "pluxy/codex": {"model": "gpt-6-luna"}
   },
   "accounts": {"work-claude": {"enabled": false}}
 }}}
@@ -414,28 +418,36 @@ is off by default, and turned on for the accounts of the extensions it lists in
   `start_hour`:00 to `end_hour`:00 plus `end_grace_ms` (30 minutes by default). An `end_hour` not
   after `start_hour` is the next day's: 22 to 6 runs over midnight, and 0 to 0 runs all day. The
   defaults are 7 and 22.
-- `extensions` lists the extensions whose accounts ignition runs for, by extension ID; an extension
-  not listed has none. Each entry takes `enabled` (`false` leaves it out), `model` (the model the
-  request names; empty picks a small one, below) and `windows` (below).
-- `accounts` holds one account's own switch and model, by account ID: its `enabled` wins over its
-  extension's, and its `model` is used for the account's windows that `windows` gives no model.
+- `extensions` lists the extensions whose accounts ignition runs for, by extension ID. Each entry
+  takes `enabled` (`false` leaves it out), `model` (the model the request names) and `windows`
+  (below).
+- `accounts` holds one account's own switch and model, by account ID. An account's `enabled` wins
+  over its extension's: `true` turns ignition on for the account even when its extension is not
+  listed, and `false` turns it off.
 - `grace_ms`, `retry_ms`, `backoff_multiplier`, `max_failures` and `hold_ms` set the waits and
   retries described below; the [config reference](config.md) has their defaults.
 
 ### Which windows are started
 
 Core reads each such account's usage from its provider (the extension's `quota` call, as the
-checks of long blocks do): when ignition turns on for it, when the settings change, a `grace_ms`
-(3 seconds by default) after each window's reset, a `hold_ms` (1 minute by default) after each
-ignition request, and an hour after a reading that found nothing to wait for.
+checks of long blocks do):
+
+- when ignition turns on for it, and when the settings or the accounts change;
+- a `grace_ms` (3 seconds by default) after each window's reset;
+- a `hold_ms` (1 minute by default) after each ignition request;
+- when a window's wait ends (a retry, the start of the hours, the end of the account's block);
+- a `retry_ms` after a reading that failed;
+- an hour after a reading that found nothing to wait for.
+
+An account whose provider gives no usage reading is not read again until the settings or the
+accounts change.
 
 From each reading it takes the windows to start: every usage window of five hours, whether it
-counts all the account's requests or those of one group of models (Antigravity has one per group).
-A provider with only one usage window has that one started, whatever its length. A weekly window,
-or one model family's, is never started; a request starts it anyway once a 5-hour window is used.
-`windows` lists the IDs of the windows to start (the IDs `pluxy account quota <id>` shows), each
-with its model (`""` for the extension's `model` or the default). When `windows` is set, only those
-are started.
+counts all the account's requests or those of one group of models. A provider with only one usage
+window has that one started, whatever its length. A weekly window, or one model family's, is never
+started. An extension's `windows` narrows this: it maps window IDs to models, and when it is set,
+only the windows it lists among those are started. A window's ID is the `id` of its limit in
+`pluxy account quota <id> --json` (for example `five_hour` for Claude and Codex).
 
 A window is started only when all of these hold:
 
@@ -464,13 +476,24 @@ the settings (setting a model after "no model to choose", for example).
 
 ### The model it asks
 
-With no model set, core picks a small model the account serves. Among the models it lists
-(leaving out excluded models, and image, audio, embedding, thinking and review models; for a
-group's window, only models of the group's families, such as `gemini` or `claude`), it takes the
-first of `haiku`, `luna`, `flash-lite`, `lite`, `mini`, `nano`, `flash`, `oss` and `small` that is
-part of a model ID, and the newest such model by the numbers in its ID; with none of those, the
-first model left. An account whose models are not listed (a config account that names none) needs a
-`model`.
+The model a window's request names is the first that is set of: the model the extension's
+`windows` gives that window, the account's `model`, and the extension's `model`.
+
+With none set, core picks a small model from the models the account serves (as
+`pluxy account models <id>` lists them):
+
+1. It leaves out excluded models, and models with an ID part (split at `-`, `.`, `_` and spaces)
+   that starts with `image`, `audio`, `tts`, `embed`, `thinking`, `review`, `realtime`,
+   `transcribe` or `search`. For a window that counts a group of models, it keeps only models of
+   the group's families, such as `gemini` or `claude`.
+2. It takes the first of `haiku`, `luna`, `flash-lite`, `lite`, `mini`, `nano`, `flash`, `oss` and
+   `small` that is a whole part of a model ID (so `gemini` is not a `mini` model), and among the
+   models that word names, the newest by the numbers in their IDs (a run of 6 digits or more, a
+   date, does not count).
+3. With none of those words, it takes the first model left.
+
+When the account's models cannot be listed, the ignition fails. When no model is left to choose,
+the window is paused until a model is set.
 
 ### Seeing what ignition does
 
@@ -648,21 +671,22 @@ not sent to it: it goes to other accounts, and the error says why. The protocol 
 
 ## Account checks
 
-When core starts, when a reload adds or changes an account (its settings, its credential or its
-extension), and when a sign-in adds one, core checks the account. It asks the account's extension
+When core starts, when a reload adds or changes an account (its settings, `proxy_url`, `headers`,
+credential or extension), and when a sign-in adds one, core checks the account. Banned accounts are
+not checked. Core asks the account's extension
 whether the account works, and the extension makes one call upstream that costs the account
 nothing, such as reading its model list. Nothing is generated, and the credential is not renewed
 for it. Up to 4 checks run at once, each for at most 30 seconds, in the background: core serves
 requests while they run, and the result does not change routing.
 
-`pluxy account list` (`GET /v0/management/accounts`) shows each account's last `check`:
+`pluxy account list --json` (`GET /v0/management/accounts`) shows each account's last `check`:
 
 | `check.state` | Meaning |
 | --- | --- |
 | `checking` | The check is running. |
 | `ok` | The account works; `detail` says what was checked. |
 | `failed` | It does not; `error` says why (code `auth` for a refused key, `unavailable` for an upstream that cannot be reached). |
-| `not_checked` | The extension cannot check it without generating, or has no check; `detail` says which. |
+| `not_checked` | The extension cannot check it without generating, has no check, or the credential has expired (core renews it for the next request, not for a check); `detail` says which. |
 
 Each extension checks with its upstream's model list, and only accounts with an API key:
 
@@ -676,7 +700,9 @@ Each extension checks with its upstream's model list, and only accounts with an 
 The other bundled extensions do not check accounts. The protocol side is the
 [`check` operation](../next/protocol/README.md#check).
 
-Core also logs each result (`account "work": check passed: ...` or `check failed: ...`).
+Core also logs the result of each check the extension ran (`account "work": check passed: ...`,
+`check failed: ...` or `not checked: ...`). An account left unchecked because its extension has no
+check, or because its credential has expired, gets no log line.
 
 ### Secrets in errors and logs
 
@@ -690,19 +716,22 @@ mangle unrelated text.
 Upstreams that refuse a key often echo its start (`invalid x-api-key: sk-ant-api03-AbCdEf...`),
 which removing whole secrets misses. So an error's message and the string values of its raw body,
 from every extension and for every call (requests, checks, quota and model reads, renewals,
-sessions and sign-ins), also lose every run of token characters that holds 4 or more consecutive
-characters of one of the account's secrets, or 8 or more of a long token:
+sessions and sign-ins), and the values of its rate-limit headers, also lose every run of token
+characters that holds 4 or more consecutive characters of one of the account's secrets, or 8 or
+more of a long token or of a PEM private key's body:
 
 - **Token characters** are letters, digits and `_-.+/=~`, and any other character such a secret
-  holds, except whitespace, control characters, quotes, brackets, commas and backslashes. The text
+  holds, except whitespace, control characters, quotes, square and curly brackets, commas and
+  backslashes. The text
   is read as written, and with JSON and percent escapes decoded.
 - A **long token** is one trimmed run of 32 or more token characters that is not base64 of text.
 - **The account's secrets** are the credential's key and tokens, secret header values, the proxy's
   user name and password, and the secrets core finds in the settings (in a URL, only its user name,
   password and secret query or fragment values). On a sign-in they include the inputs it marks
   secret (the protocol's [Accounts](../next/protocol/README.md#accounts) section says how).
-- A typed plain address that a sign-in does not mark secret (an `http` or `https` URL with no query
-  or fragment, such as a base URL) counts only by its user name and password, so its scheme, host,
+- A typed plain address that a sign-in does not mark secret (an `http` or `https` URL with no query,
+  fragment or whitespace, whose host and path hold only plain URL characters, such as a base URL)
+  counts only by its user name and password, so its scheme, host,
   port and path show in an error, and a short secret placed in its path would show too. Any other
   value the sign-in does not mark secret, and an address with a query or fragment, counts whole.
 
@@ -716,7 +745,8 @@ public key prefix (`sk-proj-`, `sk-kimi-`, `xai-` and the others the code lists)
 `project` or `kimi` stays in an error for such a key; a secret of under 16 bytes after its prefix
 keeps every piece. Any other word of the error that shares 4 characters with a secret (8 with a long
 token) goes too, such as `token` for a header `Bearer gw-token-12345`. A reply that succeeded is
-never changed by this rule.
+not changed by this rule, except the values of the rate-limit headers it starts with (a plain time
+or duration among them stays).
 
 ## Model lists
 
