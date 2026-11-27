@@ -147,6 +147,8 @@ export class FakeText extends FakeNode {
 export class FakeDocument {
   nodeType = 9;
   visibilityState: DocumentVisibilityState = "visible";
+  title = "";
+  documentElement = { dataset: {} as Record<string, string> };
   body = new FakeNode(this, "body");
   /** The node that last took focus (FakeNode.focus), else the body. */
   activeElement: FakeNode = this.body;

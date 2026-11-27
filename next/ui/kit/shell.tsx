@@ -303,15 +303,21 @@ export function Shell(props: {
     uiVersion,
     props.extensionPage ?? ExtensionPage,
   );
-  // The shell does not wait for this answer: the first page may show for an instant.
+  // On an address that names no page, the shell waits up to SETUP_GATE_WAIT_MS for core's answer
+  // about Setup before showing Home anyway. Once that wait has run out, a late answer still offers
+  // Setup in the navigation but does not replace the page already shown.
   const hasSetup = props.pages.some((p) => p.id === SETUP_PAGE);
   const [setupOffered, setSetupOffered] = useState(true);
   useEffect(() => {
     if (!signedIn || !hasSetup) return;
     let live = true;
+    let timedOut = false;
     setGate({ answered: false });
     setGateLate(false);
-    const late = setTimeout(() => setGateLate(true), SETUP_GATE_WAIT_MS);
+    const late = setTimeout(() => {
+      timedOut = true;
+      setGateLate(true);
+    }, SETUP_GATE_WAIT_MS);
     kit.api.setup().then((r) => {
       if (!live) return;
       clearTimeout(late);
@@ -321,7 +327,7 @@ export function Shell(props: {
       const gate = setupGate(r, location.hash);
       setSetupOffered(gate.offered);
       setGate({ answered: true, first: r.body?.first_run === true });
-      if (gate.open) {
+      if (gate.open && !timedOut) {
         location.replace(`#/${SETUP_PAGE}`);
         setPage(currentId(pagesRef.current));
       }
