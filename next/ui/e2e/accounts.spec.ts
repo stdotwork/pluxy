@@ -179,7 +179,7 @@ test("an account set in the settings file offers no Remove… on its page; one a
   await expect.poll(async () => (await listed()).some((a) => a.id === "gone-01")).toBe(false);
 });
 
-test("provider chips filter with a pool card, and List | Cards switches the view and persists via the list layout", async ({
+test("provider chips filter with a pool card, and List | Cards stores an Accounts-only choice without changing other lists", async ({
   page,
 }) => {
   await openPanel(page, core);
@@ -206,22 +206,33 @@ test("provider chips filter with a pool card, and List | Cards switches the view
   await expect(page.locator('[data-part="pool-card"]')).toHaveCount(0);
   await expect(page.locator('[data-part="account-row"]')).toHaveCount(3);
 
-  // List | Cards switches the view, syncs with html[data-list], and survives a reload.
+  // List | Cards switches the Accounts view, persists in Accounts-only storage across reload, and
+  // leaves the kit-wide list layout (html[data-list] and other pages' tables) untouched.
   const viewSwitch = page.getByRole("group", { name: "Account view" });
   const listBtn = viewSwitch.getByRole("button", { name: "List", exact: true });
   const cardsBtn = viewSwitch.getByRole("button", { name: "Cards", exact: true });
   await expect(listBtn).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "list");
+  await expect(page.locator("html")).toHaveAttribute("data-list", "table");
 
   await cardsBtn.click();
   await expect(cardsBtn).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "cards");
-  await expect(page.locator("html")).toHaveAttribute("data-list", "cards");
+  await expect(page.locator("html")).toHaveAttribute("data-list", "table");
   await expect(accountRow(page, "alpha-1")).toBeVisible();
 
+  // Other pages that use List stay tables (System's models list).
+  await page.goto(`${core.base}/panel/#/system`);
+  await expect(page.locator("html")).toHaveAttribute("data-list", "table");
+  await expect(page.locator("table.table").first()).toBeVisible();
+
+  // Returning to Accounts and reloading restores the stored Accounts-only Cards choice.
+  await page.goto(`${core.base}/panel/#/accounts`);
+  await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "cards");
   await page.reload();
   await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "cards");
   await expect(cardsBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("html")).toHaveAttribute("data-list", "table");
 
   // Narrow viewport in Cards view fits without horizontal scroll.
   await page.setViewportSize({ width: 560, height: 800 });

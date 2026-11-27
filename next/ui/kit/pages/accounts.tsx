@@ -198,6 +198,37 @@ export function RoundNotice(props: {
 /** Above this many accounts the list offers Find an account. */
 const SEARCH_ABOVE = 6;
 
+/** Browser storage key for the Accounts page's own List | Cards choice. */
+export const ACCOUNTS_VIEW_KEY = "pluxy.accounts.view";
+
+function accountsStorage(): Storage | undefined {
+  try {
+    return (
+      (typeof window !== "undefined" ? (window as { localStorage?: Storage }).localStorage : undefined) ??
+      globalThis.localStorage
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function readStoredView(): "list" | "cards" | undefined {
+  try {
+    const value = accountsStorage()?.getItem(ACCOUNTS_VIEW_KEY);
+    return value === "list" || value === "cards" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeStoredView(view: "list" | "cards"): void {
+  try {
+    accountsStorage()?.setItem(ACCOUNTS_VIEW_KEY, view);
+  } catch {
+    // Storage unavailable or blocked: the choice still holds until the page closes.
+  }
+}
+
 /** The button that leads to Add an account. Outlined when another repair owns the one filled button. */
 function AddButton(props: { quiet?: boolean }) {
   return (
@@ -305,17 +336,15 @@ export function AccountsPage() {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [asking, setAsking] = useState(false);
   const [report, setReport] = useState<Report>();
-  // The kit's `list` layout option sets the view; local state covers test hosts without setLayout.
+  // Starting value follows the kit's `list` layout option; pressing List | Cards stores an
+  // Accounts-only choice in browser storage and never changes other pages' layout option.
   const themeList = themes?.resolved?.layout?.list;
-  const [localView, setLocalView] = useState<"list" | "cards" | undefined>(undefined);
-  const view: "list" | "cards" = localView ?? (themeList === "cards" ? "cards" : "list");
+  const [storedView, setStoredView] = useState<"list" | "cards" | undefined>(readStoredView);
+  const view: "list" | "cards" = storedView ?? (themeList === "cards" ? "cards" : "list");
   const switchView = (next: "list" | "cards") => {
-    if (typeof themes?.setLayout === "function") {
-      setLocalView(undefined);
-      themes.setLayout("list", next === "cards" ? "cards" : "table");
-    } else {
-      setLocalView(next);
-    }
+    if (next === view) return;
+    setStoredView(next);
+    writeStoredView(next);
   };
 
   // A ticked account that is gone is no longer selected.

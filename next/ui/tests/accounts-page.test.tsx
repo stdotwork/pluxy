@@ -5,7 +5,7 @@ import { afterEach, expect, jest, test } from "bun:test";
 import { act } from "preact/test-utils";
 import { type Account, api } from "../kit/api";
 import type { Host, Method, Reply } from "../kit/host";
-import { AccountsPage } from "../kit/pages/accounts";
+import { ACCOUNTS_VIEW_KEY, AccountsPage } from "../kit/pages/accounts";
 import { AuthImport } from "../kit/pages/authImport";
 import { forgetWindows } from "../kit/parts";
 import { PrivacyContext, privacyMasks } from "../kit/privacy";
@@ -396,25 +396,78 @@ test("provider chips appear for two or more providers, filter rows, show that pr
   expect(rowNames(page.root)).toEqual(["claude-a", "claude-b", "gemini-a"]);
 });
 
-test("List | Cards switch reads and updates the theme's list layout option", async () => {
-  const calls: [string, string | undefined][] = [];
-  const page = await mount([reply(account("a"), account("b"))], {
-    listLayout: "cards",
-    onSetLayout: (opt, val) => calls.push([opt, val]),
-  });
-  const container = () => all(page.root, "div").find((d) => d.attributes.some((a) => a.name === "data-view"));
-  expect(container()?.attributes.find((a) => a.name === "data-view")?.value).toBe("cards");
+test("List | Cards starts from the theme's list layout, stores an Accounts-only choice, and never calls setLayout", async () => {
+  const store = new Map<string, string>();
+  const fakeStorage = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      store.set(key, value);
+    },
+    removeItem: (key: string) => {
+      store.delete(key);
+    },
+  };
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: fakeStorage });
+  try {
+    const calls: [string, string | undefined][] = [];
+    const page = await mount([reply(account("a"), account("b"))], {
+      listLayout: "cards",
+      onSetLayout: (opt, val) => calls.push([opt, val]),
+    });
+    const container = () =>
+      all(page.root, "div").find((d) => d.attributes.some((a) => a.name === "data-view"));
+    expect(container()?.attributes.find((a) => a.name === "data-view")?.value).toBe("cards");
 
-  await click(button(page.root, "List"));
-  expect(calls).toEqual([["list", "table"]]);
-  expect(container()?.attributes.find((a) => a.name === "data-view")?.value).toBe("list");
+    // Clicking the already-pressed button neither writes storage nor calls setLayout.
+    await click(button(page.root, "Cards"));
+    expect(store.has(ACCOUNTS_VIEW_KEY)).toBe(false);
+    expect(calls).toEqual([]);
 
-  await click(button(page.root, "Cards"));
-  expect(calls).toEqual([
-    ["list", "table"],
-    ["list", "cards"],
-  ]);
-  expect(container()?.attributes.find((a) => a.name === "data-view")?.value).toBe("cards");
+    await click(button(page.root, "List"));
+    expect(calls).toEqual([]);
+    expect(store.get(ACCOUNTS_VIEW_KEY)).toBe("list");
+    expect(container()?.attributes.find((a) => a.name === "data-view")?.value).toBe("list");
+    await page.unmount();
+
+    // A fresh mount restores the Accounts-only stored choice over the theme's list layout.
+    const reloaded = await mount([reply(account("a"), account("b"))], {
+      listLayout: "cards",
+      onSetLayout: (opt, val) => calls.push([opt, val]),
+    });
+    const reloadedContainer = all(reloaded.root, "div").find((d) =>
+      d.attributes.some((a) => a.name === "data-view"),
+    );
+    expect(reloadedContainer?.attributes.find((a) => a.name === "data-view")?.value).toBe("list");
+    await click(button(reloaded.root, "Cards"));
+    expect(store.get(ACCOUNTS_VIEW_KEY)).toBe("cards");
+    expect(calls).toEqual([]);
+    await reloaded.unmount();
+
+    // When browser storage throws, the switch falls back to the layout option and still works in memory.
+    const throwingStorage = {
+      getItem: () => {
+        throw new Error("storage blocked");
+      },
+      setItem: () => {
+        throw new Error("storage blocked");
+      },
+    };
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: throwingStorage });
+    const blocked = await mount([reply(account("a"), account("b"))], {
+      listLayout: "cards",
+      onSetLayout: (opt, val) => calls.push([opt, val]),
+    });
+    const blockedContainer = () =>
+      all(blocked.root, "div").find((d) => d.attributes.some((a) => a.name === "data-view"));
+    expect(blockedContainer()?.attributes.find((a) => a.name === "data-view")?.value).toBe("cards");
+    await click(button(blocked.root, "List"));
+    expect(blockedContainer()?.attributes.find((a) => a.name === "data-view")?.value).toBe("list");
+    expect(calls).toEqual([]);
+  } finally {
+    if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  }
 });
 
 test("the view keeps at most one filled primary button: the first repair when one exists, else Add an account", async () => {
