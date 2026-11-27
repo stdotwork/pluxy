@@ -587,6 +587,24 @@ describe("the page", () => {
     ]);
   });
 
+  test("lists every account under a provider without a six-row cap, and keeps the All accounts link", async () => {
+    const ten = Array.from({ length: 10 }, (_, i) => ({
+      id: `c-${i + 1}`,
+      extension: "pluxy/claude",
+      source: "login",
+      state: "active",
+      refreshable: true,
+    }));
+    const running = { ...statusBody, extensions: [{ id: "pluxy/claude" }] };
+    const page = await mount([{ ...good, accounts: ok({ accounts: ten }), status: ok(running) }]);
+    const group = parts(page.root, "home-group", "class")[0];
+    if (!group) throw new Error("no provider group");
+    expect(parts(group, "account-name", "class").map((a) => a.textContent)).toEqual(ten.map((a) => a.id));
+    expect(page.text()).not.toContain("And 4 more");
+    const allLink = all(page.root, "a").find((a) => a.textContent === "All accounts");
+    expect(allLink && attr(allLink, "href")).toBe("#/accounts");
+  });
+
   test("when two of three requests failed the headline does not say everything is serving", async () => {
     const failed = {
       ...usageBody(3),

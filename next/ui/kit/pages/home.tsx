@@ -73,9 +73,7 @@ const t = strings("home", {
   guidedSetup: "Guided setup",
   nextTool: "Next: connect a coding tool.",
   found: "Found: {tools}.",
-  more: "And {count} more",
   moreKinds: "More",
-  seeAll: "See all",
   accounts: "Accounts",
   allAccounts: "All accounts",
   pools: "Pools",
@@ -108,8 +106,6 @@ const t = strings("home", {
 
 /** How often the page reads again while it is shown. */
 export const HOME_POLL_MS = 60_000;
-/** The most accounts Home lists under one provider; the rest are on Accounts. */
-export const PROVIDER_SHOWN = 6;
 /** The latest requests Home lists. */
 export const LATEST_SHOWN = 10;
 
@@ -505,7 +501,6 @@ export function HomePage() {
           </a>
         </header>
         {listed.map((g) => {
-          const shown = g.accounts.slice(0, PROVIDER_SHOWN);
           const name = providerName(g.extension || undefined);
           return (
             <section class="home-group" key={g.extension} aria-label={name}>
@@ -518,7 +513,7 @@ export function HomePage() {
                     : t("groupCount", { count: g.accounts.length, serving: g.serving })}
                 </span>
               </h3>
-              {shown.map((a) => (
+              {g.accounts.map((a) => (
                 <AccountRow
                   key={a.id}
                   account={a}
@@ -530,12 +525,6 @@ export function HomePage() {
                   onClearCooldown={clearCooldown}
                 />
               ))}
-              {shown.length < g.accounts.length && (
-                <p class="home-more">
-                  {t("more", { count: g.accounts.length - shown.length })}{" "}
-                  <a href="#/accounts">{t("seeAll")}</a>
-                </p>
-              )}
             </section>
           );
         })}

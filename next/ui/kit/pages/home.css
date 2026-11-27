@@ -210,14 +210,6 @@
     border-bottom: 0;
   }
 
-  .home-more {
-    margin: 0;
-    padding: calc(var(--s) * 2) calc(var(--s) * 3.5);
-    border-bottom: var(--px-shape-border) solid var(--px-color-border);
-    color: var(--px-color-text-muted);
-    font-size: var(--px-font-size-small);
-  }
-
   /* ---- the side column ---------------------------------------------------------------------- */
 
   .home-section,
