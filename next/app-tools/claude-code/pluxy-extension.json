@@ -24,7 +24,7 @@
     "operations": [
       {
         "id": "preview",
-        "description": "Pin Claude Code's settings file (by default ~/.claude/settings.json, or a selected file or a file in a selected folder) and read its values back, never the key",
+        "description": "Pin Claude Code's settings file (by default ~/.claude/settings.json, or a selected file or a file in a selected folder) and read its values back, never the key; while ~/.claude does not exist yet (Claude Code has not run here), read nothing and name the folder Connect makes",
         "effect": "read",
         "input_schema": {
           "type": "object",
@@ -75,7 +75,7 @@
       },
       {
         "id": "apply",
-        "description": "Point Claude Code at pluxy's core: write the core's address, the client key, the Opus, Sonnet, Haiku and Fable models, the startup and subagent models and the context settings into the previewed settings file, keeping everything else in it. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "description": "Point Claude Code at pluxy's core: write the core's address, the client key, the Opus, Sonnet, Haiku and Fable models, the startup and subagent models and the context settings into the previewed settings file, keeping everything else in it. With create_folder, first make that folder, Claude Code's ~/.claude, as Claude Code makes it when it first runs (Claude Code has not run here yet). Saving replaces the file; an edit made in the same instant by another program may be lost.",
         "effect": "write",
         "secrets": {
           "key": "value"
@@ -174,6 +174,11 @@
                 ],
                 "additionalProperties": false
               }
+            },
+            "create_folder": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
             },
             "base_url": {
               "type": "string",

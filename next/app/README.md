@@ -1270,7 +1270,10 @@ the tool is installed.
 The Claude Code page (`src/claudeCode.tsx`) needs the curated native tool `pluxy/claude-code`
 ([app tools](../app-tools/README.md#claude-code)). Its default file is Claude Code's user settings
 (`~/.claude/settings.json`); the others are a file (a link, as stow makes, is followed and kept)
-or a file in a folder. A file Claude Code would not take (not strict JSON, or another `$schema`)
+or a file in a folder. Before Claude Code has ever run, there is no `~/.claude`: the page reads that
+as not connected and says Claude Code has not run yet, and Connect makes the folder in the same
+write (its confirmation names it), so Claude Code's first start uses pluxy and asks for no sign-in.
+A file Claude Code would not take (not strict JSON, or another `$schema`)
 is one pluxy will not change. **Models** holds Opus, Sonnet, Haiku and Fable (each with **1M
 context**; Fable follows Sonnet when empty), **Starts with** (a model, or one of Claude Code's
 aliases), **Subagents**, and under **Context and auto-compaction** the **Auto-compact window**, the
@@ -1423,6 +1426,8 @@ default in its agent folder (`~/.pi/agent`), or in a folder (the one `PI_CODING_
 the folder may be a link, as chezmoi can make), or as the linked files in a folder (links, as stow
 makes, are followed and kept). While the plugin is not installed, Connect is **Install plugin**: one
 press makes the key, installs the plugin and writes pluxy's address, the key and Pi's defaults.
+Before Pi has ever run, there is no `~/.pi/agent`: the page says Pi has not run yet, and Install
+plugin makes the folder first, in the same write (its confirmation names it).
 When a folder of the plugin's name is there that pluxy did not install, the head says so and Install
 plugin is held until it is moved. The head also notes when `settings.json` still lists the npm copy
 an older app installed, which Connect replaces. **Models** holds the **Default model**, the model Pi
