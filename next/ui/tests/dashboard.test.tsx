@@ -482,6 +482,30 @@ describe("the page", () => {
     expect(text).toContain("Base URL");
     expect(text).toContain("http://127.0.0.1:8317/v1");
     expect(text).toContain("Serving");
+    // Nothing needs repair, so Refresh is the view's one filled button.
+    expect(attr(button(page.root, "Refresh"), "data-variant")).toBe("primary");
+  });
+
+  test("Refresh is filled when the only band fix is Turn on, and quiet on the empty state", async () => {
+    const banned = ok({
+      accounts: [
+        {
+          id: "closed-1",
+          extension: "pluxy/claude",
+          source: "login",
+          state: "active",
+          refreshable: true,
+          health: { state: "banned" },
+        },
+      ],
+    });
+    const page = await mount([{ ...good, accounts: banned }]);
+    expect(attr(button(page.root, "Refresh"), "data-variant")).toBe("primary");
+    expect(attr(button(page.root, "Turn on"), "data-variant")).toBe("quiet");
+    await page.unmount();
+
+    const empty = await mount([{ ...good, accounts: list() }]);
+    expect(attr(button(empty.root, "Refresh"), "data-variant")).toBe("quiet");
   });
 
   test("the connection card gives the base URL of the API a tool speaks, a key's masked value and the tools set up", async () => {
@@ -549,6 +573,7 @@ describe("the page", () => {
       ["Sign in again", "primary"],
       ["Sign in again", "quiet"],
     ]);
+    expect(attr(button(page.root, "Refresh"), "data-variant")).toBe("quiet");
     const groups = parts(page.root, "home-group", "class");
     expect(groups.map((g) => attr(g, "aria-label"))).toEqual(["Claude", "Codex"]);
     const ids = (g: FakeNode) => parts(g, "account-name", "class").map((a) => a.textContent);

@@ -372,13 +372,22 @@ export function HomePage() {
   const turnOn = (id: string) => fixed(api.setDisabled(id, false));
   const clearCooldown = (id: string) => fixed(api.resetCooldown(id));
 
+  // The view's one filled button: the first repair in the band, else Refresh when nothing needs repair.
+  const firstRepair = grouped
+    ? grouped.groups.needs.findIndex(
+        (a) => accountFix(a, accountCondition(a, running, now.getTime()))?.variant === "primary",
+      )
+    : -1;
+  const primaryRefresh =
+    accounts.phase !== "loading" && !!list && list.length > 0 && !!grouped && firstRepair === -1;
+
   const head = (
     <PageHead
       title={t("title")}
       actions={
         <>
           <Freshness at={accounts.at} />
-          <Button onClick={refresh}>
+          <Button variant={primaryRefresh ? "primary" : "quiet"} onClick={refresh}>
             <Icon name="refresh" size={14} />
             {t("refresh")}
           </Button>
@@ -466,10 +475,6 @@ export function HomePage() {
   const isUnchecked = (a: Account) =>
     statusFailed && conditionUnchecked(a, accountCondition(a, running, now.getTime()), running);
 
-  // The view's one filled button: the first fix in the band that repairs something.
-  const firstRepair = grouped.groups.needs.findIndex(
-    (a) => accountFix(a, accountCondition(a, running, now.getTime()))?.variant === "primary",
-  );
   const band =
     grouped.groups.needs.length > 0 ? (
       <section class="home-band" data-part="needs-band" aria-label={groupWord("needs")}>
