@@ -1013,3 +1013,36 @@ func TestAttemptsAndTriedPersistAndOlderRecordsLoad(t *testing.T) {
 		t.Fatalf("events after reload = %+v", ev)
 	}
 }
+
+// The same average read back from a closed day's summary rows, which group requests by account.
+func TestAverageTimeFromSummaryRowsLeavesOutRequestsThatReachedNoAccount(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	c := &clock{t: now}
+	day := now.UTC().AddDate(0, 0, -3)
+	var lines []byte
+	for i, e := range []Event{
+		{Model: "gpt", Account: "a1", LatencyMS: 300},
+		{Model: "claude-opus", Failed: true},
+		{Model: "claude-opus", Failed: true},
+	} {
+		e.Seq, e.Timestamp = uint64(i+1), day.Add(time.Duration(i)*time.Minute)
+		b, err := json.Marshal(diskEvent{V: 1, Event: e})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, append(b, '\n')...)
+	}
+	if err := os.WriteFile(filepath.Join(dir, day.Format(dayLayout)+daySuffix), lines, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := openStore(Options{Dir: dir}, c.now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	sum := s.Summarize(Filter{Since: now.Add(-7 * 24 * time.Hour)}, 0, 0)
+	if sum.Requests != 3 || sum.Failure != 2 || sum.AverageLatencyMS != 300 {
+		t.Fatalf("summary = %+v, want 3 requests, 2 failures and a 300 ms average", sum.Totals)
+	}
+}

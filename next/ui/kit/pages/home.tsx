@@ -302,9 +302,9 @@ export function HomePage() {
     );
   }
 
-  const verdict = verdictOf(status.data, grouped.counts, grouped.firstBack, now.getTime());
   const days = record?.enabled ? localDays(record.series, now) : undefined;
   const totals = days && weekTotals(days);
+  const verdict = verdictOf(status.data, grouped.counts, grouped.firstBack, now.getTime(), totals);
   const hotspot = record?.enabled && totals ? hotspotOf(record.models, totals.failed) : undefined;
   const stale = staleOf([accounts, status, week, latest]);
   const config = status.data;

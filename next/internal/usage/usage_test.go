@@ -271,3 +271,30 @@ func TestEventsBefore(t *testing.T) {
 		t.Fatalf("filtered before=3 limit=2: seqs=%s next=%d more=%v", got, mf2.Next, mf2.More)
 	}
 }
+
+// A request refused before any account was tried (no account serves its model) took no time on an
+// account: the average time is the mean of the requests that reached one, so such refusals do not
+// pull it toward zero.
+func TestAverageTimeLeavesOutRequestsThatReachedNoAccount(t *testing.T) {
+	s, c := newTestStore(t, 100, time.Hour)
+	add := func(account string, failed bool, latency int64) {
+		s.Add(Event{Timestamp: c.now(), Model: "m", Account: account, Failed: failed, LatencyMS: latency})
+	}
+	add("a1", false, 300)
+	add("", true, 0)
+	add("", true, 0)
+	if got := s.Summarize(Filter{}, time.Minute, 3).AverageLatencyMS; got != 300 {
+		t.Fatalf("average = %d ms, want 300: the two refused requests reached no account", got)
+	}
+	// A failure after an account was tried still took that time.
+	add("a1", true, 900)
+	if got := s.Summarize(Filter{}, time.Minute, 3).AverageLatencyMS; got != 600 {
+		t.Fatalf("average = %d ms, want 600: a failure on an account counts", got)
+	}
+	// Nothing reached an account: no average, not a division by zero.
+	only, oc := newTestStore(t, 100, time.Hour)
+	only.Add(Event{Timestamp: oc.now(), Model: "m", Failed: true})
+	if got := only.Summarize(Filter{}, time.Minute, 3).AverageLatencyMS; got != 0 {
+		t.Fatalf("average = %d ms, want 0 when no request reached an account", got)
+	}
+}

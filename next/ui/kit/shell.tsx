@@ -11,14 +11,16 @@ import { destinationLabel, Frame, type FrameLink, type FrameStatus } from "./fra
 import type { Host, Reply } from "./host";
 import { Icon } from "./icons";
 import { PrivacyContext, type PrivacyState, privacyMasks, usePrivacyOn } from "./privacy";
-import { strings } from "./strings";
+import { rich, strings } from "./strings";
 import type { ThemeState } from "./theme/state";
 import { Button, type Kit, KitContext, Notice } from "./ui";
 
 export type { Destination, PageDef, TopicSection } from "./destinations";
 
 const t = strings("shell", {
-  signInHint: "Sign in with the management key from core's config.",
+  signInHint: "Sign in with pluxy's management key.",
+  signInWhere:
+    "It is kept in pluxy's config file, on the computer pluxy runs on. There, run {command} to print it; {help} shows where the file is.",
   key: "Management key",
   remember: "Remember on this device",
   signIn: "Sign in",
@@ -136,7 +138,7 @@ function useExtensionPages(on: boolean, kit: Kit, version: number, View: Extensi
   return defs;
 }
 
-function SignIn(props: { host: Host; onDone: () => void; reason?: string; safeAddress?: boolean }) {
+export function SignIn(props: { host: Host; onDone: () => void; reason?: string; safeAddress?: boolean }) {
   const [key, setKey] = useState("");
   const [remember, setRemember] = useState(false);
   const [error, setError] = useState(props.reason);
@@ -157,6 +159,12 @@ function SignIn(props: { host: Host; onDone: () => void; reason?: string; safeAd
       >
         <h1 data-part="page-title">pluxy</h1>
         <p class="muted">{t("signInHint")}</p>
+        <p class="muted" data-part="signin-where">
+          {rich(t("signInWhere"), {
+            command: <code class="mono">pluxy key management --show-key</code>,
+            help: <code class="mono">pluxy help</code>,
+          })}
+        </p>
         <label class="field" data-part="field">
           <span class="label">{t("key")}</span>
           <input
