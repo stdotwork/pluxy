@@ -195,6 +195,7 @@ test("provider chips filter with a pool card, and List | Cards stores an Account
 
   await chips.getByRole("button", { name: /Alpha/ }).click();
   await expect(chips.getByRole("button", { name: /Alpha/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".accounts-counts")).toHaveText("2 Alpha accounts · 2 serving");
   await expect(page.locator('[data-part="pool-card"][data-provider="alpha"]')).toContainText(
     "2 of 2 serving",
   );
@@ -203,6 +204,7 @@ test("provider chips filter with a pool card, and List | Cards stores an Account
   await expect(accountRow(page, "alpha-2")).toBeVisible();
 
   await chips.getByRole("button", { name: /^All/ }).click();
+  await expect(page.locator(".accounts-counts")).toHaveText("3 accounts at 2 providers · 3 serving");
   await expect(page.locator('[data-part="pool-card"]')).toHaveCount(0);
   await expect(page.locator('[data-part="account-row"]')).toHaveCount(3);
 

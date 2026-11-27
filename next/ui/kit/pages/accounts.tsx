@@ -543,7 +543,8 @@ export function AccountsPage() {
     unchecked ? t("statusUnread") : "",
     week.phase === "failed" && week.data === undefined ? t("weekUnread") : "",
   ].filter(Boolean);
-  const counts = stateCounts(list, running, now, unchecked);
+  const summaryList = provider ? providerAccounts : list;
+  const counts = stateCounts(summaryList, running, now, unchecked);
   const selectedPool =
     provider && !unchecked && providerAccounts.length > 0
       ? poolOf(provider, providerAccounts, windows, running, now)
@@ -568,7 +569,7 @@ export function AccountsPage() {
         <div class="accounts-summary">
           <p class="accounts-counts muted">
             {/* A long line wraps between its counts, never inside one. */}
-            {countsLine(list, running, now, unchecked)
+            {countsLine(summaryList, running, now, unchecked, provider ? providerName(provider) : undefined)
               .split(" · ")
               .map((part, i, all) => (
                 <span key={part}>

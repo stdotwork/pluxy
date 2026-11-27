@@ -17,6 +17,7 @@ import { groupTiers } from "./routing.helpers";
 
 const t = strings("accounts.words", {
   accounts: { one: "{count} account", other: "{count} accounts" },
+  providerAccounts: { one: "{count} {provider} account", other: "{count} {provider} accounts" },
   atProviders: { one: "at {count} provider", other: "at {count} providers" },
   needYou: { one: "{count} needs you", other: "{count} need you" },
   serving: "{count} serving",
@@ -122,12 +123,15 @@ export function countsLine(
   running?: ReadonlySet<string>,
   now = Date.now(),
   unchecked = false,
+  provider?: string,
 ): string {
   const n = stateCounts(list, running, now, unchecked);
   const providers = new Set(list.map((a) => a.extension).filter(Boolean)).size;
-  const total = providers
-    ? `${t("accounts", { count: list.length })} ${t("atProviders", { count: providers })}`
-    : t("accounts", { count: list.length });
+  const total = provider
+    ? t("providerAccounts", { count: list.length, provider })
+    : providers
+      ? `${t("accounts", { count: list.length })} ${t("atProviders", { count: providers })}`
+      : t("accounts", { count: list.length });
   return [
     total,
     n.needs ? t("needYou", { count: n.needs }) : "",

@@ -75,6 +75,10 @@ test("the counts line leaves out every zero count", () => {
       NOW,
     ),
   ).toBe("3 accounts at 1 provider · 2 need you · 1 waiting");
+  expect(
+    countsLine([account("a"), account("b", { state: "reauth_required" })], undefined, NOW, false, "Claude"),
+  ).toBe("2 Claude accounts · 1 needs you · 1 serving");
+  expect(countsLine([account("a")], undefined, NOW, false, "Gemini")).toBe("1 Gemini account · 1 serving");
 });
 
 test("Find an account matches the public ID, the provider's name, the name and the condition word", () => {

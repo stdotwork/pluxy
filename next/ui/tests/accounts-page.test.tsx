@@ -396,6 +396,46 @@ test("provider chips appear for two or more providers, filter rows, show that pr
   expect(rowNames(page.root)).toEqual(["claude-a", "claude-b", "gemini-a"]);
 });
 
+test("selecting a provider chip scopes the summary counts line and state bar to that provider", async () => {
+  const page = await mount([
+    reply(
+      account("claude-bad", { extension: "pluxy/claude", state: "reauth_required" }),
+      account("claude-ok", { extension: "pluxy/claude" }),
+      account("gemini-ok", { extension: "pluxy/gemini" }),
+    ),
+  ]);
+  const chip = (label: string) => {
+    const found = all(page.root, "button").find((b) => b.textContent.includes(label));
+    if (!found) throw new Error(`no chip matching ${label}`);
+    return found;
+  };
+  const barGroups = () => {
+    const bar = all(page.root, "div").find((d) =>
+      d.attributes.some((a) => a.name === "class" && a.value === "accounts-state-bar"),
+    );
+    return (bar ? all(bar, "span") : []).map((s) => s.attributes.find((a) => a.name === "data-group")?.value);
+  };
+  const countsText = () =>
+    all(page.root, "p").find((p) =>
+      p.attributes.some((a) => a.name === "class" && a.value.includes("accounts-counts")),
+    )?.textContent;
+
+  expect(countsText()).toBe("3 accounts at 2 providers · 1 needs you · 2 serving");
+  expect(barGroups()).toEqual(["serving", "needs"]);
+
+  await click(chip("Claude"));
+  expect(countsText()).toBe("2 Claude accounts · 1 needs you · 1 serving");
+  expect(barGroups()).toEqual(["serving", "needs"]);
+
+  await click(chip("Gemini"));
+  expect(countsText()).toBe("1 Gemini account · 1 serving");
+  expect(barGroups()).toEqual(["serving"]);
+
+  await click(chip("All"));
+  expect(countsText()).toBe("3 accounts at 2 providers · 1 needs you · 2 serving");
+  expect(barGroups()).toEqual(["serving", "needs"]);
+});
+
 test("List | Cards starts from the theme's list layout, stores an Accounts-only choice, and never calls setLayout", async () => {
   const store = new Map<string, string>();
   const fakeStorage = {
