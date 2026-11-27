@@ -239,7 +239,33 @@
     width: 15.5rem;
   }
 
-  .tool-page .setting-control .tool-recent {
+  .tool-page .setting-control .tool-inline .tool-path {
+    width: 14.5rem;
+  }
+
+  /* A switch beside another control in a row (such as 1M context beside a model input) keeps its
+     own label visible so the toggle explains itself. */
+  .tool-page .setting-control .tool-inline .switch {
+    align-items: center;
+    gap: calc(var(--s) * 2);
+  }
+
+  .tool-page .setting-control .tool-inline .switch .track {
+    margin-block-start: 0;
+  }
+
+  .tool-page .setting-control .tool-inline .switch .label {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    white-space: nowrap;
+  }
+
+  .tool-page .setting-control .tool-inline select.tool-recent {
     width: auto;
     max-width: 10rem;
   }
