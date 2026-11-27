@@ -1,16 +1,33 @@
-/* Order & fallback (routing.tsx): account order, fallbacks and rules. The rows are the shared
-   SettingRow and StatePane (parts.css); this file lays out what is around them. */
+/* Order & fallback (routing.tsx): per-provider account order cards using the shared AccountRow,
+   fallbacks as chains of chips with an inline editor, and rules as a grouped setting card.
+   Reads only --px-* theme tokens. */
 @layer kit {
+  html[data-page="routing"] .content {
+    padding-block: calc(var(--s) * 5) calc(var(--s) * 6);
+  }
+
+  .routing-fresh {
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    white-space: nowrap;
+  }
+
   /* The page is two columns while its own width allows, not the window's: a theme may narrow it. */
   .routing-page {
     container-type: inline-size;
+    display: grid;
+    gap: calc(var(--s) * 4);
+  }
+
+  .routing-page[data-stale] .routing-layout {
+    opacity: 0.7;
   }
 
   .routing-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 20rem);
+    grid-template-columns: minmax(0, 1fr) var(--px-size-detail);
     align-items: start;
-    gap: calc(var(--s) * 8);
+    gap: calc(var(--s) * 5);
   }
 
   .routing-fallbacks {
@@ -21,17 +38,18 @@
   .routing-rules-pane {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    gap: calc(var(--s) * 8);
+    gap: calc(var(--s) * 6);
     min-width: 0;
   }
 
   .routing-rules-pane {
-    gap: calc(var(--s) * 2);
+    gap: calc(var(--s) * 3);
   }
 
   .routing-layout h2 {
     margin: 0;
     font-size: var(--px-font-size-title);
+    font-weight: var(--px-font-weight-strong);
   }
 
   .routing-section-head {
@@ -44,8 +62,43 @@
 
   .routing-section-intro,
   .order-intro {
-    margin: calc(var(--s) * 2) 0 calc(var(--s) * 3);
+    margin: calc(var(--s) * 1.5) 0 calc(var(--s) * 3);
     color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  /* ---- Skeleton ----------------------------------------------------------------------------- */
+
+  .routing-skeleton {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--px-size-detail);
+    gap: calc(var(--s) * 5);
+    align-items: start;
+  }
+
+  .routing-skeleton-main,
+  .routing-skeleton-side {
+    display: grid;
+    gap: calc(var(--s) * 4);
+  }
+
+  .routing-skeleton i {
+    display: block;
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-card);
+    background: var(--px-color-surface-raised);
+  }
+
+  .routing-skeleton .skeleton-provider {
+    height: calc(var(--s) * 56);
+  }
+
+  .routing-skeleton .skeleton-fallbacks {
+    height: calc(var(--s) * 28);
+  }
+
+  .routing-skeleton .skeleton-rules {
+    height: calc(var(--s) * 44);
   }
 
   /* ---- Account order ------------------------------------------------------------------------ */
@@ -54,41 +107,90 @@
     min-width: 0;
   }
 
-  .order-intro {
-    margin-top: 0;
+  .order-empty.card {
+    padding: calc(var(--s) * 4);
   }
 
-  .order-provider {
+  .order-empty .state-pane {
+    padding: 0;
+  }
+
+  .order-providers {
+    display: grid;
+    gap: calc(var(--s) * 4);
     min-width: 0;
-    margin-bottom: calc(var(--s) * 5);
+  }
+
+  .order-provider.card {
+    container-type: inline-size;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .order-provider-head {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    padding: calc(var(--s) * 3) calc(var(--s) * 3.5);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    background: var(--px-color-card);
   }
 
   .order-provider-name {
-    margin: 0 0 var(--s);
+    margin: 0;
     font-size: var(--px-font-size);
     font-weight: var(--px-font-weight-strong);
+  }
+
+  .order-provider-count {
+    margin-inline-start: auto;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    white-space: nowrap;
   }
 
   .order-tier {
     min-width: 0;
     border-top: var(--px-shape-border) solid var(--px-color-border);
+    transition: background var(--t);
+  }
+
+  .order-provider-head + .order-edge + .order-tier {
+    border-top: 0;
+  }
+
+  .order-tier[data-over] {
+    background: var(--px-color-selected);
+    box-shadow: inset 2px 0 0 var(--px-color-accent);
   }
 
   .order-tier-head {
     display: flex;
-    align-items: baseline;
+    align-items: center;
+    justify-content: space-between;
     gap: calc(var(--s) * 3);
-    padding: calc(var(--s) * 2) calc(var(--s) * 2) var(--s);
+    padding: calc(var(--s) * 1.5) calc(var(--s) * 3.5);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    background: var(--px-color-surface-raised);
   }
 
   .order-tier-head h4 {
     margin: 0;
-    font-size: var(--px-font-size-small);
+    color: var(--px-color-text);
+    font-size: var(--px-font-size-label);
     font-weight: var(--px-font-weight-strong);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
 
-  .order-tier-head .muted {
-    font-size: var(--px-font-size-small);
+  .order-tier:not([data-first]) .order-tier-head h4 {
+    color: var(--px-color-text-muted);
+  }
+
+  .order-tier-priority {
+    color: var(--px-color-secondary-label);
+    font-size: var(--px-font-size-label);
   }
 
   .order-rows {
@@ -99,58 +201,121 @@
 
   .order-row {
     min-width: 0;
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    transition: background var(--t);
+  }
+
+  .order-row:last-child {
+    border-bottom: 0;
+  }
+
+  .order-row:hover {
+    background: color-mix(in srgb, var(--px-color-surface-raised) 70%, transparent);
+  }
+
+  /* Brief highlight when a person moves an account into a new group; 0 under reduced motion. */
+  @keyframes order-settled {
+    from {
+      background: var(--px-color-selected);
+      transform: translateY(-2px);
+    }
+    to {
+      background: transparent;
+      transform: translateY(0);
+    }
+  }
+
+  .order-row[data-moved] {
+    animation: order-settled var(--px-motion-duration-menu, 160ms) var(--px-motion-easing, ease-out);
   }
 
   .order-line {
-    display: flex;
+    display: grid;
+    grid-template-columns: calc(var(--s) * 5) minmax(0, 1fr) auto;
     align-items: center;
-    gap: calc(var(--s) * 2);
-    min-height: var(--px-size-row);
-    padding-inline: calc(var(--s) * 2);
+    gap: calc(var(--s) * 1.5);
+    padding-inline: calc(var(--s) * 2) calc(var(--s) * 3);
   }
 
   .order-handle {
-    flex: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     inline-size: calc(var(--s) * 5);
-    color: var(--px-color-text-muted);
+    min-height: var(--px-size-control);
+    border-radius: var(--r-chip);
+    color: var(--px-color-secondary-label);
     cursor: grab;
+    transition: color var(--t);
+  }
+
+  .order-handle:hover {
+    color: var(--px-color-text);
   }
 
   .order-handle:active {
     cursor: grabbing;
   }
 
-  .order-name {
-    flex: 1 1 8rem;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    line-height: var(--px-size-control);
+  .order-handle[data-locked] {
+    cursor: default;
   }
 
-  .order-condition,
-  .order-file {
+  /* The shared AccountRow fits inside the order row without its own divider or double hover. */
+  .order-account {
+    min-width: 0;
+  }
+
+  .order-account .account-row {
+    border-bottom: 0;
+    background: transparent;
+  }
+
+  .order-account .account-row:hover {
+    background: transparent;
+  }
+
+  .order-account .account-grid {
+    padding-inline: calc(var(--s) * 1.5);
+  }
+
+  .order-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
     flex: none;
+  }
+
+  .order-file {
     display: inline-flex;
     align-items: center;
     min-height: var(--px-size-control);
+    padding-inline: calc(var(--s) * 2);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-small);
+    background: var(--px-color-surface-raised);
     color: var(--px-color-text-muted);
     font-size: var(--px-font-size-small);
+    text-decoration: none;
     white-space: nowrap;
+    transition:
+      border-color var(--t),
+      color var(--t);
+  }
+
+  .order-file:hover {
+    border-color: var(--px-color-input-border);
+    color: var(--px-color-text);
   }
 
   .order-arrows {
-    flex: none;
     display: inline-flex;
     gap: var(--s);
   }
 
-  .order-line .btn {
+  .order-controls .btn {
     min-width: var(--px-size-control);
+    padding-inline: calc(var(--s) * 2);
     white-space: nowrap;
   }
 
@@ -158,21 +323,37 @@
     display: grid;
     gap: var(--s);
     max-width: 24rem;
-    padding: calc(var(--s) * 2) calc(var(--s) * 2) calc(var(--s) * 3) calc(var(--s) * 11);
+    padding: calc(var(--s) * 2) calc(var(--s) * 3.5) calc(var(--s) * 3) calc(var(--s) * 10);
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+    background: var(--px-color-surface-raised);
   }
 
   .order-single {
-    margin: 0;
+    margin: calc(var(--s) * 3) 0 0;
+    font-size: var(--px-font-size-small);
   }
 
   /* Where a dragged account is dropped to start a new first or last group: there only during a drag. */
   .order-edge {
     display: none;
+    margin: calc(var(--s) * 2) calc(var(--s) * 3);
     padding: calc(var(--s) * 2);
-    border: var(--px-shape-border) dashed var(--px-color-border);
+    border: var(--px-shape-border) dashed var(--px-color-input-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface-raised);
     color: var(--px-color-text-muted);
     font-size: var(--px-font-size-small);
     text-align: center;
+    transition:
+      border-color var(--t),
+      background var(--t),
+      color var(--t);
+  }
+
+  .order-edge[data-over] {
+    border-color: var(--px-color-accent);
+    background: var(--px-color-selected);
+    color: var(--px-color-text);
   }
 
   .order-provider[data-dragging] .order-edge {
@@ -181,71 +362,130 @@
 
   /* ---- Fallbacks ---------------------------------------------------------------------------- */
 
-  .fallback-list {
-    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  .fallback-empty.card {
+    padding: calc(var(--s) * 3.5);
+  }
+
+  .fallback-empty p {
+    margin: 0;
+  }
+
+  .fallback-list.card {
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
   }
 
   .fallback {
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      "ask"
-      "line"
-      "actions";
-    gap: var(--s);
-    padding: calc(var(--s) * 2);
-    border-top: var(--px-shape-border) solid var(--px-color-border);
+    gap: calc(var(--s) * 2.5);
+    padding: calc(var(--s) * 3) calc(var(--s) * 3.5);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
   }
 
-  .fallback-ask {
-    grid-area: ask;
+  .fallback:last-child {
+    border-bottom: 0;
   }
 
-  .fallback-line {
-    grid-area: line;
+  .fallback[data-open] {
+    background: color-mix(in srgb, var(--px-color-surface-raised) 50%, var(--px-color-card));
   }
 
-  .fallback-ask,
-  .fallback-line {
+  .fallback-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2) calc(var(--s) * 3);
     min-width: 0;
-    overflow-wrap: break-word;
-  }
-
-  /* A step stays on one line when it fits, so a model name is not cut at its hyphens. */
-  .fallback-step-text {
-    display: inline-block;
-    max-width: 100%;
   }
 
   .fallback-ask {
+    min-width: 0;
+    overflow-wrap: anywhere;
     font-weight: var(--px-font-weight-strong);
   }
 
   .fallback-actions {
-    grid-area: actions;
     display: inline-flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: var(--s);
+    gap: calc(var(--s) * 1.5);
+  }
+
+  /* The chain of chips: each step sits in its own pill-like chip with arrows between. */
+  .fallback-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 1.5) calc(var(--s) * 1);
+    min-width: 0;
+  }
+
+  .fallback-arrow {
+    color: var(--px-color-secondary-label);
+    font-size: var(--px-font-size-small);
+    padding-inline: calc(var(--s) * 0.5);
+    user-select: none;
+  }
+
+  .fallback-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
+    max-width: 100%;
+    padding: calc(var(--s) * 1) calc(var(--s) * 2.5);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-small);
+    background: var(--px-color-surface-raised);
+    line-height: 1.35;
+  }
+
+  .fallback-step-text {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .fallback-chip-model {
+    color: var(--px-color-text);
+    font-weight: var(--px-font-weight-medium);
+  }
+
+  .fallback-chip-detail {
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
   }
 
   .fallback-editor {
     display: grid;
     gap: calc(var(--s) * 3);
-    margin-top: calc(var(--s) * 4);
-    padding: calc(var(--s) * 3);
-    border: var(--px-shape-border) solid var(--px-color-border);
+    margin-top: calc(var(--s) * 3);
+    padding: var(--px-size-card-padding);
+    border: var(--px-shape-border) solid var(--px-color-card-border);
     border-radius: var(--r-card);
+    background: var(--px-color-card);
+    box-shadow: var(--px-shadow-raised);
+  }
+
+  .fallback-editor[data-inline] {
+    margin-top: calc(var(--s) * 1);
+    box-shadow: none;
+    background: var(--px-color-surface);
   }
 
   .fallback-steps-label {
     margin: 0;
+    font-size: var(--px-font-size-small);
     font-weight: var(--px-font-weight-strong);
   }
 
   .fallback-steps {
     display: grid;
-    gap: calc(var(--s) * 3);
+    gap: calc(var(--s) * 2.5);
     margin: 0;
     padding: 0;
     list-style: none;
@@ -253,15 +493,27 @@
 
   .fallback-step {
     display: grid;
-    grid-template-columns: calc(var(--s) * 5) minmax(0, 1fr);
+    grid-template-columns: calc(var(--s) * 6) minmax(0, 1fr);
     align-items: start;
-    gap: calc(var(--s) * 2) calc(var(--s) * 2);
+    gap: calc(var(--s) * 2);
+    padding: calc(var(--s) * 2.5);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface-raised);
   }
 
   .fallback-n {
-    padding-top: calc(var(--s) * 2);
+    display: inline-grid;
+    place-items: center;
+    width: calc(var(--s) * 5.5);
+    height: calc(var(--s) * 5.5);
+    margin-top: calc(var(--s) * 5);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: 999px;
+    background: var(--px-color-surface);
     color: var(--px-color-text-muted);
-    text-align: center;
+    font-size: var(--px-font-size-label);
+    font-weight: var(--px-font-weight-medium);
   }
 
   .fallback-fields {
@@ -274,7 +526,7 @@
     grid-column: 2;
     display: flex;
     flex-wrap: wrap;
-    gap: calc(var(--s) * 1) calc(var(--s) * 4);
+    gap: calc(var(--s) * 1) calc(var(--s) * 3);
     min-width: 0;
     margin: 0;
     padding: 0;
@@ -283,6 +535,7 @@
 
   .fallback-accounts legend {
     padding: 0;
+    margin-bottom: var(--s);
     color: var(--px-color-text-muted);
     font-size: var(--px-font-size-small);
   }
@@ -290,10 +543,11 @@
   .fallback-account {
     display: inline-flex;
     align-items: center;
-    gap: var(--s);
+    gap: calc(var(--s) * 1.5);
     min-height: var(--px-size-control);
     min-width: 0;
     max-width: 100%;
+    font-size: var(--px-font-size-small);
   }
 
   .fallback-account span {
@@ -325,44 +579,157 @@
     margin: 0;
   }
 
-  /* ---- Rules -------------------------------------------------------------------------------- */
+  /* ---- Rules (T3-style grouped card) -------------------------------------------------------- */
 
-  .routing-rules select,
-  .routing-rules input:not([type="checkbox"]) {
+  .routing-rules.card {
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .routing-rule-item .setting-row {
+    padding-block: calc(var(--s) * 3);
+  }
+
+  .routing-rule-item .setting-grid {
+    padding-inline: calc(var(--s) * 3.5);
+    gap: calc(var(--s) * 2) calc(var(--s) * 4);
+  }
+
+  .routing-rule-item .setting-name {
+    font-weight: var(--px-font-weight-medium);
+  }
+
+  .routing-rule-item .setting-description {
+    font-size: var(--px-font-size-small);
+  }
+
+  /* Switches sit cleanly at the right beside their label, even in the narrow Rules column. */
+  .routing-rule-item[data-kind="switch"] .setting-grid {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .routing-rule-item[data-kind="switch"] .setting-control {
+    justify-content: flex-end;
+  }
+
+  .routing-rule-item[data-kind="strategy"] select {
+    width: 100%;
+  }
+
+  .routing-rule-item select,
+  .routing-rule-item input:not([type="checkbox"]) {
     max-width: 100%;
   }
 
-  .routing-rules .setting-control {
-    justify-content: flex-start;
+  .routing-rule-item .setting-control fieldset {
+    max-width: 100%;
+  }
+
+  .routing-control-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    max-width: 100%;
+  }
+
+  .routing-rule-item[data-kind="strategy"] .setting-control fieldset,
+  .routing-rule-item[data-kind="strategy"] .routing-control-wrap {
+    width: 100%;
+  }
+
+  .routing-saved {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s);
+    color: var(--px-color-ok);
+    font-size: var(--px-font-size-small);
+    white-space: nowrap;
+  }
+
+  .routing-more {
+    min-width: 0;
   }
 
   .routing-more > summary {
     display: flex;
     align-items: center;
-    gap: var(--s);
-    min-height: var(--px-size-control);
-    padding-inline: calc(var(--s) * 2);
+    gap: calc(var(--s) * 1.5);
+    min-height: var(--px-size-row-tall);
+    padding-inline: calc(var(--s) * 3.5);
+    background: var(--px-color-surface-raised);
+    color: var(--px-color-text-muted);
     cursor: pointer;
-    font-weight: var(--px-font-weight-strong);
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-medium);
+    list-style: none;
+    transition: color var(--t);
+  }
+
+  .routing-more > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .routing-more > summary:hover {
+    color: var(--px-color-text);
   }
 
   .routing-more > summary .icon {
-    transition: transform 0.1s;
+    transition: transform var(--t);
+  }
+
+  .routing-more[open] > summary {
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    color: var(--px-color-text);
   }
 
   .routing-more[open] > summary .icon {
     transform: rotate(90deg);
   }
 
-  @container (max-width: 48rem) {
-    .routing-layout {
+  .routing-more-list .routing-rule-item:last-child .setting-row {
+    border-bottom: 0;
+  }
+
+  /* ---- Responsive container breakpoints ----------------------------------------------------- */
+
+  @container (max-width: 60em) {
+    .routing-layout,
+    .routing-skeleton {
       grid-template-columns: minmax(0, 1fr);
     }
   }
 
-  @container (max-width: 30rem) {
+  @container (max-width: 30em) {
+    .order-line {
+      grid-template-columns: calc(var(--s) * 5) minmax(0, 1fr);
+      row-gap: var(--s);
+      padding-block: var(--s);
+    }
+
+    .order-controls {
+      grid-column: 2;
+      justify-content: flex-start;
+      padding-inline-start: calc(var(--s) * 1.5);
+      padding-bottom: var(--s);
+    }
+
     .fallback-fields {
       grid-template-columns: minmax(0, 1fr);
+    }
+
+    .fallback-step {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .fallback-n {
+      margin-top: 0;
+    }
+
+    .fallback-accounts,
+    .fallback-step-actions {
+      grid-column: 1;
     }
   }
 }

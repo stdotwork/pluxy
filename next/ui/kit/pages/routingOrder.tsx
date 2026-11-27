@@ -1,18 +1,22 @@
 // Account order: for each provider with two or more accounts, its accounts in groups from First
-// through Backup {n}. An arrow moves an account one group, a drag onto a group joins it, and under
-// "Split by weight" a button sets how many shares of its group's requests an account takes.
+// through Backup {n}, shown as a stack of the shared AccountRow with live state and limits. An
+// arrow moves an account one group, a drag onto a group joins it, and under "Split by weight" a
+// button sets how many shares of its group's requests an account takes.
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Account } from "../api";
 import { Icon } from "../icons";
 import {
+  AccountRow,
   accountCondition,
-  accountHref,
+  accountFix,
   type Condition,
-  conditionWord,
-  GroupMark,
+  conditionUnchecked,
+  type Outcome,
+  ProviderMark,
   StatePane,
   useNaming,
+  type Windows,
 } from "../parts";
 import { strings } from "../strings";
 import { Button, Empty } from "../ui";
@@ -30,6 +34,7 @@ const t = strings("routing.order", {
   heading: "Account order",
   intro:
     "pluxy tries the first group of a provider's accounts first, and a backup only when every account above it is busy, cooling down or out.",
+  providerCount: { one: "1 account · {serving} serving", other: "{count} accounts · {serving} serving" },
   single: "One account each, so nothing to order: {providers}.",
   nothing:
     "Every provider has one account, so there is nothing to order yet. With a second account at a provider, you choose here which goes first.",
@@ -78,6 +83,7 @@ function useRestoreFocus(root: { current: HTMLElement | null }, busy: boolean) {
 
 export interface OrderProps {
   accounts: Account[];
+  windows: Map<string, Windows>;
   running?: ReadonlySet<string>;
   /** Accounts share requests by weight. */
   weighted: boolean;
@@ -85,11 +91,20 @@ export interface OrderProps {
   busy: boolean;
   /** Saves an account's priority or weight. */
   change: (id: string, change: { priority?: number; weight?: number | null }) => Promise<unknown>;
+  /** Turns an account on in place (shared AccountRow fix). */
+  onTurnOn: (id: string) => Promise<Outcome> | Outcome;
+  /** Clears an account's cooldown in place (shared AccountRow fix). */
+  onClearCooldown: (id: string) => Promise<Outcome> | Outcome;
 }
 
 function Row(props: {
   a: Account;
   c: Condition;
+  windows?: Windows;
+  running?: ReadonlySet<string>;
+  unchecked: boolean;
+  quietFix: boolean;
+  moved: boolean;
   name: string;
   accounts: Account[];
   weighted: boolean;
@@ -100,6 +115,8 @@ function Row(props: {
   setFocus: (key: string) => void;
   onDragStart: (e: DragEvent) => void;
   onDragEnd: () => void;
+  onTurnOn: (id: string) => Promise<Outcome> | Outcome;
+  onClearCooldown: (id: string) => Promise<Outcome> | Outcome;
 }) {
   const { a, c, name } = props;
   const config = a.source === "config";
@@ -110,10 +127,16 @@ function Row(props: {
   }, [editing]);
   const shares = props.editing?.trim() === "" ? 1 : Number(props.editing);
   return (
-    <li class="order-row" data-part="order-row" data-account={a.id} data-condition={c.kind}>
+    <li
+      class="order-row"
+      data-part="order-row"
+      data-account={a.id}
+      data-condition={c.kind}
+      data-moved={props.moved ? "" : undefined}
+    >
       <div class="order-line">
         {config ? (
-          <span class="order-handle" aria-hidden="true" />
+          <span class="order-handle" data-locked="" aria-hidden="true" />
         ) : (
           <span
             class="order-handle"
@@ -123,61 +146,70 @@ function Row(props: {
             onDragStart={props.onDragStart}
             onDragEnd={props.onDragEnd}
           >
-            <Icon name="grip" />
+            <Icon name="grip" size={14} />
           </span>
         )}
-        <GroupMark c={c} />
-        <a class="order-name" href={accountHref(a.id)} title={name}>
-          {name}
-        </a>
-        {c.kind !== "serving" && <span class="order-condition">{conditionWord(c)}</span>}
-        {config ? (
-          <a class="order-file" href={`#/config/source?account=${encodeURIComponent(a.id)}`}>
-            {t("inFile")}
-          </a>
-        ) : (
-          <>
-            {props.weighted && (
-              <Button
-                label={t("changeWeight", { name })}
-                focusKey={`weight ${a.id}`}
-                onClick={() => props.onEdit(a.weight === undefined ? "" : String(a.weight))}
-              >
-                {t("weight", { n: a.weight ?? 1 })}
-              </Button>
-            )}
-            <span class="order-arrows">
-              {(["up", "down"] as const).map((direction) => {
-                const why =
-                  moveOf(props.accounts, a.id, direction) === undefined
-                    ? t(direction === "up" ? "alreadyFirst" : "alreadyLast")
-                    : undefined;
-                const whyId = `order-${direction}-${a.id}-why`;
-                return (
-                  <span key={direction} title={why}>
-                    <Button
-                      disabled={!!why}
-                      focusKey={`${direction} ${a.id}`}
-                      describedBy={why ? whyId : undefined}
-                      label={t(direction === "up" ? "upFor" : "downFor", { name })}
-                      onClick={() => {
-                        props.setFocus(`${direction} ${a.id}`);
-                        props.move(direction);
-                      }}
-                    >
-                      {t(direction)}
-                    </Button>
-                    {why && (
-                      <span id={whyId} hidden>
-                        {why}
-                      </span>
-                    )}
-                  </span>
-                );
-              })}
-            </span>
-          </>
-        )}
+        <div class="order-account">
+          <AccountRow
+            account={a}
+            windows={props.windows}
+            running={props.running}
+            unchecked={props.unchecked}
+            grouped
+            quietFix={props.quietFix}
+            onTurnOn={props.onTurnOn}
+            onClearCooldown={props.onClearCooldown}
+          />
+        </div>
+        <div class="order-controls">
+          {config ? (
+            <a class="order-file" href={`#/config/source?account=${encodeURIComponent(a.id)}`}>
+              {t("inFile")}
+            </a>
+          ) : (
+            <>
+              {props.weighted && (
+                <Button
+                  label={t("changeWeight", { name })}
+                  focusKey={`weight ${a.id}`}
+                  onClick={() => props.onEdit(a.weight === undefined ? "" : String(a.weight))}
+                >
+                  <span class="num">{t("weight", { n: a.weight ?? 1 })}</span>
+                </Button>
+              )}
+              <span class="order-arrows">
+                {(["up", "down"] as const).map((direction) => {
+                  const why =
+                    moveOf(props.accounts, a.id, direction) === undefined
+                      ? t(direction === "up" ? "alreadyFirst" : "alreadyLast")
+                      : undefined;
+                  const whyId = `order-${direction}-${a.id}-why`;
+                  return (
+                    <span key={direction} title={why}>
+                      <Button
+                        disabled={!!why}
+                        focusKey={`${direction} ${a.id}`}
+                        describedBy={why ? whyId : undefined}
+                        label={t(direction === "up" ? "upFor" : "downFor", { name })}
+                        onClick={() => {
+                          props.setFocus(`${direction} ${a.id}`);
+                          props.move(direction);
+                        }}
+                      >
+                        {t(direction)}
+                      </Button>
+                      {why && (
+                        <span id={whyId} hidden>
+                          {why}
+                        </span>
+                      )}
+                    </span>
+                  );
+                })}
+              </span>
+            </>
+          )}
+        </div>
       </div>
       {editing && (
         <label class="order-weight field" data-part="field">
@@ -227,8 +259,24 @@ export function AccountOrder(props: OrderProps) {
     setWeightState(next);
   };
   const [dragging, setDragging] = useState<Account>();
+  const [dragOver, setDragOver] = useState<string>();
+  const [movedId, setMovedId] = useState<string>();
+  const movedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(movedTimer.current), []);
+
+  const markMoved = (id: string) => {
+    clearTimeout(movedTimer.current);
+    setMovedId(id);
+    movedTimer.current = setTimeout(() => setMovedId(undefined), 320);
+  };
+
   const { sections, single } = orderOf(props.accounts);
   const running = props.running;
+
+  // At most one filled (primary) repair button across the order stack.
+  const firstRepairId = sections
+    .flatMap((s) => s.tiers.flatMap((tier) => tier.accounts))
+    .find((a) => accountFix(a, accountCondition(a, running))?.variant === "primary")?.id;
 
   const edit = (a: Account, text: string | undefined, save?: boolean) => {
     if (text !== undefined) return setWeight({ id: a.id, text });
@@ -242,19 +290,30 @@ export function AccountOrder(props: OrderProps) {
   const dropOn = (target: DropTarget) => {
     const moved = dragging;
     setDragging(undefined);
+    setDragOver(undefined);
     if (!moved) return;
     const priority = dropOf(props.accounts, moved.id, target);
-    if (priority !== undefined) void props.change(moved.id, { priority });
+    if (priority !== undefined) {
+      markMoved(moved.id);
+      void props.change(moved.id, { priority });
+    }
   };
-  const allowDrop = (section: ProviderOrder) => (e: DragEvent) => {
-    if (dragging?.extension === section.extension) e.preventDefault();
+  const allowDrop = (section: ProviderOrder, key: string) => (e: DragEvent) => {
+    if (dragging?.extension !== section.extension) return;
+    e.preventDefault();
+    if (dragOver !== key) setDragOver(key);
+  };
+  const clearOver = (key: string) => () => {
+    if (dragOver === key) setDragOver(undefined);
   };
 
   if (props.accounts.length === 0) {
     return (
-      <StatePane kind="empty" title={t("noAccounts")} primary={{ label: t("add"), href: ADD }}>
-        {t("noAccountsText")}
-      </StatePane>
+      <div class="order-empty card">
+        <StatePane kind="empty" title={t("noAccounts")} primary={{ label: t("add"), href: ADD }}>
+          {t("noAccountsText")}
+        </StatePane>
+      </div>
     );
   }
   return (
@@ -265,92 +324,136 @@ export function AccountOrder(props: OrderProps) {
     >
       <p class="order-intro">{t("intro")}</p>
       {sections.length === 0 ? (
-        <Empty
-          action={
-            <a class="btn" data-part="button" data-variant="quiet" href={ADD}>
-              {t("add")}
-            </a>
-          }
-        >
-          {t("nothing")}
-        </Empty>
-      ) : (
-        sections.map((section) => (
-          <section
-            key={section.extension}
-            class="order-provider"
-            data-extension={section.extension}
-            data-dragging={dragging?.extension === section.extension ? "" : undefined}
-            aria-label={section.name}
+        <div class="order-empty card">
+          <Empty
+            action={
+              <a class="btn" data-part="button" data-variant="quiet" href={ADD}>
+                {t("add")}
+              </a>
+            }
           >
-            <h3 class="order-provider-name">{section.name}</h3>
-            <div
-              class="order-edge"
-              aria-hidden="true"
-              data-edge="first"
-              onDragOver={allowDrop(section)}
-              onDrop={() => dropOn({ edge: "first" })}
-            >
-              {t("newFirst")}
-            </div>
-            {section.tiers.map((tier, index) => (
-              // biome-ignore lint/a11y/noStaticElementInteractions: a drop target for the pointer; the arrows do the same for the keyboard
-              <div
-                key={tier.priority}
-                class="order-tier"
-                data-part="tier"
-                data-priority={tier.priority}
-                onDragOver={allowDrop(section)}
-                onDrop={() => dropOn({ group: tier.priority })}
+            {t("nothing")}
+          </Empty>
+        </div>
+      ) : (
+        <div class="order-providers">
+          {sections.map((section) => {
+            const total = section.tiers.reduce((n, tier) => n + tier.accounts.length, 0);
+            const serving = section.tiers.reduce(
+              (n, tier) =>
+                n + tier.accounts.filter((a) => accountCondition(a, running).group === "serving").length,
+              0,
+            );
+            const firstEdge = `${section.extension}:first`;
+            const lastEdge = `${section.extension}:last`;
+            return (
+              <section
+                key={section.extension}
+                class="order-provider card"
+                data-extension={section.extension}
+                data-dragging={dragging?.extension === section.extension ? "" : undefined}
+                aria-label={section.name}
               >
-                <div class="order-tier-head">
-                  <h4>{tierName(index)}</h4>
-                  <span class="muted">{priorityWord(tier.priority)}</span>
+                <header class="order-provider-head">
+                  <ProviderMark extension={section.extension} size="small" />
+                  <h3 class="order-provider-name">{section.name}</h3>
+                  <span class="order-provider-count num">
+                    {t("providerCount", { count: total, serving })}
+                  </span>
+                </header>
+                <div
+                  class="order-edge"
+                  aria-hidden="true"
+                  data-edge="first"
+                  data-over={dragOver === firstEdge ? "" : undefined}
+                  onDragOver={allowDrop(section, firstEdge)}
+                  onDragLeave={clearOver(firstEdge)}
+                  onDrop={() => dropOn({ edge: "first" })}
+                >
+                  {t("newFirst")}
                 </div>
-                <ul class="order-rows" aria-label={tierName(index)}>
-                  {tier.accounts.map((a) => {
-                    const name = naming.of(a);
-                    return (
-                      <Row
-                        key={a.id}
-                        a={a}
-                        c={accountCondition(a, running)}
-                        name={name}
-                        accounts={props.accounts}
-                        weighted={props.weighted}
-                        editing={weight?.id === a.id ? weight.text : undefined}
-                        onEdit={(text, save) => edit(a, text, save)}
-                        onEditText={(text) => setWeight({ id: a.id, text })}
-                        move={(direction) => {
-                          const priority = moveOf(props.accounts, a.id, direction);
-                          if (priority !== undefined) void props.change(a.id, { priority });
-                        }}
-                        setFocus={setFocus}
-                        onDragStart={(e) => {
-                          e.dataTransfer?.setData("text/plain", a.id);
-                          if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-                          const row = (e.currentTarget as HTMLElement).closest(".order-row");
-                          if (row) e.dataTransfer?.setDragImage(row, 0, 0);
-                          setDragging(a);
-                        }}
-                        onDragEnd={() => setDragging(undefined)}
-                      />
-                    );
-                  })}
-                </ul>
-              </div>
-            ))}
-            <div
-              class="order-edge"
-              aria-hidden="true"
-              data-edge="last"
-              onDragOver={allowDrop(section)}
-              onDrop={() => dropOn({ edge: "last" })}
-            >
-              {t("newLast")}
-            </div>
-          </section>
-        ))
+                {section.tiers.map((tier, index) => {
+                  const tierKey = `${section.extension}:${tier.priority}`;
+                  return (
+                    // biome-ignore lint/a11y/noStaticElementInteractions: a drop target for the pointer; the arrows do the same for the keyboard
+                    <div
+                      key={tier.priority}
+                      class="order-tier"
+                      data-part="tier"
+                      data-priority={tier.priority}
+                      data-first={index === 0 ? "" : undefined}
+                      data-over={dragOver === tierKey ? "" : undefined}
+                      onDragOver={allowDrop(section, tierKey)}
+                      onDragLeave={clearOver(tierKey)}
+                      onDrop={() => dropOn({ group: tier.priority })}
+                    >
+                      <div class="order-tier-head">
+                        <h4>{tierName(index)}</h4>
+                        <span class="order-tier-priority num">{priorityWord(tier.priority)}</span>
+                      </div>
+                      <ul class="order-rows" aria-label={tierName(index)}>
+                        {tier.accounts.map((a) => {
+                          const c = accountCondition(a, running);
+                          const name = naming.of(a);
+                          return (
+                            <Row
+                              key={a.id}
+                              a={a}
+                              c={c}
+                              windows={props.windows.get(a.id)}
+                              running={running}
+                              unchecked={conditionUnchecked(a, c, running)}
+                              quietFix={a.id !== firstRepairId}
+                              moved={movedId === a.id}
+                              name={name}
+                              accounts={props.accounts}
+                              weighted={props.weighted}
+                              editing={weight?.id === a.id ? weight.text : undefined}
+                              onEdit={(text, save) => edit(a, text, save)}
+                              onEditText={(text) => setWeight({ id: a.id, text })}
+                              move={(direction) => {
+                                const priority = moveOf(props.accounts, a.id, direction);
+                                if (priority !== undefined) {
+                                  markMoved(a.id);
+                                  void props.change(a.id, { priority });
+                                }
+                              }}
+                              setFocus={setFocus}
+                              onDragStart={(e) => {
+                                e.dataTransfer?.setData("text/plain", a.id);
+                                if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+                                const row = (e.currentTarget as HTMLElement).closest(".order-row");
+                                if (row) e.dataTransfer?.setDragImage(row, 0, 0);
+                                setDragging(a);
+                              }}
+                              onDragEnd={() => {
+                                setDragging(undefined);
+                                setDragOver(undefined);
+                              }}
+                              onTurnOn={props.onTurnOn}
+                              onClearCooldown={props.onClearCooldown}
+                            />
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  );
+                })}
+                <div
+                  class="order-edge"
+                  aria-hidden="true"
+                  data-edge="last"
+                  data-over={dragOver === lastEdge ? "" : undefined}
+                  onDragOver={allowDrop(section, lastEdge)}
+                  onDragLeave={clearOver(lastEdge)}
+                  onDrop={() => dropOn({ edge: "last" })}
+                >
+                  {t("newLast")}
+                </div>
+              </section>
+            );
+          })}
+        </div>
       )}
       {sections.length > 0 && single.length > 0 && (
         <p class="order-single muted">{t("single", { providers: single.join(", ") })}</p>
