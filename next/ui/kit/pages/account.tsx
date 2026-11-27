@@ -404,15 +404,7 @@ function Loaded(props: {
                 <div class="account-columns">
                   {weekCard}
                   <section class="account-section card" aria-labelledby="account-latest">
-                    <div class="account-section-head">
-                      <h2 id="account-latest">{t("latest")}</h2>
-                      {(latest.data?.events.length ?? 0) > 0 && (
-                        <a class="account-onward" href={`#/activity?account=${encodeURIComponent(a.id)}`}>
-                          {t("seeRequests")}
-                          <Icon name="chevron" size={12} />
-                        </a>
-                      )}
-                    </div>
+                    <h2 id="account-latest">{t("latest")}</h2>
                     {latest.data ? (
                       <div class="account-requests">
                         {latest.data.events.map((e) => (
@@ -574,7 +566,7 @@ function AccountLimit(props: { limit: QuotaLimit; account: string; now: number }
   if (isBalanceLimit(l)) {
     const b = balanceLabel(l);
     return (
-      <div class="account-balance" data-part="account-limit">
+      <div class="account-balance">
         <span class="account-limit-name">{b.title}</span>
         <span class="account-balance-value">{b.value}</span>
       </div>
@@ -593,7 +585,7 @@ function AccountLimit(props: { limit: QuotaLimit; account: string; now: number }
   const reset = resetLabel(l, props.now);
   const pace = paceOf(l, props.now);
   return (
-    <div class="account-limit" data-part="account-limit" data-tone={tone}>
+    <div class="account-limit" data-tone={tone}>
       <div class="account-limit-head">
         <span class="account-limit-name">{title}</span>
         <span class="account-limit-right">
@@ -651,7 +643,12 @@ function LimitList(props: {
   const hasFoot = w.resets !== undefined || w.endsAt !== undefined;
   return (
     <div class="account-limits" data-part="limits" data-state={w.state}>
-      {w.state === "reading" && <p class="muted">{t("reading")}</p>}
+      {w.state === "reading" && (
+        <div role="status" aria-busy="true">
+          <p class="muted">{t("reading")}</p>
+          <Placeholder rows={2} />
+        </div>
+      )}
       {w.state === "none" && <p class="muted">{noneText}</p>}
       {w.state === "failed" && (
         <p class="muted" title={p.text(w.error, props.ids)}>
@@ -863,7 +860,7 @@ function ChangeIt(props: {
             <span class="account-more-chevron" aria-hidden="true">
               <Icon name="chevron" size={14} />
             </span>
-            <span>{t("more")}</span>
+            {t("more")}
           </summary>
           <div class="account-more-body">
             <AccountSettings account={a} />
