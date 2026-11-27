@@ -610,8 +610,9 @@ func isReachableFromNetwork(listen string) bool {
 }
 
 // coreAddress is core's address as the client tools' checks take it (atCore): its scheme and its
-// listen address, an unspecified host (every interface: 0.0.0.0, :: or none) kept as one, so any
-// address of this machine matches it; empty when core's address is not known.
+// listen address, an unspecified host (every interface: 0.0.0.0, :: or none) kept as one, so an
+// address of this machine in the listener's family matches it (both families when the listener
+// takes both, as atCore's probe finds); empty when core's address is not known.
 func coreAddress(listen string, tlsEnable bool) string {
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
