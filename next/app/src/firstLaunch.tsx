@@ -142,7 +142,8 @@ export function NotRunningPane(props: {
       } else if (act === "key") {
         const result = await keyEntry();
         if (result.status === "signed_in") props.onChange(result.connection);
-        else if (result.status === "wrong_key") setProblem(plainReason("core refused this key"));
+        else if (result.status === "wrong_key")
+          setProblem(plainReason("This management key was not accepted."));
         else if (result.status === "error") setProblem(plainError(result.connection.error, c.ca_file));
       } else {
         const next = await (act === "restart" ? coreRestart() : coreStart());

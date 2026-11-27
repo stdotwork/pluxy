@@ -244,7 +244,7 @@ fn local_connects_to_a_running_core_and_leaves_it_running() {
     assert_eq!(
         c.sign_in(&pluxy_app::managed::random_key(), false)
             .unwrap_err(),
-        "core refused this key"
+        "This management key was not accepted."
     );
     assert!(!c.view().signed_in);
     c.sign_in(&core.key, false).unwrap();
@@ -380,7 +380,7 @@ fn local_rotation_keeps_the_new_key_as_the_old_one_was_kept() {
     assert!(!c.view().signed_in);
     assert_eq!(
         c.sign_in(&first.key, false).unwrap_err(),
-        "core refused this key"
+        "This management key was not accepted."
     );
     c.sign_in(&second.key, false).unwrap();
 
