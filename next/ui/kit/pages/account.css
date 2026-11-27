@@ -319,8 +319,8 @@
     height: calc(var(--s) * 2);
   }
 
-  /* Even-burn pace marker across the bar: a crisp 2px notch ringed in the card's background so it
-     reads clearly over both the filled bar and the empty track in every theme. */
+  /* Even-burn pace marker across the bar: a crisp 2px notch ringed in the page's background so it
+     reads clearly over both the filled bar and the empty track even when color.card is transparent. */
   .account-pace-tick {
     position: absolute;
     top: -2px;
@@ -329,7 +329,7 @@
     margin-inline-start: -1px;
     border-radius: 1px;
     background: var(--px-color-text);
-    box-shadow: 0 0 0 1px var(--px-color-card);
+    box-shadow: 0 0 0 1px var(--px-color-bg);
     pointer-events: none;
   }
 
