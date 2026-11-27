@@ -70,6 +70,8 @@ export interface SetupOptions {
   localPages?: ToolsOptions["localPages"];
   /** Runs on step 2's Refresh, so the host can read its own tools again. */
   onRefresh?: () => void;
+  /** Lines the host puts above and under step 2's list (see ToolsOptions.notes). */
+  notes?: ToolsOptions["notes"];
   /** Called after setup is finished, before the page goes to Home. */
   onFinish?: () => void;
 }
@@ -344,6 +346,7 @@ export function SetupPage(props: { options?: SetupOptions }) {
               toolAction={options?.toolAction}
               extraTools={options?.extraTools}
               localPages={options?.localPages}
+              notes={options?.notes}
               remote={remote}
               state={tools}
               onAddAccount={() => go(1)}

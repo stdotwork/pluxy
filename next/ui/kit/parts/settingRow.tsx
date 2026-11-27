@@ -74,8 +74,8 @@ export function useSetting<T>(saved: T, save: (value: T) => Promise<Outcome> | O
 }
 
 /**
- * One setting. name is the setting's name, description one sentence of what it does, configKey
- * (on Config only) its key in the settings file. children is the control: a Switch, Choices, a
+ * One setting. name is the setting's name, description one sentence of what it does, note a line
+ * after it on what else it changes, configKey (on Config only) its key in the settings file. children is the control: a Switch, Choices, a
  * select, an input or a Button. saving shows Saving… beside it; disabled, a sentence, dims the
  * control and says why under it; error, a save that failed, shows under the row. The reason and
  * the error are masked in privacy mode.
@@ -83,6 +83,7 @@ export function useSetting<T>(saved: T, save: (value: T) => Promise<Outcome> | O
 export function SettingRow(props: {
   name: string;
   description?: string;
+  note?: string;
   configKey?: string;
   saving?: boolean;
   disabled?: string;
@@ -99,6 +100,7 @@ export function SettingRow(props: {
             {props.name}
           </span>
           {props.description && <span class="setting-description">{props.description}</span>}
+          {props.note && <span class="setting-note">{props.note}</span>}
           {props.configKey && <span class="setting-key">{props.configKey}</span>}
         </div>
         <div class="setting-control">

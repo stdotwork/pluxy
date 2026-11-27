@@ -170,7 +170,7 @@ const TITLES: Record<string, string> = {
   "activity/usage": "Usage",
   settings: "General",
   setup: "Setup",
-  config: "Config Panel",
+  config: "Config",
   system: "System",
   extensions: "Extensions",
   themes: "Themes",

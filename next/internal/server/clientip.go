@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -87,6 +88,21 @@ func remoteAddr(r *http.Request) netip.Addr {
 	return ap.Addr().Unmap()
 }
 
+// localAddr returns the address the request's connection arrived at (http.LocalAddrContextKey,
+// which net/http sets for each connection, HTTP/2 over TLS included), or the zero Addr when it is
+// not known or not an IP address.
+func localAddr(r *http.Request) netip.Addr {
+	a, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if !ok || a == nil {
+		return netip.Addr{}
+	}
+	ap, err := netip.ParseAddrPort(a.String())
+	if err != nil {
+		return netip.Addr{}
+	}
+	return ap.Addr().Unmap()
+}
+
 // client is where a request came from, as WithClientIP found it.
 type client struct {
 	addr netip.Addr
@@ -95,6 +111,11 @@ type client struct {
 	// header (Forwarded, or an X-Forwarded-For that is not a list of addresses). Such a request
 	// comes from somewhere else, whatever addr is.
 	forwarded bool
+	// ownAddress: addr is the connection's peer and the same address the connection arrived
+	// at. Only a program on this machine can open such a connection: the other end of a TCP
+	// handshake sends its replies to the source address, which here is this machine's own.
+	// It is false when addr is a client a trusted proxy named, since that is the proxy's word.
+	ownAddress bool
 }
 
 type clientKey struct{}
@@ -113,6 +134,9 @@ func clientOf(trusted []netip.Prefix, r *http.Request) client {
 		return client{addr: a}
 	}
 	c := client{addr: remoteAddr(r)}
+	if local := localAddr(r); c.addr.IsValid() && local == c.addr {
+		c.ownAddress = true
+	}
 	for _, h := range anyForwardHeaders {
 		if strings.TrimSpace(strings.Join(r.Header.Values(h), "")) != "" {
 			c.forwarded = true
@@ -132,11 +156,17 @@ func clientFor(r *http.Request) client {
 // connection's peer.
 func ClientIP(r *http.Request) netip.Addr { return clientFor(r).addr }
 
-// FromThisMachine reports whether r came from a loopback address and was not forwarded from
-// elsewhere: a request that names another client in X-Forwarded-For, X-Real-IP or Forwarded,
-// where core did not take the client from that header, does not count, so a proxy on this
-// machine cannot make remote clients look local.
+// FromThisMachine reports whether r came from this machine and was not forwarded from
+// elsewhere. A request comes from this machine when it came from a loopback address, or from
+// the very address its connection arrived at (core listening on a network address of this
+// machine, called by a program here at that address). A source that this machine's own network
+// translation rewrites to the address the call arrived at (a Docker bridge source on the host)
+// counts too; a source that arrives unchanged at another address does not. A request that names
+// another client in X-Forwarded-For, X-Real-IP or Forwarded, where core did not take the client
+// from that header, does not count, so a proxy on this machine that sets one of those headers
+// keeps its callers remote. A forwarder here that sets none counts as this machine, as one on
+// loopback already does.
 func FromThisMachine(r *http.Request) bool {
 	c := clientFor(r)
-	return c.addr.IsLoopback() && !c.forwarded
+	return (c.addr.IsLoopback() || c.ownAddress) && !c.forwarded
 }

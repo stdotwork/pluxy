@@ -2,9 +2,13 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"net"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -194,4 +198,53 @@ func TestManagementRemoteGate(t *testing.T) {
 	if resp := managementFrom(t, base, "198.51.100.11", "wrong-key"); resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("with management_allow_remote, a wrong key: %d, want 401", resp.StatusCode)
 	}
+}
+
+// Core listening on a network address of its machine, with remote management off, still answers
+// the pluxy command run on that machine: the command calls the config's address, so its call
+// comes from the address it arrives at, which only this machine can send from. A call through
+// a proxy here that names another client is still refused.
+func TestCLIAtCoreNetworkAddress(t *testing.T) {
+	host := networkAddress(t)
+	if host == "" {
+		// A CI runner always has one; a machine with no network does not.
+		if os.Getenv("CI") != "" {
+			t.Fatal("no IPv4 address on this machine that is not loopback")
+		}
+		t.Skip("no IPv4 address on this machine that is not loopback")
+	}
+	cfg := accessConfig(newUpstream(t))
+	path := filepath.Join(t.TempDir(), "config.json")
+	base, _, _ := startOnFreePort(t, filepath.Join(binDir, "pluxy"), path, func(port int) []byte {
+		cfg["listen"] = net.JoinHostPort(host, strconv.Itoa(port))
+		b, _ := json.Marshal(cfg)
+		return b
+	}, noWatch...)
+	if !strings.Contains(base, "//"+host+":") {
+		t.Fatalf("core listens on %s, want %s", base, host)
+	}
+
+	if r := runCLI(t, nil, "status", "--config", path); r.code != 0 || !strings.Contains(r.stdout, "pluxy/openai-compatible") {
+		t.Errorf("pluxy status on core's machine, core at %s: %s; want exit 0 and the status", base, r)
+	}
+	if resp := managementFrom(t, base, "198.51.100.9", managementKey); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("a call at %s forwarded by a proxy core does not trust: %d, want 403", base, resp.StatusCode)
+	}
+}
+
+// networkAddress returns an IPv4 address of this machine that is not loopback, or "".
+func networkAddress(t *testing.T) string {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok {
+			if ip4 := ipn.IP.To4(); ip4 != nil && !ip4.IsLoopback() && !ip4.IsLinkLocalUnicast() {
+				return ip4.String()
+			}
+		}
+	}
+	return ""
 }

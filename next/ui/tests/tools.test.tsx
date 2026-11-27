@@ -461,6 +461,27 @@ test("without extraTools one line says three tools are set up from the app; loca
   expect(listed.text()).not.toContain("are set up from the desktop app.");
 });
 
+test("a host's notes get the tools the page lists and show above and under the list", async () => {
+  const w = world({ clients: [CLAUDE, client("codex", "Codex CLI", { installed: false })] });
+  let seen: string[] = [];
+  const m = await w.mount(
+    <ToolsPage
+      options={{
+        notes: (clients) => {
+          seen = clients.map((c) => c.id);
+          return { above: <p>Above the list.</p>, below: <p>Under the list.</p> };
+        },
+      }}
+    />,
+  );
+  expect(seen.sort()).toEqual(["claude-code", "codex"]);
+  const text = m.text();
+  expect(text.indexOf("Above the list.")).toBeLessThan(text.indexOf("Claude Code"));
+  expect(text.indexOf("Under the list.")).toBeGreaterThan(text.indexOf("Other tools"));
+  // Without a host, nothing is added.
+  expect((await w.mount(<ToolsPage />)).text()).not.toContain("the list.");
+});
+
 // ---- Connect and Disconnect ---------------------------------------------------------------------
 
 const CAN = client("claude-code", "Claude Code", { can_connect: true, config: "~/.claude/settings.json" });

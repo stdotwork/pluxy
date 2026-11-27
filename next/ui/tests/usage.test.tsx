@@ -50,6 +50,44 @@ test("a request that succeeded on its one attempt has no story", () => {
   expect(s.next).toBeUndefined();
 });
 
+test("a request that succeeded says why pluxy chose its account, linking the order when that is why", () => {
+  const why = (w: string, fields: Partial<UsageEvent> = {}) =>
+    story(event({ account: "a", why: w, ...fields })).reason;
+  expect(why("only")).toEqual({ text: "aurora is the only account that serves fake-model.", order: false });
+  expect(why("session")).toEqual({
+    text: "aurora answered this conversation's last request, so pluxy kept the conversation there.",
+    order: false,
+  });
+  expect(why("pinned")).toEqual({ text: "The request asked for aurora by name.", order: false });
+  expect(why("first")).toEqual({ text: "aurora comes first in its provider's account order.", order: true });
+  expect(why("backup")).toEqual({
+    text: "aurora is a backup in its provider's account order: no account above it could take the request then.",
+    order: true,
+  });
+  expect(why("only-free")?.text).toBe(
+    "aurora was the only account in the first group that could take it then.",
+  );
+  expect(why("round-robin")?.text).toBe("It was aurora's turn: the accounts in the first group take turns.");
+  expect(why("weighted")?.text).toBe("aurora was next by weight: the first group splits requests by weight.");
+  expect(why("fill-first")?.text).toBe(
+    "aurora is the first account in the first group that could take it: the group fills one first.",
+  );
+  expect(why("least-active")?.text).toBe("aurora had the fewest requests running in the first group.");
+  expect(why("soonest-reset")?.text).toBe(
+    "aurora's limit resets soonest in the first group, so pluxy spends it first.",
+  );
+  // A fallback step's only account serves the fallback's model.
+  expect(
+    why("only", { chain_step: 2, tried: [{ account: "a", provider: "p", model: "m2", result: "ok" }] })?.text,
+  ).toBe("aurora is the only account that serves m2.");
+  // A reason this does not know, and a failed request, say none.
+  expect(why("something-new")).toBeUndefined();
+  expect(why("only", { failed: true, error_code: "upstream" })).toBeUndefined();
+  // A backup that answered first time is marked on its row.
+  expect(story(event({ account: "a", why: "backup" })).note).toBe("backup");
+  expect(story(event({ account: "a", why: "first" })).note).toBeUndefined();
+});
+
 test("a request that succeeded after others failed says how many, and the row says after N others", () => {
   const tried = (n: number) => [
     ...Array.from({ length: n }, () => ({ account: "b", provider: "pluxy/claude", result: "rate_limit" })),
@@ -62,6 +100,21 @@ test("a request that succeeded after others failed says how many, and the row sa
   expect(two.lines).toEqual(["aurora succeeded after 2 other accounts failed."]);
   expect(two.note).toBe("after 2 others");
   expect(two.next).toBeUndefined();
+  // Why the account that answered was chosen, after the others failed.
+  const backup = story(
+    event({
+      account: "a",
+      why: "backup",
+      tried: [
+        { account: "b", provider: "pluxy/claude", result: "rate_limit" },
+        { account: "a", provider: "pluxy/claude", result: "ok" },
+      ],
+    }),
+  );
+  expect(backup.note).toBe("after 1 other");
+  expect(backup.reason?.text).toBe(
+    "aurora is a backup in its provider's account order: no account above it could take the request then.",
+  );
 });
 
 test("a request that went to a fallback says so before the line about the accounts", () => {
@@ -111,7 +164,21 @@ test("a request that failed on every attempt says so, and links the last account
     }),
   );
   expect(s.lines).toEqual(["Every account pluxy tried failed."]);
+  expect(s.leftOut).toEqual([]);
   expect(s.next).toEqual({ kind: "account", account: "b" });
+});
+
+test("a request that failed after trying some accounts also lists those it left out", () => {
+  const s = story(
+    event({
+      failed: true,
+      error_code: "rate_limit",
+      tried: [{ account: "a", provider: "p", result: "rate_limit" }],
+      left_out: [{ account: "b", state: "busy" }],
+    }),
+  );
+  expect(s.lines).toEqual(["aurora failed: Rate limited."]);
+  expect(s.leftOut).toEqual([{ account: "borealis", text: "busy with other requests" }]);
 });
 
 test("a request no account could take lists each account left out, and why", () => {

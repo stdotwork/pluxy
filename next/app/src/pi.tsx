@@ -9,6 +9,7 @@ import { useState } from "preact/hooks";
 import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { strings } from "../../ui/kit/strings";
 import { Button, ConfirmButton, Notice, PageHead } from "../../ui/kit/ui";
+import type { AgentPage } from "./addonItems";
 import { Backups } from "./backups";
 import {
   DefaultModel,
@@ -25,7 +26,6 @@ import {
   useStart,
   useToolSetup,
 } from "./clientPage";
-import type { AgentPage } from "./easyMode";
 import { CLIENT, PACKAGE, pluginNewer, selectionFor, validModel, type Where } from "./piForm";
 
 const t = strings("pi", {
@@ -262,7 +262,6 @@ export const piPage = (): AgentPage => ({
   id: "pi",
   package: PACKAGE,
   dest: "tools",
-  kind: "topic",
   under: "tools",
   title: t("title"),
   tip: t("tip"),

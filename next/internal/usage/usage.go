@@ -91,6 +91,15 @@ type Event struct {
 	// ChainStep is the step of the model's fallback chain the last attempt was for, from 1;
 	// absent for a model with no chain.
 	ChainStep int `json:"chain_step,omitempty"`
+	// Why is why routing chose the last attempt's account over the others that serve the model:
+	// pinned (the request named it), session (it served the conversation's last request), only
+	// (no other account serves the model), first (it is alone in the first group of its
+	// provider's order), only-free (the others in the first group could not take the request
+	// then), backup (no account in the groups above it could), or the routing strategy's name
+	// (round-robin, weighted, fill-first, least-active, soonest-reset) when it chose among several
+	// in the first group. Absent for a request that never reached an account, and in records from
+	// before core kept it.
+	Why string `json:"why,omitempty"`
 	// Attempts is how many accounts the request went to, the number X-Pluxy-Attempts carries;
 	// absent for a request that never reached one.
 	Attempts int `json:"attempts,omitempty"`

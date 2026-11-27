@@ -159,10 +159,12 @@ test("a log that is not written to a file leads to the setting, or turns it on",
     "href",
     "#/config/logging",
   );
-  // The link opens the Logging tab of Config.
+  // The link opens Config at its Logging section.
   await page.getByRole("link", { name: "Logging settings", exact: true }).click();
-  await expect(tab(page, "Logging")).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("switch", { name: "File logging", exact: true })).not.toBeChecked();
+  await expect(page.locator("#logging h2")).toBeInViewport();
+  await expect(
+    page.getByRole("switch", { name: "Write pluxy's log to a file", exact: true }),
+  ).not.toBeChecked();
   // One press on the page itself turns it on.
   await goTo(page, "Logs");
   await page.getByRole("button", { name: "Turn on file logging", exact: true }).click();
@@ -243,7 +245,7 @@ test("a trace with no log says what pluxy keeps and where to switch more on", as
   );
   await detail.getByRole("link", { name: "Logging settings", exact: true }).click();
   await expect(page).toHaveURL(/#\/config\/logging$/);
-  await expect(page.getByLabel("Enable request logging")).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Log every request", exact: true })).toBeInViewport();
 });
 
 test("a request log with long lines scrolls inside its frame", async ({ page }) => {

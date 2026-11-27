@@ -150,7 +150,12 @@ export interface ToolsOptions {
   localPages?: { name: string; page: string }[];
   /** Runs on Refresh, so the host can read its own tools again. */
   onRefresh?: () => void;
+  /** Lines the host puts above and under the list of tools, from the tools it lists. */
+  notes?: ToolNotes;
 }
+
+/** What a host says around the list of tools: above it, and under it. */
+export type ToolNotes = (clients: SetupClient[]) => { above?: ComponentChildren; below?: ComponentChildren };
 
 // ---- keys made on this page -------------------------------------------------------------------
 
@@ -487,6 +492,7 @@ export interface ToolListProps {
   localPages?: ToolsOptions["localPages"];
   /** Runs on Refresh, so the host can read its own tools again. */
   onRefresh?: () => void;
+  notes?: ToolNotes;
   /** The tools are on another computer than the one showing the page. */
   remote?: boolean;
   /** Opens the host's own way to add an account, in place of the link to Add an account. */
@@ -507,17 +513,18 @@ export function ToolListView(
   const { state } = props;
   const setup = state.setup;
   const [open, setOpen] = useState<string>();
-  const [notes, setNotes] = useState<Record<string, RowNote | undefined>>({});
+  const [rowNotes, setRowNotes] = useState<Record<string, RowNote | undefined>>({});
   const remote = props.remote ?? !onThisMachine(host.address);
   const rows = {
     toolAction: props.toolAction,
     extraTools: props.extraTools,
     localPages: props.localPages,
+    notes: props.notes,
     remote,
     open,
     setOpen,
-    notes,
-    setNote: (id: string, note?: RowNote) => setNotes((n) => ({ ...n, [id]: note })),
+    rowNotes,
+    setRowNote: (id: string, note?: RowNote) => setRowNotes((n) => ({ ...n, [id]: note })),
     // A connect or disconnect changed the tool's settings and the keys: both are read again.
     onConnected: () => {
       setup.reload();
@@ -592,12 +599,13 @@ function ToolRows(props: {
   toolAction?: ToolsOptions["toolAction"];
   extraTools?: SetupClient[];
   localPages?: ToolsOptions["localPages"];
+  notes?: ToolNotes;
   remote: boolean;
   open?: string;
   setOpen: (id: string | undefined) => void;
   /** What a Connect or Disconnect said under each row, by tool ID. */
-  notes: Record<string, RowNote | undefined>;
-  setNote: (id: string, note?: RowNote) => void;
+  rowNotes: Record<string, RowNote | undefined>;
+  setRowNote: (id: string, note?: RowNote) => void;
   onConnected: () => void;
   /** When pluxy last scanned; without it the summary has no time. */
   scannedAt?: string;
@@ -614,6 +622,7 @@ function ToolRows(props: {
   const connected = groups.connected.length;
   const installed = shown.length;
   const remote = props.remote;
+  const notes = props.notes?.([...shown, ...groups.other]);
   const row = (client: SetupClient) => {
     const custom = props.toolAction?.(client);
     const hasCustom = custom !== undefined && custom !== null && custom !== false && custom !== "";
@@ -625,7 +634,7 @@ function ToolRows(props: {
     const connect =
       !hasCustom &&
       (byPluxy || (client.can_connect === true && client.installed && client.state !== "configured"));
-    const note = props.notes[client.id];
+    const note = props.rowNotes[client.id];
     // Next to Connect, the steps by hand are the lesser way: a ghost button.
     const toggle = (
       <Button
@@ -644,7 +653,7 @@ function ToolRows(props: {
         <ConnectButtons
           client={client}
           onDone={(n) => {
-            props.setNote(client.id, n);
+            props.setRowNote(client.id, n);
             if (n.tone === "ok") props.setOpen(undefined);
           }}
           onChanged={props.onConnected}
@@ -677,6 +686,7 @@ function ToolRows(props: {
   };
   return (
     <>
+      {notes?.above}
       {props.summary !== false && (
         <p class="tools-summary">
           <span>
@@ -714,6 +724,7 @@ function ToolRows(props: {
       ) : (
         props.appTools && <p class="muted tools-more">{t("appTools")}</p>
       )}
+      {notes?.below}
     </>
   );
 }
@@ -1073,6 +1084,7 @@ export function ToolsPage(props: { options?: ToolsOptions }) {
           toolAction={options?.toolAction}
           extraTools={options?.extraTools}
           localPages={options?.localPages}
+          notes={options?.notes}
           remote={remote}
           state={state}
           made={made}

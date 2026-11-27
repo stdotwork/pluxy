@@ -10,8 +10,12 @@ export interface Reply<T> {
   error?: { code: string; message: string };
 }
 
-/** Things a host may or may not offer; pages hide what the host lacks. */
-export type Feature = "signOut" | "rotateManagementKey";
+/**
+ * Things a host may or may not offer; pages hide what the host lacks. confirmsKeyReplacement: the
+ * host asks the person itself before it replaces the management key (the desktop app's native
+ * confirmation), so the page does not ask too.
+ */
+export type Feature = "signOut" | "rotateManagementKey" | "confirmsKeyReplacement";
 
 export interface Host {
   /**

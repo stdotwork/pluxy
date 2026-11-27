@@ -167,6 +167,15 @@ func (x *invocation) errCell(s string) string {
 	return s
 }
 
+// stderrShows returns how foreign text is written to stderr: escaped as a single-line cell when
+// it is a terminal, as it is otherwise.
+func stderrShows(stderr io.Writer) func(string) string {
+	if stderrIsTerminal(stderr) {
+		return escapeTableCell
+	}
+	return func(s string) string { return s }
+}
+
 // table writes rows as aligned columns, the first row a header. On a terminal each cell is
 // escaped so foreign bytes cannot emit escape sequences or add a column or row.
 func (x *invocation) table(rows [][]string) {
@@ -786,7 +795,7 @@ var commands = []command{
 					x.printf("no matching events\n")
 					return
 				}
-				rows := [][]string{{"SEQ", "TIME", "MODEL", "ACCOUNT", "KEY", "STATUS", "TRIES", "LATENCY", "TOKENS"}}
+				rows := [][]string{{"SEQ", "TIME", "MODEL", "ACCOUNT", "KEY", "STATUS", "TRIES", "WHY", "LATENCY", "TOKENS"}}
 				for _, ev := range r.Events {
 					status := strconv.Itoa(ev.Status)
 					if ev.Status == 0 {
@@ -816,6 +825,7 @@ var commands = []command{
 						dash(ev.KeyID),
 						status,
 						tries,
+						dash(ev.Why),
 						fmt.Sprintf("%dms", ev.LatencyMS),
 						tokens,
 					})

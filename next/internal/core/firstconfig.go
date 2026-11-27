@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
-	"os"
 	"path/filepath"
 	"strconv"
 
 	"github.com/stdotwork/pluxy/next/internal/cred"
+	"github.com/stdotwork/pluxy/next/internal/home"
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
 
@@ -29,10 +29,14 @@ type FirstConfig struct {
 
 // WriteFirstConfig writes a new config file at path for a core that has none: it listens on
 // 127.0.0.1, with one new client key and a new management key, and only this user can read
-// it. port is the port to listen on; with port -1 it is DefaultPort when that is free and a
-// free one when it is taken, and with port 0 a free one. It never replaces a file at path
-// (the error is then fs.ErrExist), and writes JSON only: a config.yaml is today's core's,
-// written by a person.
+// it. Its folder is made when it is missing, and refused when it is a link, belongs to another
+// user, or on unix its mode lets group or others write in it (home.OpenDir: on Windows such a
+// folder is made private instead; the error is then a *home.Refusal). Only that folder is
+// checked, not those above it, and on macOS by its mode bits, not its access list. Only this
+// first write checks it: a config already there is used without a check. port is the port to
+// listen on; with port -1 it is DefaultPort when that is free and a free one when it is taken,
+// and with port 0 a free one. It never replaces a file at path (the error is then fs.ErrExist), and writes JSON
+// only: a config.yaml is today's core's, written by a person.
 func WriteFirstConfig(path string, port int) (FirstConfig, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -56,10 +60,13 @@ func WriteFirstConfig(path string, port int) (FirstConfig, error) {
 	if err != nil {
 		return FirstConfig{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+	dir := filepath.Dir(abs)
+	root, err := home.OpenDir(dir)
+	if err != nil {
 		return FirstConfig{}, err
 	}
-	if err := cred.CreatePrivate(abs, append(b, '\n')); err != nil {
+	defer root.Close()
+	if err := cred.CreatePrivateIn(root, dir, filepath.Base(abs), append(b, '\n')); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return FirstConfig{}, &fs.PathError{Op: "write a first config", Path: abs, Err: fs.ErrExist}
 		}

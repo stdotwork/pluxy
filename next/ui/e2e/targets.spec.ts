@@ -106,7 +106,7 @@ const PAGES = [
   "Requests",
   "Usage",
   "Setup",
-  "Config Panel",
+  "Config",
   "System",
   "Extensions",
   "Themes",

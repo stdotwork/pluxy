@@ -6,6 +6,7 @@
 import { useState } from "preact/hooks";
 import { strings } from "../../ui/kit/strings";
 import { PageHead } from "../../ui/kit/ui";
+import type { AgentPage } from "./addonItems";
 import { Backups } from "./backups";
 import {
   DefaultModel,
@@ -21,7 +22,6 @@ import {
   useStart,
   useToolSetup,
 } from "./clientPage";
-import type { AgentPage } from "./easyMode";
 import { CLIENT, modelOf, PACKAGE, type ReadBack, validModel } from "./ompForm";
 
 const t = strings("omp", {
@@ -187,7 +187,6 @@ export const ompPage = (): AgentPage => ({
   id: "omp",
   package: PACKAGE,
   dest: "tools",
-  kind: "topic",
   under: "tools",
   title: t("title"),
   tip: t("tip"),

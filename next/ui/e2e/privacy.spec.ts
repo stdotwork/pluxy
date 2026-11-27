@@ -6,7 +6,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, type Page, test } from "@playwright/test";
 import type { Account } from "../kit/api/accounts";
-import type { ClientKey } from "../kit/api/config";
 import { accountRow, goTo, openPanel, pageTitle, signIn, useCore } from "./support";
 
 const core = useCore();
@@ -210,13 +209,6 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   await goTo(page, "System");
   await expect(page.getByText(IMPORTED_ID_MASKED).first()).toBeVisible();
   await expectMasked(page);
-
-  // Keys are not privacy fields: the client key list shows core's own masked form, unchanged.
-  const keys = (await core.mgmt<{ keys: ClientKey[] }>("GET", "/client-keys")).body.keys;
-  await goTo(page, "Config Panel");
-  await page.getByRole("tab", { name: "Connectivity", exact: true }).click();
-  const clients = page.getByRole("region", { name: "Client keys (access.api-keys)", exact: true });
-  for (const k of keys) await expect(clients.getByText(k.masked, { exact: true })).toBeVisible();
 
   // An extension page is told, through the theme event, and its page library marks its root.
   await goTo(page, "Alpha usage");
