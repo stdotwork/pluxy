@@ -60,6 +60,12 @@ async function addSamples(page: Page) {
       notice.textContent = `${tone} notice`;
       host.append(notice);
     }
+    const stale = document.createElement("div");
+    stale.className = "home-body";
+    stale.dataset.stale = "";
+    stale.innerHTML =
+      '<div class="home-fade"><div class="card"><span class="account-sub"><span class="account-word">Serving</span></span><p class="pool-foot"><span>2 of 3 serving</span></p></div></div>';
+    host.append(stale);
     document.querySelector("main")?.prepend(host);
   });
 }
@@ -105,6 +111,8 @@ for (const theme of THEMES) {
           "#look-samples thead th",
           '#look-samples .plan-pill[data-plan-tier="mid"]',
           '#look-samples .plan-pill[data-plan-tier="free"]',
+          "#look-samples .home-body[data-stale] .home-fade .account-word",
+          "#look-samples .home-body[data-stale] .home-fade .pool-foot span",
         ].join(", "),
       );
       const measured = await measureContrast(parts);
