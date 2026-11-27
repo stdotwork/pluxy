@@ -186,13 +186,13 @@ test("a scan ending or an account appearing does not move the open step", async 
   expect(steps(m.root).map((s) => attribute(s, "data-state"))).toEqual(["open", "done", "todo"]);
 });
 
-test("Skip and Continue open the next step and move focus to its heading; a step in the row of steps opens that step", async () => {
+test("Continue opens the next step and moves focus to its heading; a step in the row of steps opens that step", async () => {
   const w = world();
   const m = await w.mount(<SetupPage />);
-  await press(buttonIn(step(m.root, 1), "Skip"));
+  await press(buttonIn(step(m.root, 1), "Continue"));
   expect(openStep(m.root)).toBe(2);
   expect(m.document.activeElement).toBe(heading(m.root, 2));
-  await press(buttonIn(step(m.root, 2), "Skip"));
+  await press(buttonIn(step(m.root, 2), "Continue"));
   expect(openStep(m.root)).toBe(3);
   expect(m.document.activeElement).toBe(heading(m.root, 3));
   await goTo(m.root, 1);
@@ -204,8 +204,8 @@ test("Skip and Continue open the next step and move focus to its heading; a step
 test("Back goes to the step before and moves focus to its heading; step 1 has none", async () => {
   const m = await world().mount(<SetupPage />);
   expect(hasButton(step(m.root, 1), "Back")).toBe(false);
-  await press(buttonIn(step(m.root, 1), "Skip"));
-  await press(buttonIn(step(m.root, 2), "Skip"));
+  await press(buttonIn(step(m.root, 1), "Continue"));
+  await press(buttonIn(step(m.root, 2), "Continue"));
   await press(buttonIn(step(m.root, 3), "Back"));
   expect(openStep(m.root)).toBe(2);
   expect(m.document.activeElement).toBe(heading(m.root, 2));
@@ -214,18 +214,20 @@ test("Back goes to the step before and moves focus to its heading; step 1 has no
   expect(m.document.activeElement).toBe(heading(m.root, 1));
 });
 
-test("every step can be skipped: Skip on steps 1 and 2, Finish without testing on step 3", async () => {
+test("every step can be skipped: quiet Continue on steps 1 and 2, Finish without testing on step 3", async () => {
   const m = await world().mount(<SetupPage />);
-  expect(hasButton(step(m.root, 1), "Skip")).toBe(true);
-  await press(buttonIn(step(m.root, 1), "Skip"));
-  expect(hasButton(step(m.root, 2), "Skip")).toBe(true);
-  await press(buttonIn(step(m.root, 2), "Skip"));
+  expect(hasButton(step(m.root, 1), "Skip")).toBe(false);
+  expect(attribute(buttonIn(step(m.root, 1), "Continue"), "data-variant")).toBe("quiet");
+  await press(buttonIn(step(m.root, 1), "Continue"));
+  expect(hasButton(step(m.root, 2), "Skip")).toBe(false);
+  expect(attribute(buttonIn(step(m.root, 2), "Continue"), "data-variant")).toBe("quiet");
+  await press(buttonIn(step(m.root, 2), "Continue"));
   expect(hasButton(step(m.root, 3), "Finish without testing")).toBe(true);
   expect(hasButton(m.root, "Finish later")).toBe(true);
   expect(m.text()).toContain("Finish later leaves a reminder on Home. Setup stays under Settings.");
 });
 
-test("Continue, not Skip, once a step is done", async () => {
+test("Continue is filled once a step is done", async () => {
   const m = await world({ accounts: [ACC], clients: [CONNECTED] }).mount(<SetupPage />);
   await goTo(m.root, 1);
   expect(attribute(buttonIn(step(m.root, 1), "Continue"), "data-variant")).toBe("primary");
@@ -438,7 +440,7 @@ test("a key made in step 2 is gone once the person leaves the step: back on it, 
 
 test("with no account, step 2's notice opens step 1", async () => {
   const m = await world().mount(<SetupPage />);
-  await press(buttonIn(step(m.root, 1), "Skip"));
+  await press(buttonIn(step(m.root, 1), "Continue"));
   const two = step(m.root, 2);
   expect(two.textContent).toContain(
     "pluxy has no accounts yet, so a coding tool you set up here will get errors.",

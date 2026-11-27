@@ -1467,8 +1467,8 @@ page ([`../ui`](../ui/README.md), `#/setup`) in place of Home when the window's 
 names no page, as the web panel does: three steps, the person's AI accounts, their coding tool,
 and one test request. It opens once the app is connected and signed in, so the first launch screen
 still comes first. On a first run it is the same focused window as the first launch, with no
-frame: one step at a time under a row of the three, Back and Continue (Skip while a step is not
-done), and Finish later, which leaves a card on Home until setup is finished or the card hidden.
+frame: one step at a time under a row of the three, Back and Continue (quiet while a step is not
+done, filled after), and Finish later, which leaves a card on Home until setup is finished or the card hidden.
 After the first run the page stays among the Settings topics, in the frame, as a checklist with
 every step folded.
 

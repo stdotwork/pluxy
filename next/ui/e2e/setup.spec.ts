@@ -87,7 +87,9 @@ test("a first run opens Setup and its three steps lead to Finish setup and Home"
   const keys = await core.mgmt<{ keys: { id: string; label?: string }[] }>("GET", "/client-keys");
   expect(keys.body.keys.map((k) => k.label)).toContain("Claude Code");
   await expect(text).not.toContainText("<client-key>");
-  await two.locator(".setup-next").getByRole("button", { name: "Skip", exact: true }).click();
+  const next2 = two.locator(".setup-next").getByRole("button", { name: "Continue", exact: true });
+  await expect(next2).toHaveAttribute("data-variant", "quiet");
+  await next2.click();
 
   // Step 3: one test request through the account passes.
   const three = page.getByRole("region", { name: "Check it works" });

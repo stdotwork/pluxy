@@ -55,7 +55,6 @@ const t = strings("setup", {
   stepOf: "Step {n} of 3",
   open: "Open",
   continue: "Continue",
-  skip: "Skip",
   back: "Back",
   done: "Done",
   toolsUse: { one: "{tools} uses pluxy.", other: "{tools} use pluxy." },
@@ -201,8 +200,8 @@ function ToolsStep(props: Omit<Parameters<typeof ToolListView>[0], "made">) {
 }
 
 /**
- * Continue once the step is done, else Skip; both open the next step. On the first run it is the
- * card's foot, with Back at its start.
+ * Continue opens the next step: quiet until the step is done, filled after. On the first run it is
+ * the card's foot, with Back at its start.
  */
 function Next(props: {
   done: boolean;
@@ -222,7 +221,7 @@ function Next(props: {
       )}
       {props.children}
       <Button variant={props.done ? "primary" : "quiet"} onClick={props.onNext}>
-        {props.done ? t("continue") : t("skip")}
+        {t("continue")}
       </Button>
     </div>
   );
