@@ -19,7 +19,7 @@ const t = strings("system", {
   built: "Built",
   address: "Address",
   settingsFile: "Settings file",
-  inUse: "In use",
+  inUse: "pluxy is using it as it is saved.",
   notInUse:
     "pluxy is not using the latest version of its settings file: {error}. It keeps working with the version before.",
   unknown: "Unknown",

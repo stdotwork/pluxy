@@ -35,7 +35,7 @@ test("a first run opens Setup and its three steps lead to Finish setup and Home"
   await expect(kind.getByRole("checkbox")).toBeChecked();
   await expect(kind).toContainText("Claude Code is installed on this computer");
   await one.getByRole("button", { name: "Add Claude", exact: true }).click();
-  await expect(one).toContainText("Added: Claude.");
+  await expect(one).toContainText("pluxy can now connect to Claude.");
   const packages = await core.mgmt<{ packages: { id: string; enabled: boolean }[] }>("GET", "/packages");
   expect(packages.body.packages).toContainEqual(
     expect.objectContaining({ id: "pluxy/claude", enabled: true }),

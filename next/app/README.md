@@ -1684,10 +1684,10 @@ stand-in `claude` printing `2.4.1 (Claude Code)` first on the PATH it inherits f
 curated registry offers the Claude Code page's package (`native/first-run.ts`). The window opens
 on Setup by itself (`#/setup`, "Set up pluxy") with step 1 open; the Claude kind is ticked,
 saying Claude Code is installed on this computer; "Add Claude" adds it, step 1 then says
-"Added: Claude.", and `GET /packages` through the app's host lists it; step 2's Claude Code row
+"pluxy can now connect to Claude.", and `GET /packages` through the app's host lists it; step 2's Claude Code row
 has the app's "Set up" link to `#/claude-code`, and pressing it opens the app's Claude Code page;
 back on `#/setup`, "Leave setup for now" lands on Home and `GET /setup` has `first_run` false. The next launch opens on Home; Setup, opened, is titled "Setup" with
-every step folded and no "Leave setup for now", and step 1 says Claude is added. The session keeps a
+every step folded and no "Leave setup for now", and step 1 says pluxy can connect to Claude. The session keeps a
 screenshot of each screen it holds (the kind found, after Add, step 2, finished) and ends on that
 page in GTK's dark variant.
 
