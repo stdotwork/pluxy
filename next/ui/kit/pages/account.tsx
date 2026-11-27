@@ -64,7 +64,7 @@ const t = strings("account", {
   notFound: "This account is not in pluxy.",
   notFoundText: "It may have been removed.",
   back: "Back to accounts",
-  serving: "Serving.",
+  serving: "Serving",
   said: "“{error}”",
   saidAt: "“{error}”, {when}",
   brokenFix:

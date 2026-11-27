@@ -88,7 +88,7 @@ test("an account's page: a model cooling down, the models it serves, a test requ
   await expect(result).toContainText(/[0-9]+ ms/);
   // Clear cooldown asks nothing: nothing is lost.
   await opening(page).getByRole("button", { name: "Clear cooldown", exact: true }).click();
-  await expect(opening(page)).toContainText("Serving.");
+  await expect(opening(page).locator(".account-state-text")).toHaveText("Serving");
   const r = await core.mgmt<{ accounts: { id: string; cooldowns?: unknown[] }[] }>("GET", "/accounts");
   expect(r.body.accounts.find((a) => a.id === "tools-key")?.cooldowns ?? []).toEqual([]);
   await tools.getByLabel("Test with").selectOption("server-error");

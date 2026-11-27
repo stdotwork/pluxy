@@ -303,7 +303,7 @@ test("an account not in pluxy says so and leads back to the list", async () => {
 
 test("when the status cannot be read, the opening does not say Serving and the page says why", async () => {
   const page = await open(account(), undefined, { status: [hiccup] });
-  expect(page.text()).not.toContain("Serving.");
+  expect(page.text()).not.toContain("Serving");
   expect(page.text()).toContain("pluxy could not check whether Claude is running.");
   expect(page.text()).toContain("Could not check which providers are running.");
   expect(controls(page.root, "Try again")).toHaveLength(1);
@@ -548,6 +548,10 @@ test("the page renders the header mark, plan pill, full-width limits with pace a
   );
   expect(pill?.textContent).toBe("Max 20x");
   expect(pill?.attributes.find((a) => a.name === "data-plan-tier")?.value).toBe("top");
+  const stateText = all(page.root, "span").find((n) =>
+    n.attributes.some((a) => a.name === "class" && a.value === "account-state-text"),
+  );
+  expect(stateText?.textContent).toBe("Serving");
   // Limits with reset times, pace ticks, pace lines, and USD balance without a bar.
   expect(page.text()).toContain("18% left");
   expect(page.text()).toContain("80% left");
