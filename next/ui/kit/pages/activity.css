@@ -230,10 +230,12 @@
     display: flex;
     align-items: center;
     gap: calc(var(--s) * 2);
+    max-width: 18em;
     min-width: 0;
   }
 
   .req-account-name {
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -272,8 +274,8 @@
     }
   }
 
-  /* A narrow list drops the key and the tokens (the pane has them), a narrower one the time taken
-     and some of the width of the names, and the narrowest the detour's note too. */
+  /* A narrow list drops the key and the tokens (the pane has them), and a narrower one the time
+     taken and some of the width of the names; the detour chip stays while the account name shrinks. */
   @container (max-width: 1040px) {
     .req-key,
     .req-tokens {
@@ -290,23 +292,24 @@
       max-width: 16em;
     }
 
-    .req-account {
+    .req-account,
+    .req-account-box {
       max-width: 13em;
     }
   }
 
   @container (max-width: 520px) {
     .req-model {
-      max-width: 12em;
+      max-width: 11em;
     }
 
-    .req-account {
-      max-width: 9em;
+    .req-account,
+    .req-account-box {
+      max-width: 11em;
     }
 
-    /* The detour's note is in the pane; the failure's word is the result column's, and stays. */
-    .req-account-box .word-chip {
-      display: none;
+    .req-account-box {
+      gap: calc(var(--s) * 1.5);
     }
   }
 

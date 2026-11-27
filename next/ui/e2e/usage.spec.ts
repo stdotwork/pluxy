@@ -472,3 +472,55 @@ test("the Usage chart keeps one bar in the tab order after switching to a shorte
   await page.keyboard.press("ArrowLeft");
   await expect(bars.nth(5)).toBeFocused();
 });
+
+test("a narrow Requests list keeps the detour chip visible and shrinks the account name", async ({
+  page,
+}) => {
+  const long = "alpha-shared-research-workspace-account-with-a-deliberately-very-long-name-0123456789";
+  await page.route("**/v0/management/usage/events?*", (route) =>
+    route.fulfill({
+      json: {
+        events: [
+          {
+            seq: 1,
+            id: "trace-backup",
+            timestamp: new Date().toISOString(),
+            endpoint: "/v1/chat/completions",
+            stream: false,
+            model: "fake-model",
+            provider: "test/alpha",
+            account: long,
+            why: "backup",
+            failed: false,
+            status: 200,
+            latency_ms: 85,
+          },
+        ],
+        next: 1,
+        more: false,
+        lost: false,
+      },
+    }),
+  );
+  await page.setViewportSize({ width: 560, height: 800 });
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/activity`);
+  const listWidth = await page.locator(".activity-list").evaluate((el) => el.getBoundingClientRect().width);
+  expect(listWidth).toBeLessThanOrEqual(520);
+  const chip = rows(page).first().locator(".req-account-box .word-chip");
+  await expect(chip).toBeVisible();
+  await expect(chip).toHaveText("via backup");
+  const layout = await rows(page)
+    .first()
+    .evaluate((tr) => {
+      const name = tr.querySelector<HTMLElement>(".req-account-name");
+      const chipEl = tr.querySelector<HTMLElement>(".req-account-box .word-chip");
+      return {
+        nameShrunk: name ? name.scrollWidth > name.clientWidth : false,
+        chipFits: chipEl ? chipEl.scrollWidth <= chipEl.clientWidth + 1 : false,
+      };
+    });
+  expect(layout.nameShrunk).toBe(true);
+  expect(layout.chipFits).toBe(true);
+});
