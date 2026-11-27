@@ -201,7 +201,7 @@ export function RequestPane(props: {
             data-variant="primary"
             href={accountHref(props.idOf(story.next.account))}
           >
-            {t("openAccount", { account: name(story.next.account) })}
+            <span class="btn-label">{t("openAccount", { account: name(story.next.account) })}</span>
           </a>
         </p>
       )}
@@ -214,7 +214,7 @@ export function RequestPane(props: {
             data-variant="primary"
             href={`#/logs/${encodeURIComponent(e.id)}`}
           >
-            {t("openLog")}
+            <span class="btn-label">{t("openLog")}</span>
           </a>
         </p>
       )}
@@ -227,7 +227,7 @@ export function RequestPane(props: {
             data-variant="quiet"
             href={accountHref(props.idOf(e.account))}
           >
-            {t("openAccount", { account: name(e.account) })}
+            <span class="btn-label">{t("openAccount", { account: name(e.account) })}</span>
           </a>
         </p>
       )}
