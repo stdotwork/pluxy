@@ -124,8 +124,9 @@
     margin: 0;
   }
 
-  .tools-fade[data-stale] {
-    opacity: 0.7;
+  /* Under a stale notice, words keep their normal colours; only marks fade. */
+  .tools-fade[data-stale] .tool-mark-tile {
+    opacity: 0.6;
   }
 
   .tools-none {
