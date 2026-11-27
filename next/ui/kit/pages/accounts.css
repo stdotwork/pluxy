@@ -15,9 +15,17 @@
     min-width: 0;
   }
 
-  /* Over data from an earlier read, when a refresh failed: dimmed under the notice that says so. */
-  .accounts-page[data-stale] .accounts-fade {
-    opacity: 0.7;
+  /* Over data from an earlier read, when a refresh failed: words keep their normal colours so
+     text stays at 4.5:1; only bars and marks fade under the stale notice. */
+  .accounts-page[data-stale]
+    :is(
+      .accounts-state-bar,
+      .accounts-fade .pool-bar,
+      .accounts-fade .meter,
+      .accounts-fade .account-mark,
+      .accounts-fade .pool-head .provider-mark
+    ) {
+    opacity: 0.6;
   }
 
   .accounts-pane.card,
