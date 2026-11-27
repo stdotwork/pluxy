@@ -94,8 +94,10 @@ test("not running: each reason has its own word, and a click opens Where pluxy r
     "box.example:8317",
     open,
   ]);
-  expect(says({ ...base, mode: "remote", target, error: "core refused this key" })[1]).toBe("Not signed in");
-  expect(says({ ...base, mode: "remote", target, error: "the connection to core timed out" })).toEqual([
+  expect(says({ ...base, mode: "remote", target, error: "This management key was not accepted." })[1]).toBe(
+    "Not signed in",
+  );
+  expect(says({ ...base, mode: "remote", target, error: "The connection to pluxy timed out." })).toEqual([
     "down",
     "Not answering",
     "box.example:8317",

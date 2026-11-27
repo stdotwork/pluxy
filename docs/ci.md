@@ -18,6 +18,18 @@ When you add a workflow, add a row here. A workflow that must pass before a merg
 runs through `ci.yml`: give it a `workflow_call` trigger instead of a `pull_request` one, add a
 path case and a job for it in `ci.yml`, and add the job to `gate`'s `needs`.
 
+## The `full-ci` label
+
+The heavy jobs are `next-app.yml`'s Linux native build and shards, and all of
+`next-app-platforms.yml` (Windows and macOS). Together they use about half of the hosted runner
+minutes.
+
+- A pull request's run leaves them out, unless the pull request has the `full-ci` label.
+- A merge-queue group always runs them, so nothing merges without them.
+- Adding the label starts `ci.yml` again, so the heavy jobs run on the pull request at once.
+- Label a pull request whose change is mainly native or platform code, so its failures show before
+  it is queued. Docs, core-only and CI pull requests go without it.
+
 ## Where jobs run
 
 By default every job runs on GitHub's own runners. Two repository variables send some jobs to

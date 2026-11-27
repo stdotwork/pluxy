@@ -27,9 +27,10 @@ export interface Core {
  *
  * firstRun starts core as a new install: nothing installed, no accounts, a home folder of its own
  * and only a claude program on its PATH (panelcore's -first-run). cpa, with firstRun, puts a
- * CLIProxyAPI setup of made-up accounts in that home folder (panelcore's -cpa).
+ * CLIProxyAPI setup of made-up accounts in that home folder (panelcore's -cpa). listen is the
+ * address core listens on (panelcore's -listen; default a random loopback port).
  */
-export function useCore(options: { firstRun?: boolean; cpa?: boolean } = {}): Core {
+export function useCore(options: { firstRun?: boolean; cpa?: boolean; listen?: string } = {}): Core {
   let proc: ChildProcess | undefined;
   const core: Core = {
     base: "",
@@ -48,7 +49,11 @@ export function useCore(options: { firstRun?: boolean; cpa?: boolean } = {}): Co
   };
 
   test.beforeAll(async () => {
-    const flags = [...(options.firstRun ? ["-first-run"] : []), ...(options.cpa ? ["-cpa"] : [])];
+    const flags = [
+      ...(options.firstRun ? ["-first-run"] : []),
+      ...(options.cpa ? ["-cpa"] : []),
+      ...(options.listen ? ["-listen", options.listen] : []),
+    ];
     const p = spawn("go", ["run", "./e2e/panelcore", ...flags], {
       cwd: join(import.meta.dirname, "..", ".."),
       stdio: ["pipe", "pipe", "inherit"],
