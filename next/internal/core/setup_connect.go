@@ -342,6 +342,27 @@ func (t *toolFile) write(data []byte, mode fs.FileMode) error {
 	return t.read()
 }
 
+// narrow sets the mode of the file read, unchanged, to mode: the file holds a key, which only its
+// owner may read. It refuses when the file is no longer the one read.
+func (t *toolFile) narrow(mode fs.FileMode) error {
+	if t.root == nil || t.info == nil {
+		return fmt.Errorf("%s is gone", t.display)
+	}
+	f, err := t.root.OpenFile(t.name, os.O_RDONLY|readNoWait, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(t.info, st) {
+		return fmt.Errorf("%s changed while pluxy was changing it; try again", t.display)
+	}
+	return f.Chmod(mode)
+}
+
 func (t *toolFile) close() {
 	if t.root != nil {
 		t.root.Close()
@@ -516,21 +537,27 @@ func (c *Core) ConnectClient(tool, label string) (management.ClientConnection, e
 		if f.info != nil {
 			mode = f.info.Mode().Perm() &^ 0o077 // the file holds a key now: its owner's alone
 		}
-		if change != management.ClientFileUnchanged {
-			if err := f.write(outs[i], mode); err != nil {
-				// Put back the files already written, then what was kept before.
-				for j := range i {
-					back := next.Files[j]
-					if !back.Existed {
-						_ = files[j].write(nil, 0)
-					} else {
-						_ = files[j].write(back.Original, back.Mode)
-					}
+		var err error
+		switch {
+		case change != management.ClientFileUnchanged:
+			err = f.write(outs[i], mode)
+		case f.info.Mode().Perm()&0o077 != 0:
+			// The bytes are already what connect writes, but others may read the key in them.
+			err = f.narrow(mode)
+		}
+		if err != nil {
+			// Put back the files already written, then what was kept before.
+			for j := range i {
+				back := next.Files[j]
+				if !back.Existed {
+					_ = files[j].write(nil, 0)
+				} else {
+					_ = files[j].write(back.Original, back.Mode)
 				}
-				_ = c.setup.saveRecord(id, rec)
-				dropKey()
-				return fail(err)
 			}
+			_ = c.setup.saveRecord(id, rec)
+			dropKey()
+			return fail(err)
 		}
 		reply.Files = append(reply.Files, management.ClientConnectionFile{Path: f.display, Change: change})
 	}

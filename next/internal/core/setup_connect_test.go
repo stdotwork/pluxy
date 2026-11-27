@@ -5,11 +5,13 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/management"
 )
@@ -317,7 +319,8 @@ func clientKeys(t *testing.T, h http.Handler) []management.ClientKey {
 
 // Connect and Disconnect through the management API on real files: the file changed with a key
 // made for the tool, a private record of the file as it was, the file given back as it was by
-// Disconnect (its mode too) and the key made for it removed; a second connect keeps the key.
+// Disconnect (its mode too) and the key made for it removed; a second connect keeps the key and
+// makes the file its owner's alone again.
 func TestConnectDisconnectClaudeCode(t *testing.T) {
 	home := connectHome(t)
 	h, cfgPath := startManagementCore(t, `{"listen":"127.0.0.1:8317","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
@@ -373,10 +376,22 @@ func TestConnectDisconnectClaudeCode(t *testing.T) {
 		t.Errorf("record mode = %v, want 0600", fi.Mode().Perm())
 	}
 
-	// Again: the key the file holds is kept, nothing changes.
+	// Again, on the file made readable by others since: the key the file holds is kept, the bytes
+	// do not change, and the file is its owner's alone again.
+	if err := os.Chmod(settings, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	code, again, body := connectCall(t, h, "connect", "claude-code")
 	if code != http.StatusOK || again.KeyMade || again.Files[0].Change != management.ClientFileUnchanged || len(clientKeys(t, h)) != 2 {
 		t.Errorf("connect again = %d %+v %s", code, again, body)
+	}
+	if after, _ := os.ReadFile(settings); string(after) != string(b) {
+		t.Errorf("settings changed on connect again:\n%s", after)
+	}
+	if runtime.GOOS != "windows" {
+		if fi, _ := os.Stat(settings); fi.Mode().Perm() != 0o600 {
+			t.Errorf("settings mode after connect again on a 0644 file = %v, want 0600: it holds a key", fi.Mode().Perm())
+		}
 	}
 
 	code, off, body := connectCall(t, h, "disconnect", "claude-code")
@@ -402,8 +417,8 @@ func TestConnectDisconnectClaudeCode(t *testing.T) {
 	}
 }
 
-// Codex with no folder yet: Connect makes ~/.codex (0700) and the file (0600); Disconnect takes
-// both away again.
+// Codex with no folder yet: Connect makes ~/.codex (0700) and the file (0600), a connect again
+// makes the file 0600 again when it was opened up since; Disconnect takes both away again.
 func TestConnectDisconnectCodexNoFolder(t *testing.T) {
 	home := connectHome(t)
 	h, _ := startManagementCore(t, `{"listen":"127.0.0.1:8317","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
@@ -431,6 +446,19 @@ func TestConnectDisconnectCodexNoFolder(t *testing.T) {
 	}
 	if _, state := inspectCodex(home, connectURL); state != stateConfigured {
 		t.Errorf("config after connect reads %q", state)
+	}
+	// Connect again on the file made readable by others: unchanged, and its owner's alone again.
+	toml := filepath.Join(dir, "config.toml")
+	if err := os.Chmod(toml, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, again, body := connectCall(t, h, "connect", "codex"); code != http.StatusOK || again.KeyMade || again.Files[0].Change != management.ClientFileUnchanged {
+		t.Errorf("connect again = %d %+v %s", code, again, body)
+	}
+	if runtime.GOOS != "windows" {
+		if fi, err := os.Stat(toml); err != nil || fi.Mode().Perm() != 0o600 {
+			t.Errorf("config.toml mode after connect again on a 0644 file = %v (%v), want 0600: it holds a key", fi.Mode().Perm(), err)
+		}
 	}
 	code, off, body := connectCall(t, h, "disconnect", "codex")
 	if code != http.StatusOK || off.Files[0].Change != management.ClientFileRemoved {
@@ -483,6 +511,42 @@ func TestConnectRefusesLinks(t *testing.T) {
 	}
 }
 
+// A settings file Connect cannot change (one it would have to guess at) is refused after the key
+// for the tool is made: the key goes again, and the file, the config's keys and the records stay as
+// they were.
+func TestConnectRefusedFileLeavesNoKey(t *testing.T) {
+	home := connectHome(t)
+	h, cfgPath := startManagementCore(t, `{"listen":"127.0.0.1:8317","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
+	files := map[string]string{
+		"claude-code": filepath.Join(home, ".claude", "settings.json"),
+		"codex":       filepath.Join(home, ".codex", "config.toml"),
+	}
+	refused := map[string]string{
+		"claude-code": `{"env": `,
+		"codex":       "[model_providers]\npluxy = { base_url = \"http://x/v1\" }\n",
+	}
+	cfgBefore, _ := os.ReadFile(cfgPath)
+	for tool, p := range files {
+		writeTestFile(t, p, refused[tool])
+		rec := manageCall(t, h, http.MethodPost, "/setup/clients/"+tool+"/connect", "")
+		if rec.Code != http.StatusUnprocessableEntity || errorCodeOf(t, rec) != "refused" {
+			t.Errorf("connect %s on a file it cannot change = %d %s, want 422 refused", tool, rec.Code, rec.Body)
+		}
+		if b, _ := os.ReadFile(p); string(b) != refused[tool] {
+			t.Errorf("%s's file changed on a refused connect: %q", tool, b)
+		}
+		if keys := clientKeys(t, h); len(keys) != 1 {
+			t.Errorf("client keys after a refused connect of %s = %+v, want the one there was", tool, keys)
+		}
+	}
+	if cfg, _ := os.ReadFile(cfgPath); !strings.Contains(string(cfg), "fake-client-key-1") || strings.Count(string(cfg), "sk-") != strings.Count(string(cfgBefore), "sk-") {
+		t.Errorf("config after refused connects:\n%s", cfg)
+	}
+	if entries, err := os.ReadDir(filepath.Join(filepath.Dir(cfgPath), "state", "tools")); err == nil && len(entries) > 0 {
+		t.Errorf("records after refused connects: %v", entries)
+	}
+}
+
 // ownAddr is an address of one of this machine's interfaces other than loopback, for the address
 // a browser on another machine reaches core by; the test skips without one.
 func ownAddr(t *testing.T) string {
@@ -497,56 +561,130 @@ func ownAddr(t *testing.T) string {
 	return ""
 }
 
-// A tool's address matches core's when it reaches that core: for a core on every interface, any
-// loopback host or address of this machine, such as the one the panel was reached by; for a core
-// on one address, that address alone.
+// A tool's address matches core's when it reaches that core: for a core on every interface, a
+// loopback address or another address of this machine of the listener's family, or of either
+// family when the listener takes both, and localhost only then; for a core on one address, that
+// address alone; for a core whose address is not known, no address.
 func TestAtCore(t *testing.T) {
 	own := ownAddr(t)
+	own4 := netip.MustParseAddr(own).Unmap().Is4()
+	ownURL := "http://" + net.JoinHostPort(own, "8317")
 	every4, every6, one := coreAddress("0.0.0.0:8317", false), coreAddress("[::]:8317", false), coreAddress("10.0.0.2:8317", false)
-	for _, c := range []struct {
+	type match struct {
 		address, core string
 		want          bool
-	}{
-		{"http://127.0.0.1:8317", every4, true},
-		{"http://localhost:8317", every4, true},
-		{"http://[::1]:8317", every6, true},
-		{"http://" + net.JoinHostPort(own, "8317"), every4, true},
-		{"http://" + net.JoinHostPort(own, "8317"), every6, true},
-		{"http://" + net.JoinHostPort(own, "8317"), coreAddress(":8317", false), true},
-		{"http://198.51.100.9:8317", every4, false}, // not this machine
-		{"http://127.0.0.1:8318", every4, false},
-		{"https://127.0.0.1:8317", every4, false},
-		{"http://127.0.0.1:8317/", every4, false},
-		{"http://127.0.0.1", every4, false},
-		{"http://10.0.0.2:8317", one, true},
-		{"http://127.0.0.1:8317", one, false}, // core is not on loopback
-		{"http://localhost:8317", coreAddress("127.0.0.1:8317", false), false},
-		{"https://127.0.0.1:8317", coreAddress("127.0.0.1:8317", true), true},
-		{"http://anything", "", true},
-	} {
-		if got := atCore(c.address, c.core); got != c.want {
-			t.Errorf("atCore(%q, %q) = %v, want %v", c.address, c.core, got, c.want)
+	}
+	check := func(t *testing.T, cases []match) {
+		t.Helper()
+		for _, c := range cases {
+			if got := atCore(c.address, c.core); got != c.want {
+				t.Errorf("atCore(%q, %q) = %v, want %v", c.address, c.core, got, c.want)
+			}
 		}
 	}
+	dualStack := func(t *testing.T, both bool) {
+		was := wildcardDualStack
+		wildcardDualStack = func() bool { return both }
+		t.Cleanup(func() { wildcardDualStack = was })
+	}
+
+	// Whether the listener takes both families or not.
+	for _, both := range []bool{false, true} {
+		dualStack(t, both)
+		check(t, []match{
+			{"http://127.0.0.1:8317", every4, true},
+			{"http://127.0.0.2:8317", every4, true},
+			{"http://[::1]:8317", every6, true},
+			{ownURL, every4, own4 || both},
+			{ownURL, every6, !own4 || both},
+			{ownURL, coreAddress(":8317", false), own4 || both},
+			{"http://198.51.100.9:8317", every4, false}, // not this machine
+			{"http://[2001:db8::9]:8317", every6, false},
+			{"http://127.0.0.1:8318", every4, false},
+			{"https://127.0.0.1:8317", every4, false},
+			{"http://127.0.0.1:8317/", every4, false},
+			{"http://127.0.0.1", every4, false},
+			{"http://10.0.0.2:8317", one, true},
+			{"http://127.0.0.1:8317", one, false}, // core is not on loopback
+			{"http://localhost:8317", coreAddress("127.0.0.1:8317", false), false},
+			{"https://127.0.0.1:8317", coreAddress("127.0.0.1:8317", true), true},
+			{"http://anything", "", false},
+			{"http://127.0.0.1:8317", "", false},
+		})
+	}
+	// A listener of one family: another server can hold the same port in the other family.
+	dualStack(t, false)
+	check(t, []match{
+		{"http://[::1]:8317", every4, false},
+		{"http://[::1]:8317", coreAddress(":8317", false), false},
+		{"http://127.0.0.1:8317", every6, false},
+		{"http://localhost:8317", every4, false}, // may resolve to ::1
+		{"http://localhost:8317", every6, false},
+	})
+	// A listener that takes both.
+	dualStack(t, true)
+	check(t, []match{
+		{"http://[::1]:8317", every4, true},
+		{"http://127.0.0.1:8317", every6, true},
+		{"http://localhost:8317", every4, true},
+		{"http://localhost:8317", every6, true},
+		{"http://[::ffff:127.0.0.1]:8317", every4, true},
+	})
 	if !atCoreV1("http://127.0.0.1:8317/v1", every4) || atCoreV1("http://127.0.0.1:8317", every4) {
 		t.Error("atCoreV1 does not want /v1 after core's address")
 	}
+	if atCoreV1("http://127.0.0.1:8317/v1", "") {
+		t.Error("atCoreV1 matches an address when core's is not known")
+	}
 }
 
-// With listen 0.0.0.0, settings that name the address the panel was reached by read as connected,
-// as do the ones Connect writes (core's loopback address).
+// wildcardDualStack says what a listener on every interface opened as core opens its own does:
+// a connection to ::1 reaches one on 0.0.0.0 exactly when it says the listener takes both.
+func TestWildcardDualStack(t *testing.T) {
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	c, err := net.DialTimeout("tcp", net.JoinHostPort("::1", port), 5*time.Second)
+	if c != nil {
+		c.Close()
+	}
+	if reached := err == nil; wildcardDualStack() != reached {
+		t.Errorf("wildcardDualStack() = %v, but a connection to [::1]:%s reached a listener on 0.0.0.0: %v (%v)", wildcardDualStack(), port, reached, err)
+	}
+}
+
+// With listen 0.0.0.0, every tool's settings that name the address the panel was reached by read
+// as connected, as do the ones Connect writes (core's loopback address).
 func TestConnectedAtEveryInterface(t *testing.T) {
 	own := ownAddr(t)
+	if !netip.MustParseAddr(own).Unmap().Is4() && !wildcardDualStack() {
+		t.Skipf("this machine's address %s is IPv6, which a listener on 0.0.0.0 does not take here", own)
+	}
 	core := coreAddress("0.0.0.0:8317", false)
 	reached := "http://" + net.JoinHostPort(own, "8317")
-	for tool, inspect := range map[string]func(string, string) (string, string){"claude-code": inspectClaudeCode, "codex": inspectCodex} {
+	for _, tool := range ClientSnippetTools {
 		snip, _ := ClientSnippetFor(tool, reached, connectKey)
-		rel := strings.TrimPrefix(snip.Files[0].Path, "~/")
 		home := t.TempDir()
-		p := filepath.Join(home, filepath.FromSlash(rel))
-		_ = os.MkdirAll(filepath.Dir(p), 0o700)
-		_ = os.WriteFile(p, []byte(snip.Files[0].Content), 0o600)
-		if _, state := inspect(home, core); state != stateConfigured {
+		for _, f := range snip.Files {
+			writeTestFile(t, filepath.Join(home, filepath.FromSlash(strings.TrimPrefix(f.Path, "~/"))), f.Content)
+		}
+		if tool == "pi" {
+			writeTestFile(t, filepath.Join(home, ".pi", "agent", piAdapterFolder, piAdapterMarker), `{"package": "pluxy/pi-setup"}`)
+		}
+		spec, _ := clientSpecByID(tool)
+		if _, state := spec.inspect(home, core); state != stateConfigured {
 			t.Errorf("%s at %s reads %q against %s", tool, reached, state, core)
 		}
 	}

@@ -1492,7 +1492,7 @@ One function, `toolAction` in `src/agentPages.ts`, gives a row its one button, b
 | Installed, off | **Turn on add-on**: the native confirmation (it names "full access to your user account"), answered in that dialog only; meanwhile "Answer the confirmation window to go on." |
 | Offered by a registry | **Install add-on** (quiet), then **Installing…**, then **Turn on add-on** |
 | Still being read | "Checking add-ons…" |
-| None to be had | no app button: the row keeps the kit's own **Set up** or **Needs its add-on** |
+| None to be had | no app button: the row keeps the kit's own buttons: for Claude Code and Codex while pluxy can write their settings, **Connect** and the steps under **Set up by hand** (**Disconnect** once pluxy connected the tool); else **Set up** or **Needs its add-on** |
 
 In safe mode, or when this device's add-ons cannot be read, a row offers **Open** or **Set up** only,
 and a warning above the list says tool add-ons are paused. A failed step says why in one line under
@@ -1505,8 +1505,10 @@ only for a pluxy on this computer (`setupOffersNeeded`).
 From step 2, **Set up** or **Open** opens the tool's page with a strip above it, "Setting up pluxy."
 and **Back to setup**; the strip is kept in memory only and goes once the person leaves the page.
 Connected to a pluxy on another computer (`isRemote`), the list is that computer's tools, with the
-kit's own steps on each row, no add-on button, no extra rows, and links to the eight pages for this
-computer under the list. `keyOwners` (`src/keyOwners.ts`) names each key the app made for a tool
+kit's own buttons on each row (for Claude Code and Codex, **Connect**, which writes their settings
+on the computer pluxy runs on, and the steps under **Set up by hand**; for the others, the steps
+under **Set up**), no add-on button, no extra rows, and links to the eight pages for this computer
+under the list. `keyOwners` (`src/keyOwners.ts`) names each key the app made for a tool
 from the vault's list (names only, never a key's value), for keys of the connected pluxy only.
 
 `SETUP_CLIENT_PAGES` in `src/agentPages.ts` maps core's ID for each tool to the ID of its page. A

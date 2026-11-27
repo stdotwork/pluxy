@@ -14,11 +14,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/stdotwork/pluxy/next/internal/server"
 	"github.com/stdotwork/pluxy/next/management"
 )
 
@@ -27,7 +27,7 @@ import (
 // it takes is configured when it points the tool at this core, not configured when it holds
 // none of what the writer adds, and needs an update otherwise. coreURL is core's address
 // (coreAddress), which a tool's address matches as atCore says; empty when core's address is not
-// known, which, as in the writers, any address matches.
+// known, which no address matches.
 
 const (
 	stateNotConfigured = management.ClientStateNotConfigured
@@ -148,11 +148,17 @@ func inspectClaudeCode(home, coreURL string) (string, string) {
 
 // atCore reports whether address, the address of core a tool's settings name, reaches the core
 // at coreURL (coreAddress): the same scheme, port and path (none: a final / is another address),
-// and the same host; for a core listening on every interface, any loopback host or address of
-// this machine too, such as the address a browser on another machine reached the panel by. An
-// empty coreURL matches any address.
+// and the same host. For a core listening on every interface (0.0.0.0, :: or no host), a loopback
+// address or another address of this machine counts too, such as the one a browser on another
+// machine reached the panel by, when it is of the listener's family (IPv4 for 0.0.0.0, IPv6 for
+// ::), or of either family when the listener takes both (wildcardDualStack); the name localhost,
+// which may resolve to either family, only then. An empty coreURL (core's address is not known)
+// matches no address.
 func atCore(address, coreURL string) bool {
-	if coreURL == "" || address == coreURL {
+	if coreURL == "" {
+		return false
+	}
+	if address == coreURL {
 		return true
 	}
 	a, errA := url.Parse(address)
@@ -165,21 +171,46 @@ func atCore(address, coreURL string) bool {
 	if strings.EqualFold(host, c.Hostname()) {
 		return true
 	}
-	if ip, err := netip.ParseAddr(c.Hostname()); err != nil || !ip.IsUnspecified() {
+	listener, err := netip.ParseAddr(c.Hostname())
+	if err != nil || !listener.IsUnspecified() {
 		return false
 	}
-	if server.IsLoopbackHost(host) {
-		return true
+	both := wildcardDualStack()
+	if strings.EqualFold(host, "localhost") {
+		return both
 	}
 	ip, err := netip.ParseAddr(host)
-	return err == nil && machineHasAddr(ip.Unmap())
+	if err != nil {
+		return false
+	}
+	ip = ip.Unmap()
+	if ip.Is4() != listener.Is4() && !both {
+		return false
+	}
+	return ip.IsLoopback() || machineHasAddr(ip)
 }
 
 // atCoreV1 is atCore for an address with /v1 after core's.
 func atCoreV1(address, coreURL string) bool {
 	base, ok := strings.CutSuffix(address, "/v1")
-	return ok && atCore(base, coreURL) || coreURL == ""
+	return ok && atCore(base, coreURL)
 }
+
+// wildcardDualStack reports whether core's listener on every interface takes IPv4 and IPv6
+// connections alike. Go opens a "tcp" listener on 0.0.0.0, :: or no host as one IPv6 socket that
+// takes IPv4 as well when the system allows it (it turns IPV6_V6ONLY off, whatever the system's
+// default), and otherwise as a socket of the address's own family. A listener on 0.0.0.0 opened
+// the same way shows which: the system names it by an IPv6 address only in the first case.
+// Probed once.
+var wildcardDualStack = sync.OnceValue(func() bool {
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		return false
+	}
+	defer ln.Close()
+	a, ok := ln.Addr().(*net.TCPAddr)
+	return ok && a.IP.To4() == nil
+})
 
 // machineHasAddr reports whether ip is an address of one of this machine's interfaces.
 var machineHasAddr = func(ip netip.Addr) bool {
@@ -855,7 +886,7 @@ func inspectOMP(home, coreURL string) (string, string) {
 	apiKey, _ := p["apiKey"].(string)
 	api, _ := p["api"].(string)
 	discType, _ := discovery["type"].(string)
-	baseOK := hasBase && (coreURL == "" && base != "" || coreURL != "" && atCoreV1(base, coreURL))
+	baseOK := hasBase && atCoreV1(base, coreURL)
 	if baseOK && apiKey != "" && (api == "openai-responses" || api == "openai-completions") &&
 		discType == "openai-models-list" && model != "" {
 		return display, stateConfigured

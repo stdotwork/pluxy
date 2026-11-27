@@ -9,7 +9,9 @@ For Claude Code and Codex on the computer pluxy runs on, pluxy can write the set
 `pluxy client connect claude-code` (or `codex`), or **Connect** on the panel's **Tools** page and
 in step 2 of its guided setup. It makes a client key for the tool, sets the lines below in the
 tool's file and keeps the rest of the file, and keeps a copy of the file as it was;
-`pluxy client disconnect <tool>`, or **Disconnect**, puts it back. pluxy changes no other file of a
+`pluxy client disconnect <tool>`, or **Disconnect**, puts it back. When the file changed since,
+Disconnect keeps those changes and takes back only the settings Connect wrote that nobody changed
+since. pluxy changes no other file of a
 client's, and these two only when asked.
 
 For the other tools, or to set one up by hand, `pluxy client show <tool>` prints the settings, and

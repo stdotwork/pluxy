@@ -22,7 +22,8 @@ If you run coding agents on subscription accounts, you have probably met these:
   then looks at the machine, offers the providers that fit what it found, and installs only the
   ones you pick.
 - **Every tool wants different settings.** `pluxy client connect <tool>` writes them into Claude
-  Code's or Codex's settings, and `pluxy client disconnect <tool>` puts the file back;
+  Code's or Codex's settings, and `pluxy client disconnect <tool>` puts the file back (or, when the
+  file changed since, takes back only the settings connect wrote);
   `pluxy client show <tool>` prints what to paste into Claude Code, Codex, OpenCode, Pi or Oh My Pi.
 
 pluxy has three parts: the core (the proxy itself, a Go program), a web panel the core serves at
@@ -122,7 +123,8 @@ Check that the account answers:
 ```
 
 This writes Claude Code's settings (`~/.claude/settings.json`) with a client key made for it, and
-keeps the file as it was: `./pluxy client disconnect claude-code` puts it back. To paste the
+keeps the file as it was: `./pluxy client disconnect claude-code` puts it back, or, when the file
+changed since, takes back only the settings connect wrote and keeps the rest. To paste the
 settings yourself instead, `./pluxy client show claude-code` prints the lines to put in the tool's
 config file, with `<client-key>` where your client key goes. The other tools are `codex`, `opencode`, `pi` and `omp`; [docs/clients.md](docs/clients.md)
 has each one's settings, and the base URLs for any other client.
