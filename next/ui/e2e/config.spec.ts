@@ -569,6 +569,7 @@ for (const theme of THEMES) {
         await keys.getByRole("button", { name: "Replace key", exact: true }).click();
         await keys.getByRole("button", { name: "Yes, replace key", exact: true }).click();
         await expect(keys).toContainText("pluxy did not answer");
+        await expect(page.getByText(/^pluxy did not answer/)).toBeInViewport();
         await fits(page);
         await shot(page, "config-no-answer");
       });
@@ -589,6 +590,10 @@ for (const theme of THEMES) {
         await shot(page, "config-review");
         await page.getByRole("button", { name: "Cancel", exact: true }).click();
         await page.getByRole("button", { name: "Refresh", exact: true }).click();
+        await expect(
+          page.getByRole("dialog", { name: "Discard your edits and refresh the file?" }),
+        ).toBeVisible();
+        await fits(page);
         await shot(page, "config-refresh-ask");
         await page.getByRole("button", { name: "Cancel", exact: true }).click();
         await tab(page, "Settings").click();

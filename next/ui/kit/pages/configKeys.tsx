@@ -123,6 +123,11 @@ export function ManagementKey(props: { state: ReplaceKey; configKey?: string; di
   const can = host.features.has("rotateManagementKey");
   const o = props.state.outcome;
   const why = props.disabled ?? (can ? undefined : t("unavailable", { command: ROTATE_KEY }));
+  // What came of it shows under the row, which may be at the bottom of the window: bring it into view.
+  const said = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (o && o.kind !== "key") said.current?.scrollIntoView?.({ block: "nearest" });
+  }, [o]);
   return (
     <>
       <SettingRow
@@ -150,14 +155,16 @@ export function ManagementKey(props: { state: ReplaceKey; configKey?: string; di
           seen={props.state.seen}
         />
       )}
-      {o?.kind === "apart" && <Notice tone="ok">{t("replacedApart")}</Notice>}
-      {o?.kind === "apart" && o.warning && <Notice tone="warn">{p.text(o.warning)}</Notice>}
-      {o?.kind === "noAnswer" && (
-        <Notice tone="warn">
-          {rich(t("noAnswer", { command: "{command}" }), { command: command(SHOW_KEY) })}
-        </Notice>
-      )}
-      {o?.kind === "failed" && <Notice tone="danger">{p.text(o.error)}</Notice>}
+      <div ref={said} class="config-key-said">
+        {o?.kind === "apart" && <Notice tone="ok">{t("replacedApart")}</Notice>}
+        {o?.kind === "apart" && o.warning && <Notice tone="warn">{p.text(o.warning)}</Notice>}
+        {o?.kind === "noAnswer" && (
+          <Notice tone="warn">
+            {rich(t("noAnswer", { command: "{command}" }), { command: command(SHOW_KEY) })}
+          </Notice>
+        )}
+        {o?.kind === "failed" && <Notice tone="danger">{p.text(o.error)}</Notice>}
+      </div>
     </>
   );
 }

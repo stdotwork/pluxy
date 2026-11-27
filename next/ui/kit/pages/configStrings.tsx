@@ -56,6 +56,7 @@ export const configText = strings("config", {
   next: "Next",
   matches: "{current} of {count}",
   noMatches: "No matches",
+  found: "{count} found",
   check: "Check for mistakes",
   noMistakes: "No mistakes found.",
   mistake: "There is a mistake: {error}",

@@ -166,7 +166,11 @@ export function ConfigSource(props: ConfigSourceProps) {
         </Button>
         <span role="status" class="config-find-count">
           {query &&
-            (matches.length ? t("matches", { current: index + 1, count: matches.length }) : t("noMatches"))}
+            (!matches.length
+              ? t("noMatches")
+              : index < 0
+                ? t("found", { count: matches.length })
+                : t("matches", { current: index + 1, count: matches.length }))}
         </span>
       </div>
       <textarea
