@@ -11,6 +11,7 @@ const t = strings("account.helpers", {
   resetAvailable: "Reset available",
   paceRunsOutAt: "At this pace it runs out at {when}, {before} before it resets.",
   paceRunsOutOn: "At this pace it runs out {when}, {before} before it resets.",
+  paceRunsOutWithinMinute: "At this pace it runs out within a minute of the reset.",
   balanceLeft: "{amount} left",
   balanceTitle: "Credit balance",
 });
@@ -19,6 +20,7 @@ const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
 const MIN_PACE_ELAPSED_MS = 5 * MINUTE_MS;
 const MIN_PACE_FRACTION = 0.02;
+const SHORT_WINDOW_PACE_FRACTION = 0.1;
 
 const startOfDay = (ms: number) => {
   const d = new Date(ms);
@@ -80,7 +82,10 @@ export function paceOf(l: QuotaLimit, now = Date.now()): PaceInfo | undefined {
   const elapsedMs = windowMs - remainingMs;
   const evenLeft = Math.max(0, Math.min(100, (remainingMs / windowMs) * 100));
   const showTick = evenLeft >= 2 && evenLeft <= 98;
-  const minElapsed = Math.max(MIN_PACE_ELAPSED_MS, windowMs * MIN_PACE_FRACTION);
+  const minElapsed = Math.min(
+    Math.max(MIN_PACE_ELAPSED_MS, windowMs * MIN_PACE_FRACTION),
+    windowMs * SHORT_WINDOW_PACE_FRACTION,
+  );
   const used = 100 - left;
   if (used <= 0 || elapsedMs < minElapsed) {
     return { evenLeft, showTick, kind: "even" };
@@ -99,6 +104,9 @@ export function paceOf(l: QuotaLimit, now = Date.now()): PaceInfo | undefined {
         kind: "fast",
         text: sameDay ? t("paceRunsOutAt", { when, before }) : t("paceRunsOutOn", { when, before }),
       };
+    }
+    if (beforeResetMs > 0) {
+      return { evenLeft, showTick, kind: "fast", text: t("paceRunsOutWithinMinute") };
     }
   }
   return { evenLeft, showTick, kind: "ok" };

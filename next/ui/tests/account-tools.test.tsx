@@ -449,6 +449,29 @@ test("paceOf places the even-burn tick and shows a sentence only when pace runs 
   expect(justStarted?.kind).toBe("even");
   expect(justStarted?.text).toBeUndefined();
 
+  // Short-gap projection (< 1 minute before reset) still reports fast pace instead of falling through.
+  const underMinute = paceOf(
+    { id: "1h", window_seconds: 3600, resets_at: Math.floor((now + 15 * 60_000) / 1000), used_percent: 76 },
+    now,
+  );
+  expect(underMinute?.kind).toBe("fast");
+  expect(underMinute?.text).toBe("At this pace it runs out within a minute of the reset.");
+
+  // Short windows (<= 5m) use a fractional elapsed floor so they can still project a fast pace.
+  const shortWindow = paceOf(
+    { id: "5m", window_seconds: 300, resets_at: Math.floor((now + 2 * 60_000) / 1000), used_percent: 80 },
+    now,
+  );
+  expect(shortWindow?.kind).toBe("fast");
+  expect(shortWindow?.text).toBe("At this pace it runs out at 15:00, 2m before it resets.");
+
+  const shortWindowJustStarted = paceOf(
+    { id: "5m", window_seconds: 300, resets_at: Math.floor((now + 285_000) / 1000), used_percent: 40 },
+    now,
+  );
+  expect(shortWindowJustStarted?.kind).toBe("even");
+  expect(shortWindowJustStarted?.text).toBeUndefined();
+
   // Used up or unlimited: no pace.
   expect(
     paceOf(
