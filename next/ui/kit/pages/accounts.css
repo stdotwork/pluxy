@@ -3,39 +3,163 @@
 @layer kit {
   /* ---- All accounts ------------------------------------------------------------------------- */
 
-  .accounts-top {
+  .accounts-page {
+    display: grid;
+    gap: calc(var(--s) * 4);
+    min-width: 0;
+  }
+
+  .accounts-fade {
+    display: grid;
+    gap: calc(var(--s) * 4);
+    min-width: 0;
+  }
+
+  /* Over data from an earlier read, when a refresh failed: dimmed under the notice that says so. */
+  .accounts-page[data-stale] .accounts-fade {
+    opacity: 0.7;
+  }
+
+  .accounts-pane.card,
+  .accounts-empty.card {
+    padding: calc(var(--s) * 2) calc(var(--s) * 4);
+  }
+
+  /* Summary line and proportional state bar */
+
+  .accounts-summary {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: calc(var(--s) * 2) calc(var(--s) * 4);
-    margin-bottom: calc(var(--s) * 4);
+    gap: calc(var(--s) * 2) calc(var(--s) * 5);
   }
 
   .accounts-counts {
     flex: 1 1 20em;
     margin: 0;
     min-width: 0;
+    font-size: var(--px-font-size-small);
   }
 
   .accounts-count {
     white-space: nowrap;
   }
 
-  .accounts-tools {
-    flex: 0 0 auto;
-    max-width: 100%;
+  .accounts-state-bar {
+    display: flex;
+    gap: 2px;
+    flex: 0 1 13em;
+    min-width: 6em;
+    height: 6px;
+  }
+
+  .accounts-state-bar span {
+    min-width: 6px;
+    border-radius: 999px;
+  }
+
+  .accounts-state-bar [data-group="serving"] {
+    background: var(--px-color-success);
+  }
+
+  .accounts-state-bar [data-group="waiting"] {
+    background: var(--px-color-warning);
+  }
+
+  .accounts-state-bar [data-group="needs"] {
+    background: var(--px-color-error);
+  }
+
+  .accounts-state-bar [data-group="off"],
+  .accounts-state-bar [data-group="unchecked"] {
+    background: var(--px-color-meter-unknown);
+  }
+
+  /* View bar: provider chips left; search, List | Cards switch and Select right */
+
+  .accounts-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2.5) calc(var(--s) * 4);
+    min-width: 0;
+  }
+
+  .accounts-providers {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .accounts-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
+    min-height: var(--px-size-control);
+    padding: 0 calc(var(--s) * 2.5);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: 999px;
+    background: var(--px-color-surface);
+    color: var(--px-color-text-muted);
+    font: inherit;
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-medium);
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background var(--t),
+      border-color var(--t),
+      color var(--t),
+      transform var(--t);
+  }
+
+  .accounts-chip:hover {
+    border-color: var(--px-color-input-border);
+    background: var(--px-color-surface-raised);
+    color: var(--px-color-text);
+  }
+
+  .accounts-chip:active {
+    transform: scale(var(--px-motion-press-scale));
+  }
+
+  .accounts-chip[aria-pressed="true"] {
+    border-color: var(--px-color-input-border);
+    background: var(--px-color-selected);
+    color: var(--px-color-selected-text);
+    box-shadow: var(--px-shadow-raised);
+  }
+
+  .accounts-chip-count {
+    color: var(--px-color-secondary-label);
+    font-weight: normal;
+  }
+
+  .accounts-chip[aria-pressed="true"] .accounts-chip-count {
+    color: var(--px-color-text-muted);
+  }
+
+  .accounts-controls {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: calc(var(--s) * 2);
+    margin-inline-start: auto;
+    max-width: 100%;
   }
 
   .accounts-find {
     position: relative;
     display: inline-flex;
     align-items: center;
-    width: min(18rem, 100%);
+    width: min(16rem, 100%);
   }
 
   .accounts-find .icon {
@@ -47,44 +171,96 @@
 
   .accounts-find input {
     width: 100%;
-    padding-inline-start: calc(var(--s) * 8);
+    padding-inline-start: calc(var(--s) * 7.5);
   }
 
-  .accounts-batch {
-    display: flex;
-    flex-wrap: wrap;
+  /* List | Cards segmented switch */
+
+  .accounts-view {
+    display: inline-flex;
     align-items: center;
-    gap: calc(var(--s) * 2);
-    margin-bottom: calc(var(--s) * 3);
-    padding-block: calc(var(--s) * 2);
-    border-block: var(--px-shape-border) solid var(--px-color-border);
+    gap: 1px;
+    margin: 0;
+    padding: 1px;
+    border: var(--px-shape-border) solid var(--px-color-input-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface-raised);
   }
 
-  .accounts-batch-count {
-    margin-inline-end: auto;
-    font-weight: var(--px-font-weight-strong);
+  .accounts-view-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
+    min-height: max(24px, calc(var(--px-size-control) - 2px - var(--px-shape-border) * 2));
+    padding: 0 calc(var(--s) * 2.5);
+    border: 0;
+    border-radius: calc(var(--px-shape-radius) - 2px);
+    background: transparent;
+    color: var(--px-color-text-muted);
+    font: inherit;
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-medium);
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background var(--t),
+      color var(--t);
   }
+
+  .accounts-view-btn:hover {
+    color: var(--px-color-text);
+  }
+
+  .accounts-view-btn[aria-pressed="true"] {
+    background: var(--px-color-surface);
+    color: var(--px-color-text);
+    box-shadow: inset 0 0 0 var(--px-shape-border) var(--px-color-border);
+  }
+
+  /* Selected provider's pool card */
+
+  .accounts-pool {
+    max-width: 22rem;
+  }
+
+  /* Batch report notices */
 
   .accounts-report {
     display: grid;
     gap: var(--s);
-    margin-bottom: calc(var(--s) * 3);
+  }
+
+  .accounts-report .notice {
+    margin: 0;
+  }
+
+  /* Groups */
+
+  .accounts-groups {
+    display: grid;
+    gap: calc(var(--s) * 4);
+    min-width: 0;
   }
 
   .accounts-group {
-    margin-bottom: calc(var(--s) * 5);
+    min-width: 0;
   }
 
   .accounts-group-head {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
     margin: 0;
-    padding: 0 calc(var(--s) * 2) var(--s);
-    border-bottom: var(--px-shape-border) solid var(--px-color-border);
-    font-size: var(--px-font-size);
+    font-size: var(--px-font-size-label);
     font-weight: var(--px-font-weight-strong);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--px-color-text-muted);
   }
 
-  .accounts-group-head .muted {
-    font-weight: normal;
+  .accounts-group-count {
+    font-weight: var(--px-font-weight-medium);
+    color: var(--px-color-secondary-label);
   }
 
   .accounts-rows {
@@ -96,17 +272,84 @@
   .accounts-item {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
   }
 
-  /* With Select on, a checkbox leads each row. */
-  [data-selecting] .accounts-item {
+  /* List view: each group is a crisp card with a subtle header bar; Needs you is a tinted band. */
+
+  .accounts-page[data-view="list"] .accounts-group {
+    border: var(--px-shape-border) solid var(--px-color-card-border);
+    border-radius: var(--r-card);
+    background: var(--px-color-card);
+    box-shadow: var(--px-shadow-raised);
+    overflow: hidden;
+  }
+
+  .accounts-page[data-view="list"] .accounts-group-head {
+    padding: calc(var(--s) * 2) calc(var(--s) * 3.5);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    background: var(--px-color-surface-raised);
+  }
+
+  .accounts-page[data-view="list"] .accounts-group[data-group="needs"] {
+    border-color: color-mix(in srgb, var(--px-color-error) 35%, var(--px-color-border));
+    background: var(--px-color-danger-surface);
+  }
+
+  .accounts-page[data-view="list"] .accounts-group[data-group="needs"] .accounts-group-head {
+    border-bottom-color: color-mix(in srgb, var(--px-color-error) 22%, transparent);
+    background: color-mix(in srgb, var(--px-color-error) 7%, transparent);
+    color: var(--px-color-danger);
+  }
+
+  .accounts-page[data-view="list"] .accounts-group[data-group="needs"] .accounts-group-count {
+    color: var(--px-color-danger);
+  }
+
+  .accounts-page[data-view="list"] .accounts-group[data-group="needs"] .account-row {
+    --row-ground: var(--px-color-danger-surface);
+    border-bottom-color: color-mix(in srgb, var(--px-color-error) 20%, transparent);
+  }
+
+  .accounts-page[data-view="list"] .accounts-group[data-group="needs"] .account-row:hover {
+    background: color-mix(in srgb, var(--px-color-error) 5%, transparent);
+  }
+
+  .accounts-page[data-view="list"] .accounts-group[data-group="needs"] .account-reason {
+    color: var(--px-color-text);
+    white-space: normal;
+  }
+
+  .accounts-page[data-view="list"] .accounts-group[data-group="needs"] .accounts-pick {
+    border-bottom-color: color-mix(in srgb, var(--px-color-error) 20%, transparent);
+  }
+
+  .accounts-page[data-view="list"] .account-grid {
+    padding-inline: calc(var(--s) * 3.5);
+  }
+
+  .accounts-page[data-view="list"] .accounts-item:last-child .account-row,
+  .accounts-page[data-view="list"] .accounts-item:last-child .accounts-pick {
+    border-bottom: 0;
+  }
+
+  /* With Select on in List view, a checkbox leads each row and selected rows tint. */
+  .accounts-page[data-view="list"][data-selecting] .accounts-item {
     grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .accounts-page[data-view="list"] .accounts-item[data-selected] {
+    background: var(--px-color-selected);
+  }
+
+  .accounts-page[data-view="list"] .accounts-item[data-selected] .account-row {
+    --row-ground: var(--px-color-selected);
   }
 
   .accounts-pick {
     display: flex;
     align-items: center;
-    padding-inline: calc(var(--s) * 2) 0;
+    padding-inline: calc(var(--s) * 3) 0;
     border-bottom: var(--px-shape-border) solid var(--px-color-border);
   }
 
@@ -119,6 +362,273 @@
   [data-part="select"]:focus-visible {
     outline: 2px solid var(--px-color-focus);
     outline-offset: 2px;
+  }
+
+  /* Cards view: each group heads a responsive grid of quota cards drawn from AccountRow. */
+
+  .accounts-page[data-view="cards"] .accounts-group {
+    display: grid;
+    gap: calc(var(--s) * 2.5);
+  }
+
+  .accounts-page[data-view="cards"] .accounts-group-head {
+    padding: 0 2px;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-group[data-group="needs"] .accounts-group-head,
+  .accounts-page[data-view="cards"] .accounts-group[data-group="needs"] .accounts-group-count {
+    color: var(--px-color-danger);
+  }
+
+  .accounts-page[data-view="cards"] .accounts-rows {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+    gap: calc(var(--s) * 3);
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item {
+    position: relative;
+    border: var(--px-shape-border) solid var(--px-color-card-border);
+    border-radius: var(--r-card);
+    background: var(--px-color-card);
+    box-shadow: var(--px-shadow-raised);
+    overflow: hidden;
+    transition:
+      border-color var(--t),
+      background var(--t);
+  }
+
+  .accounts-page[data-view="cards"] .accounts-group[data-group="needs"] .accounts-item {
+    border-color: color-mix(in srgb, var(--px-color-error) 35%, var(--px-color-border));
+    background: var(--px-color-danger-surface);
+  }
+
+  .accounts-page[data-view="cards"] .accounts-group[data-group="needs"] .account-row {
+    --row-ground: var(--px-color-danger-surface);
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item[data-selected] {
+    border-color: var(--px-color-accent);
+    background: var(--px-color-selected);
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item[data-selected] .account-row {
+    --row-ground: var(--px-color-selected);
+  }
+
+  .accounts-page[data-view="cards"] .accounts-pick {
+    position: absolute;
+    top: calc(var(--s) * 3);
+    inset-inline-end: calc(var(--s) * 3);
+    z-index: 2;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row {
+    container-type: normal;
+    height: 100%;
+    border-bottom: 0;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .account-grid {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto 1fr auto;
+    align-items: start;
+    gap: calc(var(--s) * 3) calc(var(--s) * 2.5);
+    height: 100%;
+    min-height: 0;
+    padding: var(--px-size-card-padding);
+  }
+
+  .accounts-page[data-view="cards"][data-selecting] .accounts-item .account-row[data-wide] .account-grid {
+    padding-inline-end: calc(var(--px-size-card-padding) + var(--s) * 6);
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .account-mark {
+    grid-row: 1;
+    grid-column: 1;
+    margin-top: 2px;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .account-who {
+    grid-row: 1;
+    grid-column: 2;
+    gap: 2px;
+  }
+
+  .accounts-page[data-view="cards"]
+    .accounts-item
+    .account-row[data-wide]:not(:has(.plan-pill))
+    .account-who {
+    grid-column: 2 / -1;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .account-plan {
+    grid-row: 1;
+    grid-column: 3;
+    justify-self: end;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .account-plan:empty {
+    display: none;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .account-sub {
+    flex-wrap: wrap;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .account-reason {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .account-side {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    align-self: start;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .limits {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: calc(var(--s) * 2.5);
+    width: 100%;
+    white-space: normal;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .limit {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-rows: auto auto;
+    gap: var(--s) calc(var(--s) * 2);
+    align-items: baseline;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .limit-name {
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .limit-left {
+    grid-row: 1;
+    grid-column: 2;
+    justify-self: end;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .limit-reset {
+    grid-row: 1;
+    grid-column: 3;
+    justify-self: end;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .meter[data-mode="left"] {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    width: 100%;
+    height: calc(var(--s) * 1.5);
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .account-week {
+    display: block;
+    grid-row: 3;
+    grid-column: 1 / 3;
+    justify-self: start;
+    align-self: center;
+  }
+
+  .accounts-page[data-view="cards"] .accounts-item .account-row[data-wide] .account-fix {
+    grid-row: 3;
+    grid-column: 3;
+    justify-self: end;
+    align-self: center;
+  }
+
+  /* Floating sticky batch bar while Select is on */
+
+  .accounts-batch {
+    position: sticky;
+    bottom: calc(var(--s) * 4);
+    z-index: 4;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2) calc(var(--s) * 3);
+    padding: calc(var(--s) * 2.5) calc(var(--s) * 3.5);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-card);
+    background: var(--px-color-overlay);
+    box-shadow: var(--px-shadow-overlay);
+    animation: px-in var(--px-motion-duration-slow, 240ms) var(--px-motion-easing-drawer, ease-out);
+  }
+
+  .accounts-batch-count {
+    font-weight: var(--px-font-weight-strong);
+    white-space: nowrap;
+  }
+
+  .accounts-batch-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+  }
+
+  /* Loading skeleton */
+
+  .accounts-skeleton {
+    display: grid;
+    gap: calc(var(--s) * 4);
+  }
+
+  .accounts-skeleton i {
+    display: block;
+    border-radius: var(--r-card);
+    background: var(--px-color-surface-raised);
+  }
+
+  .accounts-skeleton-bar {
+    height: var(--px-size-control);
+    width: min(28rem, 100%);
+    border-radius: var(--px-shape-radius);
+  }
+
+  .accounts-skeleton-group {
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-card);
+    overflow: hidden;
+  }
+
+  .accounts-skeleton-head {
+    height: calc(var(--s) * 7);
+    border-radius: 0;
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .accounts-skeleton-row {
+    height: calc(var(--px-size-row-tall) + var(--s) * 2);
+    border-radius: 0;
+    background: var(--px-color-surface);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .accounts-skeleton-row:last-child {
+    border-bottom: 0;
+  }
+
+  .accounts-skeleton-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+    gap: calc(var(--s) * 3);
+  }
+
+  .accounts-skeleton-card {
+    height: calc(var(--s) * 38);
+    border: var(--px-shape-border) solid var(--px-color-border);
   }
 
   /* ---- One account's page ------------------------------------------------------------------- */

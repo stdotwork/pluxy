@@ -72,6 +72,46 @@ export function groupAccounts(
   return groups;
 }
 
+export interface ProviderCount {
+  extension: string;
+  name: string;
+  count: number;
+}
+
+/**
+ * The providers represented in a list, in the order core lists their first account, each with its
+ * display name and total account count. Accounts without an extension are left out.
+ */
+export function providerCounts(list: Account[]): ProviderCount[] {
+  const counts = new Map<string, number>();
+  for (const a of list) {
+    if (!a.extension) continue;
+    counts.set(a.extension, (counts.get(a.extension) ?? 0) + 1);
+  }
+  return [...counts].map(([extension, count]) => ({
+    extension,
+    name: providerName(extension),
+    count,
+  }));
+}
+
+export type StateCounts = Record<Group | "unchecked", number>;
+
+/** How many accounts fall in each condition group, matching countsLine. */
+export function stateCounts(
+  list: Account[],
+  running?: ReadonlySet<string>,
+  now = Date.now(),
+  unchecked = false,
+): StateCounts {
+  const n: StateCounts = { needs: 0, waiting: 0, serving: 0, off: 0, unchecked: 0 };
+  for (const a of list) {
+    const c = accountCondition(a, running, now);
+    n[unchecked && conditionUnchecked(a, c, running) ? "unchecked" : c.group]++;
+  }
+  return n;
+}
+
 /**
  * The counts line: "11 accounts at 4 providers · 2 need you · 7 serving · 1 waiting · 1 turned
  * off", no zero counts. unchecked: the status could not be read, so the accounts that serve or wait
@@ -83,11 +123,7 @@ export function countsLine(
   now = Date.now(),
   unchecked = false,
 ): string {
-  const n: Record<Group | "unchecked", number> = { needs: 0, waiting: 0, serving: 0, off: 0, unchecked: 0 };
-  for (const a of list) {
-    const c = accountCondition(a, running, now);
-    n[unchecked && conditionUnchecked(a, c, running) ? "unchecked" : c.group]++;
-  }
+  const n = stateCounts(list, running, now, unchecked);
   const providers = new Set(list.map((a) => a.extension).filter(Boolean)).size;
   const total = providers
     ? `${t("accounts", { count: list.length })} ${t("atProviders", { count: providers })}`
