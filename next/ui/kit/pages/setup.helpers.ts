@@ -1,21 +1,71 @@
 // What the Setup page works out from core's replies, apart from the page so it can be tested
 // without a browser.
 
-import type { Api, Package, Setup, SetupApplyResult, SetupClient, SetupPick, SetupSignIn } from "../api";
+import type {
+  Account,
+  Api,
+  Package,
+  Setup,
+  SetupApplyResult,
+  SetupClient,
+  SetupPick,
+  SetupSignIn,
+} from "../api";
 import type { Reply } from "../host";
+import { accountCondition } from "../parts";
 
 /** What the person ticked or unticked themselves, by pick ID. A pick not in it follows core's suggestion. */
 export type Choices = Record<string, boolean>;
 
-/** The outcome of the last Start for each pick it sent, by pick ID. */
+/** The outcome of the last Add for each pick it sent, by pick ID. */
 export type Results = Record<string, { status: "done" | "error"; error?: string }>;
 
-/** The picks the page offers to install: every kind but client, whose settings the page only shows. */
-export function providerPicks(setup: Setup): SetupPick[] {
-  return setup.picks.filter((pick) => pick.kind !== "client");
+/**
+ * The four kinds of account v0.1 serves fully, in the order step 1 offers them, each under the
+ * plain name a person knows it by.
+ */
+export const MAIN_KINDS: readonly { id: string; title: string }[] = [
+  { id: "pluxy/claude", title: "Claude" },
+  { id: "pluxy/codex", title: "ChatGPT (Codex)" },
+  { id: "pluxy/gemini", title: "Gemini" },
+  { id: "pluxy/openai-compatible", title: "Another service with an API key" },
+];
+
+/** A kind of account's name: the plain name of a main kind, else the pick's own title. */
+export function kindTitle(pick: Pick<SetupPick, "id" | "title">): string {
+  return MAIN_KINDS.find((kind) => kind.id === pick.id)?.title ?? (pick.title || pick.id);
 }
 
-/** Installed as core says, or by a Start whose result core's next reply has not caught up with. */
+/** The picks step 1 offers: providers only. A tool package (kind client) never shows there. */
+export function providerPicks(setup: Setup): SetupPick[] {
+  return setup.picks.filter((pick) => pick.kind === "provider");
+}
+
+/**
+ * Step 1's kinds in their three groups: what was found on this computer (core's suggestions and
+ * what an import needs), then the main kinds not already shown, then every other one, for More.
+ */
+export function kindGroups(
+  setup: Setup,
+  needed: ReadonlySet<string> = new Set(),
+): { found: SetupPick[]; main: SetupPick[]; more: SetupPick[] } {
+  const picks = providerPicks(setup);
+  const found = picks.filter((pick) => pick.suggested || needed.has(pick.id));
+  const shown = new Set(found.map((pick) => pick.id));
+  const main = MAIN_KINDS.flatMap((kind) =>
+    picks.filter((pick) => pick.id === kind.id && !shown.has(pick.id)),
+  );
+  for (const pick of main) shown.add(pick.id);
+  return { found, main, more: picks.filter((pick) => !shown.has(pick.id)) };
+}
+
+/** Step 1's kinds in the order it shows them. */
+export function orderedKinds(setup: Setup, needed?: ReadonlySet<string>): SetupPick[] {
+  const { found, main, more } = kindGroups(setup, needed);
+  return [...found, ...main, ...more];
+}
+
+/** Installed as core says, or by an Add whose result core's next reply has not caught up with. */
 export function isInstalled(pick: SetupPick, results: Results): boolean {
   return pick.installed || results[pick.id]?.status === "done";
 }
@@ -25,20 +75,11 @@ export function isTicked(pick: SetupPick, choices: Choices, results: Results): b
   return !isInstalled(pick, results) && (choices[pick.id] ?? pick.suggested);
 }
 
-/** The pick IDs Start sends: ticked providers that are not installed. */
+/** The pick IDs Add sends: ticked providers that are not installed. */
 export function toInstall(setup: Setup, choices: Choices, results: Results): string[] {
   return providerPicks(setup)
     .filter((pick) => isTicked(pick, choices, results))
     .map((pick) => pick.id);
-}
-
-/**
- * Whether "nothing is installed until you press Start" holds: providers are offered and none of
- * them is installed yet.
- */
-export function startInstalls(setup: Setup, results: Results): boolean {
-  const picks = providerPicks(setup);
-  return picks.length > 0 && !picks.some((pick) => isInstalled(pick, results));
 }
 
 /** The results after a reply: each pick it names takes its new outcome, the others keep theirs. */
@@ -48,14 +89,13 @@ export function withResults(results: Results, reply: SetupApplyResult[]): Result
   return next;
 }
 
-/** Sends Start's picks. Returns the new results, or why the call itself failed. */
+/** Sends the picks to add (ids). Returns the new results, or why the call itself failed. */
 export async function start(
   api: Pick<Api, "applySetup">,
-  setup: Setup,
-  choices: Choices,
+  ids: string[],
   results: Results,
 ): Promise<{ reply: Reply<{ results: SetupApplyResult[] }>; results: Results }> {
-  const reply = await api.applySetup(toInstall(setup, choices, results));
+  const reply = await api.applySetup(ids);
   return { reply, results: reply.body ? withResults(results, reply.body.results) : results };
 }
 
@@ -76,7 +116,7 @@ const packageRuns = (p: Package) => p.enabled && !failedStates.has(p.state);
 
 /**
  * What a provider pick is, in the one answer the page gives to "does this provider run?". Not
- * installed: offered, or its Start failed. Installed: running, or stopped, because its Start
+ * installed: offered, or its Add failed. Installed: running, or stopped, because its Add
  * failed, its package is turned off, or its package failed.
  */
 export type PickStatus =
@@ -92,16 +132,10 @@ export interface PickWithStatus {
   status: PickStatus;
 }
 
-/** Whether the pick is installed, running or not. */
-export function installedStatus(status: PickStatus): boolean {
-  return status.state === "running" || status.state === "stopped";
-}
-
 /**
- * What a provider pick is. Installed is core's word or a Start that worked (see isInstalled). Once
- * the package is listed, its state decides whether an installed pick runs, over an older Start
- * result; a Start's error text still says why, as the first thing seen. Without the package, a
- * failed Start decides.
+ * What a provider pick is. Installed is core's word or an Add that worked (see isInstalled). Once
+ * the package is listed, its state decides whether an installed pick runs, over an older Add
+ * result. Without the package, a failed Add decides.
  */
 export function pickStatus(pick: SetupPick, results: Results, pkg?: Package): PickStatus {
   const result = results[pick.id];
@@ -132,34 +166,74 @@ export function pickStatuses(setup: Setup, results: Results, packages: Package[]
 }
 
 /**
+ * The kinds of account pluxy runs, as { id, title } in step 1's order: the provider picks whose
+ * status says running, then any running package that is none of the picks (added elsewhere, such
+ * as on Extensions), under its own ID. AddAccountPage leaves out one that has no way to sign in.
+ */
+export function runningKinds(
+  setup: Setup,
+  results: Results,
+  packages: Package[] = [],
+  needed?: ReadonlySet<string>,
+): { id: string; title?: string }[] {
+  const picked = new Set(setup.picks.map((pick) => pick.id));
+  const statuses = new Map(pickStatuses(setup, results, packages).map((s) => [s.pick.id, s.status]));
+  return [
+    ...orderedKinds(setup, needed)
+      .filter((pick) => statuses.get(pick.id)?.state === "running")
+      .map((pick) => ({ id: pick.id, title: kindTitle(pick) })),
+    ...packages.filter((p) => !picked.has(p.id) && packageRuns(p)).map((p) => ({ id: p.id })),
+  ];
+}
+
+/**
  * Whether core runs a provider: a provider pick's status says running, or a package that is none
- * of the picks, is enabled and has not failed. A pick's package is judged by the pick's status,
- * never again by itself.
+ * of the picks, is enabled and has not failed.
  */
 export function hasProvider(setup: Setup, results: Results, packages: Package[] = []): boolean {
-  const picked = new Set(setup.picks.map((pick) => pick.id));
+  return runningKinds(setup, results, packages).length > 0;
+}
+
+/** The sign-ins found whose provider runs: the ones signing in on this page can use. */
+export function signInsToName(setup: Setup, running: { id: string }[]): SetupSignIn[] {
+  const ids = new Set(running.map((kind) => kind.id));
+  return setup.found.sign_ins.filter((signIn) => ids.has(signIn.provider));
+}
+
+/** The tools that use pluxy: core's found clients and the host's own, Connected. */
+export function connectedTools(setup: Setup | undefined, extra: SetupClient[] = []): SetupClient[] {
+  return [...(setup?.found.clients ?? []), ...extra].filter(
+    (client) => client.installed && client.state === "configured",
+  );
+}
+
+/** Names in a sentence: "A", "A and B", "A, B and C". */
+export function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** An account a test request can go through: not turned off, and its provider runs. */
+export function canTest(account: Account, running?: ReadonlySet<string>): boolean {
+  const kind = accountCondition(account, running).kind;
+  return kind !== "off" && kind !== "no_provider";
+}
+
+/**
+ * The account step 3 tests by default: the one added in step 1 on this visit, else the first
+ * Serving one, else the first that can take a test. None when no account can.
+ */
+export function defaultTestAccount(
+  accounts: Account[],
+  running?: ReadonlySet<string>,
+  added?: string,
+): Account | undefined {
+  const usable = accounts.filter((a) => canTest(a, running));
   return (
-    pickStatuses(setup, results, packages).some(({ status }) => status.state === "running") ||
-    packages.some((p) => !picked.has(p.id) && packageRuns(p))
+    usable.find((a) => a.id === added) ??
+    usable.find((a) => accountCondition(a, running).kind === "serving") ??
+    usable[0]
   );
-}
-
-/** The sign-ins found whose provider is installed: the ones signing in on this page can use. */
-export function signInsToName(setup: Setup, results: Results): SetupSignIn[] {
-  const installed = new Set(
-    providerPicks(setup)
-      .filter((pick) => isInstalled(pick, results))
-      .map((pick) => pick.id),
-  );
-  return setup.found.sign_ins.filter((signIn) => installed.has(signIn.provider));
-}
-
-/** The clients found installed, and the rest. */
-export function splitClients(setup: Setup): { found: SetupClient[]; others: SetupClient[] } {
-  return {
-    found: setup.found.clients.filter((client) => client.installed),
-    others: setup.found.clients.filter((client) => !client.installed),
-  };
 }
 
 /** Whether address (scheme, host and port) names the machine the browser runs on. Unknown counts as yes. */
@@ -171,9 +245,4 @@ export function onThisMachine(address?: string): boolean {
   } catch {
     return true;
   }
-}
-
-/** The files of a paste reply with the client key's value where the placeholder stood. */
-export function withKey(content: string, placeholder: string, value?: string): string {
-  return value ? content.replaceAll(placeholder, value) : content;
 }

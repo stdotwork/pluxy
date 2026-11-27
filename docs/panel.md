@@ -48,7 +48,7 @@ request", which says under it that it uses one request.
 | (Quota Management) | Gone: every account's row on All accounts shows its two shortest limits, and its page shows every limit. The old address `#/quota` opens All accounts. |
 | Requests, Usage | The two tabs of Activity; see [The Activity page](#the-activity-page). Requests keeps the ID `usage` of the page it replaced, so `#/usage` and `data-page="usage"` still work; Usage is `activity/usage`. |
 | Tools | A new page, named for what a person does there: connect a coding tool, copy the address for any other program, and make, name and delete the keys tools send. It sits under the Tools destination; in the desktop app its topics sit beside it. |
-| Set up pluxy | A new page, named for what a person does there. The panel opens it by itself on a first start; afterwards it stays among the Settings topics and shows the same things as they are now. |
+| Set up pluxy, Setup | A new page, named for what a person does there: three steps, the person's AI accounts, their coding tool and one test request. The panel opens it by itself on a first start, titled "Set up pluxy"; afterwards it stays among the Settings topics as "Setup", every step folded. |
 
 The navigation has five destinations: Home, Accounts (All accounts, with Routing as the tab
 "Order & fallback", and each account's own page under All accounts), Activity (Requests and Usage), Tools (the Tools

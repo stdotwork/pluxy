@@ -6,7 +6,8 @@ put in each client's config. It assumes pluxy is running and has an account
 ([quick start](../README.md#quick-start)).
 
 pluxy never edits a client's files. `pluxy client show <tool>` prints the settings, and you paste
-them. The panel's **Set up pluxy** page shows the same text under **Point a client at pluxy**.
+them. The panel's **Tools** page, and step 2 of its guided setup, show the same text under each tool's
+**Set up**.
 
 Every block below has two placeholders:
 

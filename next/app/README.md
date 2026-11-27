@@ -1447,22 +1447,22 @@ as above, and reach their tools only through the router.
 
 On a first run of a core (a new "On this computer" core is one), the window opens the kit's Setup
 page ([`../ui`](../ui/README.md), `#/setup`) in place of Home when the window's address
-names no page, as the web panel does:
-what core found on its machine, the providers to install, an account, the clients, and Finish. It
-opens once the app is connected and signed in, so the first launch screen still comes first. After
-Finish the page stays among the Settings topics and shows the same things as they are now.
+names no page, as the web panel does: three steps, the person's AI accounts, their coding tool,
+and one test request. It opens once the app is connected and signed in, so the first launch screen
+still comes first. After it is finished the page stays among the Settings topics, every step
+folded.
 
-The app adds one thing to the page. Under "Point a client at pluxy", a client core found gets a
-**Set up** button beside "Show what to paste" when the window has a page for it and its optional
-tool is installed on this device or offered by a registry, which is the list Beginner Mode
-offers. Set up opens the client's own page, where the app writes the client's settings itself
-after its native confirmation; a tool that is not installed or enabled yet is named there. A
-client whose settings file pluxy would not change gets no button, only the paste text. The
-paste text stays for every client. With a remote core the button is left out: the page then lists
-the clients on core's machine, and the app sets a client up on this computer only.
+The app adds one thing to the page, through `SetupOptions.toolAction`. In step 2, a coding tool
+core found gets a **Set up** link at the end of its row when the window has a page for it and its
+optional tool is installed on this device or offered by a registry, which is the list Beginner
+Mode offers. Set up opens the tool's own page, where the app writes the tool's settings itself
+after its native confirmation; a tool that is not installed or enabled yet is named there. A tool
+whose settings file pluxy would not change gets no link, and its row keeps the panel's own steps,
+as every other row does. With a remote core the link is left out: the page then lists the tools on
+core's machine, and the app sets a tool up on this computer only.
 
-`SETUP_CLIENT_PAGES` in `src/agentPages.ts` maps core's ID for each client to the ID of its
-page here, and `setupClientAction` beside it decides which clients get the button. Beginner Mode
+`SETUP_CLIENT_PAGES` in `src/agentPages.ts` maps core's ID for each tool to the ID of its
+page here, and `setupClientPage` beside it decides which tools get the link. Beginner Mode
 is still there and unchanged.
 
 ## Beginner Mode
@@ -1662,13 +1662,14 @@ walks [Setup](../management/README.md#setup) on the app's first start, on the bu
 registry that offers `pluxy/claude` as a pick (`native/core-steps.ts` `firstRunSource`), and a
 stand-in `claude` printing `2.4.1 (Claude Code)` first on the PATH it inherits from the app; a
 curated registry offers the Claude Code page's package (`native/first-run.ts`). The window opens
-on Setup by itself (`#/setup`, "Set up pluxy"); "Found on this machine" names Claude Code 2.4.1;
-the Claude pick is ticked; the Claude Code client row has "Set up" beside "Show what to paste";
-Start installs the pick, which then says Installed, and `GET /packages` through the app's host
-lists it; Finish lands on Home and `GET /setup` has `first_run` false. The next launch
-opens on Home; Setup, opened, says "Setup is finished." and has no Finish button. The
-session keeps a screenshot of each screen it holds (Claude Code found, after Start, finished) and
-ends on that page in GTK's dark variant.
+on Setup by itself (`#/setup`, "Set up pluxy") with step 1 open; the Claude kind is ticked,
+saying Claude Code is installed on this computer; "Add Claude" adds it, step 1 then says
+"Added: Claude.", and `GET /packages` through the app's host lists it; step 2's Claude Code row
+has the app's "Set up" link to `#/claude-code`; "Finish later" lands on Home and `GET /setup`
+has `first_run` false. The next launch opens on Home; Setup, opened, is titled "Setup" with
+every step folded and no "Finish later", and step 1 says Claude is added. The session keeps a
+screenshot of each screen it holds (the kind found, after Add, step 2, finished) and ends on that
+page in GTK's dark variant.
 
 Then, in a session of its own (`native/instances-session.ts`), with the core program adopted in
 each profile, it launches the app again and again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the

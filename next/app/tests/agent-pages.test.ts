@@ -5,7 +5,15 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { agentPages, SETUP_CLIENT_PAGES, setupClientAction, setupOffersNeeded } from "../src/agentPages";
+import type { VNode } from "preact";
+import type { SetupClient } from "../../ui/kit/api";
+import {
+  agentPages,
+  SETUP_CLIENT_PAGES,
+  setupClientAction,
+  setupClientPage,
+  setupOffersNeeded,
+} from "../src/agentPages";
 import type { DeviceCatalog, DevicePackage } from "../src/device";
 
 describe("agentPages", () => {
@@ -52,20 +60,35 @@ describe("setupClientAction", () => {
   test("Set up opens the page of a client whose tool is installed or offered, and no other", () => {
     const agents = agentPages();
     const offers = [{ name: "curated", packages: [{ id: "pluxy/codex-setup", versions: ["1.0.0"] }] }];
-    const { clientAction, clientActionHint } = setupClientAction(
-      agents,
-      catalog("pluxy/claude-code"),
-      offers,
-    );
-    expect(clientAction?.("claude-code")).toEqual({ label: "Set up", page: "claude-code" });
-    expect(clientAction?.("codex")).toEqual({ label: "Set up", page: "codex" });
+    const found = (id: string, state: SetupClient["state"] = "not-configured") => ({ id, state });
+    const page = (id: string, state?: SetupClient["state"]) =>
+      setupClientPage(found(id, state), agents, catalog("pluxy/claude-code"), offers);
+    expect(page("claude-code")).toBe("claude-code");
+    expect(page("codex")).toBe("codex");
     // Pi's tool is neither installed nor offered; core may name a client this window has no page for.
-    expect(clientAction?.("pi")).toBeUndefined();
-    expect(clientAction?.("some-new-client")).toBeUndefined();
-    expect(clientAction?.("constructor")).toBeUndefined();
-    expect(clientActionHint).toContain("Set up opens the client's own page");
+    expect(page("pi")).toBeUndefined();
+    expect(page("some-new-client")).toBeUndefined();
+    expect(page("constructor")).toBeUndefined();
+    // A file pluxy refused to change: the page here would not write it either.
+    expect(page("claude-code", "refused")).toBeUndefined();
     // With no tool on this device and no registry, nothing is offered.
-    expect(setupClientAction(agents).clientAction?.("claude-code")).toBeUndefined();
+    expect(setupClientPage(found("claude-code"), agents)).toBeUndefined();
+  });
+
+  test("the Setup page's tool button is a Set up link to that page, and nothing where there is none", () => {
+    const { toolAction } = setupClientAction(agentPages(), catalog("pluxy/claude-code"));
+    const client = (id: string): SetupClient => ({
+      id,
+      name: id,
+      installed: true,
+      config: "",
+      state: "not-configured",
+    });
+    const link = toolAction?.(client("claude-code")) as VNode<{ href: string; children: string }>;
+    expect(link.type).toBe("a");
+    expect(link.props.href).toBe("#/claude-code");
+    expect(link.props.children).toBe("Set up");
+    expect(toolAction?.(client("pi"))).toBeUndefined();
   });
 });
 
