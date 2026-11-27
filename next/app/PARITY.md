@@ -223,11 +223,11 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Browser choice for login links | Dropped | The sign-in link is shown, and can be copied or opened in any browser the person chooses | — |
 | Codex "Allow parallel tool calls" in the model catalog editor | Dropped | Codex no longer reads it: `supports_parallel_tool_calls` is not in Codex's model information, so the setting would change nothing | — |
 | Windows title bar and window materials | Dropped | Decoration with per-version rules that needs native code | — |
-| Thinking and Fast aliases ("Model Aliases") | Deferred | The same effect exists in config: a thinking suffix such as `gpt-5(high)`, a payload rule, or an account's model alias; no form yet | Core's config, in the Source tab |
+| Thinking and Fast aliases ("Model Aliases") | Deferred | The same effect exists in config: a thinking suffix such as `gpt-5(high)`, a payload rule, or an account's model alias; no form yet | Core's config, in Config's Settings file tab |
 | Open-folder buttons | Deferred | Small value, and a new native action | — |
 | Installed and version badges on clients | Deferred | The client list says which clients can be set up; badges for what is installed come later | [README](README.md#beginner-mode) |
 | Languages (English, Simplified and Traditional Chinese, Japanese) | Deferred | English only for now; the string layer is ready for more | — |
-| Allow-LAN switch | Deferred | Exposing a service that holds provider credentials to the network is a choice that should be a visible edit. By hand: set `listen` to `0.0.0.0:<port>` in the Source tab and restart; the management API stays on this machine | `listen` in core's config |
+| Allow-LAN switch | Deferred | Exposing a service that holds provider credentials to the network is a choice that should be a visible edit. By hand: set `listen` to `0.0.0.0:<port>` in Config's Settings file tab and restart; the management API stays on this machine | `listen` in core's config |
 | Usage page of core requests (ranges, trend, analysis, request details, data management) | Kept in part | Totals and chart are on Home, and Activity's Requests tab lists them and saves them as a spreadsheet, and its Usage tab adds them up over 24 hours, 7 days or 30 days by provider, model, account or key; prices and the storage cap are dropped, and analysis is not built | Home and Activity in the panel |
 
 ## Evidence

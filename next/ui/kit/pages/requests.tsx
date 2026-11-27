@@ -77,6 +77,8 @@ const t = strings("requests", {
   openAccount: "Open {account}",
   openLog: "Open its log",
   accounts: "Accounts",
+  notTried: "pluxy did not try:",
+  order: "Order & fallback",
 });
 
 const SHOW = 50;
@@ -89,7 +91,7 @@ function Story(props: {
 }) {
   const e = props.event;
   const s = whyOf(e, props.name);
-  if (s.lines.length === 0 && !s.next) return null;
+  if (s.lines.length === 0 && !s.next && !s.reason) return null;
   return (
     <>
       {s.lines.map((line) => (
@@ -103,6 +105,7 @@ function Story(props: {
           )}
         </p>
       ))}
+      {s.leftOut.length > 0 && (e.tried?.length ?? 0) > 0 && <p>{t("notTried")}</p>}
       {s.leftOut.length > 0 && (
         <ul class="request-left-out">
           {s.leftOut.map((l, i) => (
@@ -111,6 +114,17 @@ function Story(props: {
             </li>
           ))}
         </ul>
+      )}
+      {s.reason && (
+        <p class="request-reason">
+          {s.reason.text}
+          {s.reason.order && (
+            <>
+              {" "}
+              <a href="#/routing">{t("order")}</a>
+            </>
+          )}
+        </p>
       )}
       {s.next?.kind === "account" && (
         <p class="request-next">

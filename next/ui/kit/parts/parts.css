@@ -397,6 +397,11 @@
     color: var(--px-color-text-muted);
   }
 
+  .setting-note {
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
   .setting-key {
     overflow-wrap: anywhere;
     color: var(--px-color-text-muted);

@@ -404,8 +404,8 @@ pluxy: logging to file is off (invalid_request)
 
 Exit code 2, from `pluxy logs`. Core always writes its log to standard error, and writes `main.log` too when file logging is on;
 `pluxy logs` reads `main.log`. Set
-`"logs": {"to_file": true}` in `config.json` and run `pluxy reload`, or turn on **File logging** on
-the panel's **Config Panel** page, **Logging** tab.
+`"logs": {"to_file": true}` in `config.json` and run `pluxy reload`, or turn on **Write pluxy's log to a file** in
+the **Logging** section of the panel's **Config** page.
 
 ### Request logging is off
 

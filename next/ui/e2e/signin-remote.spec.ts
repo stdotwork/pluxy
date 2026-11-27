@@ -1,33 +1,20 @@
-// Signing in to a core that answers only its own machine, from another address: the panel says
-// what core said and what to change. The page is opened at this machine's own network address, so
-// core's real gate sees a caller that is not loopback (core: internal/server/manage.go).
-import { networkInterfaces } from "node:os";
+// Signing in to a core that answers only its own machine, as a caller it cannot take as this
+// machine: the panel says what core said and what to change. Core counts a call from loopback, or
+// from the very address it arrived at, as this machine, so the page cannot get here by opening
+// core at this machine's own address. Instead every request the page sends names another client in
+// X-Forwarded-For, as a proxy forwarding a caller from elsewhere does, and core's real gate
+// refuses it (core: internal/server/manage.go, internal/server/clientip.go).
 import { expect, test } from "@playwright/test";
 import { useCore } from "./support";
 
-// Core listens on every address; panelcore asks it through 0.0.0.0, which is this machine.
-const core = useCore({ listen: "0.0.0.0:0" });
+const core = useCore();
 
-/** An IPv4 address of this machine that is not loopback, or undefined when it has none. */
-function networkAddress(): string | undefined {
-  for (const list of Object.values(networkInterfaces())) {
-    for (const a of list ?? []) if (a.family === "IPv4" && !a.internal) return a.address;
-  }
-  return undefined;
-}
+test.use({ extraHTTPHeaders: { "X-Forwarded-For": "203.0.113.9" } });
 
 test("sign-in from another address says that remote management is off and what to change", async ({
   page,
 }) => {
-  const address = networkAddress();
-  if (!address) {
-    // A CI runner always has one; a machine with no network does not.
-    if (process.env.CI) throw new Error("no non-loopback IPv4 address on this machine");
-    test.skip(true, "no non-loopback IPv4 address on this machine");
-    return;
-  }
-  const port = new URL(core.base).port;
-  await page.goto(`http://${address}:${port}/panel/`);
+  await page.goto(`${core.base}/panel/`);
   await page.getByLabel("Management key").fill(core.key);
   await page.getByRole("button", { name: "Sign in" }).click();
 

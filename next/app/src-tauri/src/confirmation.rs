@@ -326,6 +326,9 @@ pub struct Prepared {
     /// On Windows, a confirmed launch of `pluxy/execution`'s own program in its `open` or `app`
     /// mode, which starts with no console (`confirmation_open::windowless`).
     windowless: bool,
+    /// The confirming button's label (GTK mnemonic form): `text::CONFIRM` unless the app's own
+    /// action names what it does (`confirm_app_as`).
+    confirm: &'static str,
 }
 impl Prepared {
     fn check(&self) -> Result<(), String> {
@@ -1245,6 +1248,7 @@ impl Confirmations {
             origin,
             own: false,
             plain: false,
+            confirm: text::CONFIRM,
             exact: ExactAction {
                 what: action.what,
                 chain: action.chain,
@@ -1567,6 +1571,8 @@ pub(crate) mod text {
     pub(crate) const NOTICE_TITLE: &str = "pluxy launch notice";
     pub(crate) const CANCEL: &str = "_Cancel";
     pub(crate) const CONFIRM: &str = "C_onfirm";
+    /// The confirming button of a management key rotation, which the app calls replacing the key.
+    pub(crate) const REPLACE_KEY: &str = "_Replace key";
     pub(crate) const SETTINGS_CLOSE: &str = "Close";
     pub(crate) const NO_LAUNCHES: &str = "No remembered launches.";
     pub(crate) const REVOKE: &str = "_Revoke remembered launch";
@@ -1634,6 +1640,9 @@ pub(crate) mod text {
             assert_eq!(super::plain("C_onfirm"), "Confirm");
             assert_eq!(super::win32("C_onfirm"), "C&onfirm");
             assert_eq!(super::access_key("C_onfirm"), Some('o'));
+            assert_eq!(super::plain(super::REPLACE_KEY), "Replace key");
+            assert_eq!(super::win32(super::REPLACE_KEY), "&Replace key");
+            assert_eq!(super::access_key(super::REPLACE_KEY), Some('r'));
             let secrets = "_Remember this exact executable, argv, cwd and secrets: a__b & c";
             assert_eq!(
                 super::plain(secrets),
@@ -1663,6 +1672,8 @@ pub(crate) struct Review {
     pub page: bool,
     /// The app's own action, which shows its own outcome (no launch notice).
     pub own: bool,
+    /// The confirming button's label (GTK mnemonic form).
+    pub confirm: &'static str,
 }
 
 /// Marks pending confirmation id as showing and says what its dialog shows. Refused when it is
@@ -1681,6 +1692,7 @@ pub(crate) fn begin(app: &tauri::AppHandle, id: &str) -> Result<Review, String> 
         summary: pending.prepared.notice(),
         page: pending.page,
         own: pending.prepared.own,
+        confirm: pending.prepared.confirm,
     })
 }
 
@@ -1773,10 +1785,22 @@ pub(crate) fn confirm_app(
     what: String,
     generation: u64,
 ) -> Result<bool, String> {
+    confirm_app_as(app, what, generation, text::CONFIRM)
+}
+
+/// `confirm_app` with the confirming button labelled confirm (GTK mnemonic form), which names
+/// what the action does, such as `text::REPLACE_KEY`.
+pub(crate) fn confirm_app_as(
+    app: &tauri::AppHandle,
+    what: String,
+    generation: u64,
+    confirm: &'static str,
+) -> Result<bool, String> {
     let id = {
         let st = app.state::<crate::App>();
         let mut c = st.confirmations.lock().unwrap();
-        let prepared = c.prepare_app(what, generation)?;
+        let mut prepared = c.prepare_app(what, generation)?;
+        prepared.confirm = confirm;
         c.queue(prepared)?
     };
     let st = app.state::<crate::App>();
