@@ -9,6 +9,7 @@
 @import "./ui.css";
 @import "./shell.css";
 @import "./parts/parts.css";
+@import "./pages/settings.css";
 @import "./pages/themes.css";
 @import "./extensions/page.css";
 @import "./pages/extensions.css";

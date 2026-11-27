@@ -2,15 +2,19 @@
 // moment it changes. The desktop app has its Sign out on its Where pluxy runs page, beside the
 // connection it ends, so it turns this one off.
 
-import { SettingRow } from "../parts";
+import { SettingRow, useSavedTick } from "../parts";
 import { usePrivacyOn } from "../privacy";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
 import { Choices, ConfirmButton, PageHead, Switch, useKit, useThemeState } from "../ui";
+import { SettingGroup, SettingsColumn } from "./settingGroup";
 
 const t = strings("general", {
   title: "General",
   tip: "Look, hiding names and signing out",
+  look: "Look",
+  privacy: "Privacy",
+  thisBrowser: "This browser",
   appearance: "Appearance",
   appearanceAbout: "Light, dark, or whatever your system uses.",
   light: "Light",
@@ -33,10 +37,11 @@ export interface GeneralOptions {
 
 function Appearance() {
   const themes = useThemeState();
+  const saved = useSavedTick();
   const theme = themes.current.theme;
   const only = theme.appearance === "both" ? undefined : theme.appearance;
   return (
-    <SettingRow name={t("appearance")} description={t("appearanceAbout")}>
+    <SettingRow name={t("appearance")} description={t("appearanceAbout")} saved={saved.saved}>
       {only ? (
         // The theme has one appearance, so there is nothing to choose: say why, and where to go.
         <span class="muted">
@@ -53,7 +58,10 @@ function Appearance() {
             { value: "dark", label: t("dark") },
             { value: "system", label: t("system") },
           ]}
-          onChange={(appearance) => themes.set({ appearance })}
+          onChange={(appearance) => {
+            themes.set({ appearance });
+            saved.flash();
+          }}
         />
       )}
     </SettingRow>
@@ -63,22 +71,36 @@ function Appearance() {
 export function GeneralPage(props: { options?: GeneralOptions }) {
   const { host, privacy } = useKit();
   const hidden = usePrivacyOn(privacy);
+  const saved = useSavedTick();
   return (
     <>
       <PageHead title={t("title")} />
-      <div>
-        <Appearance />
-        <SettingRow name={t("hideNames")} description={t("hideNamesAbout")}>
-          <Switch label={t("hideNames")} checked={hidden} onChange={(on) => privacy.set(on)} />
-        </SettingRow>
-        {props.options?.signOut !== false && host.features.has("signOut") && (
-          <SettingRow name={t("signOut")} description={t("signOutAbout")}>
-            <ConfirmButton variant="quiet" onConfirm={() => host.signOut()}>
-              {t("signOut")}
-            </ConfirmButton>
+      <SettingsColumn>
+        <SettingGroup title={t("look")}>
+          <Appearance />
+        </SettingGroup>
+        <SettingGroup title={t("privacy")}>
+          <SettingRow name={t("hideNames")} description={t("hideNamesAbout")} saved={saved.saved}>
+            <Switch
+              label={t("hideNames")}
+              checked={hidden}
+              onChange={(on) => {
+                privacy.set(on);
+                saved.flash();
+              }}
+            />
           </SettingRow>
+        </SettingGroup>
+        {props.options?.signOut !== false && host.features.has("signOut") && (
+          <SettingGroup title={t("thisBrowser")}>
+            <SettingRow name={t("signOut")} description={t("signOutAbout")}>
+              <ConfirmButton variant="quiet" onConfirm={() => host.signOut()}>
+                {t("signOut")}
+              </ConfirmButton>
+            </SettingRow>
+          </SettingGroup>
         )}
-      </div>
+      </SettingsColumn>
     </>
   );
 }

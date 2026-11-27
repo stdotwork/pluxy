@@ -223,6 +223,7 @@ export const PARTS = [
   "detail",
   "card",
   "settings-section",
+  "setting-card",
   "button",
   "badge",
   "field",

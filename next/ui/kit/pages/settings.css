@@ -1,0 +1,138 @@
+/* The Settings pages' shared look (settingGroup.tsx): groups of rows in rounded cards, and the
+   rows inside them (SettingRow, parts/settingRow.tsx). General, Themes, Config, System and
+   Extensions all draw from it. */
+@layer kit {
+  .settings-column {
+    display: grid;
+    gap: calc(var(--s) * 6);
+    align-content: start;
+    max-width: 52rem;
+    margin-inline: auto;
+    min-width: 0;
+  }
+
+  /* A group: its title sits outside the card, as in T3 Code's settings. */
+  .setting-group {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    align-content: start;
+    min-width: 0;
+    /* A link to the group lands below the frame's own sticky head. */
+    scroll-margin-top: calc(var(--s) * 4);
+  }
+
+  .setting-group-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2);
+    min-height: var(--px-size-control);
+    padding-inline: calc(var(--s) * 1);
+  }
+
+  .setting-group-head h2 {
+    margin: 0;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-medium);
+  }
+
+  .setting-group-about {
+    margin: 0;
+    padding-inline: calc(var(--s) * 1);
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .setting-group-card {
+    min-width: 0;
+    border: var(--px-shape-border) solid var(--px-color-card-border);
+    border-radius: var(--r-card);
+    background: var(--px-color-card);
+    box-shadow: var(--px-shadow-raised);
+  }
+
+  /* Rows: 52 high at least, a hairline between, room at the sides; the control is at the end. */
+  .setting-group-card > .setting-row {
+    padding: calc(var(--s) * 3) calc(var(--s) * 4);
+    min-height: 52px;
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .setting-group-card > .setting-row:last-child {
+    border-bottom: 0;
+  }
+
+  .setting-group-card > .setting-row .setting-grid {
+    padding: 0;
+    align-items: center;
+  }
+
+  .setting-group-card .setting-about {
+    gap: calc(var(--s) * 0.5);
+  }
+
+  .setting-group-card .setting-name {
+    font-weight: var(--px-font-weight-medium);
+  }
+
+  .setting-group-card .setting-description,
+  .setting-group-card .setting-note {
+    font-size: var(--px-font-size-small);
+  }
+
+  .setting-group-card .setting-key {
+    font-size: var(--px-font-size-label);
+    color: var(--px-color-secondary-label);
+  }
+
+  .setting-group-card > .setting-row .setting-error {
+    padding: calc(var(--s) * 2) 0 0;
+  }
+
+  /* A piece of a group that is not a setting row (a list, a form, a dropzone): the same room. */
+  .setting-group-card > .setting-piece {
+    padding: calc(var(--s) * 3) calc(var(--s) * 4);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    min-width: 0;
+  }
+
+  .setting-group-card > .setting-piece:last-child {
+    border-bottom: 0;
+  }
+
+  /* Saved: a tick and the word, for a moment, in the place Saving… was. It fades in; the theme's
+     motion tokens turn that off for people who ask for less motion. */
+  .setting-saving[data-saved] {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 1);
+    color: var(--px-color-ok);
+    animation: saved-in var(--px-motion-duration-slow, 240ms) var(--px-motion-easing, ease-out);
+  }
+
+  @keyframes saved-in {
+    from {
+      opacity: 0;
+      transform: translateY(2px);
+    }
+  }
+
+  /* An empty state or notice inside a group takes the card's room too. */
+  .setting-group-card > .notice,
+  .setting-group-card > .empty,
+  .setting-group-card > .state-pane {
+    margin: calc(var(--s) * 3) calc(var(--s) * 4);
+  }
+
+  .setting-group-card > .state-pane {
+    padding-inline: 0;
+  }
+
+  @media (max-width: 40em) {
+    .setting-group-card > .setting-row,
+    .setting-group-card > .setting-piece {
+      padding-inline: calc(var(--s) * 3);
+    }
+  }
+}
