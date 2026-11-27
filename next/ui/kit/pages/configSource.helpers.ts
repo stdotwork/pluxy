@@ -1,22 +1,43 @@
-/** The Config Panel's tabs, in order. The first is the one `#/config` opens. */
-export const configTabIds = ["common", "connectivity", "network", "logging", "advanced", "source"] as const;
+/** The Config page's tabs, in order. The first is the one `#/config` opens. */
+export const configTabIds = ["settings", "source"] as const;
+export type ConfigTab = (typeof configTabIds)[number];
+
+/** The Settings tab's sections, by the id each has on the page. */
+export type ConfigSection = "network" | "logging" | "keys";
 
 export interface ConfigAddress {
-  tab: string;
-  /** The account the Source tab opens at. */
+  tab: ConfigTab;
+  /** The section of the Settings tab the address opens at. */
+  section?: ConfigSection;
+  /** The account the Settings file tab opens at. */
   account?: string;
 }
 
 /**
- * Reads a page address of the Config Panel: `#/config`, `#/config/<tab>` and
- * `#/config/source?account=<id>`. A tab the page does not have opens the first one. Undefined for
- * the address of another page.
+ * The old tabs' addresses, which still open where their settings now are: `#/config/common` and
+ * `#/config/network` at Network, `#/config/logging` at Logging, `#/config/connectivity` and
+ * `#/config/advanced` at Keys.
+ */
+const OLD_TABS: Record<string, ConfigSection> = {
+  common: "network",
+  network: "network",
+  logging: "logging",
+  connectivity: "keys",
+  advanced: "keys",
+};
+
+/**
+ * Reads a page address of the Config page: `#/config`, `#/config/<tab>` and
+ * `#/config/source?account=<id>`. An old tab's address opens the Settings tab at the section that
+ * holds its settings; any other name opens the Settings tab. Undefined for the address of another
+ * page.
  */
 export function parseConfigAddress(hash: string): ConfigAddress | undefined {
   const m = /^#\/config(?:\/([^?]*))?(?:\?(.*))?$/.exec(hash);
   if (!m) return undefined;
   const named = (m[1] ?? "").split("/")[0] ?? "";
-  const tab = configTabIds.find((id) => id === named) ?? configTabIds[0];
+  const tab: ConfigTab = named === "source" ? "source" : "settings";
+  const section = tab === "settings" ? OLD_TABS[named] : undefined;
   let account: string | undefined;
   for (const part of (m[2] ?? "").split("&")) {
     if (!part.startsWith("account=")) continue;
@@ -28,12 +49,12 @@ export function parseConfigAddress(hash: string): ConfigAddress | undefined {
     }
     break;
   }
-  return account ? { tab, account } : { tab };
+  return { tab, ...(section ? { section } : {}), ...(account ? { account } : {}) };
 }
 
-/** The address of a tab of the Config Panel, opening Source at an account if one is given. */
-export function configAddress(tab: string, account?: string): string {
-  const path = tab === configTabIds[0] ? "#/config" : `#/config/${tab}`;
+/** The address of a tab of the Config page, opening the Settings file at an account if one is given. */
+export function configAddress(tab: ConfigTab, account?: string): string {
+  const path = tab === "source" ? "#/config/source" : "#/config";
   return account ? `${path}?account=${encodeURIComponent(account)}` : path;
 }
 

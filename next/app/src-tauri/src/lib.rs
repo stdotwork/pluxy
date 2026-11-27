@@ -1116,7 +1116,7 @@ async fn core_call(
         return Ok(client::Reply::failed(
             403,
             "native_only",
-            "the management key is rotated only by the app itself: use Rotate on the Config page",
+            "the management key is rotated only by the app itself: use Replace key on the Config page",
         ));
     }
     let caller = state.conn.lock().unwrap().caller();

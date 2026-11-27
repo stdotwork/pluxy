@@ -1,11 +1,19 @@
 import { expect, test } from "bun:test";
 import { configAddress, findAccount, parseConfigAddress } from "../kit/pages/configSource.helpers";
 
-test("parseConfigAddress reads the tab and the account of a config address", () => {
-  expect(parseConfigAddress("#/config")).toEqual({ tab: "common" });
-  expect(parseConfigAddress("#/config/")).toEqual({ tab: "common" });
-  expect(parseConfigAddress("#/config/network")).toEqual({ tab: "network" });
+test("the old tabs' addresses open the Settings tab where their settings now are", () => {
+  expect(parseConfigAddress("#/config")).toEqual({ tab: "settings" });
+  expect(parseConfigAddress("#/config/")).toEqual({ tab: "settings" });
+  expect(parseConfigAddress("#/config/common")).toEqual({ tab: "settings", section: "network" });
+  expect(parseConfigAddress("#/config/network")).toEqual({ tab: "settings", section: "network" });
+  expect(parseConfigAddress("#/config/logging")).toEqual({ tab: "settings", section: "logging" });
+  expect(parseConfigAddress("#/config/connectivity")).toEqual({ tab: "settings", section: "keys" });
+  expect(parseConfigAddress("#/config/advanced")).toEqual({ tab: "settings", section: "keys" });
   expect(parseConfigAddress("#/config/source")).toEqual({ tab: "source" });
+  expect(parseConfigAddress("#/config/nope")).toEqual({ tab: "settings" });
+});
+
+test("parseConfigAddress reads the account the settings file opens at", () => {
   expect(parseConfigAddress("#/config/source?account=alpha-1")).toEqual({
     tab: "source",
     account: "alpha-1",
@@ -14,9 +22,6 @@ test("parseConfigAddress reads the tab and the account of a config address", () 
     tab: "source",
     account: "a b/c",
   });
-  expect(parseConfigAddress("#/config?account=x")).toEqual({ tab: "common", account: "x" });
-  // A tab the page does not have opens the first one; a malformed escape stays text.
-  expect(parseConfigAddress("#/config/nope")).toEqual({ tab: "common" });
   expect(parseConfigAddress("#/config/source?account=%E0%A4%A")).toEqual({
     tab: "source",
     account: "%E0%A4%A",
@@ -25,22 +30,18 @@ test("parseConfigAddress reads the tab and the account of a config address", () 
 });
 
 test("parseConfigAddress is undefined for another page", () => {
-  expect(parseConfigAddress("#/logs/config")).toBeUndefined();
   expect(parseConfigAddress("#/configuration")).toBeUndefined();
-  expect(parseConfigAddress("")).toBeUndefined();
+  expect(parseConfigAddress("#/routing")).toBeUndefined();
 });
 
-test("configAddress writes what parseConfigAddress reads; the first tab keeps the plain address", () => {
-  expect(configAddress("common")).toBe("#/config");
-  expect(configAddress("network")).toBe("#/config/network");
+test("configAddress writes what parseConfigAddress reads; Settings keeps the plain address", () => {
+  expect(configAddress("settings")).toBe("#/config");
+  expect(configAddress("source")).toBe("#/config/source");
   expect(configAddress("source", "alpha-1")).toBe("#/config/source?account=alpha-1");
   expect(configAddress("source", "a b/c")).toBe("#/config/source?account=a%20b%2Fc");
-  for (const [tab, account] of [
-    ["common", undefined],
-    ["logging", undefined],
-    ["source", "a b/c"],
-  ] as const)
+  for (const [tab, account] of [["settings"], ["source"], ["source", "a b/c"]] as const) {
     expect(parseConfigAddress(configAddress(tab, account))).toEqual(account ? { tab, account } : { tab });
+  }
 });
 
 const at = (content: string, id: string) => {

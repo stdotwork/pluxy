@@ -11,44 +11,38 @@
     overflow-wrap: anywhere;
     user-select: all;
   }
-  .config-fields {
+  /* The Settings tab's sections: an address with a section scrolls to it, under the sticky frame. */
+  .config-section {
+    scroll-margin-top: calc(var(--s) * 4);
+  }
+  .config-rows {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
-    gap: calc(var(--s) * 3);
-    border: 0;
-    padding: 0;
+  }
+  .config-rows > .notice,
+  .config-rows > .config-key-notice {
+    margin: calc(var(--s) * 2) calc(var(--s) * 2) 0;
+  }
+  .config-text {
+    width: min(24em, 100%);
+    font-family: var(--px-font-mono);
+  }
+  .config-number {
+    width: 8em;
+  }
+  .config-hint {
     margin: 0;
-    min-width: 0;
   }
-  .config-fields .card {
-    min-width: 0;
-  }
-  .config-fields .mono {
-    display: block;
-    overflow-wrap: anywhere;
-    margin-top: calc(var(--s) * 2);
-    font-size: var(--px-font-size-small);
-  }
-  .config-source-search {
-    margin-block: calc(var(--s) * 3);
-  }
-  [data-page="config"] input[type="search"] {
-    font: inherit;
-    color: var(--px-color-text);
-    background: var(--px-color-surface-raised);
-    border: var(--px-shape-border) solid var(--px-color-input-border);
-    border-radius: var(--px-shape-radius);
-    padding: calc(var(--s) * 2) calc(var(--s) * 2.5);
-    width: 100%;
-  }
-  .config-source-search input {
+  .config-find input {
     flex: 1;
     min-width: 10em;
+  }
+  .config-find-count {
+    color: var(--px-color-text-muted);
   }
   .config-editor {
     width: 100%;
     box-sizing: border-box;
-    min-height: 26rem;
+    min-height: min(26rem, 55vh);
     resize: vertical;
     white-space: pre;
     overflow-wrap: normal;
@@ -83,6 +77,12 @@
     display: flex;
     gap: calc(var(--s) * 6);
     color: var(--px-color-text-muted);
+  }
+  .config-diff-legend [data-change="add"] {
+    color: var(--px-color-diff-add);
+  }
+  .config-diff-legend [data-change="remove"] {
+    color: var(--px-color-diff-remove);
   }
   .config-diff {
     white-space: pre;

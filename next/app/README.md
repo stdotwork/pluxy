@@ -59,8 +59,9 @@ The window calls core through the
 `<core>/v0/management/...` only, following no redirects and, for a core on this computer, no
 proxy from the environment. Path segments that are, or decode to, `.` or `..` are refused.
 
-Rotate on the Config page's Connectivity tab rotates the management key natively: the app opens
-its native confirmation, which names the core and how the new key will be kept, then
+Replace key in the Keys section of the Config page (after its own Yes, replace key) rotates the
+management key natively: the app opens its native confirmation, which names the core and how
+the new key will be kept, then
 calls core's `POST /v0/management/management-key/rotate` itself. It keeps the new key as the old
 one was kept (in `connection.json`, for this session only, or, for the app's own core, in that
 core's config file, which core writes) and shows it once in a native window with Copy and

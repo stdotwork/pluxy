@@ -331,16 +331,16 @@ fn window_ready(app: &AppHandle) -> Result<Webview, String> {
     Ok(main)
 }
 
-/// Opens the Config page's Connectivity tab and presses Rotate.
+/// Opens the Config page at its Keys section, presses Replace key and answers its question.
 fn press_rotate(main: &Webview) -> Result<(), String> {
-    main.eval("location.hash = '#/config'")
+    main.eval("location.hash = '#/config/connectivity'")
         .map_err(|_| "could not open Config")?;
-    wait_for("the Connectivity tab", || {
-        eval(main, "(() => { const t = [...document.querySelectorAll('[role=tab]')].find((t) => t.textContent === 'Connectivity'); if (t) t.click(); return !!t; })()")
+    wait_for("the Replace key button", || {
+        eval(main, "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Replace key' && !b.disabled); if (b) b.click(); return !!b; })()")
             .filter(|v| v == true)
     })?;
-    wait_for("the Rotate button", || {
-        eval(main, "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Rotate' && !b.disabled); if (b) b.click(); return !!b; })()")
+    wait_for("the Yes, replace key button", || {
+        eval(main, "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Yes, replace key' && !b.disabled); if (b) b.click(); return !!b; })()")
             .filter(|v| v == true)
     })
     .map(|_| ())
@@ -422,7 +422,7 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<Webview, String> 
         "a cancelled rotation changed saved settings",
     )?;
 
-    // Rotate from the Config page's Rotate button, keeping the key as the old one was kept.
+    // Rotate from the Config page's Replace key button, keeping the key as the old one was kept.
     press_rotate(main)?;
     answer(app, &target, says, confirm_key())?;
     let first = revealed(
@@ -439,7 +439,7 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<Webview, String> 
     wait_for("the Config page's rotation notice", || {
         eval(
             main,
-            "document.body.innerText.includes('Management key rotated')",
+            "document.body.innerText.includes('Replaced. The app uses the new key')",
         )
         .filter(|v| v == true)
     })?;
@@ -567,7 +567,7 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<Webview, String> 
             "a failed save did not explain the recovery",
         )?;
         wait_for("the Config page's recovery notice", || {
-            eval(&main, "document.body.innerText.includes('Management key rotated') && document.body.innerText.includes('could not be kept on this device')")
+            eval(&main, "document.body.innerText.includes('Replaced. The app uses the new key') && document.body.innerText.includes('could not be kept on this device')")
                 .filter(|v| v == true)
         })?;
         require(

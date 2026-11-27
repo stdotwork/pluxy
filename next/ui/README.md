@@ -137,11 +137,13 @@ a filter in its address) keeps the place.
 Three pages add to their address. `#/accounts/<id>` opens that account's own page (the page
 `account`, which answers that prefix), and `#/accounts/<id>/sign-in` opens it with its sign-in in
 place. `#/logs/<trace ID>` opens that request's log on the Logs page, in its Failed requests tab.
-`#/config/<tab>` opens a tab of the Config Panel: `common` (what `#/config` opens),
-`connectivity`, `network`, `logging`, `advanced` or `source`. `#/config/source?account=<id>`
-opens the Source tab with that account's ID selected; an account's "Open the settings file" leads
-there. An account from a provider key section of `config.yaml` opens the Source tab with nothing
-selected, because the file does not hold its ID: core makes the ID when it reads the file.
+`#/config` opens Config's Settings tab and `#/config/source` its Settings file tab. The old tabs'
+addresses still open where their settings now are: `#/config/common` and `#/config/network` the
+Settings tab at Network, `#/config/logging` scrolled to Logging, and `#/config/connectivity` and
+`#/config/advanced` scrolled to Keys. `#/config/source?account=<id>` opens the Settings file tab
+with that account's ID selected; an account's "Open the settings file" leads there. An account
+from a provider key section of `config.yaml` opens the Settings file tab with nothing selected,
+because the file does not hold its ID: core makes the ID when it reads the file.
 
 The Setup page (`#/setup`) is the one page the panel opens by itself. Once signed in, the
 shell asks core for `GET /setup`: on a first run (`first_run`), when the address names no page,
@@ -203,7 +205,7 @@ visit), and `POST /client-keys` sends the name with the new key.
 | Tools (`tools`) | Tools | No old page |
 | General (`settings`) | Settings, the first topic | No old page |
 | Set up pluxy (`setup`) | Settings, a topic | No old page |
-| Config Panel (`config`) | Settings, a topic | Config Panel (`/config`; `/settings` and `/api-keys` led there) |
+| Config (`config`) | Settings, a topic | Config Panel (`/config`; `/settings` and `/api-keys` led there) |
 | System (`system`) | Settings, a topic | Management Center Info (`/system`) |
 | Extensions (`extensions`) | Settings, a topic | Plugins (`/plugins`) and Plugin Store (`/plugin-store`) |
 | Themes (`themes`) | Settings, a topic | No old page |
@@ -231,7 +233,7 @@ feature, it keeps the old label, unless the label named something this core does
   facts: the Extensions, System and Config pages show them.
 - The 10-minute traffic chart and its table: Home shows the last 7 local days, and the Usage page
   has the numbers behind them.
-- "Management keys", a count of client keys: the Config Panel lists the client keys.
+- "Management keys", a count of client keys: the Tools page lists the client keys.
 - "Debug" and "WebSocket auth": core has neither setting (see the config.yaml table in
   [`next/README.md`](../README.md#what-each-setting-does-here)).
 - "Server version" and "Build date": on the System page, as "Version" and "Built".
@@ -265,7 +267,7 @@ feature, it keeps the old label, unless the label named something this core does
   error rules" (`request-scoped-errors`): dropped, core already treats a request-scoped error as
   not the account's fault.
 - The OAuth excluded models and OAuth model alias pages: these rules are now an extension's
-  `excluded_models` and `model_alias` settings, written in the Config Panel's Source tab.
+  `excluded_models` and `model_alias` settings, written in Config's Settings file tab.
 - The OAuth model alias page's "Diagram", which drew each provider's models and their aliases
   joined by lines: the System page's "Models your tools can ask for" lists each extension's models with their
   aliases and the accounts that serve them. A sign-in's own aliases are changed in "Account model
@@ -332,7 +334,7 @@ feature, it keeps the old label, unless the label named something this core does
 - The storage cap and repair of the old app's database: core keeps its recent record in memory,
   limited by `usage.max_events` and `usage.max_age_ms`, and daily files on disk (`usage.keep_days`).
 
-**Config Panel**
+**Config**
 
 - Settings core does not run (marked Later or Dropped in the config.yaml table in
   [`next/README.md`](../README.md#what-each-setting-does-here)): "Debug Mode", "Commercial Mode",
@@ -344,24 +346,24 @@ feature, it keeps the old label, unless the label named something this core does
   Codex's cloaking and header defaults, Codex's response steering and live media relay, the
   Devin fields, the plugin settings, "Disable Control Panel", and the panel update
   settings ("Disable Panel Auto Updates", "Panel Repository", "Global GitHub Token"). Any of them
-  can still be written in the Source tab.
+  can still be written in the Settings file tab.
 - "Disable Image Generation": core has no switch for every account. Each Codex account has its own
   `image_generation_tool` and `images` settings (see [Codex](../README.md#codex)), changed in
-  "Settings (settings)" on a sign-in's Edit form, or in the Source tab. The old key still works in
+  "Settings (settings)" on a sign-in's Edit form, or in the Settings file tab. The old key still works in
   `config.yaml`, where it sets both on the file's Codex accounts.
 - "Host Address", "Port", "OAuth Credential Directory", "Enable TLS" and its paths, "Trusted
   proxies" and "Allow Remote Access": core runs them, but they set where core listens, who may
   reach it, or the folder an import reads (`pluxy import cpa`, or "Bring it across" on the Setup
   page), and core's settings call does not change them.
-  They are edited in the Source tab.
+  They are edited in the Settings file tab.
 - Typing or pasting a client key, "Generate" and the "API key strength" meter: core makes every
   new key itself, at random. A specific key that a client already uses can be written in the
-  Source tab.
+  Settings file tab.
 - Key names ("Name / description (optional)"): the old panel kept them only in that browser's
   storage, so no other browser saw them.
 - "Edit", and copying a key made earlier: core shows a key in full only once, when it is made.
-- "Set management key": "Rotate" makes a new random key, shows it once and signs the panel in
-  with it. In the desktop app, "Rotate" keeps the new key natively and shows it in a
+- "Set management key": "Replace key" makes a new random key, shows it once and signs the panel in
+  with it. In the desktop app, "Replace key" keeps the new key natively and shows it in a
   native window, never in a webview ([the app's README](../app/README.md#how-the-app-reaches-core)).
 
 **System**
@@ -372,7 +374,7 @@ feature, it keeps the old label, unless the label named something this core does
   releases and repositories.
 - "Local Login Data" and "Clear login data": "Sign out" forgets the key.
 - The hidden "Request Logging" dialog, opened by tapping the version seven times: "Enable request
-  logging" is a plain switch on the Config Panel's Logging tab.
+  logging" is the "Log every request" switch in the Logging section of Config.
 - The "CLI Proxy API Management Center" title: the upstream panel's product name.
 
 **Across the panel**

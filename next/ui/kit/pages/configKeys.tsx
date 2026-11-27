@@ -1,124 +1,92 @@
+// The Keys section's management key: Replace key, which asks first, and what came of it. The new
+// key shows once, in the web panel only: the desktop app replaces it natively, shows it in a
+// window of its own and never gives it to the page.
+
 import { useEffect, useRef, useState } from "preact/hooks";
 import { problem } from "../api";
-import { strings } from "../strings";
-import { Button, Card, ConfirmButton, Empty, List, Notice, useCopy, useKit, useLoad } from "../ui";
+import { SettingRow } from "../parts";
+import { usePrivacy } from "../privacy";
+import { rich, strings } from "../strings";
+import { Button, ConfirmButton, Notice, useCopy, useKit } from "../ui";
 
 const t = strings("configKeys", {
-  clients: "Client keys (access.api-keys)",
   management: "Management key",
-  add: "Add",
-  remove: "Delete",
-  rotate: "Rotate",
+  managementAbout:
+    "Replace it if someone else may have seen it. Every other window and command that uses the old key must sign in again.",
+  replace: "Replace key",
+  confirmReplace: "Yes, replace key",
+  unavailable: "Replace it with {command} on the computer pluxy runs on.",
+  newManagement: "New management key",
+  newManagementNote: "This browser already uses it. Copy it now: it is not shown again.",
+  replacedApart: "Replaced. The app uses the new key and showed it once in its own window.",
+  noAnswer:
+    "pluxy did not answer, so the key may have been replaced. Sign in again with the old key. If it is refused, run {command} on the computer pluxy runs on to see the new one.",
+  once: "Copy this key now. pluxy hides it once you close this notice or leave the tab.",
   copy: "Copy",
   copied: "Copied",
   close: "Close",
-  empty: "No client keys yet. Press Add to create one.",
-  loading: "Loading client keys…",
-  number: "#",
-  row: "#{number}",
-  key: "Client key",
-  actions: "Actions",
-  newClient: "New client key",
-  newManagement: "New management key",
-  once: "Copy this key now. pluxy hides it once you close this notice or leave the tab.",
-  rotationHint:
-    "Rotating replaces the management key immediately. Other management clients must sign in with the new key.",
-  rotationUnavailable: "Management key rotation is unavailable in this host.",
-  rotationUnknown:
-    "The management key may have changed. Find the current key in core's config file and sign in with it before rotating again.",
-  rotatedApart:
-    "Management key rotated. The app now uses the new key and showed it once in a window of its own, not on this page.",
   copyFailed: "Could not copy. Select the key and copy it manually.",
 });
 
-export function keyCards(tab: string, search: string) {
-  const query = search.trim().toLowerCase();
-  return {
-    clients: query ? t("clients").toLowerCase().includes(query) : tab === "common" || tab === "connectivity",
-    management: query ? t("management").toLowerCase().includes(query) : tab === "connectivity",
-  };
-}
-interface NewKey {
-  id: number;
-  value: string;
-  tab: string;
-  seen: boolean;
-}
-/** Owned by ConfigPage, so a reply survives leaving a tab before it arrives. */
-export function useConfigKeys(tab: string, onChanged: () => void) {
-  const { api, unauthorized } = useKit();
-  const [clients, setClients] = useState<NewKey[]>([]);
-  const [management, setManagement] = useState<NewKey>();
-  const [adding, setAdding] = useState(false);
-  const [rotating, setRotating] = useState(false);
-  /** A rotation the host kept the key of, without passing it to the page. */
-  const [rotatedApart, setRotatedApart] = useState(false);
-  const [clientError, setClientError] = useState<string>();
-  const [rotationError, setRotationError] = useState<string>();
-  const nextId = useRef(0);
-  const currentTab = useRef(tab);
-  currentTab.current = tab;
-  // A seen notice is cleared on leaving its tab. An unseen late reply waits for a visit.
-  useEffect(() => {
-    setClients((keys) => keys.filter((key) => !key.seen || key.tab === tab));
-    setManagement((key) => (key?.seen && key.tab !== tab ? undefined : key));
-  }, [tab]);
-  const add = async () => {
-    if (adding) return;
-    const origin = currentTab.current;
-    setAdding(true);
-    setClientError(undefined);
-    const reply = await api.addClientKey();
-    setAdding(false);
-    if (reply.status === 401) return unauthorized();
-    setClientError(problem(reply));
-    if (reply.body) {
-      const key = { id: ++nextId.current, value: reply.body.value, tab: origin, seen: false };
-      setClients((keys) => [...keys, key]);
-      onChanged();
-    }
-    return reply;
-  };
-  const rotate = async () => {
-    if (rotating || management) return;
-    const origin = currentTab.current;
-    setRotating(true);
-    setRotationError(undefined);
-    setRotatedApart(false);
-    const reply = await api.rotateManagementKey();
-    setRotating(false);
-    if (reply.status === 401) return unauthorized();
-    setRotationError(
-      reply.status === 0
-        ? (reply.error?.message ?? t("rotationUnknown"))
-        : (problem(reply) ?? reply.error?.message),
-    );
-    const value = reply.body?.value;
-    if (value) setManagement({ id: ++nextId.current, value, tab: origin, seen: false });
-    else if (reply.body) setRotatedApart(true);
-    if (reply.body) onChanged();
-  };
-  return {
-    clients,
-    management,
-    adding,
-    rotating,
-    rotatedApart,
-    clientError,
-    rotationError,
-    add,
-    rotate,
-    seenClient: (id: number) =>
-      setClients((keys) => keys.map((key) => (key.id === id ? { ...key, seen: true } : key))),
-    closeClient: (id: number) => setClients((keys) => keys.filter((key) => key.id !== id)),
-    seenManagement: () => setManagement((key) => (key ? { ...key, seen: true } : key)),
-    closeManagement: () => setManagement(undefined),
-  };
-}
-type KeysState = ReturnType<typeof useConfigKeys>;
+/** The command that shows the management key on pluxy's computer, and the one that replaces it. */
+const SHOW_KEY = "pluxy key management --show-key";
+const ROTATE_KEY = "pluxy key rotate-management";
 
-/** A new key, shown once: its value, Copy and Close. The Setup page shows a new client key with it too. */
-export function KeyNotice(props: { title: string; value: string; close: () => void; seen: () => void }) {
+/** What the last Replace key came to. */
+export type Replaced =
+  | { kind: "key"; id: number; value: string; seen: boolean }
+  | { kind: "apart"; warning?: string }
+  | { kind: "noAnswer" }
+  | { kind: "failed"; error: string };
+
+/**
+ * Replace key, owned by the page, so a reply that comes after leaving the Settings tab is still
+ * shown on coming back. onReplaced runs once core has a new key (the settings file changed).
+ */
+export function useReplaceKey(onReplaced: () => void) {
+  const { api, unauthorized } = useKit();
+  const [outcome, setOutcome] = useState<Replaced>();
+  const next = useRef(0);
+  const replace = async () => {
+    setOutcome(undefined);
+    const reply = await api.rotateManagementKey();
+    if (reply.status === 401) return unauthorized();
+    if (reply.status === 0) return setOutcome({ kind: "noAnswer" });
+    const why = problem(reply);
+    if (why !== undefined) return setOutcome({ kind: "failed", error: why });
+    // The app's native confirmation answers 204 with nothing when the person cancels it.
+    if (!reply.body) return;
+    const value = reply.body.value;
+    setOutcome(
+      value
+        ? { kind: "key", id: ++next.current, value, seen: false }
+        : { kind: "apart", warning: reply.error?.message },
+    );
+    onReplaced();
+  };
+  return {
+    outcome,
+    replace,
+    /** The key notice was shown. */
+    seen: () => setOutcome((o) => (o?.kind === "key" ? { ...o, seen: true } : o)),
+    close: () => setOutcome(undefined),
+    /** Leaving the tab: a key that was shown goes; one not shown yet waits for the next visit. */
+    left: () => setOutcome((o) => (o?.kind === "key" && o.seen ? undefined : o)),
+  };
+}
+export type ReplaceKey = ReturnType<typeof useReplaceKey>;
+
+/**
+ * A new key, shown once: its value, Copy and Close. note says what to do with it (by default,
+ * copy it before closing). The Setup page shows a new client key with it too.
+ */
+export function KeyNotice(props: {
+  title: string;
+  value: string;
+  note?: string;
+  close: () => void;
+  seen: () => void;
+}) {
   const { state, copy } = useCopy(props.value);
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -134,7 +102,7 @@ export function KeyNotice(props: { title: string; value: string; close: () => vo
       aria-label={props.title}
     >
       <strong>{props.title}</strong>
-      <span>{t("once")}</span>
+      <span>{props.note ?? t("once")}</span>
       <code data-part="key-value">{props.value}</code>
       <div class="actions">
         <Button onClick={copy}>{t("copy")}</Button>
@@ -145,128 +113,51 @@ export function KeyNotice(props: { title: string; value: string; close: () => vo
     </section>
   );
 }
-function ClientKeys(props: { state: KeysState; tab: string; onChanged: () => void }) {
-  const { api, unauthorized } = useKit();
-  const keys = useLoad(api.clientKeys);
-  const [deleting, setDeleting] = useState(false);
-  const [error, setError] = useState<string>();
-  const actions = useRef<HTMLDivElement>(null);
-  const state = props.state;
-  const add = async () => {
-    if (state.adding || keys.loading || deleting) return;
-    const reply = await state.add();
-    if (reply && !problem(reply)) keys.reload();
-  };
-  const remove = async (id: string) => {
-    setDeleting(true);
-    setError(undefined);
-    const reply = await api.deleteClientKey(id);
-    setDeleting(false);
-    if (reply.status === 401) return unauthorized();
-    const why = problem(reply);
-    setError(why);
-    keys.reload();
-    actions.current?.querySelector<HTMLButtonElement>("button")?.focus();
-    if (!why) props.onChanged();
-  };
-  return (
-    <Card
-      title={t("clients")}
-      actions={
-        <div ref={actions}>
-          <button
-            type="button"
-            class="btn"
-            data-part="button"
-            data-slot="button"
-            data-variant="quiet"
-            aria-disabled={state.adding || keys.loading || deleting}
-            onClick={add}
-          >
-            {t("add")}
-          </button>
-        </div>
-      }
-    >
-      {(error || state.clientError || keys.error) && (
-        <Notice tone="danger">{error ?? state.clientError ?? keys.error}</Notice>
-      )}
-      {state.clients
-        .filter((key) => key.tab === props.tab)
-        .map((key) => (
-          <KeyNotice
-            key={key.id}
-            title={t("newClient")}
-            value={key.value}
-            close={() => state.closeClient(key.id)}
-            seen={() => state.seenClient(key.id)}
-          />
-        ))}
-      {keys.loading && !keys.data && <Notice tone="muted">{t("loading")}</Notice>}
-      {keys.data &&
-        (keys.data.keys.length === 0 ? (
-          <Empty>{t("empty")}</Empty>
-        ) : (
-          <List
-            label={t("clients")}
-            items={keys.data.keys.map((key, index) => ({ ...key, number: index + 1 }))}
-            id={(key) => key.id}
-            columns={[
-              { label: t("number"), value: (key) => t("row", { number: key.number }) },
-              { label: t("key"), value: (key) => key.masked, mono: true },
-              {
-                label: t("actions"),
-                value: (key) => (
-                  <ConfirmButton disabled={state.adding || deleting} onConfirm={() => remove(key.id)}>
-                    {t("remove")}
-                  </ConfirmButton>
-                ),
-              },
-            ]}
-          />
-        ))}
-    </Card>
-  );
-}
-export function ConfigConnectivity(props: {
-  state: KeysState;
-  tab: string;
-  search: string;
-  onChanged: () => void;
-}) {
+
+const command = (c: string) => <code class="mono">{c}</code>;
+
+/** The management key's row, and under it what the last Replace key came to. */
+export function ManagementKey(props: { state: ReplaceKey; configKey?: string; disabled?: string }) {
   const { host } = useKit();
-  const canRotate = host.features.has("rotateManagementKey");
-  const shown = keyCards(props.tab, props.search);
-  const state = props.state;
-  const value = state.management?.tab === props.tab ? state.management : undefined;
+  const p = usePrivacy();
+  const can = host.features.has("rotateManagementKey");
+  const o = props.state.outcome;
+  const why = props.disabled ?? (can ? undefined : t("unavailable", { command: ROTATE_KEY }));
   return (
-    <div class="stack">
-      {shown.clients && <ClientKeys state={state} tab={props.tab} onChanged={props.onChanged} />}
-      {shown.management && (
-        <Card
-          title={t("management")}
-          actions={
-            canRotate && (
-              <Button disabled={state.rotating || !!state.management} onClick={state.rotate}>
-                {t("rotate")}
-              </Button>
-            )
-          }
+    <>
+      <SettingRow
+        name={t("management")}
+        description={t("managementAbout")}
+        configKey={props.configKey}
+        disabled={why}
+      >
+        <ConfirmButton
+          variant="quiet"
+          confirmLabel={t("confirmReplace")}
+          disabled={!!why || o?.kind === "noAnswer" || o?.kind === "key"}
+          onConfirm={props.state.replace}
         >
-          <p class="muted">{canRotate ? t("rotationHint") : t("rotationUnavailable")}</p>
-          {state.rotatedApart && <Notice tone="ok">{t("rotatedApart")}</Notice>}
-          {state.rotationError && <Notice tone="danger">{state.rotationError}</Notice>}
-          {value && (
-            <KeyNotice
-              key={value.id}
-              title={t("newManagement")}
-              value={value.value}
-              close={state.closeManagement}
-              seen={state.seenManagement}
-            />
-          )}
-        </Card>
+          {t("replace")}
+        </ConfirmButton>
+      </SettingRow>
+      {o?.kind === "key" && (
+        <KeyNotice
+          key={o.id}
+          title={t("newManagement")}
+          note={t("newManagementNote")}
+          value={o.value}
+          close={props.state.close}
+          seen={props.state.seen}
+        />
       )}
-    </div>
+      {o?.kind === "apart" && <Notice tone="ok">{t("replacedApart")}</Notice>}
+      {o?.kind === "apart" && o.warning && <Notice tone="warn">{p.text(o.warning)}</Notice>}
+      {o?.kind === "noAnswer" && (
+        <Notice tone="warn">
+          {rich(t("noAnswer", { command: "{command}" }), { command: command(SHOW_KEY) })}
+        </Notice>
+      )}
+      {o?.kind === "failed" && <Notice tone="danger">{p.text(o.error)}</Notice>}
+    </>
   );
 }
