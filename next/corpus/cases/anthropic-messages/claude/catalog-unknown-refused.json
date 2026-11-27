@@ -14,7 +14,6 @@
   },
   "old_core": {"account":{"models":null}},
   "new_core": {"account":{"models":null}},
-  "volatile": ["client.body.error.message"],
   "exceptions": [
     {
       "path": "client.status",
@@ -26,7 +25,7 @@
       "kind": "gap",
       "reason": "For an unknown model the old core says unknown provider (invalid_request_error); the new core says no account serves the model, as Anthropic's not_found_error.",
       "want": {
-        "message": "(volatile)",
+        "message": "no account serves model \"corpus-not-in-catalog\". pluxy serves: claude-3-5-haiku-20241022, claude-3-7-sonnet-20250219, claude-fable-5, claude-fable-5-1, claude-haiku-4-5-20251001, claude-haiku-5-5, claude-opus-4-1-20250805, claude-opus-4-20250514 and 11 more (pluxy model list shows them all). Set the tool's model to one of them, or add a model alias to an account so that \"corpus-not-in-catalog\" goes to one of them.",
         "type": "not_found_error",
         "pluxy": "(volatile)"
       }

@@ -7,7 +7,6 @@
   },
   "account_models": ["kimi-k3"],
   "new_core": {"account":{"models":null}},
-  "volatile": ["client.body.error.message"],
   "exceptions": [
     {
       "path": "client.status",
@@ -20,7 +19,7 @@
       "reason": "For an unknown model the old core says unknown provider (invalid_request_error, param model); the new core says no account serves the model (model_not_found).",
       "want": {
         "code": "model_not_found",
-        "message": "(volatile)",
+        "message": "no account serves model \"corpus-not-in-catalog\". pluxy serves: kimi-k2, kimi-k2-thinking, kimi-k2.5, kimi-k2.6, kimi-k2.7-code, kimi-k2.7-code-highspeed, kimi-k2.8, kimi-k2.8-code and 4 more (pluxy model list shows them all). Set the tool's model to one of them, or add a model alias to an account so that \"corpus-not-in-catalog\" goes to one of them.",
         "type": "invalid_request_error",
         "pluxy": "(volatile)"
       }

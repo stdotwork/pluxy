@@ -11,7 +11,6 @@
   },
   "old_core": {"account":{"models":null}},
   "new_core": {"account":{"models":null}},
-  "volatile": ["client.body.error.message"],
   "exceptions": [
     {
       "path": "client.status",
@@ -24,7 +23,7 @@
       "reason": "For an unknown model the old core says unknown provider (invalid_request_error, param model); the new core says no account serves the model (model_not_found).",
       "want": {
         "code": "model_not_found",
-        "message": "(volatile)",
+        "message": "no account serves model \"corpus-not-in-catalog\". pluxy serves: muse-spark-1.1, muse-spark-1.2, muse-spark-1.2-contributor, muse-spark-1.3, muse-spark-1.3-contributor, muse-wonder-1.0, muse-wonder-1.0-contributor, muse-wonder-full-1.0 and 1 more (pluxy model list shows them all). Set the tool's model to one of them, or add a model alias to an account so that \"corpus-not-in-catalog\" goes to one of them.",
         "type": "invalid_request_error",
         "pluxy": "(volatile)"
       }
