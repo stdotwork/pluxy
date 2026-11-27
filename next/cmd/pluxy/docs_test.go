@@ -184,7 +184,7 @@ func commandFlags(cmd *command) []string {
 	return names
 }
 
-// plannedCommands are commands the management README's Resources tables name before they exist
+// plannedCommands are commands the management API docs (docs/management-api.md) name before they exist
 // (laterCommands in cli_test.go lists the calls behind them). The list only shrinks: a command
 // added to the CLI comes out of it.
 var plannedCommands = []string{"config validate", "config apply", "ext config"}

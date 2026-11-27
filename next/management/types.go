@@ -135,7 +135,7 @@ type RegistriesReply struct {
 	Registries []Registry `json:"registries"`
 }
 
-// Health is an account's health (Account.Health; the README's "Accounts").
+// Health is an account's health (Account.Health; docs/management-api.md, "Account fields").
 type Health = route.Health
 
 // Health states (Health.State) and where a block's end came from (Health.Source).

@@ -1,5 +1,5 @@
-// Core's basic and routing settings, by today's core's names (GET and PATCH /settings;
-// next/README.md, the settings table; next/internal/core/manageconfig.go). Several pages show
+// Core's basic and routing settings, by the names GET and PATCH /settings use
+// (docs/management-api.md, "Settings"; next/internal/core/manageconfig.go). Several pages show
 // the same settings, so they all read and change them here.
 
 import type { Host } from "../host";

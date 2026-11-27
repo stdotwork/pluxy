@@ -204,10 +204,8 @@ From the auth folder, the `.json` files at its top of these types: `codex`, `cla
 - A symbolic link, a subfolder and any file that is not a `.json` file are not read.
 - An `antigravity` account serves only once the Antigravity extension is installed (step 4).
 
-The reference for every setting is the table "What each setting does here" in
-[`next/README.md`](../next/README.md#what-each-setting-does-here), and for every auth-file field the
-table under ["Moving from CLIProxyAPI"](../next/README.md#moving-from-cliproxyapi-pluxy-import-cpa)
-in the same file. Both call CPA "today's core".
+The reference for every setting is [What each setting does](config.md#what-each-setting-does), and
+for every auth-file field [Auth files](config.md#auth-files), both in the configuration reference.
 
 ## What does not carry over
 

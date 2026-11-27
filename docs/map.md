@@ -47,6 +47,31 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 - **Handbook**: `next/protocol/README.md` ("Overview", "Package manifest", "Calls") and
   `next/protocol/TUTORIAL.md`.
 
+### Codex client catalog
+- **Entry**: `next/extensions/codex/client_models.json`, the templates behind the catalog the Codex
+  client asks for ([Codex client catalog](routing.md#codex-client-catalog)), embedded by
+  `next/extensions/codex/client_models.go`. The desktop app's Codex setup tool embeds the same file
+  (`next/app-tools/codex/src/catalog.rs`). The routing list in `next/extensions/codex/models.json` is
+  separate.
+- **Refresh by hand**: fetch `codex_client_models.json` from the
+  [router-for-me/models](https://github.com/router-for-me/models) repository and rebuild the
+  extension:
+
+  ```bash
+  tmp=$(mktemp -d) && git -C "$tmp" init -q
+  git -C "$tmp" fetch --depth 1 https://github.com/router-for-me/models main
+  git -C "$tmp" show FETCH_HEAD:codex_client_models.json > extensions/codex/client_models.json
+  rm -rf "$tmp"
+  go build -o extensions/codex/codex ./extensions/codex
+  ```
+
+  Review the file and its diff before keeping it. Then run `go test -count=1 ./extensions/codex`
+  (`TestClientModelTemplates` in `client_models_test.go` expects 12 templates, so a changed count
+  needs the test changed too), the catalog's corpus cases
+  (`PLUXY_CORPUS_CASE='^codex-models/' go test -count=1 -run TestCorpus ./corpus`) and e2e tests
+  (`go test -count=1 -run 'TestCodexClientModels|TestCodexCatalog' ./e2e`). Rebuild the setup tool (from `next/app-tools`:
+  `cargo build --locked -p codex-setup`), and reload core after replacing the extension program.
+
 ### Wire format request or reply field
 - **Entry**: add or update the internal model in `next/llm/llm.go` (`Request`, `Item`, `Part`,
   `Event`), then update `ParseRequest`, `EncodeRequest`, `NewStreamDecoder`, `NewStreamWriter`, and
@@ -72,8 +97,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 - **Tests**: `go test -count=1 -run TestParseConfig ./internal/server`,
   `go test -count=1 -run TestApplySettings ./internal/configdoc`, and
   `go test -count=1 -run TestWriteConfig ./internal/core`.
-- **Handbook**: `next/README.md` ("config.yaml with today's key names", "Reloading config and
-  swapping extensions").
+- **Handbook**: `docs/config.md` ("Keys", "config.yaml with CLIProxyAPI key names", "Reloading").
 
 ### Management API endpoint, CLI command, and panel page
 - **Entry**: request/reply types and Go client in `next/management/types.go` and
@@ -87,7 +111,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 - **Tests**: `go test -count=1 -run TestManagement ./internal/core` and
   `go test -count=1 -run TestEveryRouteHasACommand ./cmd/pluxy`; pluxy's home in
   `next/cmd/pluxy/home_test.go` and `next/e2e/home_test.go`.
-- **Handbook**: `next/management/README.md` ("Resources", "The `pluxy` command").
+- **Handbook**: `docs/management-api.md` and `docs/cli.md`.
 
 ### Panel page or UI kit component
 - **Entry**: shared primitives in `next/ui/kit/ui.tsx` (`Card`, `List`, `Button`, `PageHead`) and
@@ -156,7 +180,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   shared logic in `activity.ts`.
 - **Tests**: `go test -count=1 -run TestStore ./internal/usage` and
   `go test -count=1 -run TestManageUsageRangesByKeyAndBefore ./internal/core`.
-- **Handbook**: `next/README.md` ("Usage statistics").
+- **Handbook**: `docs/usage-and-logs.md` ("Usage statistics").
 
 ### Logs and request logs
 - **Entry**: `main.log` rotation and folder size cap in `next/internal/logfile/logfile.go` (`Files`,
@@ -168,7 +192,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 - **Tests**: `go test -count=1 -run TestRotateAndTrim ./internal/logfile`,
   `go test -count=1 -run TestRequestLog ./internal/server`, and
   `go test -count=1 -run TestDeleteLogs ./internal/core`.
-- **Handbook**: `next/README.md` ("Log files", "Request logs").
+- **Handbook**: `docs/usage-and-logs.md` ("Log files", "Request logs").
 
 ### Secret redaction
 - **Entry**: wire and error redaction in `next/protocol/redact.go` (`Redactor`, `NewRedactor`,
@@ -186,12 +210,12 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   credential handoff in `next/internal/host/credentials.go`.
 - **Tests**: `go test -count=1 -run TestConcurrentRequestsShareOneRenewal ./internal/cred` and
   `go test -count=1 -run TestLoginPromptIsRedacted ./internal/host`.
-- **Handbook**: `next/README.md` ("Accounts added by login") and `next/protocol/README.md` ("Login
-  and refresh").
+- **Handbook**: `docs/providers.md` ("How accounts added by sign-in are kept and renewed"),
+  `docs/management-api.md` ("Sign-ins") and `next/protocol/README.md` ("Login and refresh").
 
 ### Differential test corpus
 - **Definition**: the **corpus** (`next/corpus`) replays recorded HTTP/WebSocket cases against core
-  and compares them with the removed old core's `recorded_old_core` reference. An **exception** is a
+  and compares them with the replies recorded in each case (`recorded_old_core`), the reference. An **exception** is a
   case entry (or global rule in `next/corpus/cases/corpus.json`) with `path`, `reason`, and `kind`
   (`intended` for an agreed difference, `gap` for an open one), optionally pinning `want` or
   `absent`. Unused exceptions fail the run; never edit `recorded_old_core`.

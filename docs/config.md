@@ -492,6 +492,43 @@ digits, `.`, `_` and `-`) become `-`; leading `.`, `_` and `-` are dropped, the 
 characters, and an ID another account already has (compared without regard to letter case) gets `-2`,
 `-3` and so on.
 
+### Auth files
+
+CLIProxyAPI keeps each signed-in account as a `.json` file in its auth folder.
+[`pluxy import cpa`](cli.md#pluxy-import-cpa) and `POST /v0/management/accounts/import`
+([Accounts](management-api.md#accounts)) turn each file into an account added by sign-in, by the
+file's `type`:
+
+| File `type` | Becomes | Fields |
+| --- | --- | --- |
+| `codex` | `pluxy/codex` subscription account | `access_token`, `refresh_token`, `expired` (the expiry); `id_token` and `account_id` stay with the credential; `websockets` is the account's `websockets`. A `siwc` section with a token (`access_token`, else `access`, or `refresh_token`) also becomes a Sign in with ChatGPT account, `<file id>-siwc` (with `-2`, `-3` and so on when another file in the folder imports as that ID), even when the file's own tokens are missing: its `access_token`, `refresh_token`, `expires_at` (else `expired`), and `client_id`, `device_id`, `scope` and `id_token` with the credential. It is disabled unless the file says `use_siwc: true`; it shares the file's label and routing fields below, and takes only `websockets` and the identifier setting of the account settings. |
+| `claude` | `pluxy/claude` subscription account | `access_token`, `refresh_token`, `expired`. |
+| `kimi`, `kimi-ai` | `pluxy/kimi` account | `access_token`, `refresh_token`, `expired`, `device_id`; `base_url` is an account setting, and so is the site, `domain`: from `domain`, else `base_url`'s host, else the type (`kimi.ai` for `kimi-ai`). |
+| `vertex` | `pluxy/gemini` Vertex AI account with a service account | `service_account` is the credential; `project_id` and `location` (default `us-central1`, as in CLIProxyAPI) are the account's `vertex` settings. `interactions` or `native_interactions` set to JSON `true` at the top of the file is the account's `interactions` setting. |
+| `xai` | `pluxy/xai` Grok sign-in account | `access_token`, `refresh_token`, `expired`; `token_endpoint` stays with the credential and `base_url` is an account setting. |
+| `meta` | `pluxy/meta` Muse Code sign-in account | `api_key` (else `access_token`) is the minted key and `dca_token` (else a `dca:` `access_token`) the device token that mints a new one; `base_url` stays with the credential. A file with only the device token mints its key on the first request. |
+| `devin` | `pluxy/devin` account with a session token | `session_token` (else `api_key`) is the credential; `base_url` is an account setting and `user_name` the label when the file has no `label` or `email`. |
+| `antigravity` | `pluxy/antigravity` sign-in account | `access_token`, `refresh_token`, `expired`; `project_id` (the Google Cloud project requests are billed to) stays with the credential, and a file without one is renewed at once, which finds it; `base_url` is an account setting. pluxy does not ship this extension (it is [archived](../next/archive/antigravity/README.md)): the account is added whether or not the package is installed, and serves once the package is built and installed by hand. |
+| anything else | Not brought | CLIProxyAPI does not load a file with no `type` or with `gemini` either. |
+
+From every file: `disabled: true` imports the account disabled; `priority` and `weight` are the
+account's; `disable_cooling` (or `disable-cooling`) is its `disable_cooling`; `request_retry` (or
+`request-retry`, a number or numeric text; a negative one inherits routing's) is its
+`request_retry`; and `label` is its label, a name a person gave it. `email` (in a Devin file without
+one, `user_name`) is the provider's label, which the account shows when the file has no `label` and
+a new sign-in is checked against. A file's `prefix` is the account's `prefix`, its `excluded_models`
+(a list, or one comma-separated string) its `excluded_models`, and the entries of its
+`model_aliases` (or `models`) with a `name` and an `alias` its `model_alias`. A file's `proxy_url`
+(or `proxy-url`) is the account's `proxy_url`; a file whose value core cannot use is skipped rather
+than imported without its proxy. A file's `headers` are the account's `headers`: text values only,
+trimmed, empty ones dropped, with a copy of a client header (`$` and a header name) brought as in a
+provider key's `headers`. A copy of a client's key, proxy password or cookie header and a value that
+holds `$CPA-SESSION-ID` are not brought, and a file with a header core refuses is skipped rather
+than imported without it.
+
+A file larger than 1 MiB, a file whose account ID the config or the credential store already uses,
+and anything but a `.json` file at the top of the folder are not brought.
+
 ### What each setting does
 
 The current name comes first, older spellings are in brackets. The Status column says what core

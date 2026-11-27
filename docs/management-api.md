@@ -145,6 +145,11 @@ header or setting, so core refuses the document (422 `refused`), naming the line
 there itself. A secret that is not a string has its type in its placeholder, so the number `1234` and
 the string `"1234"` have different placeholders.
 
+One limit: an account or a provider entry that keeps its secrets' placeholders keeps its secrets
+when its address or its proxy changes (an account's `base_url` or `proxy_url`, in the file or through
+`PATCH /accounts/{id}`, or an entry's `base-url` or `proxy-url` in a `config.yaml`). So a client that
+may change an account or an entry may point its kept secrets at another address.
+
 A placeholder is accepted only while the file still holds that secret and core has not restarted
 (placeholders are keyed hashes with a key core picks at start); otherwise the call answers 409
 `conflict`: read the config again.

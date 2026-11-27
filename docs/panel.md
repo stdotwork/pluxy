@@ -17,8 +17,7 @@ gives another word: an account's "Renewal time" reads "Subscription ends".
 
 Parity did not mean the same logic. The new core does things its own way, and the panel shows
 what it does. Old features were carried over only where they were worth keeping. Each one left out
-has a reason, listed page by page in
-[What each page leaves out, and why](../next/ui/README.md#what-each-page-leaves-out-and-why).
+has a reason.
 
 ## A minimal panel
 

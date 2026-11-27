@@ -28,7 +28,7 @@ The panel's **Tools** page shows the same settings under each tool's **Set up**,
 with a **Copy** button. Its **Make key** button makes a new client key and puts it into the text, so
 you do not paste it yourself. The panel's guided setup (the **Set up pluxy** page, called **Setup**
 once first-run setup is done) shows the same in its second step, "Your coding tool". The
-[desktop app](app.md) can also write a tool's files itself.
+desktop app (`app.md`) can also write a tool's files itself.
 
 Claude Desktop, Grok Build and Hermes Agent are set up from the desktop app only; `pluxy client
 show` does not know them.

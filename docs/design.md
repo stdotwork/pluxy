@@ -79,8 +79,8 @@ is Tauri 2, so its native side is Rust.
   file for each UTC day, with a summary file for each closed day. Closed-day files are not
   compressed in this version, which is worth revisiting if the volume grows.
 
-Details: [`next/README.md`](../next/README.md) (routing, reloads, packages, usage and the
-management API).
+Details: [routing](routing.md), [reloads](config.md#reloading), [packages](extensions.md),
+[usage](usage-and-logs.md) and the [management API](management-api.md).
 
 ## The extension model
 
@@ -179,7 +179,7 @@ Tailscale's [state path for a user](https://github.com/tailscale/tailscale/blob/
 Ollama's [FAQ](https://github.com/ollama/ollama/blob/main/docs/faq.mdx); T3 Code's
 [background service](https://github.com/pingdotgg/t3code/blob/main/docs/user/background-service.md);
 the GitHub CLI's [environment](https://cli.github.com/manual/gh_help_environment); Go's
-[`os` package](https://pkg.go.dev/os). Details: [`next/README.md`](../next/README.md#pluxys-home).
+[`os` package](https://pkg.go.dev/os). Details: [pluxy's home](config.md#pluxys-home).
 
 ## The desktop app
 

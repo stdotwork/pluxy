@@ -366,7 +366,7 @@ because requests through a published port arrive from Docker's network address: 
 
 ### The sign-in form says "The reply from pluxy was 403"
 
-The form shows `The reply from pluxy was <status>` and core's reason for a status it has no other
+The form shows "The reply from pluxy was", the status and core's reason for a status it has no other
 words for. A 403 with `too many failed management keys from this address; try again in 30m0s` (the
 code `blocked`) means the address is blocked: five wrong management keys in a row from one address
 block it for 30 minutes (a call with no key does not count, and a right key resets the count). The
@@ -382,7 +382,7 @@ runs (`pluxy status`) and that the address in the browser is core's.
 
 ## The desktop app
 
-Problems with the desktop app are on [the app page](app.md).
+Problems with the desktop app are on the app page, `app.md`.
 
 ## Finding out what happened
 

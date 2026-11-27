@@ -210,7 +210,7 @@ func SectionNames() []string {
 	return out
 }
 
-// Statuses of a setting, as next/README.md names them.
+// Statuses of a setting, as docs/config.md ("What each setting does") names them.
 const (
 	supported = iota
 	later

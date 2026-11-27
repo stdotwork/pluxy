@@ -77,8 +77,8 @@ func AuthAccountID(file string) string {
 	return AccountID(file[:len(file)-len(filepath.Ext(file))])
 }
 
-// ReadAuthDir reads every credential file in dir as an account, as next/README.md
-// ("Importing today's auth folder") describes. now is the current time, for renewal times.
+// ReadAuthDir reads every credential file in dir as an account, as docs/moving-from-cpa.md
+// ("What carries over") describes. now is the current time, for renewal times.
 func ReadAuthDir(dir string, opts ImportOptions, now time.Time) ([]AuthFile, []Skipped, error) {
 	files, err := AuthFiles(dir)
 	if err != nil {

@@ -340,7 +340,7 @@ func TestConfigPlacementOtherAccountKey(t *testing.T) {
 }
 
 // Case 3: account b keeps its own key's placeholder, but its base_url moves to upstream c. Known
-// limit, documented in next/README.md: the placeholder is in its own secret's place, so it goes
+// limit, documented in docs/management-api.md ("Placeholders"): the placeholder is in its own secret's place, so it goes
 // back, and core then sends b's key to c. Nothing in the file ties a key to an address, and
 // refusing a kept key whenever an account's address changes is a decision of its own, not yet
 // made. This test records today's behaviour: c gets b's key.

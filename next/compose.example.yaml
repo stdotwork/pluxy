@@ -1,10 +1,10 @@
 # An example for running pluxy with Docker Compose. Copy it to compose.yaml, make the config
-# folder (see "Run it in a container" in README.md), then:
+# folder (see "Run it in a container" in docs/setup.md), then:
 #
 #   docker compose up -d
 #
 # ./config must hold config.json with "listen": "0.0.0.0:8400" and "management_allow_remote": true
-# (see the README), and be writable by user 65532,
+# (see docs/setup.md), and be writable by user 65532,
 # the user the image runs as: chown -R 65532:65532 config
 services:
   pluxy:

@@ -332,4 +332,4 @@ archives to an `https://` address, is a registry for others to add.
 `go run ./cmd/pluxy-pack -h` prints the flags. Each package's title, summary and kind in the index
 come from its manifest. The tier is set by `pluxy-pack`: `pick` for the packages in its list of picks
 (in `cmd/pluxy-pack`), `unverified` for an archived one, `verified` for the rest. App tools are not extensions: the desktop app runs them on its own, from its
-**Add-ons** page (see [Desktop app](app.md)). Core refuses to install one.
+**Add-ons** page (see `app.md`). Core refuses to install one.

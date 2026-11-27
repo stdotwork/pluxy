@@ -12,7 +12,8 @@ use std::sync::OnceLock;
 /// The catalog's file name, beside config.toml by default.
 pub const FILE: &str = "pluxy-model-catalog.json";
 
-/// pluxy's Codex client templates, embedded: refreshed with the core's (next/README.md).
+/// pluxy's Codex client templates, embedded: refreshed with the core's (docs/map.md, "Codex client
+/// catalog").
 const TEMPLATES: &str = include_str!("../../../extensions/codex/client_models.json");
 
 /// The fields a new entry takes from its template: those Codex requires and those that shape
