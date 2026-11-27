@@ -1,3 +1,5 @@
+@import "./account.css";
+
 @layer kit {
   .account-tools {
     overflow-wrap: normal;
@@ -10,11 +12,17 @@
   .account-model-list {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--s) calc(var(--s) * 4);
+    gap: calc(var(--s) * 1.5);
     margin: 0;
     padding: 0;
     list-style: none;
     font-size: var(--px-font-size-mono);
+  }
+  .account-model-list li {
+    padding: 2px calc(var(--s) * 2);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-chip);
+    background: var(--px-color-surface-raised);
   }
   .account-test-row {
     display: flex;
@@ -31,10 +39,20 @@
     flex-wrap: wrap;
     align-items: baseline;
     gap: var(--s) calc(var(--s) * 3);
+    padding: calc(var(--s) * 3);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface-raised);
+    font-variant-numeric: tabular-nums;
   }
   .account-tools pre {
     flex-basis: 100%;
-    margin: 0;
+    margin: calc(var(--s) * 1.5) 0 0;
+    padding: calc(var(--s) * 2);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-small);
+    background: var(--px-color-code-bg);
+    color: var(--px-color-code-text);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
