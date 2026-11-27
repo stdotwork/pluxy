@@ -292,14 +292,15 @@ function Added(props: { id: string; group: MethodGroup; embedded?: boolean; onAn
           void save();
         }}
       >
-        <label class="field" data-part="field">
-          <span class="label">{t("name")}</span>
-          <span class="added-name-row">
+        <div class="added-name-row">
+          <label class="field" data-part="field">
+            <span class="label">{t("name")}</span>
             <input
               data-slot="input"
               ref={field}
               type="text"
               autocomplete="off"
+              aria-describedby="added-name-help"
               placeholder={p.on && label ? p.id(label) : t("namePlaceholder")}
               value={value}
               disabled={!ready}
@@ -310,12 +311,14 @@ function Added(props: { id: string; group: MethodGroup; embedded?: boolean; onAn
                 setSaved(false);
               }}
             />
-            <Button type="submit" disabled={busy || !ready || unchanged}>
-              {t("saveName")}
-            </Button>
-          </span>
-          <span class="hint">{t("nameHelp")}</span>
-        </label>
+          </label>
+          <Button type="submit" disabled={busy || !ready || unchanged}>
+            {t("saveName")}
+          </Button>
+        </div>
+        <p class="hint" id="added-name-help">
+          {t("nameHelp")}
+        </p>
         {error && <Notice tone="danger">{error}</Notice>}
         {saved && <Notice tone="ok">{t("saved")}</Notice>}
       </form>
@@ -515,7 +518,10 @@ export function AddAccountPage(
                                     <strong>
                                       {label}
                                       {suggested === row.method.method && (
-                                        <span class="method-badge">{t("recommended")}</span>
+                                        <>
+                                          {" "}
+                                          <span class="method-badge">{t("recommended")}</span>
+                                        </>
                                       )}
                                     </strong>
                                     <span class="muted">{methodWords(row.method)}</span>

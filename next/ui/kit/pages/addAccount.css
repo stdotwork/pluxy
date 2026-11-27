@@ -366,12 +366,17 @@
 
   .added-name-row {
     display: flex;
+    align-items: end;
     gap: calc(var(--s) * 2);
   }
 
-  .added-name-row input {
+  .added-name-row .field {
     flex: 1;
     min-width: 0;
+  }
+
+  .added-name > .hint {
+    margin: 0;
   }
 
   /* ---- the import, at the bottom -------------------------------------------------------------- */
