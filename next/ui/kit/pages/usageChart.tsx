@@ -85,12 +85,17 @@ export function barLabel(bar: Bar, index: number, count: number, unit: "hour" | 
 export function UsageChart(props: { bars: Bar[]; unit: "hour" | "day"; range: string; metric?: Metric }) {
   const { bars, unit } = props;
   const metric = props.metric ?? "requests";
+  const last = Math.max(0, bars.length - 1);
   const [shown, setShown] = useState<number>();
   const [numbers, setNumbers] = useState(false);
-  const [stop, setStop] = useState(bars.length - 1);
+  const [stop, setStop] = useState(last);
   const refs = useRef<(SVGGElement | null)[]>([]);
   const box = useRef<HTMLDivElement>(null);
   const [W, setW] = useState(DEFAULT_W);
+  useEffect(() => {
+    setStop((i) => Math.max(0, Math.min(i, last)));
+  }, [last]);
+  const tabStop = Math.max(0, Math.min(stop, last));
   useEffect(() => {
     const el = box.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -181,7 +186,8 @@ export function UsageChart(props: { bars: Bar[]; unit: "hour" | "day"; range: st
                 }}
                 role="img"
                 aria-label={text}
-                tabIndex={i === stop ? 0 : -1}
+                // Lowercase on SVG so Preact sets the real tabindex attribute rather than camelCase tabIndex.
+                tabindex={i === tabStop ? 0 : -1}
                 onMouseEnter={() => setShown(i)}
                 onFocus={() => {
                   setStop(i);

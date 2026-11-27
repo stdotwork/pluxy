@@ -439,3 +439,36 @@ test("the Open-account button wraps a long account name instead of cutting it of
   expect(check.fitsPane).toBe(true);
   expect(check.height).toBeGreaterThanOrEqual(check.control - 0.5);
 });
+
+test("the Usage chart keeps one bar in the tab order after switching to a shorter range", async ({
+  page,
+}) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/activity/usage`);
+  const bars = page.locator('[data-part="usage-chart"] svg g[role="img"]');
+  const tabbable = page.locator('[data-part="usage-chart"] svg g[role="img"][tabindex="0"]');
+  await page.getByRole("radio", { name: "30 days", exact: true }).check();
+  await expect(bars).toHaveCount(30);
+  await expect(tabbable).toHaveCount(1);
+  await tabbable.focus();
+  await page.keyboard.press("End");
+  await expect(bars.last()).toBeFocused();
+  await expect(bars.last()).toHaveAttribute("tabindex", "0");
+  expect(await bars.last().evaluate((el) => (el as SVGElement).tabIndex)).toBe(0);
+
+  await page.getByRole("radio", { name: "7 days", exact: true }).check();
+  await expect(bars).toHaveCount(7);
+  await expect(tabbable).toHaveCount(1);
+  await expect(bars.last()).toHaveAttribute("tabindex", "0");
+  expect(await bars.last().evaluate((el) => (el as SVGElement).tabIndex)).toBe(0);
+  // Tabbing from the tiles lands on that one bar, and arrow keys move from it.
+  await page
+    .locator('[data-part="usage-tiles"]')
+    .getByRole("radio", { name: /^Requests/ })
+    .focus();
+  await page.keyboard.press("Tab");
+  await expect(bars.last()).toBeFocused();
+  await page.keyboard.press("ArrowLeft");
+  await expect(bars.nth(5)).toBeFocused();
+});
