@@ -25,7 +25,7 @@
   /* As a dot on the corner of a provider's mark: the solid state colours, ringed in the row's
      ground so it reads apart from the mark. */
   .group-mark[data-dot] {
-    color: var(--px-color-meter-unknown);
+    color: var(--px-color-text-muted);
   }
 
   .group-mark[data-dot][data-group="needs"] {
@@ -285,9 +285,9 @@
     background: color-mix(in srgb, var(--px-color-surface-raised) 70%, transparent);
   }
 
-  /* A row turned off reads as set aside: its mark faded, its name in muted text. Its words keep their
-     contrast, so the row's text is never faded with opacity. */
-  .account-row[data-group="off"] .account-mark {
+  /* A row turned off reads as set aside: its provider mark faded, its name in muted text. Its dot
+     and words keep their contrast, so neither the dot nor the row's text is faded with opacity. */
+  .account-row[data-group="off"] .account-mark .provider-mark {
     opacity: 0.6;
   }
 

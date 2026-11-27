@@ -122,7 +122,7 @@
 
   .home-state-bar [data-group="unchecked"],
   .home-state-bar [data-group="off"] {
-    background: var(--px-color-meter-unknown);
+    background: var(--px-color-text-muted);
   }
 
   /* ---- the band ----------------------------------------------------------------------------- */

@@ -72,6 +72,12 @@ function rgbScript() {
     const lum = ([r, g, b]) => { const l = (v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }; return 0.2126 * l(r) + 0.7152 * l(g) + 0.0722 * l(b); };
     const ratio = (a, b) => { const [h, o] = [lum(a), lum(b)].sort((x, y) => y - x); return (h + 0.05) / (o + 0.05); };
     const over = (top, below) => { const a = top[3] / 255; return [0, 1, 2].map((i) => top[i] * a + below[i] * (1 - a)).concat(255); };
+    const effOpacity = (el) => {
+      let o = 1;
+      for (let e = el; e; e = e.parentElement) o *= Number.parseFloat(getComputedStyle(e).opacity);
+      return o;
+    };
+    const withOpacity = (c, o) => [c[0], c[1], c[2], c[3] * o];
     const bgOf = (el) => {
       const layers = [];
       for (let e = el; e; e = e.parentElement) { const c = rgb(getComputedStyle(e).backgroundColor); if (c[3] > 0) layers.push(c); }
@@ -144,6 +150,7 @@ for (const theme of THEMES) {
       await addSamples(page);
       await page.evaluate(() => {
         const box = document.querySelector("#look-samples .card");
+        const host = document.querySelector("#look-samples");
         for (const tone of ["ok", "warn", "danger", "info", "update"]) {
           const badge = document.createElement("span");
           badge.className = "badge";
@@ -152,6 +159,16 @@ for (const theme of THEMES) {
           badge.textContent = tone;
           box?.append(badge, " ");
         }
+        const offRow = document.createElement("div");
+        offRow.className = "account-row";
+        offRow.dataset.group = "off";
+        offRow.innerHTML =
+          '<span class="account-mark"><span class="provider-mark">A</span><span class="group-mark" data-group="off" data-dot=""></span></span>';
+        box?.append(offRow);
+        const bar = document.createElement("div");
+        bar.className = "home-state-bar";
+        bar.innerHTML = '<span data-group="off"></span>';
+        host?.append(bar);
       });
       const results = await page.evaluate(`(() => {
         ${rgbScript()}
@@ -167,10 +184,17 @@ for (const theme of THEMES) {
           const dot = over(rgb(getComputedStyle(badge, "::before").backgroundColor), ground);
           out.push({ what: "dot " + badge.dataset.tone + " on the card", ratio: ratio(dot, ground) });
         }
+        const offDot = document.querySelector('#look-samples .account-row[data-group="off"] .group-mark[data-dot]');
+        const offDotColor = over(withOpacity(rgb(getComputedStyle(offDot).color), effOpacity(offDot)), ground);
+        out.push({ what: "turned-off dot on the row", ratio: ratio(offDotColor, ground) });
+        const offBar = document.querySelector('#look-samples .home-state-bar [data-group="off"]');
+        const pageGround = bgOf(offBar.parentElement);
+        const offBarColor = over(withOpacity(rgb(getComputedStyle(offBar).backgroundColor), effOpacity(offBar)), pageGround);
+        out.push({ what: "turned-off bar on the page", ratio: ratio(offBarColor, pageGround) });
         return out;
       })()`);
       const list = results as { what: string; ratio: number }[];
-      expect(list).toHaveLength(8);
+      expect(list).toHaveLength(10);
       const low = list.filter((r) => r.ratio < GRAPHIC).map((r) => `${r.what}: ${r.ratio.toFixed(2)}:1`);
       expect(low).toEqual([]);
     });
