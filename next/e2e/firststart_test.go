@@ -223,3 +223,40 @@ func TestInitWritesFirstConfigOnce(t *testing.T) {
 		t.Errorf("status: %d %s", code, body)
 	}
 }
+
+// With listen on an unspecified address (0.0.0.0), core's startup lines name the address as the
+// config wrote it with plain words and point the first-run open line at 127.0.0.1, not [::] or [::1].
+func TestFirstStartUnspecifiedListenSaysPlainAddress(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeConfig(t, path, map[string]any{
+		"listen":         "0.0.0.0:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+	})
+	base, logs, err := startCoreArgv(t, filepath.Join(binDir, "pluxy"), "serve", "-config", path, "-watch-interval", "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(base, "http://"))
+	if err != nil {
+		t.Fatalf("listening base %q: %v", base, err)
+	}
+	all := logs.waitFor(t, "first-run setup")
+	lines := strings.Split(all, "\n")
+
+	wantListen := "pluxy: listening on http://0.0.0.0:" + port + " (every address of this computer)"
+	if !slices.Contains(lines, wantListen) {
+		t.Errorf("log has no line %q:\n%s", wantListen, all)
+	}
+	wantNext := "pluxy: first-run setup is not finished. Next: open http://127.0.0.1:" + port + "/panel/ in a browser and sign in with the management key, or run pluxy setup --config " + path + " --url http://127.0.0.1:" + port
+	if _, err := os.Stat(filepath.Join("..", "internal", "panel", "dist", "index.html")); err != nil {
+		wantNext = "pluxy: first-run setup is not finished. Next: run pluxy setup --config " + path + " --url http://127.0.0.1:" + port
+	}
+	if !slices.Contains(lines, wantNext) {
+		t.Errorf("log has no line %q:\n%s", wantNext, all)
+	}
+	if strings.Contains(all, "[::]") || strings.Contains(all, "[::1]") {
+		t.Errorf("log printed raw IPv6 unspecified/loopback form for 0.0.0.0:\n%s", all)
+	}
+}

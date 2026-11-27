@@ -705,8 +705,9 @@ func IsLoopbackHost(host string) bool {
 }
 
 // LocalURL is the address a program on this machine reaches a server listening on listen at:
-// a listen address with no host or an unspecified one (every interface) is reached at the
-// loopback address of its family.
+// a listen address with no host or an unspecified one (0.0.0.0 or ::, every interface) is
+// reached at 127.0.0.1 (Go's dual-stack tcp listener accepts IPv4 loopback even when the OS
+// reports [::]). Specific addresses, including [::1], stay as written.
 func LocalURL(listen string, tlsEnable bool) (string, error) {
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
@@ -714,9 +715,6 @@ func LocalURL(listen string, tlsEnable bool) (string, error) {
 	}
 	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
 		host = "127.0.0.1"
-		if ip != nil && ip.To4() == nil {
-			host = "::1"
-		}
 	}
 	scheme := "http"
 	if tlsEnable {

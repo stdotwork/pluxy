@@ -180,6 +180,60 @@ func firstStart(configPath string, inHome, inherited bool) error {
 	return nil
 }
 
+// displayListenAddr formats a bound listener address for a person to read. When the bound host
+// is unspecified (0.0.0.0, ::, or empty — Go's dual-stack tcp listener reports [::] on Linux
+// even for 0.0.0.0), it keeps the host family the config wrote (0.0.0.0 for empty or 0.0.0.0,
+// :: for ::) with the bound port, and reports everyAddress=true so callers can add plain words.
+// Specific addresses stay unchanged.
+func displayListenAddr(configured, bound string) (addr string, everyAddress bool) {
+	bHost, bPort, err := net.SplitHostPort(bound)
+	if err != nil {
+		return bound, false
+	}
+	bIP := net.ParseIP(bHost)
+	if bHost != "" && (bIP == nil || !bIP.IsUnspecified()) {
+		return bound, false
+	}
+	host := bHost
+	if configured != "" {
+		if cHost, _, err := net.SplitHostPort(configured); err == nil {
+			if cHost == "" {
+				host = "0.0.0.0"
+			} else if cIP := net.ParseIP(cHost); cIP != nil && cIP.IsUnspecified() {
+				if cIP.To4() != nil {
+					host = "0.0.0.0"
+				} else {
+					host = "::"
+				}
+			}
+		}
+	}
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	return net.JoinHostPort(host, bPort), true
+}
+
+// listeningLine is the first line core prints once its listener is bound: "listening on <url>",
+// with a plain note when the host is unspecified (0.0.0.0, ::, or empty). configured is
+// cfg.Listen ("" when serving on an inherited -listen-fd socket); bound is ln.Addr().String().
+func listeningLine(scheme, configured, bound string) string {
+	addr, every := displayListenAddr(configured, bound)
+	if every {
+		return fmt.Sprintf("listening on %s://%s (every address of this computer)", scheme, addr)
+	}
+	return fmt.Sprintf("listening on %s://%s", scheme, addr)
+}
+
+// extensionPagesLine is the line core prints for its extension-pages listener.
+func extensionPagesLine(configured, bound string) string {
+	addr, every := displayListenAddr(configured, bound)
+	if every {
+		return fmt.Sprintf("extension pages on http://%s (every address of this computer)", addr)
+	}
+	return fmt.Sprintf("extension pages on http://%s", addr)
+}
+
 // setupStartLine is what core's start says while first-run setup has not ended: where to go
 // on. It names the panel only when this build serves one (panelBuilt), at local, the address
 // core is reached at on this machine, and the setup command with what it needs to find this
@@ -450,8 +504,12 @@ func run(configPath string, byRule, safeMode bool, watch time.Duration, bundled 
 		}
 	}()
 
-	fmt.Fprintf(os.Stderr, "pluxy: listening on %s://%s\n", scheme, ln.Addr())
-	fmt.Fprintf(os.Stderr, "pluxy: extension pages on http://%s\n", pagesLn.Addr())
+	configuredListen := cfg.Listen
+	if listenFD >= 0 {
+		configuredListen = ""
+	}
+	fmt.Fprintf(os.Stderr, "pluxy: %s\n", listeningLine(scheme, configuredListen, ln.Addr().String()))
+	fmt.Fprintf(os.Stderr, "pluxy: %s\n", extensionPagesLine(cfg.ExtensionPages.Listen, pagesLn.Addr().String()))
 	// A core handed its socket was started by a program, which shows setup itself.
 	if listenFD < 0 && c.Status().FirstRun {
 		if local, err := server.LocalURL(ln.Addr().String(), tlsConfig != nil); err == nil {
