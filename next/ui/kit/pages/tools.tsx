@@ -975,20 +975,20 @@ function KeyRow(props: {
     };
   }, [menuOpen]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!menuOpen) return;
     focusMenuItem(menuTarget.current);
   }, [menuOpen]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (confirming) cancelDeleteRef.current?.focus();
   }, [confirming]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (renaming) renameInputRef.current?.focus();
   }, [renaming]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!renaming && !confirming && returnFocus.current) {
       returnFocus.current = false;
       triggerRef.current?.focus();
