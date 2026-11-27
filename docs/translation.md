@@ -675,8 +675,10 @@ list of several prompts, or token arrays, is refused with `400`. The reply is wr
 
 There is no cache setting in the model. A valid `cache_control` (`type` `ephemeral`, `ttl` `5m` or
 `1h`) on a message or content part that came from another format is sent to a Messages upstream
-(for example Chat Completions parts written for OpenRouter), up to 4 breakpoints in a request
-(more are `dropped`). To other upstream formats `cache_control` and other cache fields are
+(for example Chat Completions parts written for OpenRouter). A marker that has no content block of
+its own is moved to the last block of its message. It is `dropped` when that block already has a
+marker or when the request already holds 4 breakpoints, the most Messages allows (see
+"Prompt caching" in the Claude section). To other upstream formats `cache_control` and other cache fields are
 `dropped`. Cached input tokens are carried in usage (see "Usage").
 
 ## Claude
@@ -687,8 +689,8 @@ the options that change how a request or reply is translated are listed here.
 
 | Setting | Meaning |
 | --- | --- |
-| `base_url` | Where the Messages API is. Default `https://api.anthropic.com`. Whether it is Anthropic's own API (scheme `https`, host `api.anthropic.com`, port 443 or none, no user info) decides token counting, service tier, structured-output rules, and web search and code execution from Chat and Gemini clients (below). |
-| `rebuild_mid_system_message` | `true` moves the text of each `system` message in the conversation into the top-level `system` prompt, after what it holds, and removes those messages, for a Claude-compatible upstream that refuses them there. Blank text and non-text blocks in them are left out. Default `false`. See "Mid-conversation system messages". |
+| `base_url` | Where the Messages API is. Default `https://api.anthropic.com`. Whether it is Anthropic's own API (scheme `https`, host `api.anthropic.com`, port 443 or none, no user info) decides token counting, service tier, structured-output rules, and whether a web search or code execution tool from another format is sent. Only a Responses `web_search` tool does not depend on it; Responses `web_search_preview*` and `code_interpreter`, Chat `web_search_options`, and Gemini `googleSearch` and `codeExecution` do (below). |
+| `rebuild_mid_system_message` | `true` moves the text of each `system` message in the conversation into the top-level `system` prompt, after what it holds, and removes those messages, for a Claude-compatible upstream that refuses them there. Blank text and non-text blocks in them are left out, and so are blank text blocks of the existing `system` prompt. If no `system` message holds any text, the body is sent unchanged and the messages stay. Default `false`. See "Mid-conversation system messages". |
 | `model_level_cooling` | `true` keeps a used-up shared subscription window (5-hour or 7-day) on the model that hit it, so the account's other models stay in use. Default `false`: the whole account is blocked. |
 | `cache_ttl` | Lifetime of the `cache_control` markers pluxy adds to rebuilt requests that set none: `"5m"` (default) or `"1h"`. Any other value makes the account refuse its requests. A Responses client's own `prompt_cache_retention` or `prompt_cache_options.ttl` takes precedence for that request. |
 
@@ -722,7 +724,7 @@ These apply to a Messages client's body and to a rebuilt one.
 | What | Change | Reported |
 | --- | --- | --- |
 | Empty `allowed_domains` or `blocked_domains` on a built-in `web_search_*` tool | Removed (Anthropic refuses an empty list; leaving it out means no restriction) | no |
-| A `tool_use` `id` or `tool_result` `tool_use_id` that is not 1 to 64 letters, digits, `_` or `-` | Replaced by `cpa_tid_v1_` and the ID in unpadded URL-safe base64; if that is over 64 bytes, by `cpa_tid_v1_` and a SHA-256 digest of the ID. The same ID always becomes the same new ID, and two IDs never become one | no |
+| A `tool_use` `id` or `tool_result` `tool_use_id` that is not 1 to 64 letters, digits, `_` or `-` | Replaced by `cpa_tid_v1_` and the ID in unpadded URL-safe base64; if that is over 64 bytes, by `cpa_tid_v1_` and the first 53 hex characters of the SHA-256 digest of the ID. An empty ID is left as it is. The same ID always becomes the same new ID, and two IDs never become one (a new ID that another ID already has gets underscores in front) | no |
 | Conversation (see "Conversation repairs") | Repaired | yes |
 | Thinking settings (see "Thinking") | Fitted to the model | yes |
 | Betas (see "The `anthropic-beta` header") | Added | no |
@@ -808,7 +810,7 @@ schemas and names are not touched.
 
 The choice is sent only when the request sends at least one tool. Some models refuse a forced choice; see
 "Thinking". **Parallel tool calls:** `parallel_tool_calls: false` sends `disable_parallel_tool_use: true`, with
-`{"type":"auto"}` added when there is no choice and none when the choice is `none`; `true` sends nothing.
+`{"type":"auto"}` added when there is no choice, and no `disable_parallel_tool_use` when the choice is `none`; `true` sends nothing.
 
 **Custom tools (Responses clients).** A custom tool (Codex's `apply_patch`, for example) becomes a function with one
 required string argument `input`; its description is the client's, then how to fill `input`, then its grammar.
@@ -846,8 +848,9 @@ name (see Shared rules: Reasoning and the model-name thinking suffix) takes the 
 - A thinking budget goes to Claude 4.7 and later as adaptive thinking at the effort the budget falls in, unless the
   body names an effort.
 - Adaptive thinking goes to a model that takes only a budget as a budget sized from `output_config.effort` (1024
-  without one), below `max_tokens`; if there is no room, thinking is left out. Models that take no effort (every
-  one from 3.7 to 4.5 except Opus 4.5) lose `output_config.effort`.
+  without one), below `max_tokens`; if there is no room, thinking is left out. On a model that takes no effort
+  (every one from 3.7 to 4.5 except Opus 4.5), that step also removes `output_config.effort` (approximated); a body
+  with an effort and no adaptive thinking keeps it.
 - A forced tool choice (`any` or a named tool) is sent as `auto` to Opus 5.5 and later, Sonnet 5.5 and later, and Fable
   and Mythos 5.1 and later, which refuse one (approximated). On any other model, a forced choice with budget thinking
   is sent without thinking (reported dropped).
@@ -868,7 +871,7 @@ signature. A Gemini client gets `thought` text parts, without the signature.
 **Reasoning summary.** A Responses client's `reasoning.summary` (or `generate_summary`) becomes `thinking.display`:
 `auto`, `concise` and `detailed` as `summarized` (the last two reported approximated), `none` as `omitted`. It acts
 when the request has thinking on, or no thinking setting and a model that thinks by default (summarized only); else
-the summary is reported dropped.
+the summary is reported dropped, except `none`, which is never reported dropped.
 
 ### Sampling
 
@@ -899,9 +902,11 @@ stay in place, so the prefix Claude caches does not change:
 - On models that take a `system` message in the conversation (Opus 4.8 and later, Fable and Mythos 5 and later,
   Sonnet 5.5 and later, Haiku 5.5 and later), the message goes after the user turn it follows (or the next one: it
   may not follow an assistant turn); runs separated only by user turns are put together after those user turns.
-  Each move is reported approximated.
-- On every other `claude-` model (Sonnet 5 included), its text goes in the user turn after it, in
-  `<system-reminder>` tags, or in a user turn of its own when none follows (reported approximated).
+  Each move is reported approximated. A system message that follows an assistant turn with no user turn after it is
+  sent as a `<system-reminder>` in a user turn of its own (reported approximated).
+- On every other `claude-` model (Sonnet 5 included), its text goes, in `<system-reminder>` tags, at the end of the
+  user turn after it, or of the user turn before it when none follows. Only a system message that follows an
+  assistant turn with no user turn after it gets a user turn of its own (reported approximated).
 - A model that is not a `claude-` name gets every system message in the `system` prompt.
 
 `rebuild_mid_system_message: true` then moves every remaining `system` message into the `system` prompt. For a
@@ -939,18 +944,19 @@ A Messages client's blocks go as written.
   `max_uses` and `allowed_domains` carry; `blocked_domains` carry only when there is no `allowed_domains` (Claude
   refuses both, so the other is reported dropped); `user_location` is sent as `type: approximate` with `city`,
   `region`, `timezone` and a `country` that is an uppercase ISO 3166-1 code (a different country is reported
-  dropped); `search_context_size` is reported dropped. `external_web_access: false` leaves the tool out without a
-  report.
-- A Responses or Chat client gets Claude's search as a `web_search_call` item (Responses: one item, with the query,
-  status and the results as Claude sent them, so `encrypted_content` survives; a search left without results when
-  Claude paused the turn, `pause_turn`, stays `in_progress`, and the response has `end_turn: false`). A Chat client
-  gets the text without the search blocks.
+  dropped); `search_context_size` is reported dropped. On Anthropic's own API, `external_web_access: false` leaves
+  the tool out without a report; on another `base_url` the tool is reported dropped, whatever it says.
+- A Responses client gets Claude's search as a `web_search_call` item (one item, with the query, status and the
+  results as Claude sent them, so `encrypted_content` survives; a search left without results when Claude paused the
+  turn, `pause_turn`, stays `in_progress`, and the response has `end_turn: false`). A Chat client gets the text
+  without the search blocks.
 - A replayed `web_search_call` goes back as `server_tool_use` and `web_search_tool_result` blocks inside the
   assistant message around it. A paused search at the end of the history goes back as its `server_tool_use` alone, so
   Claude carries on. Anthropic encrypts each result for the credential that ran the search and refuses it from
   another, so the extension remembers (in memory, by hash, up to 16384 results) which account received each
-  result; a replayed result that was recorded for another account is left out (reported dropped), and the result
-  block keeps an empty list. A result this process has not seen is kept. A Messages client's history is not
+  result; a replayed result that was recorded for another account is left out of the result block (reported
+  dropped). The block keeps its other results, or an empty list when none is left. A result this process has not
+  seen is kept. The record is lost when the extension restarts or core stops it. A Messages client's history is not
   filtered.
 
 **Code execution**
@@ -1096,7 +1102,7 @@ JSON, its body. The status decides what core does next:
 
 | Upstream | Code | Scope | Retried on another account |
 | --- | --- | --- | --- |
-| 400, 413, 422 and other 4xx | `invalid_request` | the request | no; a message that says the prompt does not fit becomes `context_length_exceeded` |
+| 400, 413, 422 and other 4xx | `invalid_request` | the request | no; only a 400 whose message says the prompt does not fit becomes `context_length_exceeded` |
 | 401 | `auth` | the account | yes |
 | 403 | `permission` | the account | yes |
 | 400, 401, 403 that say the account or organization is disabled, suspended or deactivated | `account_closed` | the account | yes |
@@ -1127,7 +1133,9 @@ forwarded. A Messages client gets Anthropic's other rate-limit headers as Shared
 - A newer web search tool version than `web_search_20250305` from another format.
 - A provider-run `tool_search`, custom tool calls in Chat history, and `file_search`, `image_generation`, `mcp` and
   computer-use tools from other formats.
-- A cache of web search results.
+- Keeping web search results between requests. Only a hash of each result's encrypted content and the account that
+  got it are kept, in memory, and are lost when the extension restarts or core stops it; no result is stored or
+  served (see "Web search").
 
 ## Codex
 
@@ -1154,7 +1162,7 @@ Account settings that change how a request or reply is translated, all optional:
 | `codex_client_version` | Default `0.159.0`: the version in that `User-Agent`. It must look like a version (letters, digits, `.`, `_`, `+`, `-`). |
 | `image_generation_tool` | Default `true`: add the hosted `image_generation` tool to every request. |
 | `image_generation_off_models` | Default none: model names or patterns with `*` and `?` (any case, Go `path.Match`) that are not offered the tool. Matched against the model name sent upstream. A tool the client lists itself stays. |
-| `prompt_cache_retention_passthrough` | Default `false`: send the client's `prompt_cache_retention` on, for an upstream that takes it. |
+| `prompt_cache_retention_passthrough` | Default `false`: send a Responses client's `prompt_cache_retention` on, for an upstream that takes it. A rebuilt request never carries it (it is reported dropped). |
 | `images` | Default `true`: serve the Images API on the account. |
 | `signin_with_chatgpt_identifier` | Default `pluxy`: the start of a SIWC request's `User-Agent`. |
 | `websockets` | Default `false`: hold an upstream WebSocket for each Responses WebSocket client (see "Responses WebSocket"). |
@@ -1239,10 +1247,10 @@ A SIWC account's requests differ from a subscription's:
 | `model` | The model sent upstream, without a thinking suffix. |
 | `stream`, `store` | `true` and `false` always. |
 | `include` | `reasoning.encrypted_content`, plus `web_search_call.action.sources` if the client asked for it, plus `code_interpreter_call.outputs` for a rebuilt request that asked for it. Every other client value is removed. |
-| Removed fields | `temperature`, `top_p`, `max_tokens`, `max_completion_tokens`, `truncation`, `user`, `metadata`, `prompt_cache_retention` (unless passed on), `prompt_cache_options`, `previous_response_id` and `generate` (the last two are kept over the upstream WebSocket), `safety_identifier`. None is reported. |
+| Removed fields | `temperature`, `top_p`, `max_tokens`, `max_completion_tokens`, `truncation`, `user`, `metadata`, `prompt_cache_retention` (unless passed on), `prompt_cache_options`, `previous_response_id` and `generate` (the last two are kept over the upstream WebSocket), `safety_identifier`. Nothing removed from a Responses client's body is reported. A rebuilt request (Chat, Messages, Gemini) never carries `user`, `metadata`, `truncation`, `safety_identifier`, `prompt_cache_retention` or `prompt_cache_options`: each is reported as dropped when the request is encoded (see "Where a request goes"). Only its `temperature` and `top_p` are carried and then removed without a report. |
 | `max_output_tokens` | Taken from `max_completion_tokens` or `max_tokens` when the client gave neither `max_output_tokens`; a whole number from 1 to 15 is raised to 16, which the endpoint requires. |
 | `stream_options` | Only `reasoning_summary_delivery` is kept. |
-| `instructions` | `""` when absent (left out for a Responses-lite request from a Responses client). |
+| `instructions` | `""` when absent or `null`. A rebuilt request always gets `""`. A Responses-lite request from a Responses client is left without it when it has none. |
 | `input` | A string becomes one user message; a `system` message gets the role `developer`; a `function_call` with blank `arguments` gets `{}`. |
 | `service_tier` | See "Service tier and verbosity". |
 | `reasoning.effort` | See "Reasoning". |
@@ -1265,8 +1273,9 @@ execution without a code tool being sent is reported dropped, and so is forcing 
 Messages or Gemini request that names no choice and has tools gets `tool_choice: "auto"`.
 
 **Parallel tool calls.** `parallel_tool_calls` is `false` when the client said `false` (Messages
-`disable_parallel_tool_use` too) and for a Responses-lite request, absent when the request has no tools, and `true`
-otherwise.
+`disable_parallel_tool_use` too) and for a Responses-lite request, absent when the request ends up with no tools, and
+`true` otherwise. The image generation tool that pluxy adds counts as a tool, so a request with no tools of its own
+still gets `true` where that tool is added.
 
 **Custom and namespace tools** (a Responses client's, as the Codex client sends them) go as written. Function
 tools inside a namespace get the schema rewrites. Function names and call IDs inside a Responses client's body are
@@ -1293,13 +1302,16 @@ tool says `strict: false` when the client did not set it. A Gemini function's pa
 `additionalProperties: false` at the top.
 
 **Names and IDs.** On a rebuilt request (not on a Responses client's body), function and custom tool names in the
-tools, the tool choice and the calls of the conversation are made into at most 64 bytes of `a-zA-Z0-9_-`:
-every other character becomes `_`; a name still over 64 bytes that starts with `mcp__` keeps `mcp__` and what
-follows its last `__` (`mcp__server__tool` becomes `mcp__tool`); any other long name is cut to 64 bytes. A name that
-is short and clean is not changed. Two names that come out the same get `_1`, `_2` and so on (names are counted in
-the order tools, tool choice, conversation). The reply's tool calls give the client its own name back. A call ID
-over 64 bytes is cut to 47 bytes and ends with `_` and 16 hex characters of its SHA-256; the same ID always comes
-out the same, so a call and its result still pair.
+tools, a tool choice of type `function` or `custom`, and the calls of the conversation are made into at most 64
+bytes of `a-zA-Z0-9_-`: every other character becomes `_`; a name still over 64 bytes that starts with `mcp__` keeps
+`mcp__` and what follows its last `__` (a 70-byte `mcp__<server>__<tool>` becomes `mcp__<tool>`); any other long
+name is cut to 64 bytes. A name that is short and clean is not changed. Two names that come out the same get `_1`,
+`_2` and so on (names are counted in the order tools, tool choice, conversation). The reply's tool calls give the
+client its own name back. A call ID over 64 bytes is cut to 47 bytes and ends with `_` and 16 hex characters of its
+SHA-256; the same ID always comes out the same, so a call and its result still pair.
+
+**Known limit.** The names inside an `allowed_tools` list are not rewritten. A tool whose name is rewritten no longer
+matches its entry in the list; what the upstream does then is not defined here.
 
 ### Reasoning
 
@@ -1323,7 +1335,7 @@ out the same, so a call and its result still pair.
   text is not sent; reported as approximated), but only when the signature has the shape of OpenAI's encrypted
   reasoning (a token starting `gAAAAA`). A Responses client replays reasoning items as it received them. A Chat or
   Gemini client gets no encrypted reasoning and its replayed reasoning text is reported dropped.
-- When Codex refuses replayed encrypted reasoning it cannot read (the error code `invalid_encrypted_content`, or a
+- When Codex refuses replayed encrypted reasoning it cannot read (a 400 with the error code `invalid_encrypted_content`, or a
   400 whose message says the encrypted content could not be verified or decrypted: another account or provider made
   it), the extension sends the request once more without every reasoning item that carries encrypted content and
   reports each as dropped. This retry happens over HTTP only, once, and not under `drop_policy: "reject"`.
@@ -1340,10 +1352,11 @@ as approximated. Any other part is reported dropped.
 
 - A Responses client's `web_search` and `code_interpreter` tools go as written.
 - A Chat `web_search_options`, a Messages `web_search_*` tool or a Gemini `googleSearch` tool becomes
-  `{"type":"web_search"}` (with `search_context_size`, `filters` and `user_location` where the client gave them
-  and the upstream is `api.openai.com`; at `chatgpt.com` only the bare tool is sent and those settings, and
-  Messages `max_uses` and `blocked_domains`, are reported dropped). At any other host the tool is not sent and is
-  reported dropped.
+  `{"type":"web_search"}` (with `search_context_size`, `filters` (`allowed_domains`, or `blocked_domains` when
+  there is no `allowed_domains`) and `user_location` where the client gave them and the upstream is
+  `api.openai.com`; at `chatgpt.com` only the bare tool is sent and those settings are reported dropped). A
+  Messages `max_uses` has no place in the tool and is reported dropped at every host. At any other host the tool is
+  not sent and is reported dropped.
 - A Messages `code_execution_*` or Gemini `codeExecution` tool becomes
   `{"type":"code_interpreter","container":{"type":"auto"}}`, only at `api.openai.com` and only for a model on a
   fixed list of OpenAI models that document the tool. At `chatgpt.com` (the default for a subscription), at any
@@ -1359,22 +1372,22 @@ as approximated. Any other part is reported dropped.
 
 ### Service tier and verbosity
 
-A Responses client's `service_tier` goes through the endpoint's filter: `fast` and `priority` become `priority`,
-`ultrafast` stays, anything else (`auto`, `default`, `flex`, `scale`) is removed without a report. Its `text.verbosity`
-goes as written.
+A Responses client's `service_tier` is sent as `priority` for `fast` and `priority`, as `ultrafast` for `ultrafast`,
+and left out without a report for any other value (`auto`, `default`, `flex`, `scale`). Its `text.verbosity` goes as
+written.
 
 A Chat, Messages or Gemini client's tier and verbosity are sent only when the account's `base_url` host is
 `api.openai.com` or `chatgpt.com`; at any other host both are reported dropped at the client's field. At those
 hosts the routed model's entry in the Codex client catalog (the extension's `client_models.json`) decides:
-a tier is sent only if the entry lists it (`fast` counts as `priority`; the catalog lists only `priority`, so
-`ultrafast` is dropped), a verbosity only if the entry has `support_verbosity` and the value is `low`, `medium` or
+a tier is sent only if the entry lists it (`fast` counts as `priority`). No model in the catalog lists `ultrafast`,
+so a Chat, Messages or Gemini client's `ultrafast` is never sent and is reported dropped. A verbosity is sent only if the entry has `support_verbosity` and the value is `low`, `medium` or
 `high`. A model the catalog does not list gets neither. `auto` and `default` ask for Codex's standard service and
 are left off with no report. Every other tier or verbosity is reported dropped (so `drop_policy: "reject"`
 refuses the request). A subscription's `X-Codex-Routing-Hint` names the tier that was sent.
 
 ### Prompt cache key
 
-`prompt_cache_key` is the client's own, else nothing when the client sent a `Session-Id` header, else a UUID made
+`prompt_cache_key` is a Responses client's own, else nothing when the client sent a `Session-Id` header, else a UUID made
 from the account, the model, the session and the agent for a Claude Code request (the session from the
 `X-Claude-Code-Session-Id` header or a Messages `metadata.user_id` written as `..._session_<id>` or as a JSON object
 with `session_id`; the agent from `X-Claude-Code-Agent-Id`, else `main`), else a UUID made from the account, the
@@ -1790,7 +1803,8 @@ as non-streamed GenerateContent with the rules above, then stop sequences, struc
 are cleared, the tool choice is set to `none` (so, when function tools are sent, `toolConfig` mode `NONE`), and the Codex
 CLI's compaction prompt is appended as a user turn. Thought parts are left out of the summary. The reply is OpenAI's
 `response.compaction` object holding one user message: the Codex CLI's summary prefix, a newline, then the summary. An
-empty summary, or a reply whose finish reason is not `STOP`, fails as a 502 `upstream` error for that request only.
+empty summary, or a reply with a finish reason that is not `STOP`, fails as a 502 `upstream` error for that request only.
+A non-streamed reply with no finish reason at all is accepted.
 
 **Embeddings (OpenAI `POST /v1/embeddings`).**
 - Gemini API: one input is `:embedContent`; several are `:batchEmbedContents` in batches of at most 100, in order, with
@@ -1812,7 +1826,7 @@ and `speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName`. OpenAI voices map 
 Vindemiatrix, `shimmer` Achernar, `verse` Puck. `nova` has no mapping and is refused; any other voice name goes to Gemini
 as written. Served formats are `pcm` (`audio/pcm`) and `wav` (`audio/wav`; raw PCM is wrapped in a 44-byte header using
 the sample rate and channel count in the reply's `mimeType`, default 24000 Hz mono 16-bit). `mp3` (OpenAI's default when
-`response_format` is omitted) and every other format, `stream`, `stream_format` other than `audio`, `speed` other than 1.0,
+`response_format` is omitted, so a request with no `response_format` is refused) and every other format, `stream`, `stream_format` other than `audio`, `speed` other than 1.0,
 non-blank `instructions`, a custom voice object and a thinking suffix are refused as `unsupported`. A reply whose finish
 reason is set and not `STOP` fails as a 502 `upstream` error instead of returning cut-off audio.
 
@@ -1822,7 +1836,7 @@ must stay within 20 MB) with a verbatim-transcript instruction, plus `language` 
 served. Refused as `unsupported`: other response formats (`verbose_json`, `srt`, `vtt`, `diarized_json`),
 `timestamp_granularities`, `include`, speaker names and references, `chunking_strategy`, `stream`, a temperature outside
 0 to 1, a thinking suffix, an audio type Gemini does not list (the type comes from the part's content type, else the file
-extension), and a request over the 20 MB limit. A reply whose finish reason is not `STOP` fails as a 502 `upstream` error.
+extension), and a request over the 20 MB limit. A reply whose first candidate has a finish reason that is not `STOP` fails as a 502 `upstream` error (a reply with none is accepted).
 `POST /v1/audio/translations` is not served.
 
 **Images (OpenAI `POST /v1/images/generations`).** One non-streamed `:generateContent` call with
@@ -1836,7 +1850,7 @@ no image is a 502 `upstream` error. Other fields (`quality`, `response_format`, 
 
 | Upstream answer | Result |
 | --- | --- |
-| 3xx | `upstream` (502), "upstream redirected to another host; not followed" (a redirect to another scheme or host is never followed) |
+| 3xx | `upstream` (502), message `upstream redirected (302 Found) to another host; not followed`, with the upstream's own status line in the parentheses (a redirect to another scheme or host is never followed) |
 | 403 with ErrorInfo reason `CONSUMER_SUSPENDED`, or 401/403 whose message says the account is deactivated, disabled or suspended | `account_closed`, credential scope, another account may serve |
 | 401; 400 with reason `API_KEY_INVALID` (Google answers a wrong key with 400) | `auth`, credential scope, another account may serve |
 | other 403 | `permission`, credential scope, another account may serve |
@@ -1856,7 +1870,7 @@ a 429, for the reset time when Google gave one.
 
 - Interactions requests on an account without `interactions: true` (no translation onto GenerateContent), a thinking suffix
   on an Interactions model, and a check that drops a thought step whose signature does not look like Gemini's.
-- `POST /v1/images/edits`, `POST /v1/audio/translations`, mp3 speech, streamed speech, and Imagen models (`predict`).
+- `POST /v1/images/edits`, `POST /v1/audio/translations`, speech in any format but `pcm` and `wav` (mp3 included), streamed speech, and Imagen models (`predict`).
 - Google tools other than `googleSearch` and `codeExecution` from a client that is not a Gemini client.
 
 ## OpenAI-compatible
@@ -1883,7 +1897,7 @@ upstream's format. Each `wire_api` serves all four client formats.
 | --- | --- | --- |
 | `chat` | `{base_url}/chat/completions` | `Authorization: Bearer` |
 | `responses` | `{base_url}/responses` | `Authorization: Bearer` |
-| `messages` | `{base_url}/messages` | `x-api-key`, `anthropic-version` (the client's, else `2023-06-01`), the client's `anthropic-beta` |
+| `messages` | `{base_url}/messages` | `x-api-key`, `anthropic-version` (`2023-06-01`), and, for a Messages client, that client's `anthropic-version` and `anthropic-beta` |
 | `gemini` | `{base_url}/models/{model}:generateContent` or `:streamGenerateContent?alt=sse` | `x-goog-api-key` |
 
 A redirect to another scheme or host is not followed (the key would go with it). The sections below
@@ -1913,7 +1927,7 @@ written.
 | Max tokens, temperature, `top_p`, `stop` | Carried; max tokens is sent as `max_tokens`. |
 | Streaming | A streamed rebuilt request sets `stream_options.include_usage`. |
 | Structured output | Rebuilt as `response_format` (`text`, `json_object` or `json_schema` with name, description, schema, `strict`). |
-| Tool-call arguments that are not a JSON object | A Chat client's own call keeps its bytes, and a Chat custom tool call keeps its free-form input. |
+| Tool-call arguments that are not a JSON object | A Chat client's own call keeps its bytes, and a Chat custom tool call keeps its free-form input. A call from any other client whose arguments are not a JSON object is sent as `{}` (reported approximated; nothing is reported when the text is blank). |
 
 Service tier, verbosity, web search, code execution and candidate count from another client format are
 sent only to the hosts below (see Shared rules: Service tier, verbosity and gated features). Any other host
@@ -1923,7 +1937,7 @@ gets none of them.
 | --- | --- | --- |
 | `api.openai.com` | `chat` | service tier (`auto`, `default`, `flex`, `scale`, `priority`, `fast`), verbosity (`low`, `medium`, `high`), web search, candidate count |
 | `api.openai.com` | `responses` | service tier (the same list and `ultrafast`), verbosity, web search, code execution (on documented models) |
-| `api.anthropic.com` | `messages` | service tier `auto` and `default` (priority needs a beta header the extension does not add), web search, code execution, structured output rules |
+| `api.anthropic.com` | `messages` | service tier `auto` and `default` (priority needs a beta header the extension does not add), web search, code execution; a JSON schema from another format is fitted to Anthropic's structured-output rules (see Claude: Structured output), or left out with a reported loss. Other Messages hosts get the schema as written. `json_object` is reported dropped on every Messages host |
 | `generativelanguage.googleapis.com` | `gemini` | service tier, web search, code execution, candidate count |
 | `openrouter.ai` | `chat` | replayed assistant `annotations` |
 
@@ -1957,7 +1971,7 @@ Other hosts, OpenRouter and Groq included, have no preset. Shaping applies only 
 | Tool calls | A call with no ID gets `call_<index>` (or the next free `call_<n>`); a name that arrives in a later chunk is waited for. |
 | Usage | An empty or zero-filled usage chunk after a real one does not replace it. When a stream breaks or fails, the usage reported so far is kept. |
 | Truncation | A stream that ends before every choice has a finish reason is an upstream error. An error object in the stream is an upstream error. |
-| A loss found in a stream | The report has already gone out with the first event, so a loss found later (a dropped nameless call, a citation) is written to the extension's log, and only when the client does not get the upstream's body. |
+| A loss found while reading the reply | The report has already gone out with the first event, so a loss found later (a dropped nameless call, a citation), in a stream or not, is not in the report; it is written to the extension's log as `reply loss: <kind> <path> (<detail>)`. A client whose request is in the upstream's format and who is given the upstream's body (a Chat client on a `chat` wire always is) does not suffer the size-limit losses (`citations`, `finish`) or the losses in choices after the first, so those are not logged for it. A nameless call in the first choice is logged anyway. |
 
 ### Endpoints
 
@@ -1971,12 +1985,15 @@ Other hosts, OpenRouter and Groq included, have no preset. Shaping applies only 
 | Images API (`/v1/images/generations`, `/v1/images/edits`) | `chat` and `responses` wires: to `{base_url}/images/generations` or `/edits` with the routed model name. A multipart edit is rebuilt as multipart with a new boundary; a JSON edit stays JSON. The reply body and content type come back as they came, including server-sent events. |
 | Audio (`/v1/audio/speech`, `/transcriptions`, `/translations`) | Sent to `{base_url}/audio/...`; transcription and translation forms are rebuilt as multipart; the reply body and content type come back as they came. |
 
-**Side endpoint 404.** A 404 from a side endpoint that does not say the model is unknown (compaction,
-input token count, count tokens, embeddings, images, audio) fails that request only, with a message naming
-the endpoint and path, and holds back no model on the account. A 404 that says the model does not exist
-still holds the model back, except on embeddings, where it makes the account refuse that request (core tries
-another account) without holding the model back. A 404 from the generation path always holds the model back.
-On the count paths a 404 means the account cannot count, so core estimates.
+**Side endpoint 404.** A 404 from compaction, embeddings or images that does not say the model is unknown
+fails that request only, with a message naming the endpoint and path, and holds back no model on the account.
+A 404 from audio that does not say the model is unknown also fails that request only and holds nothing back,
+but the message is the upstream's own. A 404 that says the model does not exist still holds the model back,
+except on embeddings, where it makes the account refuse that request (core tries another account) without
+holding the model back. A 404 from the generation path always holds the model back.
+On the count paths (input token count and count tokens) a 404 that does not say the model is unknown means the
+account cannot count: the account answers `unsupported` (with a message naming the endpoint and path), and core
+estimates.
 
 ### Errors
 
@@ -1998,8 +2015,8 @@ from a Google host (or in Google's error shape) have the project and account nam
 | Wire | Differences from `chat` |
 | --- | --- |
 | `responses` | Responses client as written (custom, namespace and `tool_search` tools pass without lowering). Chat, Messages, Gemini clients are rebuilt as Responses: `stop`, `n` (Gemini `candidateCount`), `top_k`, seed, penalties reported dropped; service tier, verbosity, web search and code execution only to `api.openai.com`. The effort clamp applies to `reasoning.effort`; the suffix wins. Chat shaping does not apply. |
-| `messages` | Messages client as written. Others rebuilt as Messages: `max_tokens` is 32000 when the client set none; `reasoning_effort` reported dropped unless a model-name suffix sets thinking; verbosity and `n` reported dropped; a custom tool call and reasoning from another provider reported dropped; at most four `cache_control` breakpoints. Effort clamp and Chat shaping do not apply. |
-| `gemini` | Gemini client as written. Others rebuilt as GenerateContent: `reasoning_effort` reported dropped unless a suffix sets thinking; verbosity, function `strict` and custom tool calls reported dropped; `parallel_tool_calls` false turns function calling off (approximated); `googleSearch` and `codeExecution` are not combined with function declarations. Effort clamp and Chat shaping do not apply. |
+| `messages` | Messages client as written. Others rebuilt as Messages: `max_tokens` is 32000 when the client set none; `reasoning_effort` reported dropped (a model-name suffix still sets the thinking); verbosity and `n` reported dropped; a custom tool call and reasoning from another provider reported dropped; at most four `cache_control` breakpoints. Effort clamp and Chat shaping do not apply. |
+| `gemini` | Gemini client as written. Others rebuilt as GenerateContent: `reasoning_effort` reported dropped (a model-name suffix still sets the thinking); verbosity, function `strict` and custom tool calls reported dropped; `parallel_tool_calls` false turns function calling off (approximated); `googleSearch` and `codeExecution` are not combined with function declarations. Effort clamp and Chat shaping do not apply. |
 
 ### Not supported
 
@@ -2037,7 +2054,7 @@ CLI's identity on every request: `User-Agent: xai-grok-workspace/<client_version
 
 | What | Rule |
 | --- | --- |
-| `stop`, `previous_response_id`, `prompt_cache_retention`, `safety_identifier`, `stream_options` | Removed, with no report. A Responses client that continues with `previous_response_id` gets no stored history: it must send the whole input. |
+| `stop`, `previous_response_id`, `prompt_cache_retention`, `safety_identifier`, `stream_options` | Removed from the body with no report of their own (a rebuilt request's `stop` was already reported when it was rebuilt). A Responses client that continues with `previous_response_id` gets no stored history: it must send the whole input. |
 | `store` | `false` unless the client set it, so xAI does not keep the conversation. |
 | `include` | `reasoning.encrypted_content` is added once to the client's list, so a reasoning model's thinking reaches the next turn without stored responses. |
 | Function tool schemas | Local `$ref` is inlined from `$defs` or `definitions` (recursion stops after 16 levels), both keys removed. A function with no parameters gets `{"type":"object","properties":{}}`. |
@@ -2090,12 +2107,13 @@ ends with an upstream error.
 every client format, with these exceptions: nothing is added when the list already holds 200 tools, and
 nothing is added when the request forces a hosted `web_search` or `image_generation` tool (by choice, or
 by an allowed list that names only it): then only that tool is kept and `tool_choice` becomes `required`
-or `auto`. When the client has no tools, its `tool_choice` and `parallel_tool_calls` are removed.
+or `auto`. An allowed list that names `web_search` or `image_generation` together with other tools loses that
+entry (the hosted tool stays in `tools`), and X Search is still added. When the client has no tools, its `tool_choice` and `parallel_tool_calls` are removed.
 For a request that uses X Search, xAI's internal `x_user_search`, `x_semantic_search`, `x_keyword_search`
 and `x_thread_fetch` call traces are hidden from the reply (JSON and streamed, every client format), the
 remaining output indexes are renumbered, and the answer, citations, hosted search items and usage are kept.
 A client function of those names is kept unless its call ID starts with `xs_call`; calls inside a namespace
-are kept.
+are kept. A `custom_tool_call` item of those names (not in a namespace) is hidden even when the client declared the tool.
 
 ### Reasoning and other fields of a rebuilt request
 
@@ -2116,7 +2134,7 @@ Grok login), which has no compaction endpoint, the official API address is used 
 token and the ordinary API headers (no CLI identity). The usual body changes apply, then `stream`, `tools`,
 `tool_choice`, `max_output_tokens`, `temperature`, `top_p`, `top_k` and `stop` are removed,
 `compaction_trigger` input items are removed, and a non-empty `previous_response_id` is kept. `store` and
-`include` are left to the client. The JSON reply comes back whole with its usage recorded. A streamed
+`include` are put back as the client sent them (left out when the client sent none). The JSON reply comes back whole with its usage recorded. A streamed
 compaction request is refused with a 400 error. A 404 from the compaction path fails that request only and
 holds nothing back; a 404 that names a missing model holds back that model.
 
