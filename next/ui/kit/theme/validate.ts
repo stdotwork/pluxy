@@ -14,6 +14,7 @@ import {
   THEME_VERSION,
   type Theme,
   type ThemeAppearance,
+  TOKENS,
   type TokenName,
   tokenValueProblem,
 } from "./contract";
@@ -99,6 +100,17 @@ function readTokens(field: string, raw: unknown, warnings: string[]): Partial<Re
       continue;
     }
     out[name] = value as string;
+  }
+  // A gauge turns red under meter.low-below and amber under meter.mid-below: the red cut cannot sit
+  // above the amber one. A field that puts it there keeps both defaults.
+  const mid = Number(out["meter.mid-below"] ?? TOKENS["meter.mid-below"].light);
+  const low = Number(out["meter.low-below"] ?? TOKENS["meter.low-below"].light);
+  if (low > mid) {
+    warnings.push(
+      `${field}: meter.low-below (${low}) is above meter.mid-below (${mid}); both keep their defaults`,
+    );
+    delete out["meter.mid-below"];
+    delete out["meter.low-below"];
   }
   return out;
 }

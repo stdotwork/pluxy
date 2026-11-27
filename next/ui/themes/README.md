@@ -103,9 +103,9 @@ colour role take that role's name (`color.chrome`, `color.message-action`); the
 | `color.secondary-label` | The faintest text: column headings, reset times, the Free plan | `var(--px-color-text-muted)` |
 | `color.border` | Borders and dividers | `#e6e6e9` / `#242428` |
 | `color.accent` | Selection, links, the current tab's underline | `#2f5bea` / `#4f7bff` |
-| `color.accent-text` | Text on `color.accent` | `#ffffff` |
+| `color.accent-text` | Text on `color.accent`: selected text | `#ffffff` / `#0a0d1a` |
 | `color.message-action` | A view's one filled button, and a switch that is on | `var(--px-color-accent)` / `color-mix(in srgb, var(--px-color-accent) 85%, black)` |
-| `color.message-action-foreground` | Text on `color.message-action` | `var(--px-color-accent-text)` |
+| `color.message-action-foreground` | Text on `color.message-action` | `var(--px-color-accent-text)` / `#ffffff` |
 | `color.message-action-hover` | The filled button while hovered | `color-mix(in srgb, var(--px-color-message-action) 88%, black)` |
 | `color.ok` | Healthy states: text, and a badge's word | `#15803d` / `#4ade80` |
 | `color.warn` | Degraded states: text, and a badge's word | `#b45309` / `#fbbf24` |
@@ -128,11 +128,11 @@ colour role take that role's name (`color.chrome`, `color.message-action`); the
 | `color.meter-unknown` | The hatching of a gauge whose limit was not read | `color-mix(in srgb, var(--px-color-text) 22%, var(--px-color-surface))` |
 | `color.chart-success` | Requests that went through, in the charts of requests | `color-mix(in srgb, var(--px-color-text) 78%, var(--px-color-bg))` |
 | `color.chart-failure` | Failed requests, stacked on top | `var(--px-color-error)` |
-| `color.chart-1` | The first series of a chart split by provider or model (`data-series="1"`) | `#d97757` / `#e08a6d` |
+| `color.chart-1` | The first series of a chart split by provider or model (`data-series="1"`) | `#cf6a49` / `#e08a6d` |
 | `color.chart-2` | The second series | `#5b6bf5` / `#7684f7` |
-| `color.chart-3` | The third series | `#4f8bff` / `#6c9eff` |
+| `color.chart-3` | The third series | `#3b7bf5` / `#6c9eff` |
 | `color.chart-4` | The fourth series | `var(--px-color-text)` |
-| `color.chart-5` | The fifth series | `#14b8a6` / `#2dd4bf` |
+| `color.chart-5` | The fifth series | `#0f9a8b` / `#2dd4bf` |
 | `color.chart-6` | The sixth series | `#a855f7` / `#b875f8` |
 | `color.plan-top` | Background of the plan pill of the largest plans (`data-plan-tier="top"`): a warm metal | `linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 20%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 40%, var(--px-color-surface)))` / `linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 26%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 14%, var(--px-color-surface)))` |
 | `color.plan-top-text` | Its text | `color-mix(in srgb, var(--px-color-warning) 35%, var(--px-color-text))` / `color-mix(in srgb, var(--px-color-warning) 55%, var(--px-color-text))` |
@@ -155,7 +155,7 @@ colour role take that role's name (`color.chrome`, `color.message-action`); the
 | `color.overlay` | Background of dialogs and menus | `var(--px-color-surface)` |
 | `color.card` | Background of a card and of the detail pane. `transparent` draws a card as a section: its heading, a hairline and its content | `var(--px-color-surface)` |
 | `color.card-border` | Border of a card and of the detail pane (the detail pane always has a `color.border` line on the list's side) | `var(--px-color-border)` |
-| `color.input-border` | Border of text inputs, selects, text areas and outlined buttons | `#d4d4d8` / `#34343a` |
+| `color.input-border` | Border of text inputs, selects, text areas and outlined buttons, at 3:1 or more against `color.surface` by default | `color-mix(in srgb, var(--px-color-text-muted) 80%, var(--px-color-surface))` / `color-mix(in srgb, var(--px-color-text-muted) 65%, var(--px-color-surface))` |
 | `color.placeholder` | Placeholder text in an empty input | `var(--px-color-text-muted)` |
 | `color.selected` | Background of a selected table row and of the selected tab | `var(--px-color-surface-raised)` |
 | `color.selected-text` | Text of a selected list item | `var(--px-color-text)` |
@@ -251,7 +251,7 @@ are round. `0px` makes every corner square.
 | Token | Used for | Default |
 | --- | --- | --- |
 | `motion.duration` | Length of hover and press transitions | `120ms` |
-| `motion.duration-menu` | Length of a menu opening | `160ms` |
+| `motion.duration-menu` | Length of a menu opening. Reserved for the menus to come (the command menu): nothing reads it yet | `160ms` |
 | `motion.duration-slow` | Length of a pane or dialog opening | `240ms` |
 | `motion.easing` | The timing function of the first two | `cubic-bezier(0.2, 0, 0, 1)` |
 | `motion.easing-drawer` | The timing function of anything that slides in | `cubic-bezier(0.32, 0.72, 0, 1)` |
@@ -269,7 +269,8 @@ carries `data-theme-switching` and transitions are off.
 | `meter.mid-below` | A limit's gauge turns `color.meter-mid` under this share left, in percent | `60` |
 | `meter.low-below` | It turns `color.meter-low` under this share left, in percent | `20` |
 
-Both are numbers from `0` to `100`.
+Both are numbers from `0` to `100`, and `meter.low-below` may not be above `meter.mid-below`: a
+`tokens` or `dark` field that puts it there gets a warning, and both keep their defaults.
 
 ## Layout options
 
