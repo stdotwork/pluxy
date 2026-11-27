@@ -245,6 +245,12 @@ test("a fallback is made with its own model first, steps reordered, saved, read 
   ]);
   await page.reload();
   await expect(page.locator('[data-part="fallback"]')).toContainText("server-error (Alpha) → fake-model");
+  await expect(page.locator('[data-part="fallback"] .fallback-chip')).toHaveCount(2);
+  // Edit opens inline inside the fallback row and saves changes back.
+  await page.getByRole("button", { name: "Edit the fallback for fake-model", exact: true }).click();
+  await expect(page.locator('[data-part="fallback"][data-open] [data-part="fallback-editor"]')).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.locator('[data-part="fallback-editor"]')).toHaveCount(0);
   // Remove asks first, and saying no keeps it.
   await page.getByRole("button", { name: "Remove the fallback for fake-model…", exact: true }).click();
   await expect(
@@ -414,6 +420,7 @@ for (const size of [
     // The arrows stay at their size, and the long name is cut with its full text in the tooltip.
     const box = await arrow(page, LONG, "down").boundingBox();
     expect(Math.min(box?.width ?? 0, box?.height ?? 0)).toBeGreaterThanOrEqual(24);
-    await expect(row(page, LONG).locator(".order-name")).toHaveAttribute("title", LONG);
+    await expect(row(page, LONG).locator(".account-name")).toHaveAttribute("title", LONG);
+    await expect(row(page, LONG).locator('[data-part="account-row"]')).toBeVisible();
   });
 }

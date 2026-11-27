@@ -7,10 +7,14 @@ import { type Account, api } from "../kit/api";
 import type { CoreSettings } from "../kit/api/settings";
 import type { Host, Method, Reply } from "../kit/host";
 import { RoutingPage } from "../kit/pages/routing";
+import { forgetWindows } from "../kit/parts";
 import { type Kit, KitContext } from "../kit/ui";
 import { all, button, type FakeNode, mountIn, restoreDom, settle } from "./fakeDom";
 
-afterEach(restoreDom);
+afterEach(() => {
+  restoreDom();
+  forgetWindows();
+});
 
 const account = (id: string, more: Partial<Account> = {}): Account => ({
   id,
@@ -359,4 +363,136 @@ test("a fallback core refuses keeps the editor open with core's message", async 
   ]);
   expect(page.text()).toContain("pluxy could not save this fallback: no account serves step 2");
   expect(all(page.root, "form")).toHaveLength(1);
+});
+
+test("account rows use the shared AccountRow with live limits, plan pill and at most one filled fix", async () => {
+  const page = await mount({
+    "GET /accounts": ok({
+      accounts: [
+        account("need-1", { priority: 20, state: "reauth_required" }),
+        account("need-2", { priority: 10, state: "reauth_required" }),
+        account("paused-1", { priority: 5, disabled: true }),
+        account("live-1", {
+          priority: 0,
+          quota: {
+            fetched_at: new Date().toISOString(),
+            quota: {
+              plan: "Max 20x",
+              limits: [{ id: "5h", window_seconds: 5 * 3600, used_percent: 42 }],
+            },
+          },
+        }),
+      ],
+    }),
+  });
+  const rows = all(page.root, "div").filter((n) => attr(n, "data-part") === "account-row");
+  expect(rows).toHaveLength(4);
+  expect(page.text()).toContain("Max 20x");
+  expect(page.text()).toContain("58% left");
+  // Only the first repair button is filled (primary); the second is outlined (quiet).
+  const fixes = all(page.root, "a").filter((n) => n.textContent === "Sign in again");
+  expect(fixes.map((n) => attr(n, "data-variant"))).toEqual(["primary", "quiet"]);
+  // Opening the fallback editor steps back every row fix so Save is the view's one filled button.
+  await act(async () => {
+    button(page.root, "+ Add a fallback").dispatchEvent(new Event("click"));
+  });
+  const fixesWithEditor = all(page.root, "a").filter((n) => n.textContent === "Sign in again");
+  expect(fixesWithEditor.map((n) => attr(n, "data-variant"))).toEqual(["quiet", "quiet"]);
+  await act(async () => {
+    button(page.root, "Cancel").dispatchEvent(new Event("click"));
+  });
+  // Turning on a disabled account sends the PATCH in place.
+  await act(async () => {
+    button(page.root, "Turn on").dispatchEvent(new Event("click"));
+  });
+  await settle();
+  expect(page.changes()).toContainEqual({
+    method: "PATCH",
+    path: "/accounts/paused-1",
+    body: { disabled: false },
+  });
+});
+
+test("editing an existing fallback opens the editor inline inside its row and renders step chips", async () => {
+  const page = await mount({
+    "GET /chains": ok({
+      chains: [
+        {
+          name: "claude-opus-4-7",
+          steps: [
+            { model: "claude-opus-4-7", provider: "pluxy/claude" },
+            { model: "gpt-5.5", provider: "pluxy/codex" },
+          ],
+        },
+      ],
+    }),
+  });
+  const fallback = all(page.root, "div").find((n) => attr(n, "data-part") === "fallback");
+  if (!fallback) throw new Error("no fallback row");
+  const chips = all(fallback, "span").filter((n) => attr(n, "class") === "fallback-chip");
+  expect(chips).toHaveLength(2);
+  const marks = all(fallback, "span").filter((n) => attr(n, "data-part") === "provider-mark");
+  expect(marks).toHaveLength(2);
+  await act(async () => {
+    button(fallback, "Edit").dispatchEvent(new Event("click"));
+  });
+  expect(attr(fallback, "data-open")).toBe("");
+  expect(all(fallback, "form").filter((n) => attr(n, "data-part") === "fallback-editor")).toHaveLength(1);
+});
+
+test("a failed refresh over loaded data keeps the page under the stale notice", async () => {
+  let failAccounts = false;
+  const page = await mount();
+  expect(page.text()).toContain("Claude");
+  // Simulate a subsequent reload failing by clicking Refresh when GET /accounts starts failing.
+  const callsBefore = page.calls.length;
+  // Mount with a stateful host to test stale reload directly.
+  restoreDom();
+  forgetWindows();
+  const base: Record<string, Answer> = {
+    "GET /accounts": ok({ accounts: [account("a1"), account("a2")] }),
+    "GET /settings": ok(settings()),
+    "GET /chains": ok({ chains: [] }),
+    "GET /models": ok({ models: [] }),
+    "GET /config": ok({ format: "json", hash: "x", content: "{}" }),
+    "GET /status": ok({ extensions: [{ id: "pluxy/claude" }] }),
+  };
+  const host = {
+    call: async (method: Method, path: string): Promise<Reply<unknown>> => {
+      if (method === "GET" && path === "/accounts" && failAccounts) return hiccup;
+      const ans = base[`${method} ${path}`];
+      return ans && ans !== "pending" ? ans : ok({});
+    },
+    signedIn: () => true,
+    prefs: { get: () => null, set: () => {} },
+    features: new Set(),
+  } as unknown as Host;
+  const kit = {
+    host,
+    api: api(host),
+    themes: { resolved: { layout: { tabs: "top" } }, subscribe: () => () => {} },
+    unauthorized: () => {},
+    extensionsChanged: () => {},
+  } as unknown as Kit;
+  const live = await mountIn(
+    <KitContext.Provider value={kit}>
+      <RoutingPage />
+    </KitContext.Provider>,
+  );
+  expect(callsBefore).toBeGreaterThan(0);
+  expect(live.text()).toContain("a1");
+  failAccounts = true;
+  await act(async () => {
+    button(live.root, "Refresh").dispatchEvent(new Event("click"));
+  });
+  await settle();
+  expect(live.text()).toContain("Could not refresh.");
+  expect(live.text()).toContain("a1");
+});
+
+test("saving a rule shows a Saved tick beside it", async () => {
+  const page = await mount();
+  const box = toggle(page.root, "Keep a conversation on one account");
+  await flip(box);
+  expect(page.text()).toContain("Saved");
 });
