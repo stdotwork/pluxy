@@ -10,7 +10,9 @@ or the app quits or restarts for an update.
 The contract between the app and a tool (frames, states, jobs, launches, saving files, the vault)
 is in [`../app/app-host/README.md`](../app/app-host/README.md) ("App program contract v0"). This
 folder implements it and does not change it. This page is the reference for what each tool and
-library does.
+library does. How a person uses them from the app's pages is in
+[docs/app.md](../../docs/app.md#the-coding-tool-pages), and how the app hosts them in
+[docs/app-design.md](../../docs/app-design.md#packages-on-this-device).
 
 ## Tools and libraries
 

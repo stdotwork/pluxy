@@ -47,9 +47,10 @@ to `<core>/v0/management/...` only, follows no redirects, uses no proxy from the
 core on this computer, refuses path segments that are or decode to `.` or `..`, and refuses every
 path under `/management-key`, however it is spelled.
 
-Rotating the key (the Config page's Connectivity tab) is a command of its own,
-`management_key_rotate`: a native confirmation names the core and how the new key will be kept,
-the native side calls `POST /v0/management/management-key/rotate`, keeps the new key as the old
+Replacing the key (**Replace key** in the Keys section of the Config page) is a command of its own,
+`management_key_rotate`. The page asks nothing itself: the app's host tells the kit it confirms
+natively (`confirmsKeyReplacement` in `next/app/src/host.ts`), and a native confirmation names the
+core and how the new key will be kept, with Replace key and Cancel. Then the native side calls `POST /v0/management/management-key/rotate`, keeps the new key as the old
 one was kept (in `connection.json`, for the session only, or, for the app's own core, in that
 core's config, which core writes) and shows it once in a native window with Copy and Close. The
 window learns only how it went. A call that left with the old key during a rotation is sent once
@@ -69,6 +70,11 @@ says what happened (the case is chosen from the connection alone, `paneOf` in
 In managed mode the app runs only core versions it installed itself, each in its own folder under
 `cores/versions/` in the app's data folder (`next/app/src-tauri/src/cores.rs`). It never runs a
 pluxy program in place.
+
+**The core's folder.** The app's own core keeps its config, credentials and packages in `core/` in
+the app's data folder. On Unix the app makes that folder 0700 whatever the umask, and tightens one of
+the user's that group or others may use, since core's first `init` refuses a config folder that is a
+link, another user's, or group- or other-writable (`core_folder` in `managed.rs`).
 
 **Where versions come from.** Three ways, all ending in a version folder of the store:
 

@@ -93,9 +93,9 @@ sign in by itself next time; otherwise it forgets the key when it quits. The key
 the app switches, and a wrong key or **Cancel** keeps the connection you had.
 
 The key never reaches the app's web pages: you type it into that window, and the app adds it to each
-call. To change the key, use **Rotate** on the Config Panel's Connectivity tab: the app confirms in a
-window of its own, keeps the new key the way the old one was kept, and shows it once with Copy, for
-other programs that used the old key.
+call. To change the key, press **Replace key** in the **Keys** section of **Config** (Settings tab):
+the app asks in a window of its own, keeps the new key the way the old one was kept, and shows it
+once with Copy, for other programs that used the old key.
 
 When pluxy is not running or the app is not signed in, the window shows none of pluxy's pages, only
 one pane that says what happened and offers the way on, such as **Start pluxy**, **Enter management
@@ -351,6 +351,8 @@ A settings file the app cannot read is moved aside (such as `startup.damaged-<ra
 | **No pluxy is installed** | A plain build has no pluxy inside. Press **Use this program** if the app found one, name your own under **Your own pluxy program**, or use the local build |
 | **pluxy kept stopping, so the app stopped restarting it** | Read why on the pane and in pluxy's log (Settings, Logs, or the files in `core/` in the app's data folder), fix the config, then press **Start pluxy** |
 | **Not signed in to pluxy on this computer** (or **at <host>**) | Press **Enter management key**. Print the key with `pluxy key management --show-key` on the computer pluxy runs on |
+| "That pluxy refused the key. Check it and try again." | The key is wrong for that pluxy. Print it again with `pluxy key management --show-key` there and enter it again |
+| "This pluxy answers only the computer it runs on." | That pluxy's remote management is off. On its computer, set `"management_allow_remote": true` in its `config.json` (`pluxy help` there says where the file is) and save; pluxy picks it up without a restart, so then sign in again |
 | **Cannot connect to pluxy at <host>** (or **on this computer**) | Check pluxy runs there, the address and port, and for `https://` the certificate (add its **Certificate file** if you made it yourself) |
 | **pluxy at <host> is not answering** (or **on this computer**) | Nothing answered as pluxy at that address while the app checked its key; the line under the heading says why (no answer in time, a name not found, a certificate that could not be checked). Fix that, then press **Enter management key** |
 | A tool page says its add-on is missing or off | Install it on Add-ons (in the local build it is under **Available to install**), then **Turn on add-on** |
