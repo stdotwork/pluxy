@@ -222,8 +222,9 @@
     white-space: nowrap;
   }
 
+  /* The hint gives way first: a long name keeps its room, and the hint shrinks to nothing. */
   .command-hint {
-    flex: 1;
+    flex: 0 100 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -281,13 +282,33 @@
   }
 
   .command-skeleton i {
-    height: calc(var(--px-size-row) - var(--s) * 2);
-    border-radius: var(--px-shape-radius);
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2.5);
+    height: var(--px-size-row);
+    padding: 0 calc(var(--s) * 2);
+  }
+
+  .command-skeleton i::before,
+  .command-skeleton i::after {
+    content: "";
+    height: calc(var(--s) * 3);
+    border-radius: var(--r-chip);
     background: var(--px-color-meter-track);
   }
 
-  .command-skeleton i:nth-child(2) {
-    width: 70%;
+  .command-skeleton i::before {
+    flex: none;
+    width: 16px;
+    height: 16px;
+  }
+
+  .command-skeleton i::after {
+    width: 45%;
+  }
+
+  .command-skeleton i:nth-child(2)::after {
+    width: 30%;
   }
 
   .command-error {

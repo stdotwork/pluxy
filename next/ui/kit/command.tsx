@@ -211,7 +211,6 @@ export function CommandMenu(props: CommandMenuProps) {
           id: RETRY,
           kind: "action",
           label: t("tryAgain"),
-          hint: t("accountsFailed"),
           icon: "refresh",
           run: () => {
             accounts.reload();
@@ -309,6 +308,7 @@ export function CommandMenu(props: CommandMenuProps) {
           rowId={`${id}-${(first.get(g.id) ?? 0) + i}`}
           index={(first.get(g.id) ?? 0) + i}
           selected={(first.get(g.id) ?? 0) + i === at}
+          hint={c.kind !== "setting" || g.id === "recent"}
           note={note?.id === c.id ? note.text : undefined}
           onPoint={(i) => setActive(i)}
           onChoose={choose}
@@ -332,6 +332,7 @@ export function CommandMenu(props: CommandMenuProps) {
         class="command"
         data-part="command"
         data-by={props.by}
+        data-slot="dialog-popup"
         role="dialog"
         aria-modal="true"
         aria-label={t("title")}
@@ -374,9 +375,7 @@ export function CommandMenu(props: CommandMenuProps) {
           {groups.map(shown)}
           {retry && (
             <div class="command-group" role="presentation">
-              <div class="command-note" data-part="command-empty">
-                {t("accountsFailed")}
-              </div>
+              <div class="command-note">{t("accountsFailed")}</div>
               <Row
                 command={retry}
                 query=""
@@ -450,6 +449,8 @@ function Row(props: {
   rowId: string;
   index: number;
   selected: boolean;
+  /** Whether to say where it is: a settings topic under the Settings heading need not. */
+  hint?: boolean;
   note?: string;
   onPoint: (index: number) => void;
   onChoose: (c: Command) => void;
@@ -472,7 +473,7 @@ function Row(props: {
       <span class="command-label">
         <Marked text={c.label} query={props.query} />
       </span>
-      {c.hint !== undefined && <span class="command-hint">{c.hint}</span>}
+      {c.hint !== undefined && props.hint !== false && <span class="command-hint">{c.hint}</span>}
       {props.note !== undefined ? (
         <span class="command-done" role="status">
           <Icon name="check" size={14} />

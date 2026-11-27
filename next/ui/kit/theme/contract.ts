@@ -293,6 +293,16 @@ export const PARTS = [
   "usage-breakdown",
   "tool-steps",
   "tool-key",
+  "search",
+  "command-backdrop",
+  "command",
+  "command-input",
+  "command-list",
+  "command-group",
+  "command-item",
+  "command-shortcut",
+  "command-loading",
+  "command-empty",
 ] as const;
 
 export type Part = (typeof PARTS)[number];
