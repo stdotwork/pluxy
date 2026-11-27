@@ -599,12 +599,15 @@ fn a_preview_takes_the_three_files_selected() {
     let input = json!({"targets": [
         file("cliproxyapi.json"), file("settings.json"), file("cliproxyapi-models.json"),
     ]});
-    let sels = crate::selections(&input).unwrap();
+    let home = || Ok(abs("home"));
+    let crate::Selected::Files(sels) = crate::selections(&input, &home).unwrap() else {
+        panic!("the selected files are read")
+    };
     assert_eq!(
         crate::agent_of(&[&sels[0], &sels[1], &sels[2]]).unwrap(),
         abs("s")
     );
-    assert!(crate::selections(&json!({"targets": [file("settings.json")]})).is_err());
+    assert!(crate::selections(&json!({"targets": [file("settings.json")]}), &home).is_err());
 }
 
 #[test]
@@ -1556,4 +1559,191 @@ fn a_failed_connect_removes_the_copy_it_installed_and_nothing_else() {
     assert!(vault.open().is_empty());
     std::fs::remove_dir_all(&base).unwrap();
     std::fs::remove_dir_all(&data).unwrap();
+}
+
+/// A home folder where Pi never ran (no `~/.pi`), its data folder, and the home as a call is
+/// given it.
+fn fresh_home(name: &str) -> (PathBuf, PathBuf) {
+    (temp(&format!("{name}-home")), temp(&format!("{name}-data")))
+}
+
+/// What the page sends to Connect around the preview it read (its targets, and create_folder when
+/// it named one), with the key as the secret secret-1.
+fn connect_input(
+    preview: &serde_json::Value,
+) -> (
+    serde_json::Value,
+    serde_json::Map<String, serde_json::Value>,
+) {
+    let mut input = serde_json::json!({"targets": preview["targets"], "key": "secret-1",
+        "base_url": "http://127.0.0.1:41999/", "model": "gpt-6.1-sol"});
+    if let Some(f) = preview.get("create_folder") {
+        input["create_folder"] = f.clone();
+    }
+    let mut secrets = serde_json::Map::new();
+    secrets.insert("secret-1".into(), "k-test".into());
+    (input, secrets)
+}
+
+/// The mode a folder made with the system's defaults gets here (what Pi gives `~/.pi` and
+/// `~/.pi/agent` when it makes them).
+#[cfg(unix)]
+fn default_mode(at: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    let probe = at.join("probe");
+    std::fs::create_dir(&probe).unwrap();
+    let m = std::fs::metadata(&probe).unwrap().permissions().mode() & 0o777;
+    std::fs::remove_dir(probe).unwrap();
+    m
+}
+
+#[test]
+fn a_home_where_pi_never_ran_reads_as_not_set_up_and_nothing_is_made() {
+    let (home, data) = fresh_home("unmade-preview");
+    let h = home.clone();
+    let at = move || Ok(h.clone());
+    let v = crate::preview_in(&Mem::default(), data.clone(), &serde_json::json!({}), &at).unwrap();
+    let agent = home.join(".pi").join("agent");
+    assert_eq!(v["pi"]["state"], "not-configured", "{v}");
+    assert_eq!(v["pi"]["adapter"]["installed"], false);
+    assert_eq!(v["pi"]["adapter"]["pin"], serde_json::Value::Null);
+    assert_eq!(v["applied"], false);
+    assert_eq!(v["create_folder"], serde_json::json!(agent));
+    let real = std::fs::canonicalize(&home)
+        .unwrap()
+        .join(".pi")
+        .join("agent");
+    for (i, name) in crate::FILES.iter().enumerate() {
+        assert_eq!(
+            v["targets"][i],
+            serde_json::json!({"selected": agent.join(name), "link": null,
+                "target": real.join(name),
+                "identity": {"link": null, "parent": null, "file": null}, "sha256": null})
+        );
+    }
+    assert!(crate::is_unmade(
+        &serde_json::json!({"targets": v["targets"]})
+    ));
+    assert!(!home.join(".pi").exists(), "a folder was made");
+    // Once Pi made its agent folder, its files are read as before.
+    std::fs::create_dir_all(&agent).unwrap();
+    let v = crate::preview_in(&Mem::default(), data, &serde_json::json!({}), &at).unwrap();
+    assert!(v.get("create_folder").is_none(), "{v}");
+    assert!(!crate::is_unmade(
+        &serde_json::json!({"targets": v["targets"]})
+    ));
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn connect_makes_pis_agent_folder_as_pi_would_and_sets_pi_up_in_it() {
+    // No ~/.pi at all, and ~/.pi without its agent folder.
+    for pi_there in [false, true] {
+        let (home, data) = fresh_home(&format!("unmade-connect-{pi_there}"));
+        if pi_there {
+            std::fs::create_dir(home.join(".pi")).unwrap();
+        }
+        let h = home.clone();
+        let at = move || Ok(h.clone());
+        let vault = Mem::default();
+        let v = crate::preview_in(&vault, data.clone(), &serde_json::json!({}), &at).unwrap();
+        let (input, secrets) = connect_input(&v);
+        let out = crate::apply_in(&vault, data.clone(), &input, &secrets, &at).unwrap();
+        assert_eq!(out["adapter"], "installed");
+        let agent = home.join(".pi").join("agent");
+        assert!(agent.join("pluxy-cliproxyapi-provider").is_dir());
+        let settings = text(std::fs::read(agent.join("settings.json")).unwrap());
+        assert!(
+            settings.contains("pluxy-cliproxyapi-provider"),
+            "{settings}"
+        );
+        let config = text(std::fs::read(agent.join("cliproxyapi.json")).unwrap());
+        assert!(config.contains("http://127.0.0.1:41999"), "{config}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&agent), default_mode(&home));
+            assert_eq!(mode(&home.join(".pi")), default_mode(&home));
+            assert_eq!(mode(&agent.join("cliproxyapi.json")), 0o600);
+        }
+        // Read again, it is connected, and its files are pinned as any others.
+        let again = serde_json::json!({"base_url": "http://127.0.0.1:41999/"});
+        let v = crate::preview_in(&vault, data.clone(), &again, &at).unwrap();
+        assert_eq!(v["pi"]["state"], "configured", "{v}");
+        assert!(v.get("create_folder").is_none());
+        assert!(vault.all_committed());
+        std::fs::remove_dir_all(&home).unwrap();
+        std::fs::remove_dir_all(&data).unwrap();
+    }
+}
+
+#[test]
+fn connect_makes_only_pis_own_agent_folder_for_the_preview_it_names() {
+    let (home, data) = fresh_home("unmade-refused");
+    let h = home.clone();
+    let at = move || Ok(h.clone());
+    let v = crate::preview_in(&Mem::default(), data.clone(), &serde_json::json!({}), &at).unwrap();
+    let (input, secrets) = connect_input(&v);
+    let mut elsewhere = input.clone();
+    elsewhere["create_folder"] = serde_json::json!(home.join("other"));
+    let mut moved = input.clone();
+    moved["targets"][1]["target"] = serde_json::json!(home.join("other").join("settings.json"));
+    for bad in [elsewhere, moved] {
+        let e = crate::apply_in(&Mem::default(), data.clone(), &bad, &secrets, &at).unwrap_err();
+        assert!(
+            e.message.contains("create_folder is Pi's agent folder"),
+            "{e}"
+        );
+    }
+    // Without create_folder the targets are no pins; a key the app did not deliver or a model
+    // that is no model is refused before any folder is made.
+    let mut plain = input.clone();
+    plain.as_object_mut().unwrap().remove("create_folder");
+    let mut no_key = input.clone();
+    no_key["key"] = serde_json::json!("secret-2");
+    let mut no_model = input.clone();
+    no_model["model"] = serde_json::json!("");
+    for bad in [plain, no_key, no_model] {
+        assert!(crate::apply_in(&Mem::default(), data.clone(), &bad, &secrets, &at).is_err());
+    }
+    assert!(names(&home).is_empty(), "made {:?}", names(&home));
+    // Pi ran meanwhile and made its agent folder: read again first; what Pi wrote stays.
+    let agent = home.join(".pi").join("agent");
+    std::fs::create_dir_all(&agent).unwrap();
+    std::fs::write(agent.join("settings.json"), "{}\n").unwrap();
+    let e = crate::apply_in(&Mem::default(), data.clone(), &input, &secrets, &at).unwrap_err();
+    assert!(e.message.contains("read the settings again"), "{e}");
+    assert_eq!(names(&agent), ["settings.json"]);
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn a_connect_that_fails_takes_away_the_folders_it_made() {
+    let (home, data) = fresh_home("unmade-failed");
+    // The data folder is a file: the write fails after the folders are made.
+    let data = data.join("file");
+    std::fs::write(&data, "").unwrap();
+    let h = home.clone();
+    let at = move || Ok(h.clone());
+    let v = crate::preview_in(&Mem::default(), data.clone(), &serde_json::json!({}), &at).unwrap();
+    let (input, secrets) = connect_input(&v);
+    assert!(crate::apply_in(&Mem::default(), data, &input, &secrets, &at).is_err());
+    assert!(!home.join(".pi").exists(), "{:?}", names(&home));
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn other_writes_say_in_words_that_the_agent_folder_does_not_exist_yet() {
+    // The page maps "is not applied to these targets" to its own words (no copy from before).
+    for op in ["clear", "restore"] {
+        assert!(crate::unmade_refusal(op)
+            .message
+            .contains("is not applied to these targets"));
+    }
+    for op in ["update", "uninstall", "backup-create", "backup-restore"] {
+        assert!(crate::unmade_refusal(op)
+            .message
+            .contains("Connect makes it"));
+    }
 }
