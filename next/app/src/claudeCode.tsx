@@ -58,6 +58,8 @@ const t = strings("claudeCode", {
   rootHint: "A full path; the folder may be a link (as chezmoi can make).",
   inRoot: "File in the folder",
   models: "Models",
+  modelsNote: "Choose which model each Claude Code tier uses.",
+  modelMappings: "Model mappings",
   roleNote: "The model Claude Code uses for {role}.",
   fableNote: "Empty: the same as Sonnet.",
   oneM: "1M context",
@@ -169,26 +171,12 @@ export function ClaudeCodePage() {
       />
       <EnvironmentBlock env={env} tool={t("title")} disabled={s.locked} />
       {s.addon === "on" && s.settings && !refused && (
-        <Section title={t("models")} aside={<SaveButton s={s} dirty={dirty} form={input} held={held} />}>
+        <Section
+          title={t("models")}
+          subtitle={t("modelsNote")}
+          aside={<SaveButton s={s} dirty={dirty} form={input} held={held} />}
+        >
           <ModelList id={listId} s={s} />
-          {(["opus", "sonnet", "haiku", "fable"] as const).map((role) => (
-            <SettingRow
-              key={role}
-              name={LABELS[role]}
-              description={role === "fable" ? t("fableNote") : t("roleNote", { role: LABELS[role] })}
-            >
-              <span class="tool-inline">
-                <ModelInput
-                  label={LABELS[role]}
-                  value={form.models[role]}
-                  list={listId}
-                  served={served}
-                  onInput={(v) => edit({ models: { ...form.models, [role]: v } })}
-                />
-                <Switch label={t("oneM")} checked={form.oneM[role]} onChange={(on) => setOneM(role, on)} />
-              </span>
-            </SettingRow>
-          ))}
           <SettingRow name={t("startup")} description={t("startupNote")}>
             <ModelInput
               label={t("startup")}
@@ -209,6 +197,25 @@ export function ClaudeCodePage() {
               onInput={(v) => edit({ subagent: v })}
             />
           </SettingRow>
+          <div class="tool-subgroup">{t("modelMappings")}</div>
+          {(["opus", "sonnet", "haiku", "fable"] as const).map((role) => (
+            <SettingRow
+              key={role}
+              name={LABELS[role]}
+              description={role === "fable" ? t("fableNote") : t("roleNote", { role: LABELS[role] })}
+            >
+              <span class="tool-inline">
+                <ModelInput
+                  label={LABELS[role]}
+                  value={form.models[role]}
+                  list={listId}
+                  served={served}
+                  onInput={(v) => edit({ models: { ...form.models, [role]: v } })}
+                />
+                <Switch label={t("oneM")} checked={form.oneM[role]} onChange={(on) => setOneM(role, on)} />
+              </span>
+            </SettingRow>
+          ))}
           <details class="tool-more tool-more-inner">
             <summary>{t("context")}</summary>
             <SettingRow name={t("window")} description={t("windowNote")}>

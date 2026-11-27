@@ -10,6 +10,7 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useId, useRef, useState } from "preact/hooks";
 import type { SetupClient } from "../../ui/kit/api";
 import type { Reply } from "../../ui/kit/host";
+import { ToolMark } from "../../ui/kit/pages/tools";
 import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { toolState } from "../../ui/kit/parts/toolRow";
 import { strings } from "../../ui/kit/strings";
@@ -557,6 +558,7 @@ export function useToolSetup<P extends ToolPreview>(o: {
   return {
     name: o.name,
     pkg: o.pkg,
+    scan: o.scan,
     env: o.env,
     addon,
     launcher,
@@ -616,6 +618,7 @@ export type ToolSetup = ReturnType<typeof useToolSetup>;
  * (ToolTop), so the same state reads and acts the same on each.
  */
 export function ToolHead(props: {
+  tool?: string;
   name: string;
   state?: string;
   facts: (string | undefined)[];
@@ -626,12 +629,15 @@ export function ToolHead(props: {
   return (
     <header class="tool-head">
       <div class="tool-head-top">
-        <div class="tool-head-who">
-          <p class="tool-head-name">
-            <strong>{props.name}</strong>
-            {props.state && <StateBadge state={props.state} of="tool" />}
-          </p>
-          {facts.length > 0 && <p class="tool-head-facts">{facts.join(" · ")}</p>}
+        <div class="tool-head-id">
+          {props.tool && <ToolMark id={props.tool} name={props.name} size="large" />}
+          <div class="tool-head-who">
+            <p class="tool-head-name">
+              <strong>{props.name}</strong>
+              {props.state && <StateBadge state={props.state} of="tool" />}
+            </p>
+            {facts.length > 0 && <p class="tool-head-facts">{facts.join(" · ")}</p>}
+          </div>
         </div>
         {props.actions && <div class="tool-head-actions">{props.actions}</div>}
       </div>
@@ -853,6 +859,7 @@ export function ToolTop(props: {
   }
   return (
     <ToolHead
+      tool={s.scan}
       name={tool}
       state={state}
       facts={[...props.facts, path]}
@@ -864,12 +871,20 @@ export function ToolTop(props: {
 
 // ---- sections and rows -------------------------------------------------------------------------
 
-/** A section of a tool's page on a hairline, with its name; aside sits on the name's line. */
-export function Section(props: { title: string; aside?: ComponentChildren; children: ComponentChildren }) {
+/** A section of a tool's page in a card, with its name; subtitle sits under the name and aside at its end. */
+export function Section(props: {
+  title: string;
+  subtitle?: string;
+  aside?: ComponentChildren;
+  children: ComponentChildren;
+}) {
   return (
     <section class="tool-section" aria-label={props.title}>
       <header class="tool-section-head">
-        <h2>{props.title}</h2>
+        <div class="tool-section-title">
+          <h2>{props.title}</h2>
+          {props.subtitle && <p class="tool-section-sub muted">{props.subtitle}</p>}
+        </div>
         {props.aside && <div class="tool-section-aside">{props.aside}</div>}
       </header>
       {props.children}
