@@ -266,8 +266,8 @@ carries `data-theme-switching` and transitions are off.
 
 | Token | Used for | Default |
 | --- | --- | --- |
-| `meter.mid-below` | A limit's gauge turns `color.meter-mid` under this share left, in percent | `60` |
-| `meter.low-below` | It turns `color.meter-low` under this share left, in percent | `20` |
+| `meter.mid-below` | A limit's gauge turns `color.meter-mid` under this share left, in percent | `70` |
+| `meter.low-below` | It turns `color.meter-low` under this share left, in percent | `30` |
 
 Both are numbers from `0` to `100`, and `meter.low-below` may not be above `meter.mid-below`: a
 `tokens` or `dark` field that puts it there gets a warning, and both keep their defaults.

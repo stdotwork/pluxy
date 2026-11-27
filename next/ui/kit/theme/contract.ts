@@ -178,8 +178,8 @@ export const TOKENS = {
   "motion.easing": { light: "cubic-bezier(0.2, 0, 0, 1)" },
   "motion.easing-drawer": { light: "cubic-bezier(0.32, 0.72, 0, 1)" },
   "motion.press-scale": { light: "0.97" },
-  "meter.mid-below": { light: "60" },
-  "meter.low-below": { light: "20" },
+  "meter.mid-below": { light: "70" },
+  "meter.low-below": { light: "30" },
 } as const satisfies Record<string, TokenDef>;
 
 /** Tokens that hold a length of time: reduced motion sets each to 0ms. */

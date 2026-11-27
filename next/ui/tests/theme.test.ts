@@ -366,8 +366,8 @@ describe("resolving", () => {
     expect(r.warnings).toContain(
       "tokens: meter.low-below (40) is above meter.mid-below (10); both keep their defaults",
     );
-    // One cut alone is checked against the other's default (mid 60).
-    const alone = parseTheme({ ...base, dark: { "meter.low-below": "70" } });
+    // One cut alone is checked against the other's default (mid 70).
+    const alone = parseTheme({ ...base, dark: { "meter.low-below": "80" } });
     if (!alone.ok) throw new Error(alone.error);
     expect(alone.theme.dark?.["meter.low-below"]).toBeUndefined();
     const fine = parseTheme({ ...base, tokens: { "meter.mid-below": "50", "meter.low-below": "50" } });
