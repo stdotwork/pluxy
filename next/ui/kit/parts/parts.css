@@ -1192,17 +1192,13 @@
 
   .pool-segment[data-kind="unknown"] {
     background:
-      repeating-linear-gradient(135deg, var(--px-color-meter-unknown) 0 2px, transparent 2px 5px),
+      repeating-linear-gradient(135deg, var(--px-color-text-muted) 0 2px, transparent 2px 5px),
       var(--px-color-meter-track);
   }
 
   .pool-segment[data-kind="out"] {
     background:
-      repeating-linear-gradient(
-        135deg,
-        color-mix(in srgb, var(--px-color-meter-low) 55%, transparent) 0 2px,
-        transparent 2px 5px
-      ),
+      repeating-linear-gradient(45deg, var(--px-color-meter-low) 0 2px, transparent 2px 5px),
       var(--px-color-meter-track);
   }
 

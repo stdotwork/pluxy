@@ -169,6 +169,11 @@ for (const theme of THEMES) {
         bar.className = "home-state-bar";
         bar.innerHTML = '<span data-group="off"></span>';
         host?.append(bar);
+        const poolBar = document.createElement("div");
+        poolBar.className = "pool-bar";
+        poolBar.innerHTML =
+          '<span class="pool-segment" data-kind="unknown"></span><span class="pool-segment" data-kind="out"></span>';
+        box?.append(poolBar);
       });
       const results = await page.evaluate(`(() => {
         ${rgbScript()}
@@ -191,10 +196,19 @@ for (const theme of THEMES) {
         const pageGround = bgOf(offBar.parentElement);
         const offBarColor = over(withOpacity(rgb(getComputedStyle(offBar).backgroundColor), effOpacity(offBar)), pageGround);
         out.push({ what: "turned-off bar on the page", ratio: ratio(offBarColor, pageGround) });
+        for (const seg of document.querySelectorAll("#look-samples .pool-segment")) {
+          const style = getComputedStyle(seg);
+          const track = over(rgb(style.backgroundColor), ground);
+          const stops = (style.backgroundImage.match(/(?:rgba?|color|oklab|oklch|lab|lch)\\([^()]*\\)/g) ?? [])
+            .map(rgb)
+            .filter((c) => c[3] > 0);
+          const stroke = stops[0] ? over(stops[0], track) : track;
+          out.push({ what: "pool hatch " + seg.dataset.kind + " on its track", ratio: ratio(stroke, track) });
+        }
         return out;
       })()`);
       const list = results as { what: string; ratio: number }[];
-      expect(list).toHaveLength(10);
+      expect(list).toHaveLength(12);
       const low = list.filter((r) => r.ratio < GRAPHIC).map((r) => `${r.what}: ${r.ratio.toFixed(2)}:1`);
       expect(low).toEqual([]);
     });
