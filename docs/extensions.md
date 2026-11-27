@@ -113,7 +113,9 @@ pluxy ext install pluxy/claude --version <release>
   (cooldowns, blocks, session bindings, the round-robin turn) carries over for accounts whose ID,
   extension and `settings` stay the same.
 - A Responses WebSocket session lives in the old release. It closes when its running turn ends; the
-  client's next turn that continues it gets `previous_response_not_found`.
+  client's next turn that continues it (with a `previous_response_id`, or a `response.append`) gets
+  `previous_response_not_found`. A turn that carries the whole conversation and
+  continues nothing opens a session on the new release.
 - Installing the same release again changes nothing, unless its files were changed since the
   install: then the checked release replaces them, but only once no running or draining copy uses
   the files (turn the package off and wait for its requests to finish first; otherwise the install
@@ -326,8 +328,8 @@ archives to an `https://` address, is a registry for others to add.
 | `-out <folder>` | Where to write. Required. |
 | `-platforms <list>` | Comma-separated `GOOS/GOARCH` pairs. Default: this machine's platform. |
 | `-extensions <list>` | Pack only these extensions, by folder name or package ID. Default: all. With `-app-tools` it selects app tools instead. |
-| `-archived` | Also pack the extensions under `next/archive/`, which pluxy no longer ships. They are listed with the tier `unverified`. |
-| `-app-tools <folder>` | Pack the desktop app's native tools in `next/app-tools/` instead, from programs built beforehand at `<folder>/<goos>-<goarch>/<program file name>`. It builds nothing, and writes to `dist/app-tools`. |
+| `-archived` | Also pack the extensions under `next/archive/`, which pluxy no longer ships. Each is a Go module of its own, built in its own folder, and is listed with the tier `unverified`. Without the flag they are neither packed nor named. |
+| `-app-tools <folder>` | Pack the desktop app's native tools in `next/app-tools/` instead, from programs built beforehand at `<folder>/<goos>-<goarch>/<program file name>`. It builds nothing, and writes to `dist/app-tools`. It skips the test fixture `usage-fixture`, and packs each tool only for the platforms its manifest names. Its `index.json` is for the desktop app's device registries. The app installs a native tool only with a curated signature, which `pluxy-pack` does not make. |
 
 `go run ./cmd/pluxy-pack -h` prints the flags. Each package's title, summary and kind in the index
 come from its manifest. The tier is set by `pluxy-pack`: `pick` for the packages in its list of picks

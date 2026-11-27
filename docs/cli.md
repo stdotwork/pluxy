@@ -136,7 +136,7 @@ Runs core. `pluxy` with no command, or with a flag first (`pluxy -config config.
 On a first start with no config, it writes one ([config.md](config.md#a-first-config)); the one
 exception is when pluxy's home has no config and the desktop app keeps a core of its own, where it
 writes nothing and exits 1 with the two ways on. When no `-config` names the file, core logs which
-config file it found. It prints the address it listens on and the address of the extension pages on
+config file it found. It logs the build line that `pluxy -version` prints when it starts. It prints the address it listens on and the address of the extension pages on
 standard error. `SIGHUP` reloads the config; Ctrl-C or `SIGTERM` stops core, after finishing running
 requests (at most 10 seconds).
 
@@ -145,8 +145,8 @@ requests (at most 10 seconds).
 | `-config <file>` | `config.json` in the current folder when there is one, else in pluxy's home | The config file. |
 | `-safe-mode` | off | Starts no extension: client requests fail, the management API works. |
 | `-watch-interval <duration>` | `1s` | How often core looks for changes to the config file. `0` turns the watch off. |
-| `-bundled <index.json>` | `bundled/index.json` beside the program, when it exists | The index of the registry of bundled packages. |
-| `-listen-fd <n>` | none | Serves on the listening TCP socket inherited at this file descriptor instead of binding `listen`. For a program that starts core and keeps the socket, such as the desktop app. |
+| `-bundled <index.json>` | `bundled/index.json` beside the program, when it exists | The index of the registry of bundled packages. With neither the flag nor that file, core has no bundled registry: setup has no providers to offer and **Extensions** has nothing to install, unless the config lists a registry under `packages.registries`. |
+| `-listen-fd <n>` | none | Serves on the listening TCP socket inherited at this file descriptor (3 or higher; a TCP socket) instead of binding `listen`. For a program that starts core and keeps the socket, such as the desktop app. The config must still set `listen`. The program keeps its own copy of the socket, so no other program can take the port while core stops or after it exits. |
 | `-version` | | Prints the build's version, commit and build date, then exits. |
 
 ```bash
@@ -483,7 +483,8 @@ pluxy usage --since 24h --by account
 ### `pluxy usage events`
 
 Lists recorded requests: sequence number, time, model, account, client key, status, number of accounts
-tried, latency and total tokens.
+tried (TRIES), why routing chose the account (WHY, the event's `why`; see
+[Usage and logs](usage-and-logs.md#what-is-recorded)), latency and total tokens.
 
 | Flag | What it does |
 | --- | --- |
@@ -557,6 +558,20 @@ and the key to come from a config file (not `--key`, `PLUXY_MANAGEMENT_KEY` or `
 needs `--show-key`; otherwise it exits 2 before any call. When the new key is in use it exits 0 and
 ends by naming what needs the new key: the web panel, the desktop app, `PLUXY_MANAGEMENT_KEY` and
 `--key`. When you decline the question, it changes nothing and exits 0.
+
+The command changes the key in two steps, so that a lost reply never leaves you without a key that
+works:
+
+1. It asks core to stage a new key. Core keeps that key in memory only and names the config file it
+   runs on. The old key still works, and nothing is written yet.
+2. It makes sure you can get the new key: with `--show-key` it prints it (a failed write ends the
+   command here), and without it checks that the config file it read is core's own file. Only then
+   does it ask core to commit: core writes the key to its config file, and the old key stops working.
+
+A failure before the commit changes nothing, and the command says the old key still works. When the
+commit's reply is lost, the command asks once more: it exits 0 when the new key is in use, and
+otherwise fails and says which key to try (the printed one with `--show-key`, else the key in the
+config file). Two rotations at the same time are not covered: the later key replaces the earlier one.
 
 | Flag | What it does |
 | --- | --- |

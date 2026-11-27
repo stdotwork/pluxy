@@ -12,9 +12,9 @@ how to read it and how to turn it on or off.
 
 The usage record and the logs are kept in the folders `usage` and `logs` beside the config file,
 readable only by the user that runs pluxy. The settings below go in the config file, and take effect
-when core reloads it, which it does when the file is saved (see [Config](config.md)). The panel's
-**Settings**, **Config Panel**, **Logging** tab changes the file logging, log size, error log, request
-logging and usage on/off settings; the other keys are set in the config file.
+when core reloads it, which it does when the file is saved (see [Config](config.md)). The **Logging**
+section of the panel's **Config** page (its **Settings** tab) changes the file logging, log size,
+error log, request logging and usage on/off settings; the other keys are set in the config file.
 
 ## Usage statistics
 
@@ -40,6 +40,7 @@ An event has these fields. `seq`, `timestamp`, `endpoint`, `stream`, `model`, `f
 | `served_model` | The model the upstream's reply says served it, when it names one. |
 | `provider`, `account` | The extension and the account the last attempt went to. |
 | `chain_step` | The step of the model's fallback chain the last attempt was for, from 1. Left out for a model with no chain. |
+| `why` | Why routing chose the last attempt's account over the others that serve the model (at that step of a fallback chain): `pinned` (the request named it in `X-Pluxy-Account`), `session` (it served the session's last request), `only` (no other account serves the model), `first` (it is alone at the highest `priority`), `only-free` (it shares the highest `priority` with others, and none of them could take the request then: tried already, busy or blocked), `backup` (no account of a higher `priority` could take it), or the strategy's name (`round-robin`, `weighted`, `fill-first`, `least-active`, `soonest-reset`) when it chose among several at the highest `priority`. Left out for a request that reached no account, and in events recorded before core kept it. |
 | `attempts`, `tried` | How many accounts the request went to, and what each attempt ended with (at most 16 entries). `tried` is left out for one attempt that succeeded. |
 | `left_out` | For a failed request, the accounts that serve the model and were not tried, and why (at most 8 entries). Recorded whatever `routing.explain` says. |
 | `key_id`, `label` | The ID of the client key the request used, as `pluxy key list` shows it, never the key itself, and the key's name at that time. |
@@ -49,7 +50,8 @@ An event has these fields. `seq`, `timestamp`, `endpoint`, `stream`, `model`, `f
 | `tokens` | What the upstream reported: `input_tokens` (cached ones included), `output_tokens` (reasoning included), `reasoning_tokens`, `cached_tokens`, `cache_creation_tokens` and `total_tokens` (input plus output). A count the upstream did not report is left out, not 0. |
 
 A WebSocket turn is recorded before its last message is written, so a client that has that message
-finds the turn in the record.
+finds the turn in the record. For the same reason a client that goes away while that message is
+written leaves the turn recorded as finished, with the tokens the upstream reported.
 
 ### Where it is kept
 
@@ -59,15 +61,22 @@ finds the turn in the record.
   UTC day, one JSON event per line. Events are queued (4,096 at most) and written without waiting
   for the disk. When the queue is full the event is not written to disk and `dropped` counts it; an
   event the disk refuses is counted in `write_errors` and logged. Both still count in the memory
-  record, so slow storage never holds up a request. At start, core refills the memory record from
-  today's and yesterday's files.
-- **Summaries**, `usage/summary/YYYY-MM-DD.json`: when a range covers a closed UTC day, core builds
-  that day's summary from its day file, so a long range never rereads old files. A summary is
-  rebuilt when its day file has grown. A closed day counts by whole UTC hours: a `since` or `until`
-  inside an hour counts the whole hour.
+  record, so slow storage never holds up a request. Each line has `"v": 1` besides the event's
+  fields, and the files are mode `0600`. Core does not flush each line to the disk (no `fsync`). At
+  start, core refills the memory record from today's and yesterday's files, skipping a last line that
+  was cut short.
+- **Summaries**, `usage/summary/YYYY-MM-DD.json`, mode `0600`: when a range covers a closed UTC day,
+  core builds that day's summary from its day file (on demand, then kept in memory), so a long range
+  never rereads old files. A summary holds, for each hour, model, provider, account, client key and
+  whether the request failed, the number of requests, the sum of the latencies and all six token
+  counts. A summary is rebuilt when its day file has grown. The `usage/summary` folder grows by one
+  small file for each closed day a range has covered.
 - `usage/seq.json` keeps the highest event number, so numbering continues after old files are
-  deleted. `state/key-id.key` keeps the key that makes `key_id` values, so IDs stay the same
-  across restarts.
+  deleted. Core writes it at start, before it deletes a day file, and at shutdown. At start `seq`
+  continues from the highest `seq` in the files it refilled from, or from the newest earlier day file
+  that has an event when those hold none, or from `seq.json` when that is higher; lines without a
+  `seq` are numbered in order. `state/key-id.key`, mode `0600`, keeps the key that makes `key_id`
+  values, so IDs stay the same across restarts.
 
 ```json
 {"usage": {"enabled": true, "max_events": 10000, "max_age_ms": 86400000, "keep_days": 90}}
@@ -83,8 +92,8 @@ finds the turn in the record.
 Lowering `max_events` or `max_age_ms` drops the oldest requests from memory at the next reload.
 Reading the record never removes anything.
 
-In the panel, **Settings**, **Config Panel**, **Logging** has the switch **Enable in-memory usage
-statistics**.
+In the panel, the **Logging** section of the **Config** page has the switch **Keep a record of
+requests**.
 
 ### Read the usage
 
@@ -131,6 +140,10 @@ The commands take the flags every client command takes (`--json`, `--config`, `-
 **Management API.** `GET /v0/management/usage` returns the totals, the breakdowns and a time series
 (from 1-second to 24-hour steps). `GET /v0/management/usage/events` pages through events; its reply
 says with `lost` when events were pushed out before a program that polls with `after` read them.
+A closed day is counted by whole UTC hours. In a series, such an hour is counted once, in the step
+that holds its start (the first step when the hour starts before the series does), as it is in the
+totals. The series is oldest first and ends at `until`, or at the step that holds the present when
+there is no `until`.
 Both take the filters `since`, `until`, `model`, `provider`, `account`, `key` (or `key_id`) and
 `failed`. A filter that does not parse is a 400. See [Management API](management-api.md).
 
@@ -152,6 +165,19 @@ millisecond) and level:
 | `error` | It starts with `error: `: something you must fix, such as a config change that was not applied, an extension that crashed or was stopped after crashes, an account a provider closed or that needs a new sign-in, or a failed write of core's own state. |
 
 There are no debug lines. Lines an extension's program writes go to standard error only, each starting with its package ID in square brackets; they are not in `main.log`.
+
+**Failure lines.** When routing ends a request with an error, the line that gives the failure's
+reason names what routing did, after the error's message:
+
+```text
+POST /v1/responses from 127.0.0.1 [trace 20261109120001-5b1c0d7e9a3f4c26 account work-codex]: <message> model=gpt-5 tried=[work-codex(pluxy/codex): quota] left_out=[spare: exhausted until 2026-11-09T17:00:00Z; old-key: banned]
+```
+
+`tried` lists each account the request went to with its provider (and the model sent upstream when
+that is not the one asked for), and how the attempt ended; `left_out` lists each account that serves
+the model and was not tried, with its state and, for a block, when it ends. Both name accounts by their
+config IDs, not their public IDs, and name the first 8 entries, then `; +N more`. The line holds codes,
+states and times, never an upstream's words, and it is written whatever `routing.explain` says.
 
 **Access lines.** Core writes one line when each client API request ends: after a streamed reply
 ends, and when a Responses WebSocket closes. It writes none for `/healthz`, the management API, the
@@ -186,7 +212,7 @@ macOS (an existing folder keeps its mode), and on Windows gives the folder and e
 list that lets in only core's user and SYSTEM. On Windows core checks the folder each time it opens
 `main.log` or writes a request log; a folder that is a link or a file, or that another account owns,
 is refused: core still starts, writes no log files and says why on standard error. A `main.log` that
-is not a regular file is refused on every system.
+is not a regular file, or that another account owns, is refused on every system.
 
 **Read the log.**
 
@@ -198,6 +224,10 @@ is not a regular file is refused on every system.
   line's time (the `latest-timestamp` of the `--json` reply). `pluxy logs clear` empties `main.log`
   and deletes its rotated files; request logs and error logs stay.
 - Both read `main.log` and its rotated files, and answer an error while logging to file is off.
+- Reading on from `latest-timestamp` misses no line: core gives each write a time of its own, later
+  than the write before it, even when the clock goes back. Lines written together (a message that
+  spans lines) share that time, so a page can hold a few more lines than `--limit`. How `after` and
+  `limit` work is in [Management API](management-api.md#logs).
 
 ## Request logs
 
@@ -219,8 +249,8 @@ private.
 | `logs.request_log` | Write every request. Keep it off unless you are investigating something: it writes the prompts. | off |
 | `logs.error_logs_max_files` | How many error logs to keep, the newest. `0` keeps all. | 10 |
 
-The panel has **Enable request logging** and **Retained error log files** in **Settings**,
-**Config Panel**, **Logging**.
+The panel has **Log every request** and **Failed requests to keep** in the **Logging** section of
+the **Config** page.
 
 **File names.** A log is named after the request's path, its time and its trace ID, such as
 `v1-chat-completions-2026-11-09T120000-20261109120000-3f9a0c2e5b7d4e18.log`. An error log has
@@ -236,12 +266,18 @@ The panel has **Enable request logging** and **Retained error log files** in **S
    error that kept a response from coming). A refused attempt and the retry on another account show
    as two pairs. A request that made more than two upstream requests keeps the first and the last,
    with a line saying how many were left out. These sections need an extension that supports
-   [upstream capture](../next/protocol/README.md#upstream-capture), and are written only while
-   `logs.request_log` is on.
+   [upstream capture](../next/protocol/README.md#upstream-capture) (extension protocol 0.13), and
+   are written only while `logs.request_log` is on, so an error log written while it is off has none.
+   The line that says a body was not read to its end needs protocol 0.17; with an older extension a
+   body just ends where the read stopped.
 4. `=== RESPONSE ===`: the status, headers and body of the reply to the client.
 
 A Responses WebSocket turn is written as one request: the client's `response.create` message as the
-body, then `=== WEBSOCKET MESSAGES ===` with the messages sent back, one per line.
+body, then `=== WEBSOCKET MESSAGES ===` with the messages sent back, one per line. A turn that
+answers with an error counts as failed. A message core refuses before it starts a turn (an unknown
+message type, no model, an `input` that is not a list) is answered on the socket and is not written
+to any request log. When a turn opens a WebSocket to the upstream, its upstream sections hold that
+handshake (the request, the status and the headers); the messages on that socket are not written.
 
 **Size limits.** A body that is too long keeps its start and its end, with a line saying how many
 bytes were left out between them:
@@ -254,9 +290,33 @@ bytes were left out between them:
 
 The client's request body is kept whole, up to the 24 MiB core accepts.
 
-Next to each cut, core also leaves out any bytes that could be part of a secret the cut split in
-two. A body that the extension did not read to its end ends with `[... the body was not read past
-here ...]`.
+**Next to a cut.** Core removes a secret only where it is whole in the text, so next to each cut it
+also leaves out the bytes that could be the two parts of a secret the cut split. On each side of the
+cut:
+
+- A window of 12 bytes for each byte of the longest spelling (the secret itself, or an escaped or
+  encoded form of it) of a configured secret that holds a character other than a letter, a digit or one
+  of `-_.~+/=%\`. A secret made only of those characters, such as an API key or a token, needs no
+  window: the run of those characters at the edge goes, however long.
+- A part of a secret that the window's edge still cuts through goes too: the edge moves to where a
+  secret that the redaction finds whole there starts (or ends). After 4 moves, or when the redaction
+  gives up on the text around the edge, the whole side goes.
+- A percent escape nested 6 times takes 13 bytes for a byte, more than the window holds, so such a
+  part of a secret can stay.
+
+So the log shows less than the limits above when a secret with a space or other such character is
+configured: a 20-byte secret with a space in it takes at least 240 bytes on each side of a cut. The
+number of bytes left out is in the line that says how many were not logged.
+
+A body that the extension did not read to its end ends with `[... the body was not read past here
+...]`, and the same rule applies at that end, except that the window reaches back no further than the
+last line break, so a stream that stopped after an event keeps every whole event. A body with no line
+break near its end (JSON on one line, binary frames) loses the whole window. A secret that spans lines
+can keep a line shorter than 8 bytes where the read stopped: always a line of 1 or 2 bytes, and a
+line of 3 to 7 bytes when the body spells it with JSON or percent escapes or ends it with a carriage
+return and line feed. Avoid configuring a secret that has such short lines. An extension marks a body
+this way whenever it closes the body before its end, also for a reply that was complete when the
+extension stopped at the last event of the stream.
 
 **Secrets.** Core removes these from every request log, replacing them with a placeholder:
 
@@ -271,6 +331,12 @@ here ...]`.
 - in the upstream sections, also the values of headers and query parameters whose names contain
   `auth`, `key`, `token`, `secret`, `cookie`, `session`, `password`, `passphrase` or `signature`, and the user name and password of a URL.
 
+A secret made of parts has each part of 8 bytes or more removed on its own too, since an upstream may
+echo only one: the token behind a public prefix (`devin-session-token$<jwt>`, `dca:<token>`), the
+token of a `Bearer` value (or the decoded text of a `Basic` one), each value of a cookie list, and
+each line of a secret that spans lines (a PEM private key). A prefix, a scheme or a cookie name is
+never removed as a part.
+
 Removal is by the secret's value, so text that is not a secret is not touched, except in a failed
 request, where a word of the model's text that shares 4 characters (8 for a long token) with a
 secret can be lost. The prompts and replies themselves are not removed.
@@ -282,7 +348,10 @@ secret can be lost. The prompts and replies themselves are not removed.
   the log of any request, plain or error. A log over 2 MiB cannot be shown in the panel.
 - Command line: `pluxy logs errors` lists the error logs, `pluxy logs errors <name>` prints one,
   and `pluxy logs request <trace id>` prints the newest log of the request with that trace ID. The
-  trace ID is the `X-CPA-TRACE-ID` header of the reply, and the `id` of the usage event. A Responses
+  trace ID is the `X-CPA-TRACE-ID` header of the reply, and the `id` of the usage event. Core
+  reads an error log only by a name of the form `error-<...>.log` (400 for another name, 404 when
+  there is no such file) and finds a request log only by an ID of a trace ID's shape (see
+  [Management API](management-api.md#logs)). A Responses
   WebSocket turn is the exception: its log has a trace ID of its own, and its usage event has no `id`. When there
   is no log and `logs.request_log` is off, the command says that only failed requests are logged.
 
