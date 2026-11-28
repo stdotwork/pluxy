@@ -1,6 +1,3 @@
-// The small parts Activity's pages share: a word as a chip (a failure, "2nd", "via backup"), a
-// filter as a chip that comes off with a press, and the Filter button that offers the filters.
-
 import type { ComponentChildren } from "preact";
 import { useEffect, useId, useRef, useState } from "preact/hooks";
 import { Icon } from "../icons";
@@ -13,10 +10,6 @@ const t = strings("activity.chips", {
   chip: "{kind}: {name}",
 });
 
-/**
- * A word as a chip. danger is a failure's word (never colour alone: the word is the chip); the
- * neutral one says what the list notes about a request, such as "2nd".
- */
 export function WordChip(props: { tone?: "danger"; title?: string; children: ComponentChildren }) {
   return (
     <span class="word-chip" data-part="word-chip" data-tone={props.tone} title={props.title}>
@@ -25,12 +18,10 @@ export function WordChip(props: { tone?: "danger"; title?: string; children: Com
   );
 }
 
-/** One applied filter, as a chip: "Account: studio-max ×". A press takes it off. */
 export function FilterChip(props: {
   kind: string;
   name: string;
   onRemove: () => void;
-  /** The data-part the chip carries: the Usage tab keeps its own, usage-chip. */
   part?: "filter-chip" | "usage-chip";
 }) {
   return (
@@ -47,21 +38,14 @@ export function FilterChip(props: {
   );
 }
 
-/** What the Filter button offers: one list of names to pick from, by what it filters. */
 export interface FilterChoice<K extends string> {
   filter: K;
-  /** "Account": the kind, in the chip and beside the list. */
   kind: string;
-  /** "Every account": the list's name for assistive technology, and its empty choice. */
   every: string;
   options: { value: string; label: string }[];
   value: string;
 }
 
-/**
- * The Filter button: it opens a small panel with a list for each thing to filter by. A pick takes
- * effect at once (the page shows it as a chip), and Escape or a press outside closes the panel.
- */
 export function FilterMenu<K extends string>(props: {
   choices: FilterChoice<K>[];
   onPick: (filter: K, value: string) => void;

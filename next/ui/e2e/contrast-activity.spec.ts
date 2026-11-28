@@ -1,6 +1,3 @@
-// Activity's own text is readable (WCAG AA, 4.5:1) in every built-in theme, in light and in dark:
-// the day headings and the end of the Requests list, the failure and detour chips, the Usage
-// tiles, the Usage chart's labels, readout and legend, and the Logs warning and error lines.
 import { expect, type Page, test } from "@playwright/test";
 import { measureContrast } from "./contrast";
 import { openPanel, signIn, useCore } from "./support";

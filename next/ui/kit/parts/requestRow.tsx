@@ -46,7 +46,6 @@ function ordinal(n: number): string {
 
 const n = (v: number | undefined) => (v ?? 0).toLocaleString();
 
-/** How long a request took, as a person reads a wait: <1 ms, 420 ms, 2.2 s, 1m 5s. */
 export function timeTaken(ms: number): string {
   if (Math.round(ms) < 1) return t("underMs");
   if (ms < 1000) return t("ms", { count: Math.round(ms) });

@@ -1,7 +1,3 @@
-// The side pane of one request on Requests: the sentence that says what routing did, the attempts
-// as a timeline, the facts, and the one next step. It is what a person opens a failed request to
-// read, so it starts with the decision, not with the facts.
-
 import type { ClientKey } from "../api/config";
 import type { UsageEvent } from "../api/usageEvents";
 import { accountHref, keyName, providerName, timeTaken } from "../parts";
@@ -43,10 +39,8 @@ export function RequestPane(props: {
   event: UsageEvent;
   name: (account: string) => string;
   idOf: (account: string) => string;
-  /** Whether an account's model aliases are edited in its form (not set in the settings file). */
   editable: (account: string) => boolean;
   keys?: ClientKey[];
-  /** How the trace shows: a link to its log, or text to copy (a request whose log is not kept). */
   trace: "link" | "text";
   onClose: () => void;
 }) {

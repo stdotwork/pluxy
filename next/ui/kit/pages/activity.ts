@@ -170,10 +170,6 @@ export interface Story {
   note?: string;
   /** Sentences, in order. */
   lines: string[];
-  /**
-   * The sentences that are not about the attempts: the fallback, and why no account took it. The
-   * attempts have their own sentence (decisionOf) and their timeline.
-   */
   rest: string[];
   /** After the lines: each account the request left out, and why. */
   leftOut: { account: string; text: string }[];
@@ -270,7 +266,6 @@ export function whyOf(e: UsageEvent, name: (account: string) => string, now = Da
   const rest: string[] = [];
   const story: Story = { lines, rest, leftOut: [] };
   const notes: string[] = [];
-  /** A sentence about the request as a whole, which the attempts' own sentence does not cover. */
   const say = (line: string) => {
     lines.push(line);
     rest.push(line);
@@ -322,11 +317,6 @@ export function whyOf(e: UsageEvent, name: (account: string) => string, now = Da
 
 const lower = (word: string) => word.charAt(0).toLowerCase() + word.slice(1);
 
-/**
- * The one sentence a request's pane opens with: which accounts were tried and what each came to,
- * and which one answered, in how long. took says a length of time as a person reads it. Undefined
- * when the record names no account at all (the story's other sentences say why).
- */
 export function decisionOf(
   e: Pick<UsageEvent, "failed" | "account" | "tried" | "status">,
   name: (account: string) => string,
@@ -345,15 +335,8 @@ export function decisionOf(
     : t("decisionAnswered", { account: name(winner), time: took });
 }
 
-/** The ordinals a request that went to the second, third or fourth account says: 2nd, 3rd, 4th. */
 const ORDINALS = ["2nd", "3rd", "4th"];
 
-/**
- * What the list says about a detour in two words, beside the account: "2nd" when the second
- * account it tried answered (3rd, 4th, then "5th or later"), "via backup" when a backup answered
- * with nothing tried before it, and "fallback 2" when a fallback model's step 2 answered. The
- * words are the first of the story's note, in short. Undefined for a request that went straight.
- */
 export function detourOf(e: UsageEvent): string | undefined {
   if (e.failed) return undefined;
   const others = (e.tried ?? []).slice(0, -1).filter((x) => x.result !== "ok").length;

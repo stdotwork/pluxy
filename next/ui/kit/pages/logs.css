@@ -1,6 +1,4 @@
 @layer kit {
-  /* The log is one panel: its controls in a bar across the top, the lines under them on the
-     code ground. */
   .logs-pane {
     display: grid;
     min-width: 0;
@@ -20,8 +18,6 @@
     background: var(--px-color-surface);
   }
 
-  /* In the bar the fields name themselves (a placeholder, the choices), so their labels are only
-     for assistive technology. */
   .logs-controls .field > .label {
     position: absolute;
     width: 1px;
@@ -79,13 +75,11 @@
     border-radius: 0;
   }
 
-  /* A line that warns or fails has a bar at its start, as a failed request has in Requests. */
   .logs-core [data-part="log-line"] {
     padding: 0 calc(var(--s) * 3);
   }
 
   .logs-core [data-level="warn"] {
-    /* Mixed towards the text colour, as warn badges are, so light themes clear 4.5:1 on the tint. */
     color: color-mix(in srgb, var(--px-color-warn) 75%, var(--px-color-text));
     background: var(--px-color-warn-surface);
     box-shadow: inset 2px 0 0 var(--px-color-warning);

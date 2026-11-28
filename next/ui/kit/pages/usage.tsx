@@ -79,7 +79,6 @@ const BYS: { value: By; filter: Picked }[] = [
   { value: "keys", filter: "key" },
 ];
 
-/** A share of the requests, as a person reads it: 62%, or <1% when it rounds to nothing. */
 const sharePercent = (part: number, total: number) => {
   const percent = (part / Math.max(1, total)) * 100;
   return percent > 0 && percent < 0.5 ? "<1%" : `${Math.round(percent)}%`;
@@ -139,11 +138,6 @@ function useSummary(query: string): Loaded<UsageSummary> {
   return { phase: "ready", data: mine.data, loading, reload };
 }
 
-/**
- * The figures of the range as four tiles. Three of them are also the chart's tabs: the one chosen
- * is underlined and the chart under them shows that figure for each bar. The fourth (the time a
- * request took) has no figure per bar, so it is only read.
- */
 function UsageTiles(props: { u: UsageSummary; metric: Metric; onMetric: (m: Metric) => void }) {
   const { u } = props;
   const name = useId();

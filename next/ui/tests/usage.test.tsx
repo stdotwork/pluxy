@@ -150,10 +150,8 @@ test("the pane's decision sentence names what was tried, what each came to, and 
   expect(decisionOf(event({ account: "a", tried }), name, "2.4 s")).toBe(
     "Tried borealis: rate limited; cirrus: limit used up. Then aurora answered in 2.4 s.",
   );
-  // One attempt, or none recorded: who answered.
   expect(decisionOf(event({ account: "a" }), name, "2.4 s")).toBe("aurora answered in 2.4 s.");
   expect(decisionOf(event({}), name, "2.4 s")).toBeUndefined();
-  // A failure lists its attempts, and says nobody answered.
   expect(
     decisionOf(
       event({ failed: true, status: 429, tried: [{ account: "a", provider: "p", result: "rate_limit" }] }),
@@ -161,9 +159,7 @@ test("the pane's decision sentence names what was tried, what each came to, and 
       "1 s",
     ),
   ).toBe("Tried aurora: rate limited. No account answered.");
-  // A failure that reached no account has nothing to say here: the story's other sentences do.
   expect(decisionOf(event({ failed: true, error_code: "not_found" }), name, "1 s")).toBeUndefined();
-  // A sub-millisecond finish reads as "<1 ms", never "0 ms".
   expect(timeTaken(0)).toBe("<1 ms");
   expect(timeTaken(0.4)).toBe("<1 ms");
   expect(timeTaken(1)).toBe("1 ms");
@@ -208,7 +204,6 @@ test("the list notes a detour in two words: 2nd, 3rd, via backup, fallback 2", (
   expect(detourOf(event({ account: "a", tried: tried(4) }))).toBe("5th or later");
   expect(detourOf(event({ account: "a", why: "backup" }))).toBe("via backup");
   expect(detourOf(event({ account: "a", chain_step: 2 }))).toBe("fallback 2");
-  // Straight to the first account, or a request that failed: nothing to note.
   expect(detourOf(event({ account: "a", why: "first" }))).toBeUndefined();
   expect(detourOf(event({ failed: true, tried: tried(1) }))).toBeUndefined();
 });

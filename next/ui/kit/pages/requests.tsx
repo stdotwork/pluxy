@@ -293,7 +293,6 @@ export function RequestsPage() {
   ];
   const valueFor = (filter: Picked) =>
     filter === "account" ? accountValue(filters.account, accounts.data?.accounts) : filters[filter];
-  // The lists the Filter button offers: those with something to choose from, or a value set.
   const offered = selects
     .filter((s) => s.options.length >= 2 || filters[s.filter] !== "")
     .map((s) => ({ ...s, value: valueFor(s.filter) }));
@@ -508,12 +507,6 @@ export function RequestsPage() {
   );
 }
 
-/**
- * One request as a row of the table. The time is the row's button (it opens the request in the
- * pane beside the list); the rest of the row takes a press as a shortcut for pointers. A request
- * that failed has a bar at its start and its failure as a word; one a detour answered says so
- * in two words beside its account.
- */
 function RequestLine(props: {
   event: UsageEvent;
   name: (account: string) => string;
@@ -547,7 +540,6 @@ function RequestLine(props: {
         data-failed={e.failed ? "" : undefined}
         data-open={props.open ? "" : undefined}
         onClick={(ev) => {
-          // A link or a button in the row does its own thing.
           if (ev.target instanceof Element && ev.target.closest("a, button")) return;
           props.onToggle(!props.open);
         }}

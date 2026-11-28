@@ -79,7 +79,6 @@ test("a request for a model no account serves says what is served and leads to a
   const request = page.locator(".activity-request").filter({ hasText: ASKED }).first();
   await expect(request).toContainText("Model not served");
   await request.getByRole("button", { expanded: false }).click();
-  // The request opens in the side pane beside the list.
   const pane = page.locator('[data-part="detail"]');
   await expect(pane).toContainText(`No account serves ${ASKED}.`);
   await expect(pane).toContainText("These accounts serve:");

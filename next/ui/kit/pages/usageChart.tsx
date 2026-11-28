@@ -1,9 +1,3 @@
-// The Usage tab's chart: one bar per hour or per local day. What a bar shows is the tab chosen on
-// the tiles above it: the requests (went through in neutral ink, the failed ones on top in the
-// danger tone), the share that went through (the same two, scaled to a full bar), or the tokens.
-// A bar says its figures when hovered or focused; the arrow keys move between bars, so the chart
-// is one stop for the keyboard, not thirty.
-
 import { useEffect, useRef, useState } from "preact/hooks";
 import { strings } from "../strings";
 import { Button, TableFrame } from "../ui";
@@ -34,10 +28,8 @@ const t = strings("usage.chart", {
   tokens: "Tokens",
 });
 
-/** What the bars show: the requests, the share that went through, or the tokens. */
 export type Metric = "requests" | "through" | "tokens";
 
-/** The chart is drawn at the width it is shown at, so its text keeps its size; this is its width before it is measured. */
 const DEFAULT_W = 600;
 const MIN_W = 280;
 const H = 200;
@@ -109,7 +101,6 @@ export function UsageChart(props: { bars: Bar[]; unit: "hour" | "day"; range: st
   const requests = bars.reduce((n, b) => n + b.requests, 0);
   const failed = bars.reduce((n, b) => n + b.failed, 0);
   const tokens = bars.reduce((n, b) => n + b.tokens, 0);
-  // The top of the scale: the busiest bar, or a full bar for the share that went through.
   const peak =
     metric === "through" ? 1 : Math.max(1, ...bars.map((b) => (metric === "tokens" ? b.tokens : b.requests)));
   const plotH = H - TOP - BOTTOM;
@@ -161,7 +152,6 @@ export function UsageChart(props: { bars: Bar[]; unit: "hour" | "day"; range: st
           {bars.map((b, i) => {
             const x = LEFT + i * slot + (slot - barW) / 2;
             const ok = b.requests - b.failed;
-            // What the bar stacks: its two parts, in the unit of the scale.
             const first =
               metric === "tokens" ? b.tokens : metric === "through" ? (b.requests ? ok / b.requests : 0) : ok;
             const second =
@@ -237,7 +227,6 @@ export function UsageChart(props: { bars: Bar[]; unit: "hour" | "day"; range: st
                     class="chart-label"
                     x={i === bars.length - 1 && i > 0 ? W : x + barW / 2}
                     y={H - 6}
-                    // The last label ends at the chart's edge, so a long one (Today) is not cut off.
                     text-anchor={i === bars.length - 1 && i > 0 ? "end" : "middle"}
                   >
                     {label}

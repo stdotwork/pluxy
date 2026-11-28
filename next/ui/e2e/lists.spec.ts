@@ -317,7 +317,6 @@ test("Requests: no request leads to a tool, filters with no match can be cleared
   const rows = page.locator('[data-page="usage"] [data-part="request-row"]');
   await expect(rows).toHaveCount(2);
 
-  // The copy button copies the ID and does not close the request's pane.
   const row = rows.filter({ hasText: "fake-model" }).first();
   await row.getByRole("button", { expanded: false }).click();
   const trace = page.locator('[data-part="detail"] [data-part="trace-id"]');
