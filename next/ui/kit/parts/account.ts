@@ -430,8 +430,8 @@ export function windowShort(l: QuotaLimit): string {
   return l.label || l.id;
 }
 
-/** A window's whole name, for its title: 5-hour limit, Weekly limit. */
 export function windowName(l: QuotaLimit): string {
+  if ((l.feature || l.models?.length) && l.label?.trim()) return l.label.trim();
   const s = l.window_seconds ?? 0;
   if (s === 5 * HOUR) return t("fiveHourLimit");
   if (s === DAY) return t("dailyLimit");

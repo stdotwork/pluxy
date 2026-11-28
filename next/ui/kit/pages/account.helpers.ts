@@ -100,9 +100,8 @@ export function paceOf(l: QuotaLimit, now = Date.now()): PaceInfo | undefined {
 }
 
 export function limitTitle(l: QuotaLimit): string {
-  if ((l.models?.length || l.feature) && l.label?.trim()) return l.label.trim();
   const base = windowName(l);
-  if (l.models?.length) return `${base} · ${l.models.join(", ")}`;
+  if (l.models?.length && !l.label?.trim()) return `${base} · ${l.models.join(", ")}`;
   return base;
 }
 
