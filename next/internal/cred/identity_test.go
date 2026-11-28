@@ -7,9 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// A new login to an account must sign in to the same upstream account: every field of the stored
-// identity must match (letter case aside); without a stored identity the labels are compared: the
-// provider's label when the record keeps one apart from a label a person gave, else the label.
 func TestSameIdentity(t *testing.T) {
 	id := func(kv ...string) map[string]string {
 		m := map[string]string{}

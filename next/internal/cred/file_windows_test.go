@@ -17,9 +17,6 @@ import (
 	"unsafe"
 )
 
-// Reading what the file system holds for a path: its owner and access list. Declared here
-// rather than taken from internal/private (private_windows.go), so the test does not rest on the
-// code it checks.
 var (
 	testAdvapi32                     = syscall.NewLazyDLL("advapi32.dll")
 	procGetNamedSecurityInfo         = testAdvapi32.NewProc("GetNamedSecurityInfoW")
@@ -31,7 +28,7 @@ var (
 )
 
 const (
-	testSEFileObject         = 1 // SE_FILE_OBJECT
+	testSEFileObject         = 1
 	ownerSecurityInformation = 0x1
 	daclSecurityInfo         = 0x4
 	seDaclProtected          = 0x1000
@@ -40,8 +37,6 @@ const (
 	administrators           = "S-1-5-32-544"
 )
 
-// aclHeader is the start of an ACL; allowedACE is an ACCESS_ALLOWED_ACE (other kinds share its
-// first eight bytes).
 type aclHeader struct {
 	Revision, _ byte
 	Size        uint16
@@ -56,8 +51,6 @@ type allowedACE struct {
 	SidStart    uint32
 }
 
-// accessList reads path's owner, whether its access list is protected (inherits nothing from
-// its parent), and its entries as "SID type flags mask", sorted.
 func accessList(t *testing.T, path string) (owner string, protected bool, entries []string) {
 	t.Helper()
 	p, err := syscall.UTF16PtrFromString(path)
@@ -103,8 +96,6 @@ func entry(sid string, typ, flags byte, mask uint32) string {
 	return fmt.Sprintf("%s type %d flags %#x mask %#x", sid, typ, flags, mask)
 }
 
-// thisUser returns this process's user SID and its token's default owner, the owner Windows
-// gives what it makes.
 func thisUser(t *testing.T) (me, defaultOwner string) {
 	t.Helper()
 	token, err := syscall.OpenCurrentProcessToken()
@@ -133,14 +124,12 @@ func thisUser(t *testing.T) (me, defaultOwner string) {
 }
 
 const (
-	aceAllowedType = 0          // ACCESS_ALLOWED_ACE_TYPE
-	inheritable    = 0x1 | 0x2  // OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
-	inherited      = 0x10       // INHERITED_ACE
-	fullAccess     = 0x001F01FF // FILE_ALL_ACCESS
+	aceAllowedType = 0
+	inheritable    = 0x1 | 0x2
+	inherited      = 0x10
+	fullAccess     = 0x001F01FF
 )
 
-// wantList is the private access list as accessList shows it: this user's and SYSTEM's full
-// access, each entry with flags.
 func wantList(t *testing.T, flags byte) string {
 	me, _ := thisUser(t)
 	w := []string{entry(me, aceAllowedType, flags, fullAccess), entry(system, aceAllowedType, flags, fullAccess)}
@@ -148,9 +137,6 @@ func wantList(t *testing.T, flags byte) string {
 	return strings.Join(w, "\n")
 }
 
-// checkPrivate checks that path, a folder or a file, has an owner the store accepts (this user,
-// the default owner or SYSTEM) and exactly the private access list: protected, this user's and
-// SYSTEM's full access, a folder's entries inheritable.
 func checkPrivate(t *testing.T, what, path string, folder bool) {
 	t.Helper()
 	me, defaultOwner := thisUser(t)
@@ -170,11 +156,6 @@ func checkPrivate(t *testing.T, what, path string, folder bool) {
 	}
 }
 
-// The credentials folder, a new record's file and the file after a save each have a protected
-// access list (nothing inherited from the parent) that lets in only this user and SYSTEM, with
-// full access; the folder's entries pass on to what is made in it. A folder that already
-// exists, open to Everyone, is made private when the store is opened, with no save, and a file
-// already in it then takes only this user's and SYSTEM's entries from it.
 func TestFileBackendWindowsAccessList(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "credentials")
 	store, err := Open(FileBackend{Dir: dir})
@@ -226,9 +207,6 @@ func icacls(t *testing.T, args ...string) {
 	}
 }
 
-// setOwner gives path to the account sid with icacls, which takes the restore privilege: an
-// elevated administrator holds it (CI's hosted runners run elevated) and icacls turns it on.
-// Without it the test is skipped, except on CI, where it fails.
 func setOwner(t *testing.T, path, sid string) {
 	t.Helper()
 	if out, err := exec.Command("icacls", path, "/setowner", "*"+sid).CombinedOutput(); err != nil {
@@ -242,9 +220,6 @@ func setOwner(t *testing.T, path, sid string) {
 	}
 }
 
-// refused checks that a save into dir and opening the store on dir both fail with a credential
-// store error that wrong accepts, and leave the folder inside (dir, or the folder a link at dir
-// points to) as it was: no file in it, and the same access list.
 func refused(t *testing.T, dir, inside, want string, wrong func(error) bool) {
 	t.Helper()
 	_, protected, before := accessList(t, inside)
@@ -273,8 +248,6 @@ func says(text string) func(error) bool {
 	return func(err error) bool { return strings.Contains(err.Error(), text) }
 }
 
-// A credentials folder that is a link (here a junction) to another folder is refused, not made
-// private through the link.
 func TestFileBackendWindowsRefusesALink(t *testing.T) {
 	base := t.TempDir()
 	target := filepath.Join(base, "target")
@@ -285,12 +258,10 @@ func TestFileBackendWindowsRefusesALink(t *testing.T) {
 	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
 		t.Fatalf("mklink: %v: %s", err, out)
 	}
-	t.Cleanup(func() { os.Remove(link) }) // the junction only, before the folder is removed
+	t.Cleanup(func() { os.Remove(link) })
 	refused(t, link, target, "is a link", says("is a link"))
 }
 
-// A credentials folder another account owns is refused, though this user may change its list:
-// the owner could open it again. The refusal names the account and says how to fix it.
 func TestFileBackendWindowsRefusesAnotherOwner(t *testing.T) {
 	const localService = "S-1-5-19"
 	dir := filepath.Join(t.TempDir(), "credentials")
@@ -304,11 +275,9 @@ func TestFileBackendWindowsRefusesAnotherOwner(t *testing.T) {
 	})
 }
 
-// withoutPrivileges turns the named privileges off in this process's token until the test ends,
-// when each is set back as it was. A privilege the token does not hold is left alone.
 func withoutPrivileges(t *testing.T, names ...string) {
 	t.Helper()
-	const adjustPrivileges, query = 0x20, 0x8 // TOKEN_ADJUST_PRIVILEGES, TOKEN_QUERY
+	const adjustPrivileges, query = 0x20, 0x8
 	process, err := syscall.GetCurrentProcess()
 	if err != nil {
 		t.Fatal(err)
@@ -347,13 +316,6 @@ func withoutPrivileges(t *testing.T, names ...string) {
 	}
 }
 
-// When the folder's list cannot be changed, the save fails before it writes anything. The
-// folder is given to SYSTEM, an owner the store accepts, so this user no longer has the owner's
-// own right to change its list, and its list gives this user Modify (M): everything but changing
-// the list or the owner, so a save that went on after the failed change could still write its
-// record. An administrator's backup, restore and
-// take-ownership privileges would get past the list when they are on (a folder is opened with
-// backup semantics), so they are turned off for the test.
 func TestFileBackendWindowsFailedReset(t *testing.T) {
 	me, _ := thisUser(t)
 	dir := filepath.Join(t.TempDir(), "credentials")
@@ -362,9 +324,6 @@ func TestFileBackendWindowsFailedReset(t *testing.T) {
 	}
 	setOwner(t, dir, system)
 	icacls(t, dir, "/inheritance:r", "/grant:r", "*"+me+":(OI)(CI)M")
-	// After that, CI's runner still listed SYSTEM and Administrators with full access as the
-	// folder's own entries, and an elevated administrator could change the list through
-	// Administrators'.
 	icacls(t, dir, "/remove:g", "*"+system, "*"+administrators)
 	withoutPrivileges(t, "SeBackupPrivilege", "SeRestorePrivilege", "SeTakeOwnershipPrivilege")
 	p, err := syscall.UTF16PtrFromString(dir)
@@ -382,7 +341,6 @@ func TestFileBackendWindowsFailedReset(t *testing.T) {
 	refused(t, dir, dir, "is denied", func(err error) bool { return errors.Is(err, fs.ErrPermission) })
 }
 
-// descriptor returns path's owner, group and access list as SDDL text.
 func descriptor(t *testing.T, path string) string {
 	t.Helper()
 	const groupInfo = 0x2
@@ -405,8 +363,6 @@ func descriptor(t *testing.T, path string) string {
 	return syscall.UTF16ToString(unsafe.Slice(text, 1<<16))
 }
 
-// A folder whose list is protected but also lets Everyone read is not private: opening the store
-// gives it exactly the private list.
 func TestFileBackendWindowsProtectedButOpen(t *testing.T) {
 	me, _ := thisUser(t)
 	dir := filepath.Join(t.TempDir(), "credentials")
@@ -424,8 +380,6 @@ func TestFileBackendWindowsProtectedButOpen(t *testing.T) {
 	checkPrivate(t, "protected folder open to Everyone, after opening", dir, true)
 }
 
-// A folder that is private already, with a list other than the one core sets (this user's
-// entry alone), is left exactly as it is by opening the store and saving a record.
 func TestFileBackendWindowsLeavesAPrivateFolder(t *testing.T) {
 	me, _ := thisUser(t)
 	dir := filepath.Join(t.TempDir(), "credentials")
@@ -450,7 +404,6 @@ func TestFileBackendWindowsLeavesAPrivateFolder(t *testing.T) {
 	}
 }
 
-// A folder SYSTEM owns, which still lets this user change it, is accepted and made private.
 func TestFileBackendWindowsAcceptsSystemsFolder(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "credentials")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -463,8 +416,6 @@ func TestFileBackendWindowsAcceptsSystemsFolder(t *testing.T) {
 	checkPrivate(t, "SYSTEM's folder after opening", dir, true)
 }
 
-// A record file another account owns (put there before the folder was private) is skipped with
-// a notice naming it and its owner, not loaded; the other records load.
 func TestFileBackendWindowsSkipsARecordAnotherAccountOwns(t *testing.T) {
 	const localService = "S-1-5-19"
 	dir := filepath.Join(t.TempDir(), "credentials")
@@ -496,7 +447,6 @@ func TestFileBackendWindowsSkipsARecordAnotherAccountOwns(t *testing.T) {
 	}
 }
 
-// A file CreatePrivate makes has the private access list from the start, as a record has.
 func TestCreatePrivateWindowsAccessList(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := CreatePrivate(path, []byte("{}")); err != nil {
@@ -505,15 +455,12 @@ func TestCreatePrivateWindowsAccessList(t *testing.T) {
 	checkPrivate(t, "created file", path, false)
 }
 
-// letsEveryoneIn reports whether path's access list has an entry for Everyone.
 func letsEveryoneIn(t *testing.T, path string) bool {
 	t.Helper()
 	_, _, entries := accessList(t, path)
 	return slices.ContainsFunc(entries, func(e string) bool { return strings.HasPrefix(e, everyone+" ") })
 }
 
-// loadsPrivately opens the store on dir and checks that the record acct loads, that its file
-// then has exactly the private access list, and that the log says the record was made private.
 func loadsPrivately(t *testing.T, dir, file string) {
 	t.Helper()
 	var logged bytes.Buffer
@@ -532,10 +479,6 @@ func loadsPrivately(t *testing.T, dir, file string) {
 	}
 }
 
-// A record file with an entry of its own that lets Everyone read it, written before the folder
-// was private, keeps that entry when the folder is made private, since a folder's list reaches
-// only the entries its files inherit. Loading the store writes the record again as a private
-// file.
 func TestFileBackendWindowsMakesARecordWithItsOwnEntriesPrivate(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "credentials")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -553,9 +496,6 @@ func TestFileBackendWindowsMakesARecordWithItsOwnEntriesPrivate(t *testing.T) {
 	loadsPrivately(t, dir, file)
 }
 
-// A record file moved into the credentials folder from another folder on the same volume keeps
-// the list it had there, inherited entries included, since a move does not make a file inherit
-// again. Loading the store writes the record again as a private file.
 func TestFileBackendWindowsMakesAMovedInRecordPrivate(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "credentials")

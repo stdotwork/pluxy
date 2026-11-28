@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// A record file that does not read as a record no longer fails the open: the records around it
-// load, and the file is reported as broken, naming its path and what is wrong with it.
 func TestFileBackendReportsUnreadableRecords(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "credentials")
 	store, err := Open(FileBackend{Dir: dir})
@@ -64,7 +62,6 @@ func TestFileBackendReportsUnreadableRecords(t *testing.T) {
 		}
 	}
 
-	// Deleting a broken account removes its file, and a good record can be added under its ID.
 	if err := again.Delete("truncated"); err != nil {
 		t.Fatalf("deleting the broken account: %v", err)
 	}

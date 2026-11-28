@@ -13,9 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A login started without an account ID adds the account under a new ID, acc_ and 8 hex digits
-// from the random source, drawn again while it is an ID or public ID an account core knows has
-// (letter case aside for the ID), or an account outside the store (core's config) has.
 func TestLoginWithoutIDGetsAFreshID(t *testing.T) {
 	p := &immediateLoginProvider{fakeProvider: &fakeProvider{}, grant: grantLabelled("jane@example.test", nil)}
 	m := loginManager(t, p)
@@ -52,9 +49,6 @@ func TestLoginWithoutIDGetsAFreshID(t *testing.T) {
 	}
 }
 
-// SetAccount sets the label a person gives an account and, given "", takes it away, leaving the
-// provider's. An account stored before core kept the provider's label apart is still checked by
-// its old label on a new login after a person renamed it.
 func TestSetAccountLabel(t *testing.T) {
 	p := &immediateLoginProvider{fakeProvider: &fakeProvider{}, grant: grantLabelled("jane@example.test", nil)}
 	m := loginManager(t, p)
@@ -70,7 +64,6 @@ func TestSetAccountLabel(t *testing.T) {
 		t.Fatalf("SetAccount of an unknown account: %v", err)
 	}
 
-	// An account stored before: its label is the provider's, with no ProviderLabel.
 	if _, err := m.store.Create(Record{ID: "old", Extension: provID, State: StateActive, Label: "old@example.test"}); err != nil {
 		t.Fatal(err)
 	}
@@ -90,10 +83,6 @@ func TestSetAccountLabel(t *testing.T) {
 	}
 }
 
-// A login started with an ID of the shape core makes (acc_ and 8 lower-case hex digits), which is
-// its own public ID, is refused when that ID is another account's public ID, stored or set in
-// core's config, as a drawn ID would be drawn again; so is an imported account of such an ID. A
-// free one is taken.
 func TestSuppliedCoreShapedIDMustBeFree(t *testing.T) {
 	p := &immediateLoginProvider{fakeProvider: &fakeProvider{}, grant: grantLabelled("jane@example.test", nil)}
 	m := loginManager(t, p)
@@ -121,9 +110,6 @@ func TestSuppliedCoreShapedIDMustBeFree(t *testing.T) {
 	}
 }
 
-// A login to a new account fails, and adds nothing, when core's config comes to have its ID or
-// its public ID as an account's ID or public ID while the login runs. The login reports a
-// conflict, as a refusal at its start does, not an internal error.
 func TestLoginRefusedWhenConfigTakesItsIDMeanwhile(t *testing.T) {
 	p := &immediateLoginProvider{fakeProvider: &fakeProvider{}, grant: grantLabelled("jane@example.test", nil)}
 	m := loginManager(t, p)
@@ -137,12 +123,12 @@ func TestLoginRefusedWhenConfigTakesItsIDMeanwhile(t *testing.T) {
 	}
 
 	for _, tc := range []struct{ id, config string }{
-		{"acc_0a1b2c3d", "acc_0a1b2c3d"}, // the config takes the ID itself
-		{"foo", state.PublicID("foo")},   // the config takes the ID's public ID
-		{state.PublicID("bar"), "bar"},   // the ID is the public ID of the config's account
+		{"acc_0a1b2c3d", "acc_0a1b2c3d"},
+		{"foo", state.PublicID("foo")},
+		{state.PublicID("bar"), "bar"},
 	} {
 		configID.Store("")
-		p.onLogin = func() { configID.Store(tc.config) } // free when the login starts, taken after
+		p.onLogin = func() { configID.Store(tc.config) }
 		v, err := m.StartLogin(context.Background(), LoginRequest{Account: route.Account{ID: tc.id}, Method: "device"})
 		if err != nil || v.State != LoginFailed || v.Error == nil {
 			t.Fatalf("a login to %s whose ID the config took meanwhile (as %s) = %+v, %v; want failed", tc.id, tc.config, v, err)
@@ -156,11 +142,6 @@ func TestLoginRefusedWhenConfigTakesItsIDMeanwhile(t *testing.T) {
 	}
 }
 
-// The ID check works both ways: a new account, by login or by import, is refused while its public
-// ID is another account's ID, not only while its ID is another account's public ID. Account foo
-// is added, removed, and an account is added whose ID is foo's public ID; adding foo again is then
-// refused. The same holds when that account is set in core's config. The refusal does not tell an
-// import to leave the ID out, which an import cannot do.
 func TestNewAccountWhosePublicIDIsTakenIsRefused(t *testing.T) {
 	p := &immediateLoginProvider{fakeProvider: &fakeProvider{}, grant: grantLabelled("jane@example.test", nil)}
 	m := loginManager(t, p)

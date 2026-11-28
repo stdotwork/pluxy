@@ -23,7 +23,6 @@ func recordFor(id string) Record {
 		Credential: protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "a", RefreshToken: "r"}}
 }
 
-// writeRecordFile writes r to path as the file backend would, but not through it.
 func writeRecordFile(t *testing.T, path string, r Record) {
 	t.Helper()
 	b, err := json.Marshal(r)
@@ -48,9 +47,6 @@ func names(t *testing.T, dir string) []string {
 	return out
 }
 
-// A folder renamed into the credentials folder's place between its check and its opening is
-// refused, by loading and by saving: nothing is read from it or written to it. With nothing
-// swapped, loading and saving go through the root as before.
 func TestFileBackendRefusesASwappedFolder(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "credentials")
@@ -111,8 +107,6 @@ func TestFileBackendRefusesASwappedFolder(t *testing.T) {
 	}
 }
 
-// A file where the credentials folder should be is refused, by loading and by saving, with a
-// credential store error.
 func TestFileBackendRefusesAFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "credentials")
 	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
@@ -127,9 +121,6 @@ func TestFileBackendRefusesAFile(t *testing.T) {
 	}
 }
 
-// A record file that is a link is skipped with a notice naming it, not followed; the other
-// records load. Making a link on Windows takes a privilege an elevated administrator holds (CI's
-// hosted runners run elevated); without it the test is skipped there, except on CI.
 func TestFileBackendSkipsALinkedRecord(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "credentials")
@@ -167,8 +158,6 @@ func TestFileBackendSkipsALinkedRecord(t *testing.T) {
 	}
 }
 
-// CreatePrivate writes a new file only its user can read, never over an existing one, and leaves
-// no temporary file behind either way.
 func TestCreatePrivate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

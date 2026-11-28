@@ -20,22 +20,18 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// The provider extension is the edge of core, so these tests replace it with a scripted
-// token endpoint: each refresh waits until the test lets it answer, then rotates the refresh
-// token the way RFC 9700 section 4.14.2 describes, refusing a refresh token used before.
-
 const provID = "test/oauth"
 
 type fakeProvider struct {
 	mu      sync.Mutex
 	calls   int
 	used    map[string]bool
-	gate    chan struct{} // each refresh waits for a receive, when not nil
-	started chan struct{} // gets a value as each refresh starts
-	fail    *llm.Error    // returned instead of a credential, when set
-	ttl     time.Duration // lifetime of issued access tokens
-	noKey   bool          // renew successfully but without an access token, as a provider answering {} does
-	onInfo  func(n int)   // called with the count of Info calls so far, when not nil
+	gate    chan struct{}
+	started chan struct{}
+	fail    *llm.Error
+	ttl     time.Duration
+	noKey   bool
+	onInfo  func(n int)
 	infos   int
 }
 
@@ -88,7 +84,6 @@ func (p *fakeProvider) Refresh(ctx context.Context, a protocol.Account) (*protoc
 		RefreshToken: fmt.Sprintf("refresh-%d", p.calls), ExpiresAt: time.Now().Add(ttl).Unix()}, nil
 }
 
-// single is the one provider extension that runs.
 type single struct{ p Provider }
 
 func (s single) Provider(id string) Provider {
@@ -106,8 +101,6 @@ func (p *fakeProvider) refreshCalls() int {
 	return p.calls
 }
 
-// newManager returns a manager over a file store in a temporary folder holding one account
-// whose access token expires in expiresIn.
 func newManager(t *testing.T, p *fakeProvider, expiresIn time.Duration) (*Manager, *Store) {
 	t.Helper()
 	store, err := Open(FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")})
@@ -133,8 +126,6 @@ func wait(t *testing.T, ch <-chan struct{}) {
 	}
 }
 
-// Many requests that find the credential about to expire share one renewal: one refresh
-// call, and every request gets the renewed credential.
 func TestConcurrentRequestsShareOneRenewal(t *testing.T) {
 	p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 100)}
 	m, _ := newManager(t, p, time.Minute)
@@ -154,7 +145,6 @@ func TestConcurrentRequestsShareOneRenewal(t *testing.T) {
 		}()
 	}
 	wait(t, p.started)
-	// Let every caller reach the renewal before it answers.
 	time.Sleep(100 * time.Millisecond)
 	close(p.gate)
 	wg.Wait()
@@ -166,7 +156,6 @@ func TestConcurrentRequestsShareOneRenewal(t *testing.T) {
 			t.Errorf("caller %d got %q, %v; want access-1", i, got[i], errs[i])
 		}
 	}
-	// Later requests use the renewed credential without renewing again.
 	if c, v, e := m.Credential(context.Background(), provID, "acct"); e != nil || c.AccessToken != "access-1" || v != 2 {
 		t.Errorf("after the renewal: %v version %d %v, want access-1 at version 2", c, v, e)
 	}
@@ -175,8 +164,6 @@ func TestConcurrentRequestsShareOneRenewal(t *testing.T) {
 	}
 }
 
-// A renewal whose account was signed in to again while it ran is refused: the newer
-// credential stands.
 func TestRenewalOfReplacedCredentialIsRefused(t *testing.T) {
 	p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 1)}
 	m, store := newManager(t, p, time.Minute)
@@ -207,8 +194,6 @@ func TestRenewalOfReplacedCredentialIsRefused(t *testing.T) {
 	}
 }
 
-// A renewal still running when its account is removed and added again under the same ID
-// never lands on the new account.
 func TestRenewalOfRemovedAccountIsRefused(t *testing.T) {
 	p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 1)}
 	m, store := newManager(t, p, time.Minute)
@@ -233,7 +218,6 @@ func TestRenewalOfRemovedAccountIsRefused(t *testing.T) {
 	}
 }
 
-// A caller that read the credential before a renewal finished does not renew it again.
 func TestCallerWithOldVersionDoesNotRenewAgain(t *testing.T) {
 	p := &fakeProvider{}
 	m, store := newManager(t, p, time.Minute)
@@ -241,7 +225,6 @@ func TestCallerWithOldVersionDoesNotRenewAgain(t *testing.T) {
 	if _, err := m.Refresh(context.Background(), "acct"); err != nil {
 		t.Fatal(err)
 	}
-	// The upstream refused the old credential: the renewed one is ready without a second call.
 	if !m.Rejected(context.Background(), "acct", before.Version) {
 		t.Error("Rejected with the old version reported no newer credential")
 	}
@@ -250,7 +233,6 @@ func TestCallerWithOldVersionDoesNotRenewAgain(t *testing.T) {
 	}
 }
 
-// Requests that see the upstream refuse the same credential share one renewal.
 func TestConcurrentRejectionsShareOneRenewal(t *testing.T) {
 	p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 100)}
 	m, store := newManager(t, p, time.Hour)
@@ -278,8 +260,6 @@ func TestConcurrentRejectionsShareOneRenewal(t *testing.T) {
 	}
 }
 
-// A refused grant leaves the account waiting for a new login: not usable, not routed, and
-// not the same as a user's disable.
 func TestRejectedGrantNeedsLogin(t *testing.T) {
 	p := &fakeProvider{fail: &llm.Error{Code: llm.CodeAuth, Scope: llm.ScopeCredential, Message: "invalid_grant"}}
 	m, store := newManager(t, p, time.Minute)
@@ -298,14 +278,11 @@ func TestRejectedGrantNeedsLogin(t *testing.T) {
 	if _, _, e := m.Credential(context.Background(), provID, "acct"); e == nil || e.Code != llm.CodeAuth {
 		t.Errorf("Credential after the refusal = %v, want code auth", e)
 	}
-	// Enabling is about the user's disable, not the refusal.
 	if rec, _ := m.SetDisabled("acct", false); rec.State != StateReauth {
 		t.Errorf("enabling cleared the refusal: state %q", rec.State)
 	}
 }
 
-// After a renewal fails in a way that may pass, requests are not each sent to the token
-// endpoint: renewal waits, and an expired credential fails with when to try again.
 func TestFailedRenewalBacksOff(t *testing.T) {
 	p := &fakeProvider{fail: &llm.Error{Code: llm.CodeUnavailable, Retryable: true, Scope: llm.ScopeEndpoint, Message: "token endpoint down"}}
 	m, store := newManager(t, p, -time.Minute)
@@ -321,7 +298,6 @@ func TestFailedRenewalBacksOff(t *testing.T) {
 	if rec, _ := store.Get("acct"); rec.State != StateActive || rec.Version != 1 {
 		t.Errorf("a passing failure changed the record: state %q version %d", rec.State, rec.Version)
 	}
-	// An explicit refresh does not wait for the backoff.
 	p.mu.Lock()
 	p.fail = nil
 	p.mu.Unlock()
@@ -330,15 +306,11 @@ func TestFailedRenewalBacksOff(t *testing.T) {
 	}
 }
 
-// An account that holds no key yet (an imported Meta device token, or a refresh token alone) has
-// nothing to present until its first renewal works. While that renewal waits out its backoff, a
-// request gets the renewal's failure, never a credential with an empty key, whatever the
-// credential's expiry says.
 func TestKeylessCredentialIsNeverHandedOut(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		refreshAt int64 // 0 for none, else seconds from now
-		expiresIn int64 // 0 for none, else seconds from now
+		refreshAt int64
+		expiresIn int64
 	}{
 		{"refresh due", -1, 0},
 		{"no refresh time", 0, 0},
@@ -368,7 +340,6 @@ func TestKeylessCredentialIsNeverHandedOut(t *testing.T) {
 			if c := p.refreshCalls(); c != 1 {
 				t.Errorf("refresh calls = %d, want 1 (the later requests wait out the backoff)", c)
 			}
-			// Once the renewal works, the new key is handed out.
 			p.mu.Lock()
 			p.fail = nil
 			p.mu.Unlock()
@@ -382,7 +353,6 @@ func TestKeylessCredentialIsNeverHandedOut(t *testing.T) {
 	}
 }
 
-// makeKeyless changes the stored credential of the account "acct".
 func makeKeyless(t *testing.T, store *Store, change func(*protocol.Credential)) {
 	t.Helper()
 	rec, _ := store.Get("acct")
@@ -391,12 +361,9 @@ func makeKeyless(t *testing.T, store *Store, change func(*protocol.Credential)) 
 	}
 }
 
-// A renewal that succeeds without a key (a token endpoint answering {}) gives nothing to present.
-// It counts as ineffective: no request gets an empty key, and the renewal is repeated only after
-// the ineffective backoff, not on every request.
 func TestRenewalWithoutKeyIsIneffective(t *testing.T) {
 	p := &fakeProvider{noKey: true}
-	m, _ := newManager(t, p, time.Minute) // due at once
+	m, _ := newManager(t, p, time.Minute)
 	var offset atomic.Int64
 	start := time.Now()
 	m.now = func() time.Time { return start.Add(time.Duration(offset.Load())) }
@@ -420,8 +387,6 @@ func TestRenewalWithoutKeyIsIneffective(t *testing.T) {
 	}
 }
 
-// A credential of an extension's own kind keeps its secret in data, not in the access token: it
-// is not keyless, and core hands it out as it is, without renewing it first.
 func TestOwnKindCredentialIsNotKeyless(t *testing.T) {
 	p := &fakeProvider{}
 	m, store := newManager(t, p, time.Hour)
@@ -439,14 +404,12 @@ func TestOwnKindCredentialIsNotKeyless(t *testing.T) {
 	}
 }
 
-// noRefresh is a provider extension without a refresh operation.
 type noRefresh struct{ *fakeProvider }
 
 func (noRefresh) Info() protocol.Info {
 	return protocol.Info{ID: provID, Operations: []string{protocol.OpGenerate}}
 }
 
-// A credential without a key that no extension renews is handed out as it is, as before.
 func TestKeylessCredentialWithoutRefreshIsHandedOut(t *testing.T) {
 	p := &fakeProvider{}
 	store, err := Open(FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")})
@@ -468,11 +431,7 @@ func TestKeylessCredentialWithoutRefreshIsHandedOut(t *testing.T) {
 	}
 }
 
-// Another request's failed renewal can land between the moments one request decides whether to
-// renew and whether to hand the credential out. Whenever it lands, the request does not get an
-// empty key.
 func TestKeylessCredentialIsNotHandedOutWhenARenewalFailsMeanwhile(t *testing.T) {
-	// Info is asked once per decision: whether to renew first, whether again.
 	for landsAt := 1; landsAt <= 2; landsAt++ {
 		t.Run(fmt.Sprintf("at Info call %d", landsAt), func(t *testing.T) {
 			p := &fakeProvider{}
@@ -487,7 +446,7 @@ func TestKeylessCredentialIsNotHandedOutWhenARenewalFailsMeanwhile(t *testing.T)
 				p.mu.Lock()
 				p.fail = &llm.Error{Code: llm.CodeUnavailable, Retryable: true, Scope: llm.ScopeEndpoint, Message: "mint failed"}
 				p.mu.Unlock()
-				p.onInfo = nil // the renewal below asks for Info too
+				p.onInfo = nil
 				if _, err := m.Refresh(context.Background(), "acct"); err == nil {
 					t.Error("the other request's renewal worked, want it to fail")
 				}
@@ -503,7 +462,6 @@ func TestKeylessCredentialIsNotHandedOutWhenARenewalFailsMeanwhile(t *testing.T)
 	}
 }
 
-// A renewal that gives a credential already due for renewal is not repeated on every request.
 func TestIneffectiveRenewalBacksOff(t *testing.T) {
 	p := &fakeProvider{ttl: time.Minute}
 	m, _ := newManager(t, p, time.Minute)
@@ -517,8 +475,6 @@ func TestIneffectiveRenewalBacksOff(t *testing.T) {
 	}
 }
 
-// A caller that stops waiting does not cancel the renewal: the provider may already have
-// rotated the refresh token, and the result must still be stored.
 func TestRenewalOutlivesItsCaller(t *testing.T) {
 	p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 1)}
 	m, store := newManager(t, p, time.Minute)
@@ -546,7 +502,6 @@ func TestRenewalOutlivesItsCaller(t *testing.T) {
 	}
 }
 
-// Credentials go to their own provider only, and static keys are never renewed.
 func TestOnlyOwnCredentials(t *testing.T) {
 	p := &fakeProvider{}
 	m, store := newManager(t, p, time.Minute)
@@ -567,8 +522,6 @@ func TestOnlyOwnCredentials(t *testing.T) {
 	if c := p.refreshCalls(); c != 0 {
 		t.Errorf("refresh calls = %d, want 0", c)
 	}
-	// Every usable account is routable, each tagged with its own extension: routing sends it
-	// only there.
 	var ids []string
 	for _, a := range m.Accounts() {
 		ids = append(ids, a.ID+"@"+a.Extension)
@@ -581,7 +534,6 @@ func TestOnlyOwnCredentials(t *testing.T) {
 	}
 }
 
-// The file backend keeps each record readable only by its owner and leaves no partial files.
 func TestFileBackendPermissions(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "credentials")
 	store, err := Open(FileBackend{Dir: dir})
@@ -596,7 +548,6 @@ func TestFileBackendPermissions(t *testing.T) {
 	if _, err := store.Update("acct", rec.Registration, rec.Version, func(r *Record) { r.Label = "x" }); err != nil {
 		t.Fatal(err)
 	}
-	// Windows keeps no such modes; TestFileBackendWindowsAccessList reads its access lists.
 	if runtime.GOOS != "windows" {
 		if st, _ := os.Stat(dir); st.Mode().Perm() != 0o700 {
 			t.Errorf("folder mode %v, want 0700", st.Mode().Perm())
@@ -620,7 +571,6 @@ func TestFileBackendPermissions(t *testing.T) {
 	}
 }
 
-// A provider's refresh_at, earlier than the default lead, is when the credential is renewed.
 func TestRefreshAtSetsRenewalTime(t *testing.T) {
 	p := &fakeProvider{}
 	m, store := newManager(t, p, 24*time.Hour)
@@ -635,8 +585,6 @@ func TestRefreshAtSetsRenewalTime(t *testing.T) {
 	}
 }
 
-// Disabling an account while its credential is being renewed keeps the renewed credential:
-// the provider has already retired the old refresh token.
 func TestDisableDuringRenewalKeepsRotatedToken(t *testing.T) {
 	p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 2)}
 	m, store := newManager(t, p, time.Minute)
@@ -664,8 +612,6 @@ func TestDisableDuringRenewalKeepsRotatedToken(t *testing.T) {
 	}
 }
 
-// A renewal that fails after the credential it renews was replaced (a new login) leaves no
-// backoff on the new credential.
 func TestStaleFailureLeavesNewCredentialAlone(t *testing.T) {
 	p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 2),
 		fail: &llm.Error{Code: llm.CodeUnavailable, Retryable: true, Message: "old grant failed"}}
@@ -688,13 +634,11 @@ func TestStaleFailureLeavesNewCredentialAlone(t *testing.T) {
 	p.fail = nil
 	p.mu.Unlock()
 	close(p.gate)
-	// The new credential is due for renewal: it is renewed, not held back by the old failure.
 	if c, _, e := m.Credential(context.Background(), provID, "acct"); e != nil || c.AccessToken != "access-2" {
 		t.Errorf("Credential = %v, %v; want the renewed access-2", c, e)
 	}
 }
 
-// failingBackend refuses saves once fail is set.
 type failingBackend struct {
 	Backend
 	fail atomic.Bool
@@ -707,8 +651,6 @@ func (b *failingBackend) Save(r Record) error {
 	return b.Backend.Save(r)
 }
 
-// When the provider refuses the grant and recording that fails, the refusal is still
-// reported, not taken for success.
 func TestRejectedGrantSaveFailureIsReported(t *testing.T) {
 	b := &failingBackend{Backend: FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")}}
 	store, err := Open(b)
@@ -726,14 +668,11 @@ func TestRejectedGrantSaveFailureIsReported(t *testing.T) {
 	if _, err := m.Refresh(context.Background(), "acct"); err == nil {
 		t.Error("Refresh succeeded although the provider refused the grant")
 	}
-	// The refused credential is not handed out afterwards either.
 	if c, _, e := m.Credential(context.Background(), provID, "acct"); e == nil || e.Code != llm.CodeAuth {
 		t.Errorf("Credential after the unrecorded refusal = %v, %v; want code auth", c, e)
 	}
 }
 
-// A failure recorded against one credential does not hold back another that replaced it,
-// however the replacement got there.
 func TestFailureBacksOffOnlyItsCredential(t *testing.T) {
 	p := &fakeProvider{fail: &llm.Error{Code: llm.CodeUnavailable, Retryable: true, Message: "old grant failed"}}
 	m, store := newManager(t, p, time.Minute)
@@ -754,8 +693,6 @@ func TestFailureBacksOffOnlyItsCredential(t *testing.T) {
 	}
 }
 
-// IDs that differ only in case would share a file on macOS and Windows, so the second is
-// refused.
 func TestIDsDifferingInCaseAreOneAccount(t *testing.T) {
 	store, err := Open(FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")})
 	if err != nil {
@@ -769,8 +706,6 @@ func TestIDsDifferingInCaseAreOneAccount(t *testing.T) {
 	}
 }
 
-// slowLoginProvider's logins take until start is closed to begin, then prompt once and wait
-// until cancelled.
 type slowLoginProvider struct {
 	fakeProvider
 	start   chan struct{}
@@ -800,8 +735,6 @@ func (p *slowLoginProvider) Login(ctx context.Context, _ protocol.Account, _ pro
 	return &waitingLogin{ctx: ctx, inputs: make(chan map[string]string, 1)}
 }
 
-// Input for a login that is still starting is refused, not sent to a call that does not exist
-// yet.
 func TestInputWhileLoginStarts(t *testing.T) {
 	p := &slowLoginProvider{start: make(chan struct{}), calling: make(chan struct{})}
 	store, err := Open(FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")})
@@ -829,9 +762,6 @@ func TestInputWhileLoginStarts(t *testing.T) {
 	m.CancelLogin("login-1")
 }
 
-// endedLoginProvider starts a login that prompts once and then waits for input, as a login
-// does, on a call whose sends fail with sendErr: a connection closed when its extension
-// finished, or another write error.
 type endedLoginProvider struct {
 	fakeProvider
 	sendErr error
@@ -858,8 +788,6 @@ func (l *endedLogin) Next() protocol.Reply {
 func (l *endedLogin) Send(map[string]string) error { return l.sendErr }
 func (l *endedLogin) Close()                       {}
 
-// Input for a login whose call has ended, before the login is marked finished, is refused as a
-// conflict: nothing is left to take what the user entered. Another send failure stays as it is.
 func TestInputAfterLoginEnds(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -892,11 +820,9 @@ func TestInputAfterLoginEnds(t *testing.T) {
 	}
 }
 
-// An account removed while its credential is being renewed, and added again under the same ID
-// for another extension, never has the new account's credential handed to the first extension.
 func TestRenewalNeverReturnsAnotherExtensionsCredential(t *testing.T) {
 	p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 1)}
-	m, store := newManager(t, p, time.Minute) // due for renewal
+	m, store := newManager(t, p, time.Minute)
 	type result struct {
 		c *protocol.Credential
 		e *llm.Error
@@ -924,8 +850,6 @@ func TestRenewalNeverReturnsAnotherExtensionsCredential(t *testing.T) {
 	}
 }
 
-// A new login that names the registration its caller checked is refused, before the provider is
-// asked, once the account has been removed and added again.
 func TestReauthOfAnotherRegistrationIsRefused(t *testing.T) {
 	m, store := newManager(t, &fakeProvider{}, time.Hour)
 	rec, _ := store.Get("acct")
@@ -935,8 +859,6 @@ func TestReauthOfAnotherRegistrationIsRefused(t *testing.T) {
 	if _, err := store.Create(Record{ID: "acct", Extension: provID, State: StateActive, Credential: protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k"}}); err != nil {
 		t.Fatal(err)
 	}
-	// fakeProvider.Login panics: reaching the provider fails the test. The deadline keeps a
-	// login that did start from waiting for a first prompt that never comes.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_, err := m.StartLogin(ctx, LoginRequest{Account: route.Account{ID: "acct"}, Method: "device", Reauth: true, Registration: rec.Registration})
@@ -962,9 +884,6 @@ func TestStoredCredentialDoesNotRenew(t *testing.T) {
 	}
 }
 
-// A renewal that started under the account's old settings says nothing about the account once
-// its settings change: a refusal does not mark it for a new login, and a passing failure leaves
-// no backoff on it. A rotated credential is still kept, as on any other change.
 func TestRenewalUnderOldSettingsIsDropped(t *testing.T) {
 	newSettings := func(m *Manager, s string) {
 		t.Helper()
@@ -997,7 +916,6 @@ func TestRenewalUnderOldSettingsIsDropped(t *testing.T) {
 			if e := m.LastRenewalError(func() Record { r, _ := store.Get("acct"); return r }()); e != nil {
 				t.Errorf("renewal error %v kept for the new settings", e)
 			}
-			// The account is still due for renewal: it is asked again, not held back.
 			p.mu.Lock()
 			p.fail = nil
 			p.mu.Unlock()
@@ -1007,7 +925,6 @@ func TestRenewalUnderOldSettingsIsDropped(t *testing.T) {
 			}
 		})
 	}
-	// A rotated credential from a renewal under the old settings is kept.
 	p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 2)}
 	m, store := newManager(t, p, time.Minute)
 	done := make(chan struct{})
@@ -1046,7 +963,7 @@ func TestRemoveCallsOnRemove(t *testing.T) {
 type immediateLoginProvider struct {
 	*fakeProvider
 	grant   *protocol.Grant
-	onLogin func() // called as each login starts, when not nil
+	onLogin func()
 }
 
 type immediateLoginCall struct {
@@ -1071,7 +988,6 @@ func (p *immediateLoginProvider) Login(context.Context, protocol.Account, protoc
 	return &immediateLoginCall{grant: p.grant}
 }
 
-// OnCredentialChange fires when an account's credential is renewed or it signs in again.
 func TestOnCredentialChangeOnRenewalAndRelogin(t *testing.T) {
 	p := &immediateLoginProvider{
 		fakeProvider: &fakeProvider{},

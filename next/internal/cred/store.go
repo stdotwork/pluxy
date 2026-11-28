@@ -1,7 +1,3 @@
-// Package cred is core's credential authority: it keeps the accounts added by login and their
-// credentials, versioned, in a store behind the Backend interface, and renews credentials
-// through the provider extension that owns them. Core owns the record; the provider owns the
-// login and refresh protocol.
 package cred
 
 import (
@@ -19,67 +15,32 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// RecordFormat is the version of the Record format.
 const RecordFormat = 0
 
-// Account states. A disabled account (Record.Disabled, the user's choice) is a separate thing:
-// enabling it again does not clear a refusal.
 const (
-	// StateActive: the credential is in use.
 	StateActive = "active"
-	// StateReauth: the provider refused the grant itself (for example OAuth invalid_grant); only
-	// a new login brings the account back.
 	StateReauth = "reauth_required"
 )
 
-// Record is one account in the store.
 type Record struct {
-	Format int    `json:"format"`
-	ID     string `json:"id"`
-	// Extension is the ID of the provider extension the account belongs to. Only that
-	// extension ever receives the credential.
-	Extension string `json:"extension"`
-	// Registration identifies this registration of the ID: removing an account and adding it
-	// again gives a new one, so a renewal begun before the removal can never land on the new
-	// account.
-	Registration string `json:"registration"`
-	// Version goes up by one with every change to the record. A renewal applies only to the
-	// version it renewed.
-	Version  uint64 `json:"version"`
-	State    string `json:"state"`
-	Disabled bool   `json:"disabled,omitempty"`
-	// Reason says why the account needs a new login.
-	Reason string `json:"reason,omitempty"`
-	// Label names the account for people; not secret. It is the label a person gave the
-	// account (Named), else the provider's (ProviderLabel).
-	Label string `json:"label,omitempty"`
-	// Named is true when Label is a label a person gave the account: the login's caller's
-	// (LoginRequest.Label), one SetAccount set, or an imported credential file's own label; never
-	// the provider's. False in a record stored before core kept the two apart, whose Label then
-	// counts as the provider's, whoever gave it.
-	Named bool `json:"named,omitempty"`
-	// ProviderLabel is the last non-empty label the provider's logins gave the account
-	// (protocol.Grant.Label, often an e-mail address; for an imported credential file, its e-mail
-	// or Devin's user name), kept apart from a label a person gave it, so a new login is checked
-	// against it (sameIdentity); empty when the provider never gave one. Also empty in a record
-	// stored before core kept it apart, whose old Label then counts as the provider's.
-	ProviderLabel string `json:"provider_label,omitempty"`
-	// Identity names the upstream account the credential signs in to, as the provider's login
-	// reported it (protocol.Grant.Identity); not secret. A new login to the account must sign
-	// in to the same one.
-	Identity map[string]string `json:"identity,omitempty"`
-	// Account holds the account's routing fields and settings. Its credential is always nil;
-	// the credential is Credential.
-	Account    route.Account       `json:"account"`
-	Credential protocol.Credential `json:"credential"`
-	CreatedAt  time.Time           `json:"created_at"`
-	UpdatedAt  time.Time           `json:"updated_at"`
+	Format        int                 `json:"format"`
+	ID            string              `json:"id"`
+	Extension     string              `json:"extension"`
+	Registration  string              `json:"registration"`
+	Version       uint64              `json:"version"`
+	State         string              `json:"state"`
+	Disabled      bool                `json:"disabled,omitempty"`
+	Reason        string              `json:"reason,omitempty"`
+	Label         string              `json:"label,omitempty"`
+	Named         bool                `json:"named,omitempty"`
+	ProviderLabel string              `json:"provider_label,omitempty"`
+	Identity      map[string]string   `json:"identity,omitempty"`
+	Account       route.Account       `json:"account"`
+	Credential    protocol.Credential `json:"credential"`
+	CreatedAt     time.Time           `json:"created_at"`
+	UpdatedAt     time.Time           `json:"updated_at"`
 }
 
-// identityLabel is the label a new login's is compared with when the record has no identity:
-// the provider's, never one a person gave (Named); "" when the provider gave none. A record
-// stored before core kept ProviderLabel (neither Named nor ProviderLabel set) keeps its old Label
-// as the provider's, whoever gave it.
 func (r Record) identityLabel() string {
 	if r.Named || r.ProviderLabel != "" {
 		return r.ProviderLabel
@@ -87,11 +48,7 @@ func (r Record) identityLabel() string {
 	return r.Label
 }
 
-// setLabel sets the label a person gave the account; "" takes it away, leaving the provider's
-// (none when the provider gave none).
 func (r *Record) setLabel(label string) {
-	// A record stored before ProviderLabel holds its provider's label as Label: keep it apart
-	// first, so the new label does not take its place in the identity check.
 	r.ProviderLabel = r.identityLabel()
 	r.Label, r.Named = label, label != ""
 	if label == "" {
@@ -99,52 +56,32 @@ func (r *Record) setLabel(label string) {
 	}
 }
 
-// Usable reports whether requests may be routed to the account.
 func (r Record) Usable() bool { return r.State == StateActive && !r.Disabled }
 
-// Broken is a record file the backend cannot read as a record: a file that does not parse, or
-// one whose ID is not the file's name. The store keeps it out of its records, so it is never
-// routed to, and reports it, so core can show the account as broken instead of stopping.
 type Broken struct {
-	// ID is the account ID the file name gives. It is what removing the account removes.
-	ID string
-	// Path is the file.
+	ID   string
 	Path string
-	// Err says why the file cannot be read.
-	Err error
+	Err  error
 }
 
-// Why says what is wrong with the file, for people: its path and the error.
 func (b Broken) Why() string { return b.Path + ": " + b.Err.Error() }
 
-// Backend keeps records durably. Save replaces a record whole and atomically: after a crash
-// the backend holds the old record or the new one, never a mix. Load also returns the record
-// files it could not read, as Broken entries; a backend that keeps no files of its own returns
-// none. Implementations need not be safe for concurrent use; Store serialises calls.
 type Backend interface {
 	Load() ([]Record, []Broken, error)
 	Save(Record) error
 	Delete(id string) error
 }
 
-// Errors from Store.
 var (
 	ErrExists   = errors.New("an account with this ID already exists")
 	ErrNotFound = errors.New("no such account")
-	// ErrStale: the record changed (or was removed and added again) since the caller read it,
-	// so the caller's change was refused.
-	ErrStale = errors.New("the account changed since it was read")
+	ErrStale    = errors.New("the account changed since it was read")
 )
 
-// idPattern is what an account ID in the store may look like; IDs name files.
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
-// ValidID reports whether id may name a stored account.
 func ValidID(id string) bool { return idPattern.MatchString(id) && !strings.HasSuffix(id, ".") }
 
-// Store is the versioned record store. Every change is a compare-and-swap on the record's
-// registration and version, written through to the backend before it is visible. It is safe
-// for concurrent use.
 type Store struct {
 	mu     sync.Mutex
 	b      Backend
@@ -153,14 +90,11 @@ type Store struct {
 	now    func() time.Time
 }
 
-// OpenError is the error of an Open that failed. Safe mode opens the store too, so starting
-// without extensions does not get past it.
 type OpenError struct{ Err error }
 
 func (e *OpenError) Error() string { return e.Err.Error() }
 func (e *OpenError) Unwrap() error { return e.Err }
 
-// Open loads the records the backend holds. Its error is an *OpenError.
 func Open(b Backend) (*Store, error) {
 	s, err := open(b)
 	if err != nil {
@@ -192,7 +126,6 @@ func open(b Backend) (*Store, error) {
 	return s, nil
 }
 
-// Get returns the record for id.
 func (s *Store) Get(id string) (Record, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -200,7 +133,6 @@ func (s *Store) Get(id string) (Record, bool) {
 	return r, ok
 }
 
-// List returns every record, by ID.
 func (s *Store) List() []Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -212,15 +144,12 @@ func (s *Store) List() []Record {
 	return out
 }
 
-// Broken returns the record files the backend could not read, by ID: accounts core knows only
-// by the name of their file. They are never routed to. Deleting one removes its file.
 func (s *Store) Broken() []Broken {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.broken)
 }
 
-// Create adds a record under a new registration, at version 1.
 func (s *Store) Create(r Record) (Record, error) {
 	if !ValidID(r.ID) {
 		return Record{}, fmt.Errorf("account ID %q is not valid: use letters, digits, '.', '_' and '-'", r.ID)
@@ -242,14 +171,10 @@ func (s *Store) Create(r Record) (Record, error) {
 		return Record{}, err
 	}
 	s.recs[r.ID] = r
-	// Its file is the record now, not the one that could not be read.
 	s.broken = slices.DeleteFunc(s.broken, func(b Broken) bool { return strings.EqualFold(b.ID, r.ID) })
 	return r, nil
 }
 
-// Update applies change to the record for id, if its registration and version are still the
-// given ones, and returns the new record at the next version. Otherwise it changes nothing and
-// returns ErrStale (or ErrNotFound when the account is gone).
 func (s *Store) Update(id, registration string, version uint64, change func(*Record)) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -273,7 +198,6 @@ func (s *Store) Update(id, registration string, version uint64, change func(*Rec
 	return next, nil
 }
 
-// Delete removes the record for id, or the unreadable file that stands for it.
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

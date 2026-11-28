@@ -20,7 +20,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Login states.
 const (
 	LoginPending   = "pending"
 	LoginDone      = "done"
@@ -28,32 +27,16 @@ const (
 	LoginCancelled = "cancelled"
 )
 
-// LoginRequest starts a login.
 type LoginRequest struct {
-	// Account is the account to add: its ID, routing fields and settings. Without an ID, core
-	// makes one (newAccountID); an ID is refused while it or its public ID is taken (idTaken). For
-	// a new login to an existing account (Reauth) only the ID is read; the account keeps its fields.
-	Account route.Account
-	// Extension is the ID of the extension that signs in and owns the account. Empty: the one
-	// extension that runs (for a reauth, the account's own).
-	Extension string
-	// Label is the label a person gave the new account. It wins over the provider's (the grant's),
-	// which the record keeps apart as ProviderLabel. A new login to an existing account (Reauth)
-	// ignores it.
-	Label string
-	// Registration, when set with Reauth, is the registration of the account the caller
-	// checked: the login is refused if the account was removed and added again since, so a
-	// check made before starting still holds when it starts (and finishLogin fences the rest).
+	Account      route.Account
+	Extension    string
+	Label        string
 	Registration string
-	// Method is one of the provider's login methods.
-	Method string
-	// Input is what the user entered when starting the login.
-	Input map[string]string
-	// Reauth signs in again to an existing account, replacing its credential.
-	Reauth bool
+	Method       string
+	Input        map[string]string
+	Reauth       bool
 }
 
-// LoginView is a login as the management API shows it.
 type LoginView struct {
 	ID        string           `json:"id"`
 	Account   string           `json:"account"`
@@ -68,15 +51,14 @@ type login struct {
 	id, account, method string
 	extension           string
 	reauth              bool
-	registration        string // the account's, for a reauth
-	label               string // the request's, for the label of a new account
+	registration        string
+	label               string
 	fields              route.Account
-	call                LoginCall // set under Manager.mu once the call has started
+	call                LoginCall
 	cancel              context.CancelFunc
-	first               chan struct{} // closed after the first frame
+	first               chan struct{}
 	firstOnce           bool
 
-	// Guarded by Manager.mu.
 	state  string
 	prompt *protocol.Prompt
 	err    *llm.Error
@@ -87,7 +69,6 @@ func (l *login) view() LoginView {
 	return LoginView{ID: l.id, Account: l.account, Extension: l.extension, Method: l.method, State: l.state, Prompt: l.prompt, Error: l.err}
 }
 
-// notifyFirst marks the first frame seen. Call with Manager.mu held.
 func (l *login) notifyFirst() {
 	if !l.firstOnce {
 		l.firstOnce = true
@@ -95,9 +76,6 @@ func (l *login) notifyFirst() {
 	}
 }
 
-// StartLogin starts a login and returns it once the provider has sent its first prompt or
-// finished, or ctx ends. A new account without an ID gets one core makes, which the login's
-// view names (LoginView.Account).
 func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, error) {
 	id := req.Account.ID
 	fresh := id == "" && !req.Reauth
@@ -232,9 +210,6 @@ func (m *Manager) runLogin(l *login) {
 	}
 }
 
-// finishLogin stores a login's credential: a new account, or the new credential of an account
-// signed in to again (which also clears a refused grant and fences off any renewal of the old
-// credential still running).
 func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 	if l.reauth {
 		for {
@@ -250,7 +225,6 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 				r.Credential = *g.Credential
 				r.State, r.Reason = StateActive, ""
 				if g.Label != "" {
-					// A label a person gave stays; one that was the provider's follows it.
 					if !r.Named {
 						r.Label = g.Label
 					}
@@ -278,9 +252,6 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 			return nil
 		}
 	}
-	// The config may have changed since the login started: the new account's ID and its public ID
-	// must still be no config account's ID or public ID. (A config reload between this check and
-	// the store's Create below is not caught.)
 	if m.reserved(l.account) {
 		return fmt.Errorf("%w: account %q is now set in core's config", ErrConflict, l.account)
 	}
@@ -294,7 +265,6 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 	fields := l.fields
 	if len(g.Settings) > 0 {
 		var defaults, explicit map[string]json.RawMessage
-		// The host validates grant settings; the management API validates caller settings.
 		_ = json.Unmarshal(g.Settings, &defaults)
 		_ = json.Unmarshal(fields.Settings, &explicit)
 		maps.Copy(defaults, explicit)
@@ -310,11 +280,6 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 	return nil
 }
 
-// sameIdentity checks that grant g, from a new login to the account cur, signs in to the same
-// upstream account: every field of the account's stored identity must be in g's, with the same
-// value (letter case aside). An account stored without an identity (added before its extension
-// reported one) is checked by the provider's label instead (Record.identityLabel, never a label
-// a person gave it), when both have one. Neither: nothing to check.
 func sameIdentity(cur Record, g *protocol.Grant) error {
 	if len(cur.Identity) > 0 {
 		for _, k := range slices.Sorted(maps.Keys(cur.Identity)) {
@@ -330,14 +295,11 @@ func sameIdentity(cur Record, g *protocol.Grant) error {
 	return nil
 }
 
-// newAccountID returns a new account ID: "acc_" and 8 lower-case hex digits from m.random, drawn
-// again while it is taken (idTaken). route.State gives such an ID as its own public ID, so the
-// account has one ID everywhere. Call with m.mu held.
 func (m *Manager) newAccountID() string {
 	b := make([]byte, 4)
 	for {
 		if _, err := io.ReadFull(m.random, b); err != nil {
-			panic("cred: reading random bytes: " + err.Error()) // crypto/rand does not fail
+			panic("cred: reading random bytes: " + err.Error())
 		}
 		if id := "acc_" + hex.EncodeToString(b); !m.idTaken(id) {
 			return id
@@ -345,7 +307,6 @@ func (m *Manager) newAccountID() string {
 	}
 }
 
-// publicIDOf returns the public ID of account id (Options.PublicID), or id when there is none.
 func (m *Manager) publicIDOf(id string) string {
 	if m.publicID == nil {
 		return id
@@ -353,16 +314,10 @@ func (m *Manager) publicIDOf(id string) string {
 	return m.publicID(id)
 }
 
-// configTaken reports whether an account outside the store (core's config, Options.Taken) has id
-// or id's public ID as its ID or public ID.
 func (m *Manager) configTaken(id string) bool {
 	return m.taken != nil && (m.taken(id) || m.taken(m.publicIDOf(id)))
 }
 
-// idTaken reports whether id or its public ID is the ID (letter case aside, as the store compares
-// IDs) or the public ID of an account core knows, of a login still running, or of an account
-// outside the store (configTaken). A new account may then not have id, or two accounts would
-// answer to one ID. Call with m.mu held.
 func (m *Manager) idTaken(id string) bool {
 	if m.configTaken(id) {
 		return true
@@ -384,12 +339,10 @@ func (m *Manager) idTaken(id string) bool {
 	return false
 }
 
-// idTakenError refuses a new account an ID that is taken (idTaken).
 func idTakenError(id string) error {
 	return fmt.Errorf("%w: account ID %q or its public ID is another account's ID or public ID; choose another account ID", ErrConflict, id)
 }
 
-// Login returns login id.
 func (m *Manager) Login(id string) (LoginView, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -400,7 +353,6 @@ func (m *Manager) Login(id string) (LoginView, bool) {
 	return l.view(), true
 }
 
-// LoginInput passes what the user entered to a running login.
 func (m *Manager) LoginInput(id string, input map[string]string) error {
 	m.mu.Lock()
 	l, ok := m.logins[id]
@@ -419,9 +371,6 @@ func (m *Manager) LoginInput(id string, input map[string]string) error {
 		return fmt.Errorf("%w: login %s is still starting; try again", ErrConflict, id)
 	}
 	if err := call.Send(input); err != nil {
-		// The call's connection closed between the check above and the send — the extension
-		// finished, or the login was cancelled — so the login has ended, as it would be marked
-		// a moment later. Another send failure stays as it is.
 		if errors.Is(err, net.ErrClosed) {
 			return fmt.Errorf("%w: login %s has finished", ErrConflict, id)
 		}
@@ -430,7 +379,6 @@ func (m *Manager) LoginInput(id string, input map[string]string) error {
 	return nil
 }
 
-// CancelLogin cancels a running login.
 func (m *Manager) CancelLogin(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -442,7 +390,6 @@ func (m *Manager) CancelLogin(id string) error {
 	return nil
 }
 
-// dropOldLogins forgets logins that finished more than loginKeep ago. Call with m.mu held.
 func (m *Manager) dropOldLogins() {
 	for id, l := range m.logins {
 		if l.state != LoginPending && m.now().Sub(l.ended) > loginKeep {

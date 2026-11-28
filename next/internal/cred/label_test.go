@@ -36,11 +36,6 @@ func runLoginTo(t *testing.T, m *Manager, req LoginRequest) LoginView {
 	return v
 }
 
-// A label the caller gives a new account wins over the provider's. Signing in to the account
-// again keeps it, and the new login is still checked against the provider's label when the
-// provider reports no identity: the same upstream account (letter case aside) is let in, another
-// is refused. Without a label from the caller, the provider's is the account's, and follows a new
-// login's, as before.
 func TestCallerLabelWinsAndReloginChecksProviderLabel(t *testing.T) {
 	p := &immediateLoginProvider{fakeProvider: &fakeProvider{}, grant: grantLabelled("jane@example.test", nil)}
 	m := loginManager(t, p)
@@ -74,13 +69,10 @@ func TestCallerLabelWinsAndReloginChecksProviderLabel(t *testing.T) {
 	}
 }
 
-// apiKeyGrant is the grant of an API-key login: a credential, no label and no identity.
 func apiKeyGrant() *protocol.Grant {
 	return &protocol.Grant{Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-label-test"}}
 }
 
-// An account added with a name a person typed, by a login whose grant carries no label (an API
-// key), has no provider's label: taking the name away leaves the account with no label.
 func TestClearingTypedNameWithoutProviderLabel(t *testing.T) {
 	p := &immediateLoginProvider{fakeProvider: &fakeProvider{}, grant: apiKeyGrant()}
 	m := loginManager(t, p)
@@ -96,10 +88,6 @@ func TestClearingTypedNameWithoutProviderLabel(t *testing.T) {
 	}
 }
 
-// A name a person typed is never what a new login is checked against: an account added with one
-// by a login whose grant had no label and no identity lets in a later login whose grant brings
-// the provider's first label (still no identity). The typed name stays, and taking it away then
-// leaves the provider's label.
 func TestTypedNameIsNotCheckedAtSignIn(t *testing.T) {
 	p := &immediateLoginProvider{fakeProvider: &fakeProvider{}, grant: apiKeyGrant()}
 	m := loginManager(t, p)
