@@ -13,9 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// xAI's error text reaches the client before an account has a credential, when core cannot redact
-// what a hostile or careless login server echoes: it must be bounded and free of token-like
-// strings, and the OAuth error code kept.
 func TestLoginErrorTextIsBounded(t *testing.T) {
 	const jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLWJ5dGVz"
 	srv := xaitest.New(t)

@@ -58,6 +58,8 @@ const t = strings("claudeCode", {
   rootHint: "A full path; the folder may be a link (as chezmoi can make).",
   inRoot: "File in the folder",
   models: "Models",
+  modelsNote: "Choose which model each Claude Code tier uses.",
+  modelMappings: "Model mappings",
   preselected:
     "Claude Code's own model names are not served by your accounts, so these start with {model}, one your accounts serve.",
   roleNote: "The model Claude Code uses for {role}.",
@@ -199,7 +201,32 @@ export function ClaudeCodePage() {
       />
       <EnvironmentBlock env={env} tool={t("title")} disabled={s.locked} />
       {s.addon === "on" && s.settings && !refused && (
-        <Section title={t("models")} aside={<SaveButton s={s} dirty={dirty} form={input} held={held} />}>
+        <Section
+          title={t("models")}
+          subtitle={t("modelsNote")}
+          aside={<SaveButton s={s} dirty={dirty} form={input} held={held} />}
+        >
+          <SettingRow name={t("startup")} description={t("startupNote")}>
+            <ModelInput
+              label={t("startup")}
+              value={form.startup}
+              served={served}
+              known={ROLES}
+              empty={t("claudeDefault")}
+              onInput={(v) => edit({ startup: v })}
+            />
+          </SettingRow>
+          <SettingRow name={t("subagent")} description={t("subagentNote")}>
+            <ModelInput
+              label={t("subagent")}
+              value={form.subagent}
+              served={served}
+              known={ROLES}
+              empty={t("sameAsMain")}
+              onInput={(v) => edit({ subagent: v })}
+            />
+          </SettingRow>
+          <div class="tool-subgroup">{t("modelMappings")}</div>
           <div class="tool-say">
             {preselected !== undefined && form.models.opus === preselected && (
               <p class="muted">{t("preselected", { model: preselected })}</p>
@@ -224,26 +251,6 @@ export function ClaudeCodePage() {
               </span>
             </SettingRow>
           ))}
-          <SettingRow name={t("startup")} description={t("startupNote")}>
-            <ModelInput
-              label={t("startup")}
-              value={form.startup}
-              served={served}
-              known={ROLES}
-              empty={t("claudeDefault")}
-              onInput={(v) => edit({ startup: v })}
-            />
-          </SettingRow>
-          <SettingRow name={t("subagent")} description={t("subagentNote")}>
-            <ModelInput
-              label={t("subagent")}
-              value={form.subagent}
-              served={served}
-              known={ROLES}
-              empty={t("sameAsMain")}
-              onInput={(v) => edit({ subagent: v })}
-            />
-          </SettingRow>
           <details class="tool-more tool-more-inner">
             <summary>{t("context")}</summary>
             <SettingRow name={t("window")} description={t("windowNote")}>

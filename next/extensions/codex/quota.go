@@ -17,17 +17,11 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// Codex quota is read from the ChatGPT backend's usage endpoint, {backend}/wham/usage, which the
-// Codex client itself reads for its usage display. {backend} is the account's base URL without its
-// trailing /codex (https://chatgpt.com/backend-api). The call spends nothing from the plan.
 const (
-	usagePath = "/wham/usage"
-	// maxUsageBody bounds how much of the usage reply is read.
+	usagePath    = "/wham/usage"
 	maxUsageBody = 1 << 20
 )
 
-// quota reads a ChatGPT subscription's usage, renewal time and balances (protocol minor version 10).
-// An API key has no plan to report.
 func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -39,7 +33,6 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	}
 	switch {
 	case a.siwc:
-		// Its token is for the OpenAI API; the usage windows are the ChatGPT backend's.
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "a Sign in with ChatGPT (SIWC) account has no usage windows to report", Scope: llm.ScopeCredential}
 	case !a.subscription:
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "an API key has no ChatGPT plan to report", Scope: llm.ScopeCredential}
@@ -67,7 +60,6 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		e := statusError(resp, "")
 		if e.Code == llm.CodeNotFound {
-			// The usage endpoint is missing; no model is involved.
 			e.Scope = llm.ScopeEndpoint
 		}
 		return nil, e
@@ -123,8 +115,6 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	return q, nil
 }
 
-// Optional reads use the account's Codex identity too. A refused or malformed reply leaves its
-// fields out without losing the usage already read.
 func optionalQuotaJSON(ctx context.Context, endpoint string, s settings, a account) json.RawMessage {
 	if ctx.Err() != nil {
 		return nil
@@ -155,7 +145,6 @@ func optionalQuotaJSON(ctx context.Context, endpoint string, s settings, a accou
 	return body
 }
 
-// usagePayload is the usage endpoint's reply, as far as the extension reads it.
 type usagePayload struct {
 	PlanType            string      `json:"plan_type"`
 	RateLimit           *rateLimit  `json:"rate_limit"`
@@ -173,8 +162,6 @@ type extraRate struct {
 	RateLimit      *rateLimit `json:"rate_limit"`
 }
 
-// rateLimit is a pair of usage windows: the primary one (5 hours on most plans) and the secondary
-// (a week, or a month on some workspace plans).
 type rateLimit struct {
 	Allowed         *bool        `json:"allowed"`
 	LimitReached    bool         `json:"limit_reached"`
@@ -232,8 +219,6 @@ func (w *usageWindow) monthly() bool {
 	return ok && s >= minMonthSeconds && s <= maxMonthSeconds
 }
 
-// classify tells the 5-hour window from the longer one by their lengths. A window with no length
-// is taken by its place: the primary is the 5-hour window and the secondary the longer one.
 func (r *rateLimit) classify() (five, long *usageWindow) {
 	for _, w := range []*usageWindow{r.PrimaryWindow, r.SecondaryWindow} {
 		s, _ := w.seconds()
@@ -256,16 +241,9 @@ func (r *rateLimit) classify() (five, long *usageWindow) {
 
 var notID = regexp.MustCompile(`[^a-z0-9]+`)
 
-// limits turns the reply into the plan's limits, in the order the old panel shows them: the plan's
-// own windows, code review's, each extra rate limit's (for example one model's), then the credit
-// balance. Code review's windows and the extra rate limits count a metered feature, not the
-// account's requests in general, and say so (protocol.QuotaLimit.Feature): the reply names an
-// extra limit's model only for people, so the extension cannot list its models.
 func (u *usagePayload) limits(now time.Time) []protocol.QuotaLimit {
 	out := []protocol.QuotaLimit{}
 	seen := map[string]bool{}
-	// group adds the 5-hour and the longer window of r, under ids made from prefix; feature
-	// marks them as a feature's.
 	group := func(r *rateLimit, prefix string, labels [3]string, feature bool) {
 		if r == nil {
 			return
@@ -321,8 +299,6 @@ func (u *usagePayload) limits(now time.Time) []protocol.QuotaLimit {
 	return out
 }
 
-// limit builds the limit a window reports. A window that says nothing of its use but whose rate
-// limit is reached, with a reset time, counts as fully used.
 func (w *usageWindow) limit(id, label string, reached bool, now time.Time) protocol.QuotaLimit {
 	l := protocol.QuotaLimit{ID: id, Label: label}
 	if w.ResetAt.ok {
@@ -344,7 +320,6 @@ func (w *usageWindow) limit(id, label string, reached bool, now time.Time) proto
 	return l
 }
 
-// unixSeconds reads a Unix time given in seconds or milliseconds.
 func unixSeconds(v float64) int64 {
 	if v <= 0 {
 		return 0

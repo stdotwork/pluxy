@@ -1257,6 +1257,10 @@ func TestCLIMessages(t *testing.T) {
 	if code != exitOK || errOut != "" || !strings.HasPrefix(out, "usage: pluxy status [flags]\n  core's state:") || strings.Contains(out, "Usage of") {
 		t.Errorf("status -h: code=%d out=%q err=%q", code, out, errOut)
 	}
+	out, errOut, code = run(nil, "account", "import", "-h")
+	if code != exitOK || errOut != "" || !strings.Contains(out, "any other file as a CLIProxyAPI credential file") || strings.Contains(out, "today's core") {
+		t.Errorf("account import -h: code=%d out=%q err=%q", code, out, errOut)
+	}
 
 	// Bad flag value prints one line pointing to pluxy help, not the full flag dump.
 	_, errOut, code = run(nil, "logs", "--limit", "abc")

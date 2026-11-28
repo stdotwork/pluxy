@@ -36,8 +36,6 @@ func lookups(n int) string {
 	return strings.Join(kids, ",")
 }
 
-// A namespace's tools are sent as functions named by the namespace and the tool; no prefix is added
-// to a name that has it or starts with mcp__; tool_search is left out, and the first of a name stays.
 func TestNamespaceFlattened(t *testing.T) {
 	got := responsesBody(t, `{"model":"grok-4.6","input":[],"tools":[
 		{"type":"function","name":"get_time"},
@@ -58,8 +56,6 @@ func TestNamespaceFlattened(t *testing.T) {
 	}
 }
 
-// With 201 tools once flattened a namespace is folded into one function, and its folded tools stay
-// when the tools are cut to 200; at 200 it is flattened.
 func TestNamespaceFold(t *testing.T) {
 	flat := responsesBody(t, `{"model":"grok-4.6","input":[],"tools":[{"type":"namespace","name":"ns","tools":[`+lookups(200)+`]}]}`)
 	if tools := toolsOf(t, flat); len(tools) != 200 || tools[0]["name"] != "ns__lookup0" {
@@ -95,8 +91,6 @@ func TestNamespaceFold(t *testing.T) {
 	}
 }
 
-// A call in the history and a tool choice that name a namespace are written the way the tools were
-// sent: to the qualified function, or to the dispatcher with the child in its arguments.
 func TestNamespaceHistoryAndChoice(t *testing.T) {
 	call := `{"type":"function_call","call_id":"c1","namespace":"ns","name":"a","arguments":"{\"x\":\"1\"}"},
 		{"type":"function_call_output","call_id":"c1","output":"ok"}`
@@ -124,8 +118,6 @@ func TestNamespaceHistoryAndChoice(t *testing.T) {
 	}
 }
 
-// The Codex app's automation_update gets parameters that accept any object, flattened or already
-// named for its namespace; other tools keep theirs.
 func TestAutomationUpdateParameters(t *testing.T) {
 	big := `{"oneOf":[{"$ref":"#/$defs/A"}],"$defs":{"A":{"type":"object"}}}`
 	for name, tools := range map[string]string{
@@ -152,8 +144,6 @@ func nsCall(name, args string) string {
 
 const nsRequest = `{"model":"grok-4.6","stream":true,"input":[],"tools":[{"type":"namespace","name":"weather","tools":[{"type":"function","name":"get_forecast"}]}]}`
 
-// A flattened namespace's call goes to the client as the call to the tool in its namespace, in
-// every event that shows the item.
 func TestNamespaceFlattenedReply(t *testing.T) {
 	args := `{"city":"Oslo"}`
 	added1 := `{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"weather__get_forecast","arguments":""}`
@@ -173,8 +163,6 @@ func TestNamespaceFlattenedReply(t *testing.T) {
 	})
 }
 
-// A folded namespace's call goes to the client as the call to the child, with its own arguments,
-// when the arguments name one of the namespace's tools; otherwise it stays the call to the namespace.
 func TestNamespaceFoldedReply(t *testing.T) {
 	body := `{"model":"grok-4.6","stream":true,"input":[],"tools":[{"type":"namespace","name":"ns","tools":[{"type":"function","name":"a"},` + lookups(200) + `]}]}`
 	wrapper := `{"name":"a","arguments":{"x":1}}`
@@ -209,8 +197,6 @@ func TestNamespaceFoldedReply(t *testing.T) {
 	}
 }
 
-// A reply read as one response is restored too, and a request with an apply_patch tool and a
-// namespace turns back both.
 func TestNamespaceNonStreamedAndWithPatch(t *testing.T) {
 	req, err := openairesponses.ParseRequest([]byte(`{"model":"grok-4.6","input":[],"tools":[
 		{"type":"custom","name":"apply_patch"},
@@ -248,7 +234,6 @@ func TestNamespaceNonStreamedAndWithPatch(t *testing.T) {
 	}
 }
 
-// A request without namespace tools has nothing to restore.
 func TestNoNamespacesNoRestorer(t *testing.T) {
 	req, _ := openairesponses.ParseRequest([]byte(`{"model":"grok-4.6","input":[],"tools":[{"type":"function","name":"f"}]}`))
 	if _, _, bridge, err := buildRequest(req, false); err != nil || bridge != nil {
@@ -256,8 +241,6 @@ func TestNoNamespacesNoRestorer(t *testing.T) {
 	}
 }
 
-// The upstream may open with the call's added event, with no response.created before it. The call
-// is then restored from its first event on.
 func TestNamespaceReplyWithoutCreated(t *testing.T) {
 	args := `{"city":"Oslo"}`
 	started := `{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"weather__get_forecast","arguments":""}`
@@ -276,8 +259,6 @@ func TestNamespaceReplyWithoutCreated(t *testing.T) {
 	})
 }
 
-// A history call and a tool choice in a namespace go to the namespace's function, not to a plain
-// function that has the namespace's name, when the namespace was flattened.
 func TestNamespaceNamedLikeAFunction(t *testing.T) {
 	got := responsesBody(t, `{"model":"grok-4.6","input":[{"type":"function_call","call_id":"c1","namespace":"ns","name":"a","arguments":"{\"x\":1}"}],
 		"tool_choice":{"type":"function","namespace":"ns","name":"a"},
@@ -294,8 +275,6 @@ func TestNamespaceNamedLikeAFunction(t *testing.T) {
 	}
 }
 
-// A namespace declared more than once is one folded function that has the children of every
-// declaration, each child as its first declaration has it.
 func TestNamespaceDeclaredTwice(t *testing.T) {
 	body := `{"model":"grok-4.6","stream":true,"input":[],"tools":[
 		{"type":"namespace","name":"ns","description":"First.","tools":[` + lookups(201) + `]},
@@ -320,7 +299,6 @@ func TestNamespaceDeclaredTwice(t *testing.T) {
 	if d, _ := tools[0]["description"].(string); !strings.HasPrefix(d, "First.\n\n") || strings.Contains(d, "again") {
 		t.Errorf("description %.80q: want the first declaration's, with lookup0 as it first had it", d)
 	}
-	// A call to the child only the second declaration has comes back as that child.
 	wrapper := `{"name":"last_child","arguments":{}}`
 	got, err := replyStream(t, body, sseOf(created(0), itemDone(1, 0, nsCall("ns", wrapper)), completed(2, nsCall("ns", wrapper))))
 	if err != nil {
@@ -330,8 +308,6 @@ func TestNamespaceDeclaredTwice(t *testing.T) {
 	expect(t, got, []string{`0 response.created `, `1 response.output_item.done [0] ` + want, `2 response.completed output: ` + want})
 }
 
-// A function in a namespace that is called apply_patch is an ordinary function, whatever the
-// top-level custom apply_patch tool is: it is not given the patch rules.
 func TestNamespacedApplyPatchIsNotThePatchTool(t *testing.T) {
 	body := `{"model":"grok-4.6","stream":true,"input":[],"tools":[{"type":"custom","name":"apply_patch"},
 		{"type":"namespace","name":"ns","tools":[{"type":"function","name":"apply_patch","parameters":{"type":"object"}}]}]}`
@@ -344,13 +320,11 @@ func TestNamespacedApplyPatchIsNotThePatchTool(t *testing.T) {
 	want := `function_call apply_patch ns=ns arguments="{}"`
 	expect(t, got, []string{`0 response.created `, `1 response.output_item.added [0] function_call apply_patch ns=ns arguments=""`,
 		`2 response.function_call_arguments.done [0] arguments="{}"`, `3 response.output_item.done [0] ` + want, `4 response.completed output: ` + want})
-	// Without any earlier event for it, the final response restores it the same way.
 	got, err = replyStream(t, body, sseOf(created(0), completed(1, other)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	expect(t, got, []string{`0 response.created `, `1 response.completed output: ` + want})
-	// The top-level tool still is the patch tool.
 	text := fmt.Sprintf("%q", patchText)
 	got, err = replyStream(t, body, sseOf(created(0), added(1, 0, callItem("in_progress", "")), argsDone(2, 0, "fc_1", patchArgs), itemDone(3, 0, callItem("completed", patchArgs)), completed(4, callItem("completed", patchArgs))))
 	if err != nil {
@@ -361,9 +335,6 @@ func TestNamespacedApplyPatchIsNotThePatchTool(t *testing.T) {
 	}
 }
 
-// The fold decision counts the x_search tool the extension is going to inject, as today's core
-// counts it: 200 tools in a namespace are flattened, and with the injected tool they are 201 and
-// folded. A request that has x_search of its own gets no injected tool, so nothing is added.
 func TestNamespaceFoldCountsInjectedSearch(t *testing.T) {
 	build := func(body string, inject bool) []map[string]any {
 		t.Helper()

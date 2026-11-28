@@ -7,17 +7,10 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// vertexCallIDs reports whether a Vertex AI request translated from the client format from
-// carries function call IDs, as today's core sends it: it removes the IDs a Responses client's
-// calls carry (Vertex rejects them), and its Chat translation never writes a tool call's ID to any
-// Gemini upstream. The IDs a Messages client's calls carry, and a Gemini client's own, are sent.
 func vertexCallIDs(from string) bool {
 	return from != llm.FormatOpenAIResponses && from != llm.FormatOpenAIChat
 }
 
-// stripCallIDs removes functionCall.id and functionResponse.id from the parts of a GenerateContent
-// body's contents. A body with no such ID, or that is not shaped like a request, is returned
-// as it is; in a body that changes, the bytes of every field that is not rewritten are kept.
 func stripCallIDs(body []byte) []byte {
 	dropID := func(fn json.RawMessage) (json.RawMessage, bool) {
 		return editObject(fn, "id", func(json.RawMessage) (json.RawMessage, bool) { return nil, true })
@@ -39,9 +32,6 @@ func stripCallIDs(body []byte) []byte {
 	return out
 }
 
-// editObject rewrites the value of key in the JSON object raw with fix, which returns the new
-// value (nil to remove the key) and whether it changed anything. It returns raw itself when raw is
-// not an object, has no such key, or fix changed nothing.
 func editObject(raw json.RawMessage, key string, fix func(json.RawMessage) (json.RawMessage, bool)) (json.RawMessage, bool) {
 	var obj map[string]json.RawMessage
 	if json.Unmarshal(raw, &obj) != nil {
@@ -63,7 +53,6 @@ func editObject(raw json.RawMessage, key string, fix func(json.RawMessage) (json
 	return encodeJSON(raw, obj)
 }
 
-// editArray rewrites each element of the JSON array raw with fix, as editObject does.
 func editArray(raw json.RawMessage, fix func(json.RawMessage) (json.RawMessage, bool)) (json.RawMessage, bool) {
 	var elems []json.RawMessage
 	if json.Unmarshal(raw, &elems) != nil {
@@ -81,8 +70,6 @@ func editArray(raw json.RawMessage, fix func(json.RawMessage) (json.RawMessage, 
 	return encodeJSON(raw, elems)
 }
 
-// encodeJSON encodes v without escaping <, > and &, so raw JSON text keeps its bytes. If v cannot
-// be encoded it returns orig, unchanged.
 func encodeJSON(orig json.RawMessage, v any) (json.RawMessage, bool) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

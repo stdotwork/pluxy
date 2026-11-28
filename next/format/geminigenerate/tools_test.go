@@ -8,8 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// GenerateContent takes 1 to 128 characters from a-z, A-Z, 0-9, _, ., : and -, and Vertex AI
-// wants the first to be a letter or an underscore; other names are sent under a name it takes.
 func TestToolNames(t *testing.T) {
 	long := strings.Repeat("x", 140)
 	req := llm.Request{
@@ -51,7 +49,6 @@ func TestToolNames(t *testing.T) {
 	if got := names["called/only"]; got != "called_only" {
 		t.Errorf("called/only -> %q, want called_only", got)
 	}
-	// a b and a@b sanitize the same, and a_b is already taken: each gets its own hashed name.
 	seen := map[string]bool{}
 	for _, from := range []string{"a b", "a@b", "a_b"} {
 		to := from
@@ -69,7 +66,6 @@ func TestToolNames(t *testing.T) {
 	if !strings.HasPrefix(names["a b"], "a_b_") || !strings.HasPrefix(names["a@b"], "a_b_") {
 		t.Errorf("colliding names not hashed: %q, %q", names["a b"], names["a@b"])
 	}
-	// The map depends only on the request.
 	again := ToolNames(req)
 	if len(again) != len(names) {
 		t.Fatalf("ToolNames is not deterministic: %v vs %v", names, again)
@@ -81,7 +77,6 @@ func TestToolNames(t *testing.T) {
 	}
 }
 
-// encodeGemini decodes the body EncodeRequest built.
 func encodeGemini(t *testing.T, req llm.Request) (body []byte, decls []string, contents []map[string]any, config map[string]any) {
 	t.Helper()
 	body, _, err := EncodeRequest(req)
@@ -110,8 +105,6 @@ func encodeGemini(t *testing.T, req llm.Request) (body []byte, decls []string, c
 	return body, decls, out.Contents, out.ToolConfig.FunctionCallingConfig
 }
 
-// The declarations, the replayed calls and the function responses all use the same
-// GenerateContent name, and a tool choice names it too.
 func TestEncodeRequestUsesToolNames(t *testing.T) {
 	req := llm.Request{Model: "m",
 		Tools: []llm.Tool{{Name: "weird/name", Parameters: json.RawMessage(`{"type":"object"}`)}},
@@ -147,7 +140,6 @@ func TestEncodeRequestUsesToolNames(t *testing.T) {
 	}
 }
 
-// A request whose names are already valid is sent unchanged.
 func TestEncodeRequestKeepsValidToolNames(t *testing.T) {
 	req := llm.Request{Model: "m",
 		Tools: []llm.Tool{{Name: "get_weather"}, {Name: "mcp:server.tool"}},

@@ -9,8 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A 503 does not show that the upstream never ran the request (a gateway may answer 503 after
-// the model started), so another account must not be tried.
 func TestServiceUnavailableIsNotRetrySafe(t *testing.T) {
 	resp := &http.Response{StatusCode: http.StatusServiceUnavailable, Status: "503 Service Unavailable",
 		Header: http.Header{"Retry-After": {"7"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"overloaded"}}`))}
@@ -26,8 +24,6 @@ func TestServiceUnavailableIsNotRetrySafe(t *testing.T) {
 	}
 }
 
-// A 429, a rate limit or a used-up quota, holds back only the model on the account, as today's
-// core cools only the model that answered.
 func TestTooManyRequestsBlocksTheModel(t *testing.T) {
 	for _, c := range []struct{ body, code string }{
 		{`{"error":{"message":"Rate limit reached","type":"requests","code":"rate_limit_exceeded"}}`, llm.CodeRateLimit},
@@ -42,7 +38,6 @@ func TestTooManyRequestsBlocksTheModel(t *testing.T) {
 	}
 }
 
-// A 429 on a call for no model (the model list) is the account's.
 func TestTooManyRequestsWithoutModelIsTheAccounts(t *testing.T) {
 	resp := &http.Response{StatusCode: http.StatusTooManyRequests, Status: "429 Too Many Requests",
 		Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"Rate limit reached"}}`))}

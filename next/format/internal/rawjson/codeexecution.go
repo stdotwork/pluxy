@@ -6,11 +6,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// CodeExecutionLosses returns a dropped loss for every field of a translated code execution tool
-// that the target cannot carry, at that field's path in the client's original tool. For OpenAI
-// Responses, the mandatory default auto container {"type":"auto"} (with no file_ids, memory_limit
-// or network_policy) reports no loss; explicit container IDs, file_ids, memory_limit,
-// network_policy, allowed_callers and any unknown fields are reported as dropped.
 func CodeExecutionLosses(t llm.Tool, fallbackPath, target string) []llm.Loss {
 	p := fallbackPath
 	if t.Origin != nil && t.Origin.Path != "" {
@@ -40,7 +35,6 @@ func CodeExecutionLosses(t llm.Tool, fallbackPath, target string) []llm.Loss {
 			case "container":
 				cm := Object(v)
 				if cm == nil {
-					// Explicit container ID string (or non-object): cannot be carried across providers.
 					lose(Join(p, k))
 					continue
 				}

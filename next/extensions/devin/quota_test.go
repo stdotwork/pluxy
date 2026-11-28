@@ -98,7 +98,6 @@ func TestQuotaReadsUserStatus(t *testing.T) {
 	}
 }
 
-// The device seed fixes the fingerprint the quota read sends, as it does for chat requests.
 func TestQuotaFingerprintFollowsSeed(t *testing.T) {
 	srv := devintest.New(t)
 	tok := srv.Token()
@@ -115,8 +114,6 @@ func TestQuotaFingerprintFollowsSeed(t *testing.T) {
 	}
 }
 
-// A window Devin gives a reset time but no percent for reports the reset only; one it says nothing
-// of is left out.
 func TestQuotaPartialStatus(t *testing.T) {
 	srv := devintest.New(t)
 	plan := devintest.Bytes(nil, 1, devintest.Bytes(nil, 2, []byte("Free")))
@@ -189,12 +186,9 @@ func TestQuotaErrors(t *testing.T) {
 	})
 }
 
-// A refused quota read's text body becomes the error's message only when it was read whole. A body
-// longer than the 1 MiB read is cut, and the cut may fall inside a credential the upstream echoed,
-// which core's whole-copy redaction would pass on: then the message is the status alone.
 func TestQuotaErrorTextBody(t *testing.T) {
 	const secret = "devin-quota-cut-secret-0f1e2d3c4b5a69788796a5b4c3d2e1f0"
-	const read = 30 // bytes of secret the 1 MiB read takes
+	const read = 30
 	head := "refused Basic "
 	cut := strings.Repeat("x", 1<<20-read-len(head)) + head + secret + " more"
 	for _, tc := range []struct {
@@ -223,7 +217,6 @@ func TestQuotaErrorTextBody(t *testing.T) {
 	}
 }
 
-// A login reports the account's user ID, not its name, as the identity.
 func TestLoginGrantCarriesIdentity(t *testing.T) {
 	srv := devintest.New(t)
 	tok := srv.Token()

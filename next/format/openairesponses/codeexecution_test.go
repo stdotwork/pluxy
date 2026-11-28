@@ -12,7 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// These models' pages list code_interpreter, but their Responses endpoint row says "Not supported".
 func TestCodeExecutionNotSentToModelsWithoutResponses(t *testing.T) {
 	for _, model := range []string{"o1-mini", "gpt-4o-mini-audio-preview"} {
 		req, err := anthropicmessages.ParseRequest([]byte(`{"model":"` + model + `","max_tokens":9,
@@ -37,8 +36,6 @@ func TestCodeExecutionNotSentToModelsWithoutResponses(t *testing.T) {
 	}
 }
 
-// A translated code tool asks for its run's outputs, which the Responses API leaves out unless
-// include names them (https://developers.openai.com/api/reference/resources/responses/create).
 func TestTranslatedCodeToolAsksForOutputs(t *testing.T) {
 	const want = "code_interpreter_call.outputs"
 	include := func(t *testing.T, body []byte) (list []string, present bool) {
@@ -92,8 +89,6 @@ func TestTranslatedCodeToolAsksForOutputs(t *testing.T) {
 	})
 
 	t.Run("merged with the client's include, once", func(t *testing.T) {
-		// The tool is added by hand: the Responses parser gives a client's own code_interpreter
-		// tool its Origin, and that tool is sent as it came, never translated.
 		for _, in := range []string{`["web_search_call.action.sources"]`, `["web_search_call.action.sources","` + want + `"]`} {
 			req, err := openairesponses.ParseRequest([]byte(`{"model":"gpt-5.2","input":"compute","include":` + in + `}`))
 			if err != nil {

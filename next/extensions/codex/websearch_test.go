@@ -13,8 +13,6 @@ const (
 	userMsg       = `{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`
 )
 
-// shapedBody builds the upstream body for a Responses request, as /responses (ws false) or the
-// Responses WebSocket (ws true) sends it.
 func shapedBody(t *testing.T, body string, headers map[string]string, ws bool) map[string]json.RawMessage {
 	t.Helper()
 	req := wsRequest(t, body)
@@ -60,8 +58,6 @@ func inputTypes(t *testing.T, m map[string]json.RawMessage) string {
 	return strings.Join(types, ",")
 }
 
-// A request that replays a web search without declaring a web search tool gets one, over HTTP and
-// the WebSocket alike, ahead of the image generation tool the extension adds.
 func TestReplayedWebSearchGetsTool(t *testing.T) {
 	for _, tools := range []string{`"tools":[],`, ``, `"tools":null,`, `"tools":[{"type":"function","name":"f","parameters":{}}],`} {
 		for _, ws := range []bool{false, true} {
@@ -81,7 +77,6 @@ func TestReplayedWebSearchGetsTool(t *testing.T) {
 	}
 }
 
-// A request that already declares a web search tool, or replays no search, is left as it is.
 func TestWebSearchToolLeftAlone(t *testing.T) {
 	for _, c := range []struct{ name, body, tools string }{
 		{"web_search declared", `{"model":"m","tools":[{"type":"web_search","external_web_access":true}],"input":[` + webSearchItem + `]}`, "web_search,image_generation"},
@@ -102,8 +97,6 @@ func TestWebSearchToolLeftAlone(t *testing.T) {
 	}
 }
 
-// A Responses-lite request declares no hosted tools, so its replayed searches are removed instead
-// and no tool is added.
 func TestReplayedWebSearchDroppedForLite(t *testing.T) {
 	lite := map[string]string{"x-openai-internal-codex-responses-lite": "true"}
 	for _, ws := range []bool{false, true} {
@@ -115,14 +108,12 @@ func TestReplayedWebSearchDroppedForLite(t *testing.T) {
 			t.Errorf("ws=%v: lite request got tools %s", ws, m["tools"])
 		}
 	}
-	// With a web search tool declared, nothing is removed.
 	m := shapedBody(t, `{"model":"m","tools":[{"type":"web_search"}],"input":[`+userMsg+`,`+webSearchItem+`]}`, lite, false)
 	if got := inputTypes(t, m); got != "message,web_search_call" {
 		t.Errorf("lite request with a web search tool: input %q, want it kept", got)
 	}
 }
 
-// The compact endpoint applies the same rule to a body it sends nearly as it came.
 func TestWebSearchForHistoryOnABody(t *testing.T) {
 	parse := func(s string) map[string]json.RawMessage {
 		var m map[string]json.RawMessage
@@ -148,9 +139,6 @@ func TestWebSearchForHistoryOnABody(t *testing.T) {
 	}
 }
 
-// A request is Responses-lite when the X-Openai-Internal-Codex-Responses-Lite header says true, in
-// any case, or when client_metadata carries the flag as true or "true", as today's core reads it;
-// another header value, or a false flag, is not. A lite request turns parallel tool calls off.
 func TestLiteDetection(t *testing.T) {
 	const tool = `"tools":[{"type":"function","name":"f","parameters":{"type":"object"}}]`
 	header := func(v string) map[string]string {

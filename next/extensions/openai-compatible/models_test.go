@@ -66,7 +66,6 @@ func TestListModels(t *testing.T) {
 		t.Errorf("models = %+v, want %+v", list.Models, want)
 	}
 
-	// Messages and Gemini wires send the key in their headers.
 	if _, err := listModels(context.Background(), callFor("messages")); err != nil || gotAPIKey != "sk-test" {
 		t.Errorf("messages wire: err=%v x-api-key=%q", err, gotAPIKey)
 	}
@@ -74,14 +73,11 @@ func TestListModels(t *testing.T) {
 		t.Errorf("gemini wire: err=%v x-goog-api-key=%q", err, gotGoogAPIKey)
 	}
 
-	// Empty data array returns an empty list without error.
 	body = `{"object":"list","data":[]}`
 	if list, err := listModels(context.Background(), callFor("chat")); err != nil || len(list.Models) != 0 {
 		t.Errorf("empty list: %+v, %v", list, err)
 	}
 
-	// Gemini's list shape, which a wire_api "gemini" account answers with: the model's resource
-	// name is its id without "models/", and its other fields have the model's own places.
 	body = `{"models":[{"name":"models/gemini-a","displayName":"Gemini A","description":"A test model","version":"001","inputTokenLimit":1000,"outputTokenLimit":100,"supportedGenerationMethods":["generateContent"]},{"name":"models/gemini-a"},{"name":"gemini-b"}]}`
 	gemini, err := listModels(context.Background(), callFor("gemini"))
 	if err != nil {
@@ -90,14 +86,12 @@ func TestListModels(t *testing.T) {
 	wantGemini := []protocol.Model{
 		{ID: "gemini-a", Name: "models/gemini-a", DisplayName: "Gemini A", Description: "A test model", Version: "001",
 			InputTokenLimit: 1000, OutputTokenLimit: 100, GenerationMethods: []string{"generateContent"}},
-		{ID: "gemini-b"}, // a name without the "models/" prefix leaves Name at its default, the id
+		{ID: "gemini-b"},
 	}
 	if !reflect.DeepEqual(gemini.Models, wantGemini) {
 		t.Errorf("gemini models = %+v, want %+v", gemini.Models, wantGemini)
 	}
 
-	// A Gemini list keeps only the models a request can call: one that lists generateContent or
-	// streamGenerateContent, or that lists no methods at all (a server may not send the field).
 	body = `{"models":[
 		{"name":"models/gen-only","supportedGenerationMethods":["generateContent"]},
 		{"name":"models/stream-only","supportedGenerationMethods":["streamGenerateContent"]},
@@ -120,7 +114,6 @@ func TestListModels(t *testing.T) {
 		t.Errorf("gemini callable ids = %v, want %v", gotIDs, wantIDs)
 	}
 
-	// Non-list JSON or HTTP errors fail with *llm.Error.
 	body = `{"object":"list"}`
 	if _, err := listModels(context.Background(), callFor("chat")); err == nil {
 		t.Error("expected error when neither list shape is there")

@@ -14,8 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// Devin returns one candidate, so a client's candidate count above one is reported dropped under
-// the field it came from, and drop_policy reject refuses the request before anything is sent.
 func TestCandidateCountDropped(t *testing.T) {
 	chatBody := func(n string) []byte {
 		return []byte(`{"model":"swe-2","n":` + n + `,"messages":[{"role":"user","content":"hi"}]}`)
@@ -52,7 +50,6 @@ func TestCandidateCountDropped(t *testing.T) {
 				t.Errorf("reject policy: err %v, %d requests sent; want unsupported naming %s and none sent", err, len(srv.Requests()), paths[name])
 			}
 
-			// One candidate is what Devin returns, so asking for one drops nothing.
 			one, err := p("1")
 			if err != nil {
 				t.Fatal(err)

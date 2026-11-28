@@ -9,9 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// The cases and their expected outcomes are today's core's (core/internal/runtime/executor:
-// claude_executor_fable_ratelimit_test.go, helps/claude_ratelimit_test.go and
-// helps/claude_request_rate_test.go), without its random 1-30 s grace.
 func TestRateLimit(t *testing.T) {
 	now := time.Unix(1793000000, 0)
 	at := func(d time.Duration) string { return strconv.FormatInt(now.Add(d).Unix(), 10) }
@@ -126,8 +123,6 @@ func TestRateLimit(t *testing.T) {
 	}
 }
 
-// From helps/claude_ratelimit_test.go: with the 7d window allowed and the 5h status left out, an
-// overage refusal is the model's only while the 5h utilization is missing or below 1.
 func TestRateLimitUtilization(t *testing.T) {
 	for _, c := range []struct {
 		name, value string
@@ -153,8 +148,6 @@ func TestRateLimitUtilization(t *testing.T) {
 	}
 }
 
-// Two Retry-After values are not one usable wait, so a per-minute message keeps the aggregate
-// reset.
 func TestRateLimitRepeatedRetryAfter(t *testing.T) {
 	now := time.Unix(1793000000, 0)
 	h := http.Header{"Retry-After": {"30", "30"}, hUnifiedReset: {strconv.FormatInt(now.Add(4*time.Hour).Unix(), 10)}}

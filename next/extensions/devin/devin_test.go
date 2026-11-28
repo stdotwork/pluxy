@@ -20,8 +20,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// A client's model name becomes Devin's model ID as today's core builds it: the request's effort
-// or the model's default, moved to the nearest effort the model has.
 func TestModelID(t *testing.T) {
 	for _, c := range []struct{ model, effort, want string }{
 		{"swe-2", "", "swe-2-high"},
@@ -60,7 +58,6 @@ func TestModelID(t *testing.T) {
 	}
 }
 
-// fieldsOf decodes a message's fields by number, failing the test on a malformed message.
 func fieldsOf(t *testing.T, b []byte) map[int][]field {
 	t.Helper()
 	fs, err := parseFields(b)
@@ -81,9 +78,6 @@ func str(fs map[int][]field, n int) string {
 	return string(fs[n][0].data)
 }
 
-// A conversation becomes Devin's turns: system text as the system prompt, the assistant's
-// reasoning, text and calls in one turn, a result for a call as a tool turn and one for no call
-// as the user's text; tools, output limit, temperature and model ID in their fields.
 func TestRequestEncoding(t *testing.T) {
 	max, temp := 100000, 0.3
 	sig := "sealed.v1.sig"
@@ -183,8 +177,6 @@ func relayFrames(frames ...[]byte) (*recorder, error) {
 	return rec, r.run(context.Background(), bytes.NewReader(bytes.Join(frames, nil)))
 }
 
-// A reply's frames become items as they arrive: reasoning, which stays open until the reply ends
-// so it gets its signature, text, and each tool call by its ID, then the finish with usage.
 func TestRelay(t *testing.T) {
 	sig := devintest.Frame(devintest.Bytes(nil, 10, []byte("sig")))
 	rec, err := relayFrames(devintest.Thinking("Hmm"), sig, devintest.Text("Sure."), devintest.ToolCall("call_a", "weather", `{"ci`),
@@ -213,9 +205,6 @@ func TestRelay(t *testing.T) {
 	}
 }
 
-// An end frame's error is classified as today's core maps Connect codes; one after output is not
-// retry-safe; a stream that ends without an end frame is an error, and a garbled end frame a
-// clean end.
 func TestReplyErrors(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -250,7 +239,6 @@ func TestReplyErrors(t *testing.T) {
 	}
 }
 
-// A 429 holds back the model, unless Devin says the account's quota is used up.
 func TestStatusErrors(t *testing.T) {
 	e := statusError(http.StatusTooManyRequests, "Too many requests", nil, "20")
 	if e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeModel || e.RetryAfterMS != 20000 {
@@ -269,9 +257,6 @@ func TestStatusErrors(t *testing.T) {
 	}
 }
 
-// A refusal with a Connect error body keeps a Raw: the body rebuilt from its cleaned code and
-// message. Any other body's message is its cleaned text, and the body itself, which the client and
-// the account's last error would get as it is, is not kept: it may hold part of the token.
 func TestRefusalRaw(t *testing.T) {
 	const tok = "devin-raw-secret-0f1e2d3c4b5a69788796a5b4c3d2e1f0"
 	for _, tc := range []struct {
@@ -305,7 +290,6 @@ func TestRefusalRaw(t *testing.T) {
 	}
 }
 
-// What a user pastes in the browser login is read as today's core reads it.
 func TestReadPaste(t *testing.T) {
 	for _, c := range []struct{ in, token, code string }{
 		{"devin-session-token$abc", "devin-session-token$abc", ""},
@@ -322,8 +306,6 @@ func TestReadPaste(t *testing.T) {
 	}
 }
 
-// Requests carry Devin's CLI headers: the token twice as Basic credentials, Connect's content type
-// and version, and no User-Agent.
 func TestChatHeaders(t *testing.T) {
 	srv := devintest.New(t)
 	tok := srv.Token()
@@ -345,8 +327,6 @@ func TestChatHeaders(t *testing.T) {
 	}
 }
 
-// The goroutine that forwards login input ends once the login's context is cancelled, even with
-// input it cannot hand over: nothing reads the inputs after the login ends.
 func TestForwardInputsStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	input := func(ctx context.Context) (map[string]string, error) {
@@ -356,7 +336,6 @@ func TestForwardInputsStops(t *testing.T) {
 		return map[string]string{"code": "x"}, nil
 	}
 	forwardInputs(ctx, input)
-	// Let the forwarder fill the inputs and block handing over the next one.
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	deadline := time.Now().Add(2 * time.Second)
@@ -372,10 +351,6 @@ func TestForwardInputsStops(t *testing.T) {
 	}
 }
 
-// A server that holds the stream open after the reply's end frame does not hold the reply back:
-// the extension reads on past the end frame for afterEndWait only, no less (readToEnd gives up
-// only then, so a reply that returns sooner did not read on) and no more than a little over.
-// What the log then records of that body is covered by e2e.TestUpstreamCaptureDevinReplyLoggedWhole.
 func TestReplyNotHeldAfterEndFrame(t *testing.T) {
 	srv := devintest.New(t)
 	srv.Chat = func(w http.ResponseWriter, r *http.Request, _ devintest.Request) {

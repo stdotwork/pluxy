@@ -12,7 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// chatRequest reads a Chat Completions body as core does for a Chat client's request.
 func chatRequest(t *testing.T, body string) llm.Request {
 	t.Helper()
 	req, err := openaichat.ParseRequest([]byte(body))
@@ -22,8 +21,6 @@ func chatRequest(t *testing.T, body string) llm.Request {
 	return req
 }
 
-// shaped builds the upstream body for a Chat client's request to a Chat account with settings, and
-// returns its messages (as generic JSON), its top-level fields and the translation report.
 func shaped(t *testing.T, settingsJSON, body string) (messages []map[string]any, top map[string]any, tr *llm.Translation) {
 	t.Helper()
 	var s settings
@@ -48,8 +45,6 @@ const developerRequest = `{"model":"m","messages":[
 	{"role":"developer","content":"Be brief."},
 	{"role":"user","content":"hi"}]}`
 
-// developer_role "system" sends a developer message as a system one, to a client's own Chat body
-// and to one translated from Responses; the default sends it as it came.
 func TestDeveloperRole(t *testing.T) {
 	for _, c := range []struct{ settings, want string }{
 		{`{"base_url":"https://example.test/v1"}`, "developer"},
@@ -61,7 +56,6 @@ func TestDeveloperRole(t *testing.T) {
 			t.Errorf("%s: roles %v %v, want %s user", c.settings, msgs[0]["role"], msgs[1]["role"], c.want)
 		}
 	}
-	// From a Responses client: the encoder writes a developer message, and the setting changes it.
 	responses, err := openairesponses.ParseRequest([]byte(`{"model":"m","input":[{"type":"message","role":"developer","content":"Be brief."},{"type":"message","role":"user","content":"hi"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -81,8 +75,6 @@ const partsRequest = `{"model":"m","messages":[
 	{"role":"assistant","content":[{"type":"text","text":"ok"}]},
 	{"role":"user","content":"plain"}]}`
 
-// string_content sends content that is all text parts as one string, and leaves every other
-// message as it is: a message with an image keeps its parts.
 func TestStringContent(t *testing.T) {
 	msgs, _, _ := shaped(t, `{"base_url":"https://example.test/v1","string_content":true}`, partsRequest)
 	if got := msgs[0]["content"]; got != "You are terse." {
@@ -97,7 +89,6 @@ func TestStringContent(t *testing.T) {
 	if got := msgs[3]["content"]; got != "plain" {
 		t.Errorf("string content = %#v, want it unchanged", got)
 	}
-	// Unset or false: the parts are sent as they came.
 	for _, set := range []string{`{"base_url":"https://example.test/v1"}`, `{"base_url":"https://example.test/v1","string_content":false}`} {
 		msgs, _, _ := shaped(t, set, partsRequest)
 		if _, ok := msgs[0]["content"].([]any); !ok {
@@ -106,8 +97,6 @@ func TestStringContent(t *testing.T) {
 	}
 }
 
-// A reasoning effort the account does not take is reported as an approximated loss naming the
-// effort asked and the one sent, also when the client's own body is otherwise sent unchanged.
 func TestEffortClampIsReported(t *testing.T) {
 	const noEffort = `{"model":"m","messages":[{"role":"user","content":"hi"}]}`
 	for _, c := range []struct {
@@ -136,12 +125,10 @@ func TestEffortClampIsReported(t *testing.T) {
 			}
 		})
 	}
-	// An effort the account takes loses nothing and the body is passed through.
 	_, tr, err := upstreamBody(chatRequest(t, `{"model":"m","reasoning_effort":"high","messages":[{"role":"user","content":"hi"}]}`), llm.FormatOpenAIChat, settings{})
 	if err != nil || len(tr.Losses) != 0 || !tr.Passthrough {
 		t.Errorf("high: err %v, translation %+v, want a passthrough with no losses", err, tr)
 	}
-	// A level the account lists is sent as it is.
 	_, tr, err = upstreamBody(chatRequest(t, `{"model":"m","reasoning_effort":"xhigh","messages":[{"role":"user","content":"hi"}]}`), llm.FormatOpenAIChat, settings{ReasoningLevels: []string{"low", "xhigh"}})
 	if err != nil || len(tr.Losses) != 0 {
 		t.Errorf("xhigh with xhigh listed: err %v, losses %+v, want none", err, tr.Losses)
@@ -157,14 +144,11 @@ const toolTurnRequest = `{"model":"deepseek-flash","tools":[{"type":"function","
 
 func reasoningOf(m map[string]any) any { return m["reasoning_content"] }
 
-// On DeepSeek a request with tools carries the reasoning_content of every earlier assistant
-// message (without it the API answers 400), and one that lost it gets a blank placeholder. The
-// base URL host selects it; reasoning_passback does for any other host.
 func TestReasoningPassbackWithTools(t *testing.T) {
 	for _, c := range []struct {
 		name, settings string
 		on             bool
-		off            bool // reasoning_passback false: nothing is sent back, not even what the client sent
+		off            bool
 	}{
 		{"deepseek host", `{"base_url":"https://api.deepseek.com"}`, true, false},
 		{"deepseek host with path", `{"base_url":"https://api.deepseek.com/v1/"}`, true, false},
@@ -193,8 +177,6 @@ func TestReasoningPassbackWithTools(t *testing.T) {
 	}
 }
 
-// Without tools DeepSeek ignores reasoning_content, and with thinking off it has none to pass
-// back: nothing is added, and what the client sent stays.
 func TestReasoningPassbackNotNeeded(t *testing.T) {
 	noTools := strings.Replace(toolTurnRequest, `"tools":[{"type":"function","function":{"name":"get_date","parameters":{"type":"object"}}}],`, "", 1)
 	off := strings.Replace(toolTurnRequest, `"messages"`, `"thinking":{"type":"disabled"},"messages"`, 1)
@@ -212,7 +194,6 @@ func TestReasoningPassbackNotNeeded(t *testing.T) {
 	}
 }
 
-// reasoning_passback false takes reasoning_content off every message, for a strict upstream.
 func TestReasoningPassbackOff(t *testing.T) {
 	msgs, _, _ := shaped(t, `{"base_url":"https://example.test/v1","reasoning_passback":false}`, toolTurnRequest)
 	for i, m := range msgs {
@@ -222,8 +203,6 @@ func TestReasoningPassbackOff(t *testing.T) {
 	}
 }
 
-// A reply's reasoning that comes back in a Claude or Responses request is passed back too: the
-// translated request has it on its assistant message, and DeepSeek keeps it there.
 func TestReasoningPassbackFromTranslatedHistory(t *testing.T) {
 	req, err := openairesponses.ParseRequest([]byte(`{"model":"m","tools":[{"type":"function","name":"get_date","parameters":{"type":"object"}}],"input":[
 		{"type":"message","role":"user","content":"date?"},
@@ -255,9 +234,7 @@ func TestReasoningPassbackFromTranslatedHistory(t *testing.T) {
 	}
 }
 
-// A vendor preset applies where the account sets nothing, and the account's own value wins.
 func TestPresets(t *testing.T) {
-	// DeepSeek: system role (its messages take no developer role) and string content.
 	msgs, _, _ := shaped(t, `{"base_url":"https://api.deepseek.com"}`, strings.Replace(developerRequest, `"Be brief."`, `[{"type":"text","text":"Be brief."}]`, 1))
 	if msgs[0]["role"] != "system" || msgs[0]["content"] != "Be brief." {
 		t.Errorf("DeepSeek: first message %v, want a system message with string content", msgs[0])
@@ -269,7 +246,6 @@ func TestPresets(t *testing.T) {
 	if _, ok := msgs[0]["content"].([]any); !ok {
 		t.Errorf("DeepSeek with string_content false: content %#v, want parts", msgs[0]["content"])
 	}
-	// Mistral: system role, and no reasoning_content (its assistant message takes no other fields).
 	msgs, _, _ = shaped(t, `{"base_url":"https://api.mistral.ai/v1"}`, toolTurnRequest)
 	if _, ok := msgs[1]["reasoning_content"]; ok {
 		t.Errorf("Mistral: assistant message %v, want no reasoning_content", msgs[1])
@@ -278,7 +254,6 @@ func TestPresets(t *testing.T) {
 	if msgs[0]["role"] != "system" {
 		t.Errorf("Mistral: role %v, want system", msgs[0]["role"])
 	}
-	// Hosts with no preset are untouched: Groq and OpenRouter, whose docs name no such need.
 	for _, host := range []string{"https://api.groq.com/openai/v1", "https://openrouter.ai/api/v1", "https://api.openai.com/v1"} {
 		msgs, _, _ := shaped(t, `{"base_url":"`+host+`"}`, developerRequest)
 		if msgs[0]["role"] != "developer" {
@@ -287,7 +262,6 @@ func TestPresets(t *testing.T) {
 	}
 }
 
-// The shaping settings apply to a Chat upstream only; another wire is sent as before.
 func TestShapingIsChatOnly(t *testing.T) {
 	req, err := openaichat.ParseRequest([]byte(developerRequest))
 	if err != nil {
@@ -302,7 +276,6 @@ func TestShapingIsChatOnly(t *testing.T) {
 	}
 }
 
-// A shaping setting with a value it does not know is refused, as an unknown wire_api is.
 func TestShapingSettingsAreChecked(t *testing.T) {
 	call := func(s string) error {
 		_, _, _, err := account(callWith(s))

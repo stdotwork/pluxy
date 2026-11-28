@@ -9,14 +9,12 @@ import (
 )
 
 func TestReader(t *testing.T) {
-	// Examples follow the WHATWG event stream interpretation rules.
 	stream := ": comment\n" +
 		"data: first\n\n" +
 		"event: delta\r\nid: 7\r\ndata: line one\r\ndata:line two\r\n\r\n" +
-		"retry: 1000\n\n" + // no data: dispatches nothing
+		"retry: 1000\n\n" +
 		"data: [DONE]\n\n" +
 		"data: cut off"
-	// OneByteReader splits every event across many reads.
 	r := NewReader(iotest.OneByteReader(strings.NewReader(stream)))
 	want := []Event{
 		{Data: "first"},
@@ -46,7 +44,6 @@ func TestReaderLimit(t *testing.T) {
 }
 
 func TestReaderLineEndings(t *testing.T) {
-	// The standard's end-of-line is CRLF, LF or a lone CR, and a stream may mix them.
 	for name, stream := range map[string]string{
 		"CR":         "data: hello\rdata: world\r\rdata: [DONE]\r\r",
 		"mixed":      "data: hello\r\ndata: world\r\rdata: [DONE]\n\n",
@@ -71,7 +68,6 @@ func TestReaderLineEndings(t *testing.T) {
 }
 
 func TestReaderCRDispatchesWithoutMoreInput(t *testing.T) {
-	// An event ended by CR CR must be returned at once, not when the next byte arrives.
 	pr, pw := io.Pipe()
 	defer pw.Close()
 	go func() { _, _ = io.WriteString(pw, "data: now\r\r") }()
@@ -92,7 +88,6 @@ func TestReaderCRDispatchesWithoutMoreInput(t *testing.T) {
 }
 
 func TestReaderLimitIsPerEvent(t *testing.T) {
-	// Keepalive comments are events of their own; their bytes must not count toward the next one.
 	stream := strings.Repeat(": keepalive\n\n", 100) + "data: ok\n\n"
 	r := NewReader(strings.NewReader(stream))
 	r.max = 50

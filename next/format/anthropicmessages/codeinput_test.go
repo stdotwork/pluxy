@@ -49,8 +49,6 @@ func codeRunsWhole(t *testing.T, input string) []llm.CodeExecution {
 	return evs[len(evs)-1].CodeExecutions
 }
 
-// A field that is not the code must not decide whether the run is kept, so a stream and the same
-// reply not streamed keep the same runs.
 func TestCodeInputWithAHugeOtherFieldIsKeptTheSameStreamedAndNot(t *testing.T) {
 	for _, padSize := range []int{1 << 10, 1 << 20, maxCodeExecInput - 100, maxCodeExecInput, 7 << 20} {
 		input := `{"code":"print(1)","pad":"` + strings.Repeat("p", padSize) + `"}`
@@ -64,7 +62,6 @@ func TestCodeInputWithAHugeOtherFieldIsKeptTheSameStreamedAndNot(t *testing.T) {
 	}
 }
 
-// Code blocks that never close hold their input together within one block's bound.
 func TestOpenCodeBlocksHoldOneBoundBetweenThem(t *testing.T) {
 	d := NewStreamDecoder()
 	feed := func(s string) {

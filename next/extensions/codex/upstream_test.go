@@ -9,8 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A 503 does not show that the upstream never ran the request (a gateway may answer 503 after
-// the model started), so another account must not be tried.
 func TestServiceUnavailableIsNotRetrySafe(t *testing.T) {
 	resp := &http.Response{StatusCode: http.StatusServiceUnavailable, Status: "503 Service Unavailable",
 		Header: http.Header{"Retry-After": {"7"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"overloaded"}}`))}
@@ -23,9 +21,6 @@ func TestServiceUnavailableIsNotRetrySafe(t *testing.T) {
 	}
 }
 
-// A usage_limit_reached refusal carries the length of the used-up window from Codex's rate-limit
-// headers (of the windows at 100%, the one that resets last), and the window's reset when the
-// body names none.
 func TestUsageLimitWindow(t *testing.T) {
 	refusal := func(h http.Header, body string) *http.Response {
 		return &http.Response{StatusCode: http.StatusTooManyRequests, Status: "429 Too Many Requests", Header: h,
@@ -60,8 +55,6 @@ func usageLimitRefusal(h http.Header, body string) *http.Response {
 		Body: io.NopCloser(strings.NewReader(body))}
 }
 
-// A usage_limit_reached refusal whose body names no reset waits until the used-up window resets,
-// when Codex's headers say when.
 func TestUsageLimitWaitsForTheWindowReset(t *testing.T) {
 	h := http.Header{}
 	h.Set("X-Codex-Primary-Used-Percent", "100")
@@ -82,8 +75,6 @@ func TestUsageLimitWaitsForTheWindowReset(t *testing.T) {
 	}
 }
 
-// An endpoint call's 404 that does not name a missing model is the endpoint missing upstream,
-// scoped to the request so routing blocks no model; one that names the model stays model-scoped.
 func TestEndpointNotFoundBlocksNoModel(t *testing.T) {
 	notFound := func(body string) *http.Response {
 		return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Header: http.Header{},
@@ -97,9 +88,6 @@ func TestEndpointNotFoundBlocksNoModel(t *testing.T) {
 	}
 }
 
-// Which refusals say the turn or the model is full: the codes turn_rate_limit_exceeded,
-// model_at_capacity and model_is_at_capacity, and, with no code at all, a message that says "at
-// capacity" for a rate_limit_error or for the model. Another explicit code keeps its own handling.
 func TestCapacityRefusal(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -118,8 +106,6 @@ func TestCapacityRefusal(t *testing.T) {
 		{"model wording, no code", `{"error":{"message":"Selected model is at capacity. Please try a different model."}}`, true},
 		{"model wording at the top", `{"message":"The model is at capacity"}`, true},
 		{"model code named in the message", `{"error":{"message":"error: model_is_at_capacity"}}`, true},
-		// The first code found decides, in the order error.code, top level, body.error, response.error,
-		// as in today's core: a later capacity code does not override an earlier other code.
 		{"other code first, capacity code at the top", `{"error":{"code":"rate_limit_exceeded"},"code":"turn_rate_limit_exceeded"}`, false},
 		{"other code first, capacity code in body.error", `{"error":{"code":"rate_limit_exceeded"},"body":{"error":{"code":"turn_rate_limit_exceeded"}}}`, false},
 		{"capacity code first, other code at the top", `{"error":{"code":"turn_rate_limit_exceeded"},"code":"rate_limit_exceeded"}`, true},
@@ -146,9 +132,6 @@ func capacityReply(status int, h http.Header, body string) *http.Response {
 	return &http.Response{StatusCode: status, Status: http.StatusText(status), Header: h, Body: io.NopCloser(strings.NewReader(body))}
 }
 
-// A capacity refusal is a rate limit on the model, not on the account: it was refused before it
-// ran, so another account may take it; the client sees a 429 whatever the upstream's status; the
-// upstream's Retry-After is kept. It is not a quota block, and a usage limit stays one.
 func TestCapacityRefusalIsAModelRateLimit(t *testing.T) {
 	turn := `{"error":{"type":"rate_limit_error","code":"turn_rate_limit_exceeded","message":"Codex is at capacity"}}`
 	for _, status := range []int{http.StatusTooManyRequests, http.StatusBadRequest, http.StatusServiceUnavailable} {
@@ -162,14 +145,11 @@ func TestCapacityRefusalIsAModelRateLimit(t *testing.T) {
 	if e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeModel || !e.Retryable || e.Status != http.StatusTooManyRequests || e.RetryAfterMS != 0 {
 		t.Errorf("model wording: %+v; want a retryable rate limit on the model, status 429, no retry time", e)
 	}
-	// A usage limit that also carries the turn code is still the account's quota.
 	e = statusError(capacityReply(http.StatusTooManyRequests, nil,
 		`{"error":{"type":"usage_limit_reached","code":"turn_rate_limit_exceeded","resets_in_seconds":3600}}`), "m")
 	if e.Code != llm.CodeQuota || e.Scope != llm.ScopeCredential || e.RetryAfterMS != 3_600_000 {
 		t.Errorf("usage limit with the turn code: %+v; want quota on the credential, retry after 3600000 ms", e)
 	}
-	// A plain rate limit holds back only the model, as today's core cools only the model that
-	// answered.
 	e = statusError(capacityReply(http.StatusTooManyRequests, nil,
 		`{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"Codex is at capacity"}}`), "m")
 	if e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeModel || !e.Retryable {
@@ -177,8 +157,6 @@ func TestCapacityRefusalIsAModelRateLimit(t *testing.T) {
 	}
 }
 
-// A capacity refusal reported inside an open stream is a rate limit on the model too; it is not
-// marked retryable, as the stream is open.
 func TestCapacityRefusalInStream(t *testing.T) {
 	raw := `{"type":"response.failed","response":{"status":"failed","error":{"type":"rate_limit_error","code":"turn_rate_limit_exceeded","message":"Codex is at capacity"}}}`
 	err := classify(&llm.Error{Code: llm.CodeUpstream, Message: "Codex is at capacity", Raw: llm.RawJSON([]byte(raw))})
@@ -188,8 +166,6 @@ func TestCapacityRefusalInStream(t *testing.T) {
 	}
 }
 
-// A plain rate limit reported inside the stream holds back only the model too, as today's core
-// cools only the model that answered.
 func TestRateLimitInStreamBlocksTheModel(t *testing.T) {
 	raw := `{"type":"response.failed","response":{"status":"failed","error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"Rate limit reached"}}}`
 	err := classify(&llm.Error{Code: llm.CodeUpstream, Message: "Rate limit reached", Raw: llm.RawJSON([]byte(raw))})
@@ -199,10 +175,6 @@ func TestRateLimitInStreamBlocksTheModel(t *testing.T) {
 	}
 }
 
-// Deactivated Codex fixtures (from OmniRoute's classifier tests, not captured upstream
-// replies) map to account_closed (retryable, credential-scoped), while per-request safety
-// refusals (misalignment_policy_violation / content_policy_violation) and plain invalid-token
-// 401s do not.
 func TestAccountClosedMapping(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -212,14 +184,10 @@ func TestAccountClosedMapping(t *testing.T) {
 		scope     string
 		retryable bool
 	}{
-		// From OmniRoute's classifier tests (tests/unit/provider-test-account-deactivated.test.ts), not a captured reply.
 		{"401 account deactivated (from OmniRoute's classifier tests)", 401, `{"error":{"message":"Your account has been deactivated. Please contact support."}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
-		// From OmniRoute's classifier tests (tests/unit/error-classifier.test.ts, tests/unit/codex-passive-refresh-gate.test.ts), not a captured reply.
 		{"401 code account_deactivated (from OmniRoute's classifier tests)", 401, `{"error":{"code":"account_deactivated","message":"account_deactivated: this account has been disabled"}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
-		// Guard: from OmniRoute's classifier tests (tests/unit/provider-safety-refusal-not-a-ban.test.ts).
 		{"403 misalignment_policy_violation guard", 403, `{"error":{"message":"This request was blocked by our safety systems. Reason: Potentially unintended activity.","type":"invalid_request_error","code":"misalignment_policy_violation"}}`, llm.CodePermission, llm.ScopeCredential, true},
 		{"400 content_policy_violation guard", 400, `{"error":{"message":"blocked","type":"invalid_request_error","code":"content_policy_violation"}}`, llm.CodeInvalidRequest, llm.ScopeRequest, false},
-		// Guard: from OmniRoute's classifier tests (tests/unit/provider-test-account-deactivated.test.ts).
 		{"401 invalid token guard", 401, `{"error":{"message":"Token invalid or revoked"}}`, llm.CodeAuth, llm.ScopeCredential, true},
 	} {
 		e := statusError(capacityReply(c.status, nil, c.body), "gpt-6.1-sol")
@@ -228,7 +196,6 @@ func TestAccountClosedMapping(t *testing.T) {
 				c.name, e.Code, e.Scope, e.Retryable, c.code, c.scope, c.retryable)
 		}
 	}
-	// Stream response.failed carrying account_deactivated (from OmniRoute's classifier tests, not a captured reply) classifies as account_closed too.
 	raw := `{"type":"response.failed","response":{"status":"failed","error":{"type":"invalid_request_error","code":"account_deactivated","message":"Your account has been deactivated."}}}`
 	err := classify(&llm.Error{Code: llm.CodeUpstream, Message: "Your account has been deactivated.", Raw: llm.RawJSON([]byte(raw))})
 	e, ok := err.(*llm.Error)

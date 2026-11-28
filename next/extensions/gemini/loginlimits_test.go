@@ -13,9 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// An access token's lifetime from the token endpoint is bounded before it becomes an expiry time:
-// a huge one must not overflow into the past (the token would be fetched again on every call), a
-// negative one must not expire the token, and none means an hour.
 func TestTokenLifetimeIsBounded(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

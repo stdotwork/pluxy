@@ -123,8 +123,6 @@ func TestQuotaRenewalAndManualResets(t *testing.T) {
 	}
 }
 
-// A subscription's quota is read from the ChatGPT backend's usage endpoint, with the Codex client's
-// identity and the account's ChatGPT ID, and mapped to the labels of the old panel.
 func TestQuotaReadsUsage(t *testing.T) {
 	srv := codextest.New(t)
 	token := srv.IssueToken("text")
@@ -137,7 +135,6 @@ func TestQuotaReadsUsage(t *testing.T) {
 		t.Fatalf("usage requests = %d, want 1", len(reqs))
 	}
 	h := reqs[0].Header
-	// The fake serves GET only, so a request with another method would have been refused.
 	if reqs[0].Path != "/backend-api/wham/usage" {
 		t.Errorf("path = %q, want /backend-api/wham/usage (the base URL without /codex)", reqs[0].Path)
 	}
@@ -163,9 +160,7 @@ func TestQuotaReadsUsage(t *testing.T) {
 		used      *float64
 		resets    int64
 		window    int64
-		// feature: the window counts a metered feature (code review, an additional limit), not
-		// the account's requests in general, so routing never holds the account on it.
-		feature bool
+		feature   bool
 	}
 	wants := []want{
 		{"five_hour", "5-hour limit", pct(42), 1794268800, 18000, false},
@@ -198,7 +193,6 @@ func TestQuotaReadsUsage(t *testing.T) {
 	}
 }
 
-// With codex_identity off, the extension sends no Codex User-Agent, as for its requests.
 func TestQuotaFollowsCodexIdentitySetting(t *testing.T) {
 	srv := codextest.New(t)
 	acct := testAccount(srv, subscription(srv.IssueToken("text"), ""))
@@ -215,7 +209,6 @@ func TestQuotaFollowsCodexIdentitySetting(t *testing.T) {
 	}
 }
 
-// An API key has no ChatGPT plan; nothing is sent upstream.
 func TestQuotaAPIKeyIsUnsupported(t *testing.T) {
 	srv := codextest.New(t)
 	_, e := readQuota(t, testAccount(srv, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-test"}))
@@ -262,9 +255,6 @@ func TestQuotaBadReplies(t *testing.T) {
 	}
 }
 
-// Windows are told apart by their length (a monthly one is labelled so), a window with no length
-// is taken by its place, a used-up rate limit without a share counts as used, and a reset may be
-// given as seconds from now or in milliseconds.
 func TestQuotaWindows(t *testing.T) {
 	const body = `{
 	  "plan_type": "team",
@@ -313,8 +303,6 @@ func TestQuotaWindows(t *testing.T) {
 	}
 }
 
-// A browser, device or renewed login names the upstream account by e-mail address and ChatGPT
-// account ID, which workspace members share; an API key names none.
 func TestLoginGrantsCarryIdentity(t *testing.T) {
 	g, err := grantFrom(&tokenResponse{AccessToken: "opaque", RefreshToken: "r", IDToken: codextest.IDToken()}, nil)
 	if err != nil {

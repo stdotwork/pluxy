@@ -6,34 +6,23 @@ import (
 	"unicode/utf8"
 )
 
-// InputDecoder reads a custom tool's text out of the arguments of the function call it was sent
-// as, {"input":"<text>"}, while the arguments arrive in fragments, so the client sees the text as
-// it is written. It accepts only that shape: an object with one field, input, holding a string,
-// and nothing after it. A fragment may end inside an escape or a character; the text is handed out
-// once the whole of it has arrived, so text from arguments that later turn out not to have the
-// shape may already be out; such a call is never finished for the client (CustomInput). It is
-// adapted from extensions/xai/patchinput.go, without that decoder's size limits and final
-// comparison: here the writer holds the arguments, and CustomInput reads them whole at the end.
 type InputDecoder struct {
 	pending []byte
 	state   int
-	head    int  // how many of headTokens are read
-	closed  bool // the closing brace is read
+	head    int
+	closed  bool
 	failed  bool
 	input   strings.Builder
 }
 
 const (
-	decHead  = iota // before the value's opening quote
-	decValue        // inside the value
-	decTail         // after the value
+	decHead = iota
+	decValue
+	decTail
 )
 
-// headTokens are what comes before the text, each with optional white space before it.
 var headTokens = [...]string{"{", `"input"`, ":", `"`}
 
-// Push reads the next fragment and returns the text it completed, which may be empty. After
-// arguments that do not have the shape it returns nothing more.
 func (d *InputDecoder) Push(fragment string) string {
 	if d.failed {
 		return ""
@@ -61,13 +50,11 @@ func (d *InputDecoder) Push(fragment string) string {
 	return d.input.String()[before:]
 }
 
-// Check reads the next fragment for a caller that needs only Whole, without keeping its text.
 func (d *InputDecoder) Check(fragment string) {
 	d.Push(fragment)
 	d.input.Reset()
 }
 
-// Whole reports whether the arguments read so far are exactly one {"input":"<string>"} object.
 func (d *InputDecoder) Whole() bool {
 	return !d.failed && d.state == decTail && d.closed
 }
@@ -79,8 +66,6 @@ func (d *InputDecoder) fail() int {
 
 func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
 
-// readHead reads white space and the next head token once it has all arrived, and returns how many
-// bytes it read.
 func (d *InputDecoder) readHead() int {
 	p := d.pending
 	i := 0
@@ -92,7 +77,7 @@ func (d *InputDecoder) readHead() int {
 		if !strings.HasPrefix(tok, rest) {
 			return d.fail()
 		}
-		return i // the token has not all arrived
+		return i
 	}
 	if !strings.HasPrefix(rest, tok) {
 		return d.fail()
@@ -104,8 +89,6 @@ func (d *InputDecoder) readHead() int {
 	return i + len(tok)
 }
 
-// readValue reads the whole characters of the value at the start of pending and returns how many
-// bytes it read. A character that has not all arrived stays in pending.
 func (d *InputDecoder) readValue() int {
 	p := d.pending
 	i := 0
@@ -145,10 +128,6 @@ func (d *InputDecoder) readValue() int {
 	return i
 }
 
-// unescape reads one escape sequence at the start of p, which starts with a backslash. It returns
-// the character and the bytes the escape takes; ok is false when the escape has not all arrived,
-// and n is negative when it is not valid JSON. A \u escape of a high surrogate takes the low
-// surrogate's escape after it.
 func unescape(p []byte) (r rune, n int, ok bool) {
 	if len(p) < 2 {
 		return 0, 0, false
@@ -176,7 +155,7 @@ func unescape(p []byte) (r rune, n int, ok bool) {
 	hi, valid := hex4(p[2:6])
 	switch {
 	case !valid, hi >= 0xdc00 && hi <= 0xdfff:
-		return 0, -1, false // not hex, or a low surrogate with no high one before it
+		return 0, -1, false
 	case hi < 0xd800 || hi > 0xdbff:
 		return rune(hi), 6, true
 	}
@@ -210,7 +189,6 @@ func hex4(p []byte) (rune, bool) {
 	return v, true
 }
 
-// readTail reads what may follow the value: white space and the closing brace.
 func (d *InputDecoder) readTail() int {
 	for _, c := range d.pending {
 		switch {

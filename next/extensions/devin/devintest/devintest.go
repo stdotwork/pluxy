@@ -1,6 +1,3 @@
-// Package devintest is a fake Devin for the Devin extension's tests: its sign-in page
-// (/auth/cli/continue), login API (/auth/cli/token, /v3/self) and API server's chat method. It
-// issues session tokens of its own and accepts only those.
 package devintest
 
 import (
@@ -21,49 +18,34 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// ChatPath is the API server's chat method.
 const ChatPath = "/exa.api_server_pb.ApiServerService/GetChatMessage"
 
-// StatusPath is the seat management server's GetUserStatus method, which reports a user's plan
-// and quota.
 const StatusPath = "/exa.seat_management_pb.SeatManagementService/GetUserStatus"
 
-// UserName is the user name the fake's profile reports.
 const UserName = "devintest-user"
 
-// Request is a chat request the fake received.
 type Request struct {
-	Header http.Header
-	// Message is the request's protobuf message, out of its Connect frame.
+	Header  http.Header
 	Message []byte
 }
 
-// Server is the fake Devin.
 type Server struct {
 	*httptest.Server
 
-	// Chat, if set, answers chat requests whose token is valid. The default replies "Hello" in
-	// two pieces with usage 11 in, 7 out.
-	Chat func(w http.ResponseWriter, r *http.Request, req Request)
-	// UserStatus, if set, is the protobuf body of the GetUserStatus reply; the default is
-	// DefaultUserStatus. StatusCode, if not 0, makes the method answer that status with a Connect
-	// error body instead.
-	UserStatus []byte
-	StatusCode int
-	// DenyBrowser makes the sign-in page send the browser back with access_denied.
+	Chat        func(w http.ResponseWriter, r *http.Request, req Request)
+	UserStatus  []byte
+	StatusCode  int
 	DenyBrowser bool
 
 	mu       sync.Mutex
 	n        int
-	codes    map[string]string // sign-in code to its PKCE challenge
+	codes    map[string]string
 	tokens   map[string]bool
 	requests []Request
 	status   []Request
 }
 
-// New starts a fake that is closed when the test ends.
 func New(t testing.TB) *Server {
-	// The extension honours the fake's address in account settings only under this variable.
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	s := &Server{codes: map[string]string{}, tokens: map[string]bool{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
@@ -71,13 +53,11 @@ func New(t testing.TB) *Server {
 	return s
 }
 
-// Settings returns account settings that point the extension at the server.
 func (s *Server) Settings() json.RawMessage {
 	b, _ := json.Marshal(map[string]string{"base_url": s.URL, "app_base_url": s.URL, "api_base_url": s.URL})
 	return b
 }
 
-// Token issues a session token the fake accepts.
 func (s *Server) Token() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,22 +71,18 @@ func (s *Server) token() string {
 	return t
 }
 
-// Revoke makes the fake refuse a token.
 func (s *Server) Revoke(token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.tokens, token)
 }
 
-// Requests returns the chat requests the server answered, in order.
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Request(nil), s.requests...)
 }
 
-// StatusRequests returns the GetUserStatus requests the server answered, in order. Message is the
-// request's body, a bare protobuf message.
 func (s *Server) StatusRequests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -135,8 +111,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// signIn plays Devin's sign-in page: it sends the browser back to the redirect URI with a code
-// (or access_denied) and the state, or, without a redirect URI, shows the code as the page.
 func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if q.Get("code_challenge_method") != "S256" || q.Get("code_challenge") == "" || q.Get("state") == "" {
@@ -200,8 +174,6 @@ func (s *Server) valid(tok string) bool {
 	return s.tokens[tok]
 }
 
-// basicOK checks the request's Basic credentials, which are a valid session token twice; it
-// answers an unauthenticated Connect error and returns false when they are not.
 func (s *Server) basicOK(w http.ResponseWriter, r *http.Request) bool {
 	basic, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Basic ")
 	half := len(basic) / 2
@@ -214,7 +186,6 @@ func (s *Server) basicOK(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// userStatus answers GetUserStatus, a unary Connect call with a bare protobuf message.
 func (s *Server) userStatus(w http.ResponseWriter, r *http.Request) {
 	if !s.basicOK(w, r) {
 		return
@@ -237,22 +208,17 @@ func (s *Server) userStatus(w http.ResponseWriter, r *http.Request) {
 	w.Write(reply)
 }
 
-// Plan and quota the default GetUserStatus reply reports.
 const (
 	PlanName          = "Pro"
-	PlanEnd           = 1796083200 // 2026-12-01T00:00:00Z
+	PlanEnd           = 1796083200
 	DailyRemaining    = 70
 	WeeklyRemaining   = 40
-	DailyResetAtUnix  = 1794268800 // 2026-11-10T00:00:00Z
-	WeeklyResetAtUnix = 1794787200 // 2026-11-16T00:00:00Z
+	DailyResetAtUnix  = 1794268800
+	WeeklyResetAtUnix = 1794787200
 )
 
-// UserID is the user ID the fake reports, in its profile and in GetUserStatus.
 const UserID = "user-1"
 
-// DefaultUserStatus returns a GetUserStatus reply: user status (field 1) with the user's name,
-// e-mail address and ID, and a plan status with the plan, its end, and the daily and weekly quota
-// as a percent remaining and the Unix time it resets.
 func DefaultUserStatus() []byte {
 	plan := Bytes(nil, 1, Bytes(nil, 2, []byte(PlanName)))
 	plan = Bytes(plan, 3, Varint(nil, 1, PlanEnd))
@@ -293,7 +259,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// Reply writes a streamed chat reply of frames.
 func Reply(w http.ResponseWriter, frames ...[]byte) {
 	w.Header().Set("Content-Type", "application/connect+proto")
 	for _, f := range frames {
@@ -301,9 +266,6 @@ func Reply(w http.ResponseWriter, frames ...[]byte) {
 	}
 }
 
-// Stream writes a streamed chat reply of frames as a server that sends each as it comes does:
-// each is flushed on its own, so the reply has no Content-Length. After the last it holds the
-// stream open for hold, or until the request ends, before the transfer ends.
 func Stream(w http.ResponseWriter, r *http.Request, hold time.Duration, frames ...[]byte) {
 	w.Header().Set("Content-Type", "application/connect+proto")
 	for _, f := range frames {
@@ -316,10 +278,8 @@ func Stream(w http.ResponseWriter, r *http.Request, hold time.Duration, frames .
 	}
 }
 
-// Frame wraps a chat reply message in a Connect data frame.
 func Frame(msg []byte) []byte { return connectFrame(0, msg) }
 
-// End returns the end frame, carrying an error when code is set.
 func End(code string, message ...string) []byte {
 	if code == "" {
 		return connectFrame(2, []byte("{}"))
@@ -335,13 +295,10 @@ func connectFrame(flags byte, msg []byte) []byte {
 	return append(out, msg...)
 }
 
-// Text returns a frame with a piece of reply text.
 func Text(s string) []byte { return Frame(Bytes(nil, 3, []byte(s))) }
 
-// Thinking returns a frame with a piece of reasoning.
 func Thinking(s string) []byte { return Frame(Bytes(nil, 9, []byte(s))) }
 
-// ToolCall returns a frame with a piece of a tool call; id and name are left out when empty.
 func ToolCall(id, name, args string) []byte {
 	var c []byte
 	if id != "" {
@@ -356,19 +313,16 @@ func ToolCall(id, name, args string) []byte {
 	return Frame(Bytes(nil, 6, c))
 }
 
-// Usage returns a frame with usage and stop reason 4 (stop).
 func Usage(in, out uint64) []byte {
 	u := Varint(Varint(nil, 2, in), 3, out)
 	return Frame(Varint(Bytes(nil, 7, u), 5, 4))
 }
 
-// Varint appends a varint field to a protobuf message.
 func Varint(m []byte, n int, v uint64) []byte {
 	m = binary.AppendUvarint(m, uint64(n)<<3)
 	return binary.AppendUvarint(m, v)
 }
 
-// Bytes appends a length-delimited field to a protobuf message.
 func Bytes(m []byte, n int, b []byte) []byte {
 	m = binary.AppendUvarint(m, uint64(n)<<3|2)
 	m = binary.AppendUvarint(m, uint64(len(b)))

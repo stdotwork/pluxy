@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// toolsBody wraps parametersJsonSchema schemas as the functionDeclarations of one tool.
 func toolsBody(t *testing.T, schemas ...string) []byte {
 	t.Helper()
 	var decls []string
@@ -19,7 +18,6 @@ func toolsBody(t *testing.T, schemas ...string) []byte {
 	return []byte(`{"contents":[],"tools":[{"functionDeclarations":[` + strings.Join(decls, ",") + `]}]}`)
 }
 
-// cleanedSchemas runs the request path over body and returns each declaration's schema as text.
 func cleanedSchemas(t *testing.T, body []byte) []string {
 	t.Helper()
 	out := cleanToolSchemas(body)
@@ -40,8 +38,6 @@ func cleanedSchemas(t *testing.T, body []byte) []string {
 	return schemas
 }
 
-// fanoutSchema is a schema whose def d<i> holds four $refs to d<i+1>: expanding it in full
-// multiplies its size by four at every level. The last def is a string.
 func fanoutSchema(levels int) string {
 	var defs []string
 	for i := 0; i < levels; i++ {
@@ -58,10 +54,6 @@ func fanoutSchema(levels int) string {
 	return `{"type":"object","$defs":{` + strings.Join(defs, ",") + `},"properties":{"x":{"$ref":"#/$defs/d0"}}}`
 }
 
-// TestRefFanoutIsBounded: ten levels of four refs is a schema of about 1.5 KB that, expanded in
-// full, is tens of megabytes (every level adds a factor of four; the seventeenth would need
-// about 150 GB). The request is still sent, with the refs the budget could not pay for replaced by
-// a "See:" hint.
 func TestRefFanoutIsBounded(t *testing.T) {
 	in := fanoutSchema(10)
 	if len(in) > 4000 {
@@ -89,8 +81,6 @@ func TestRefFanoutIsBounded(t *testing.T) {
 	}
 }
 
-// TestRefBudgetIsSharedByAllTools: the budget is per request, not per tool, or many tools would
-// multiply it. Every tool here inlines one def of 500 properties twice.
 func TestRefBudgetIsSharedByAllTools(t *testing.T) {
 	var props []string
 	for i := 0; i < 500; i++ {
@@ -131,8 +121,6 @@ func TestRefBudgetIsSharedByAllTools(t *testing.T) {
 	}
 }
 
-// TestRefReusedDefIsInlined: an ordinary schema that uses one small def many times is expanded
-// in full.
 func TestRefReusedDefIsInlined(t *testing.T) {
 	var props []string
 	for i := 0; i < 30; i++ {
@@ -149,9 +137,6 @@ func TestRefReusedDefIsInlined(t *testing.T) {
 	}
 }
 
-// TestRefLongDescriptionIsBounded: the budget counts bytes, not only values. One def with a long
-// description and a thousand refs to it is a small request whose full expansion is a thousand
-// copies of the description.
 func TestRefLongDescriptionIsBounded(t *testing.T) {
 	var props []string
 	for i := 0; i < 1000; i++ {
@@ -168,9 +153,6 @@ func TestRefLongDescriptionIsBounded(t *testing.T) {
 	}
 }
 
-// TestRefRefusedTargetsLongTypeIsNotCloned: a refused ref keeps its target's type only when it
-// is short. A target with a type list of 60,000 strings and 200 refs to it must not clone the
-// list 200 times.
 func TestRefRefusedTargetsLongTypeIsNotCloned(t *testing.T) {
 	var props []string
 	for i := 0; i < 200; i++ {
@@ -192,8 +174,6 @@ func TestRefRefusedTargetsLongTypeIsNotCloned(t *testing.T) {
 	}
 }
 
-// Once the budget is spent, a refused ref keeps nothing of its target, so many refs to a target
-// with a long type list cost a small fixed stub each.
 func TestRefusedRefKeepsNothingOnceBudgetIsSpent(t *testing.T) {
 	in := `{"type":"object","$defs":{"d":{"type":["string","number","integer","boolean","object","array","null"],"nullable":true,"description":"kept only if paid for"}},"properties":{"p":{"$ref":"#/$defs/d"}}}`
 	out, _ := cleanToolSchema(json.RawMessage(in), false, &refBudget{})
@@ -209,9 +189,6 @@ func TestRefusedRefKeepsNothingOnceBudgetIsSpent(t *testing.T) {
 	}
 }
 
-// TestRefFallbackKeepsTargetFieldsForCyclesAndDepthCap checks that cyclic and depth-capped $ref
-// stubs look up their target and keep its short type, nullable, and description (when the budget
-// can pay for them), while letting sibling fields on the $ref node override the target.
 func TestRefFallbackKeepsTargetFieldsForCyclesAndDepthCap(t *testing.T) {
 	t.Run("cycle", func(t *testing.T) {
 		in := `{
@@ -331,9 +308,6 @@ func TestRefFallbackKeepsTargetFieldsForCyclesAndDepthCap(t *testing.T) {
 	})
 }
 
-// TestRefFallbackKeepsLiteralKeywords checks that when a $ref is refused (missing, cyclic, or
-// over budget), sibling literal keywords (default, examples, enum) are copied literally rather
-// than rewritten by resolveRefs.
 func TestRefFallbackKeepsLiteralKeywords(t *testing.T) {
 	t.Run("missing ref keeps literal default examples and enum", func(t *testing.T) {
 		in := `{

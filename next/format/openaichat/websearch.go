@@ -8,8 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// parseWebSearchOptions reads Chat Completions' top-level web_search_options object into a
-// canonical ToolWebSearch. The client's original object stays on Origin.Raw.
 func parseWebSearchOptions(raw json.RawMessage) *llm.Tool {
 	var o struct {
 		UserLocation *struct {
@@ -46,10 +44,6 @@ func parseWebSearchOptions(raw json.RawMessage) *llm.Tool {
 	}
 }
 
-// isSearchModel reports whether model is one of OpenAI's specialized Chat Completions search
-// models (such as gpt-5-search-api, or the legacy gpt-4o-search-preview / gpt-4o-mini-search-preview).
-// Per https://developers.openai.com/api/docs/guides/tools-web-search, only these models accept
-// web_search_options on the Chat Completions API.
 func isSearchModel(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	return strings.Contains(m, "-search-api") || strings.Contains(m, "-search-preview")

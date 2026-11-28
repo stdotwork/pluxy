@@ -10,8 +10,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// TestListModels checks the list against what today's core lists in GET /v1/models and
-// /v1beta/models for a Devin account.
 func TestListModels(t *testing.T) {
 	want := []string{"devin/claude-5-fable", "devin/claude-fable-5-1", "devin/claude-haiku-5-5", "devin/claude-opus-4-6",
 		"devin/claude-opus-4-6-1m", "devin/claude-opus-4-7", "devin/claude-opus-4-8", "devin/claude-opus-5",
@@ -24,8 +22,6 @@ func TestListModels(t *testing.T) {
 		"devin/grok-4-6", "devin/grok-4-7", "devin/kimi-k2-6", "devin/kimi-k2-7", "devin/kimi-k3",
 		"devin/muse-wonder-1-0", "devin/nemotron-3-ultra", "devin/swe-1-6", "devin/swe-1-6-slow", "devin/swe-1-7",
 		"devin/swe-2", "devin/swe-2-lightning"}
-	// A session token is held as an API key (a login or the config), and an OAuth credential
-	// would be treated the same: core lists the same models for every Devin account.
 	for _, cred := range []*protocol.Credential{
 		{Kind: protocol.CredentialAPIKey, APIKey: "devin-session-token$x"},
 		{Kind: protocol.CredentialOAuth, AccessToken: "t"},

@@ -16,9 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// A Gemini client's own body gets the repair a translated one gets: function responses go out in
-// the order of the calls they answer, matched by ID, then by name, then by position, and one with
-// no name takes its call's name.
 func TestFixTurnsOrdersNativeFunctionResponses(t *testing.T) {
 	const (
 		user  = `{"role":"user","parts":[{"text":"Weather and time?"}]}`
@@ -53,7 +50,6 @@ func TestFixTurnsOrdersNativeFunctionResponses(t *testing.T) {
 			}
 		})
 	}
-	// Responses already in order are left byte for byte.
 	body := []byte(`{"contents":[` + user + "," + calls + `,{"role":"user","parts":[{"functionResponse":{"id":"fc-a","name":"get_weather","response":{"c":4}}},{"functionResponse":{"id":"fc-b","name":"get_time","response":{"t":"12:00"}}}]}]}`)
 	if out := fixTurns(body, false, false, false); string(out) != string(body) {
 		t.Errorf("an ordered body changed: %s", out)
@@ -65,7 +61,6 @@ func jsonEqual(a json.RawMessage, b string) bool {
 	return json.Unmarshal(a, &x) == nil && json.Unmarshal([]byte(b), &y) == nil && fmt.Sprint(x) == fmt.Sprint(y)
 }
 
-// recorder takes a reply's events, as core's stream would.
 type recorder struct{ events []llm.Event }
 
 func (r *recorder) Send(ev llm.Event) error { r.events = append(r.events, ev); return nil }
@@ -90,9 +85,6 @@ func (r *recorder) count(typ string) int {
 	return n
 }
 
-// malformedReply writes a reply that ends with MALFORMED_FUNCTION_CALL. A non-stream reply always
-// carries a thought; a stream sends one first only with thought, and then, with text, some answer
-// text.
 func malformedReply(w http.ResponseWriter, stream, thoughtFirst bool, text string) {
 	thought := `{"text":"I should call get_weather.","thought":true,"thoughtSignature":"CiQbadAttempt"}`
 	finish := `{"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"MALFORMED_FUNCTION_CALL",` +
@@ -114,10 +106,6 @@ func malformedReply(w http.ResponseWriter, stream, thoughtFirst bool, text strin
 	io.WriteString(w, "data: "+finish+"\n\n")
 }
 
-// A reply that ends with MALFORMED_FUNCTION_CALL is asked for again once, through the
-// extension's real request path against the fake Google. The client sees only the retry's reply;
-// if the retry fails the same way, it gets an error that says so. A stream that has already sent
-// content, a thought or answer text, is not retried (the client has it), and ends with the error.
 func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 	native := &llm.Native{Format: llm.FormatGeminiGenerate, Body: json.RawMessage(`{"contents":[{"role":"user","parts":[{"text":"Weather in Oslo?"}]}]}`)}
 	items := []llm.Item{{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "Weather in Oslo?"}}}}
@@ -128,13 +116,13 @@ func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 	for _, c := range []struct {
 		name         string
 		stream       bool
-		from         string // a client format other than Gemini's: "chat" or "messages"
-		malformed    int    // how many replies end malformed before a good one
-		thought      bool   // the malformed stream sends a thought first
-		text         string // answer text the malformed stream sends first
+		from         string
+		malformed    int
+		thought      bool
+		text         string
 		requests     int
 		wantText     string
-		wantThoughts int // reasoning deltas the client should get
+		wantThoughts int
 		wantError    bool
 	}{
 		{name: "non-stream, retry succeeds", malformed: 1, requests: 2, wantText: "Hello"},
@@ -189,8 +177,6 @@ func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 				t.Errorf("the client got %d reasoning deltas, want %d", n, c.wantThoughts)
 			}
 			for _, ev := range rec.events {
-				// The dropped reply's thought signature must not reach the client, which would
-				// replay it to Gemini in the next turn.
 				if c.wantText == "Hello" && (ev.Opaque != nil && ev.Opaque.Data == "CiQbadAttempt" || strings.Contains(string(ev.Raw), "CiQbadAttempt")) {
 					t.Errorf("the client got the dropped reply's thought signature: %+v", ev)
 				}
@@ -212,9 +198,6 @@ func TestMalformedFunctionCallRetriedOnce(t *testing.T) {
 	}
 }
 
-// A Gemini client's body for a Vertex AI account reaches Vertex with its function responses in
-// the order of the calls and every thought signature where the client put it: the reorder moves
-// only function responses, never a signed part.
 func TestVertexNativeOrderKeepsSignatures(t *testing.T) {
 	srv := geminitest.New(t)
 	const body = `{"contents":[{"role":"user","parts":[{"text":"Weather and time?"}]},` +

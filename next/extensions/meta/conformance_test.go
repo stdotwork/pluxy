@@ -12,8 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// TestConformance runs the extension conformance kit against this extension, with a fake Meta
-// acting out each scenario, for each kind of account: a Muse Code login and a Meta API key.
 func TestConformance(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	for _, apiKey := range []bool{false, true} {
@@ -91,7 +89,6 @@ func prepareLogin(t *testing.T, s conformance.LoginScenario, method string) conf
 				return nil
 			}}
 		case "api_key":
-			// An API key is not checked when it is entered; an empty one is refused.
 			key := ""
 			if approve {
 				key = "meta-conformance-key"

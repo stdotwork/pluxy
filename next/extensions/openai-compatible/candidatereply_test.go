@@ -6,8 +6,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Every candidate's tool call, not only the first, comes back under the client's tool name, for
-// each upstream format and whether the reply streamed or not.
 func TestReportingRestoresEveryCandidatesToolName(t *testing.T) {
 	req := llm.Request{Tools: []llm.Tool{{Name: "lookup/item"}}}
 	chatCall := func(i int) string {

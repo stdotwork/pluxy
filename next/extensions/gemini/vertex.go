@@ -26,39 +26,10 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// Vertex AI serves Gemini under a Google Cloud project. An account with "vertex" in its settings
-// sends its requests there, authorised one of two ways (Google's Vertex AI authentication guide):
-//
-//   - a service account: credential {"kind": "service_account", "data": {"client_email": ...,
-//     "private_key": ...}}, the secret part of the JSON key Google Cloud's console downloads.
-//     The whole key is accepted too, but core redacts every string of a credential from
-//     replies, so its project ID and other plain fields would be cut out of them. The extension
-//     signs a JWT with the key and trades it at Google's token endpoint for an access token
-//     (OAuth 2.0 JWT bearer grant, RFC 7523), which it keeps until five minutes before it
-//     expires. A key whose token_uri names any other endpoint is refused. Requests go to
-//     {host}/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:{method};
-//   - an API key (Vertex AI express mode): credential {"kind": "api_key"}, sent in x-goog-api-key
-//     to {host}/v1/publishers/google/models/{model}:{method}.
-//
-// Settings:
-//
-//	{"vertex": {"project": "my-project", "location": "us-central1"}, "base_url": "..."}
-//
-// project defaults to the service account key's project_id when the credential holds the whole
-// key; location defaults to global. base_url,
-// when set, replaces the Vertex host (https://aiplatform.googleapis.com for global and for API
-// keys, https://aiplatform.{us,eu}.rep.googleapis.com for the us and eu multi-regions, otherwise
-// https://{location}-aiplatform.googleapis.com). With an API key a base_url that already holds
-// /publishers/ is used as the models path itself, and one that ends in a version (v1, v1beta1)
-// keeps it.
-
-// CredentialServiceAccount is the credential kind of a Vertex service account key.
 const CredentialServiceAccount = "service_account"
 
-// cloudPlatformScope is the OAuth scope Vertex AI takes.
 const cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
 
-// defaultTokenURI is Google's token endpoint, for a key that names none.
 const defaultTokenURI = "https://oauth2.googleapis.com/token"
 
 // googleTokenURIs are the token endpoints the keys Google Cloud makes for its standard universe
@@ -86,7 +57,6 @@ func (v *vertexSettings) check() error {
 	return nil
 }
 
-// vertexHost returns the Vertex AI host for a location.
 func vertexHost(location string) string {
 	switch location {
 	case "", "global":
@@ -146,7 +116,6 @@ func (v *vertexSettings) resolve(ctx context.Context, base string, cred *protoco
 	return target{}, &llm.Error{Code: llm.CodeAuth, Message: "the Vertex account has neither an API key nor a service account key", Scope: llm.ScopeCredential}
 }
 
-// serviceAccount is the part of a Google service account JSON key the extension uses.
 type serviceAccount struct {
 	Type         string `json:"type"`
 	ProjectID    string `json:"project_id"`
@@ -158,7 +127,6 @@ type serviceAccount struct {
 	key *rsa.PrivateKey
 }
 
-// readServiceAccount reads and checks a service account key.
 func readServiceAccount(raw json.RawMessage) (*serviceAccount, error) {
 	bad := func(msg string) error {
 		return &llm.Error{Code: llm.CodeAuth, Message: "the service account key " + msg, Scope: llm.ScopeCredential}
@@ -177,18 +145,13 @@ func readServiceAccount(raw json.RawMessage) (*serviceAccount, error) {
 		sa.TokenURI = defaultTokenURI
 	}
 	if !googleTokenURIs[sa.TokenURI] {
-		// The extension posts to token_uri and sends the token it gets back to Vertex, so a key
-		// file must not choose where that goes. Keys Google makes name its own endpoint; only a
-		// test (core started with PLUXY_TEST_LOGIN_HOSTS=1) may name a fake one.
 		if sdk.TestLoginHost(sa.TokenURI) == "" {
 			return nil, bad("has a token_uri that is not Google's token endpoint (" + defaultTokenURI + ")")
 		}
 		if u, err := url.Parse(sa.TokenURI); err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && loopback(u.Hostname()))) {
-			// The signed assertion goes to token_uri, so it must not cross a network in the clear.
 			return nil, bad("has a token_uri that is not an https URL (plain http only to this machine)")
 		}
 	}
-	// Keys pasted through forms often have their newlines escaped.
 	block, _ := pem.Decode([]byte(strings.ReplaceAll(sa.PrivateKey, `\n`, "\n")))
 	if block == nil {
 		return nil, bad("has a private_key that is not PEM")
@@ -206,32 +169,25 @@ func readServiceAccount(raw json.RawMessage) (*serviceAccount, error) {
 	return &sa, nil
 }
 
-// cacheKey names a service account key in the token cache: its email, token endpoint and a hash
-// of its private key, so a replaced key never gets the old key's token.
 func (sa *serviceAccount) cacheKey() string {
 	h := sha256.Sum256([]byte(sa.PrivateKey))
 	return sa.ClientEmail + "|" + sa.TokenURI + "|" + base64.RawURLEncoding.EncodeToString(h[:])
 }
 
-// tokenCache keeps each service account's access token until shortly before it expires, and lets
-// one call at a time fetch a new one per key. A call waiting for another's fetch can still be
-// cancelled. Entries without a usable token are dropped, so failed logins and removed keys do not
-// pile up.
 type tokenCache struct {
 	mu      sync.Mutex
 	entries map[string]*tokenEntry
 }
 
 type tokenEntry struct {
-	users   int           // calls that have the entry; guarded by tokenCache.mu
-	turn    chan struct{} // holds one value while a call fetches or reads the token
+	users   int
+	turn    chan struct{}
 	token   string
 	expires time.Time
 }
 
 var tokens = &tokenCache{entries: map[string]*tokenEntry{}}
 
-// tokenLead is how long before its expiry a token is replaced.
 const tokenLead = 5 * time.Minute
 
 func (c *tokenCache) get(ctx context.Context, sa *serviceAccount) (string, error) {
@@ -255,8 +211,6 @@ func (c *tokenCache) get(ctx context.Context, sa *serviceAccount) (string, error
 	return token, nil
 }
 
-// invalidate forgets token if it is still the one cached for sa: the upstream refused it, so the
-// next call fetches a new one. A newer token fetched meanwhile is kept.
 func (c *tokenCache) invalidate(sa *serviceAccount, token string) {
 	e := c.enter(sa)
 	defer c.leave(e)
@@ -267,7 +221,6 @@ func (c *tokenCache) invalidate(sa *serviceAccount, token string) {
 	<-e.turn
 }
 
-// enter returns sa's entry, made if needed, counted as in use until leave.
 func (c *tokenCache) enter(sa *serviceAccount) *tokenEntry {
 	key := sa.cacheKey()
 	c.mu.Lock()
@@ -281,7 +234,6 @@ func (c *tokenCache) enter(sa *serviceAccount) *tokenEntry {
 	return e
 }
 
-// leave ends a call's use of e and drops every entry no call has whose token is gone or expired.
 func (c *tokenCache) leave(e *tokenEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -294,9 +246,6 @@ func (c *tokenCache) leave(e *tokenEntry) {
 	}
 }
 
-// tokenClient fetches tokens and checks keys at login. Its timeout covers only getting a
-// credential, never a model request: a token endpoint that stops answering must not hold every
-// request of the account. It follows no redirect, which would send the assertion elsewhere.
 var tokenClient = &http.Client{
 	Timeout: 30 * time.Second,
 	Transport: sdk.Upstream(&http.Transport{
@@ -307,16 +256,12 @@ var tokenClient = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
-// fetchToken trades a JWT signed with the service account's key for an access token: Google's
-// OAuth 2.0 for server-to-server applications, the JWT bearer grant of RFC 7523.
 func fetchToken(ctx context.Context, sa *serviceAccount) (string, time.Time, error) {
 	assertion, err := signAssertion(sa, time.Now())
 	if err != nil {
 		return "", time.Time{}, &llm.Error{Code: llm.CodeInternal, Message: "signing the service account assertion: " + err.Error(), Scope: llm.ScopeCredential}
 	}
 	form := url.Values{"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"}, "assertion": {assertion}}
-	// The exchange is left out of the call's capture: core does not know the token as a secret,
-	// nor the signed assertion that gets one.
 	req, err := http.NewRequestWithContext(sdk.Uncaptured(ctx), http.MethodPost, sa.TokenURI, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", time.Time{}, &llm.Error{Code: llm.CodeAuth, Message: "bad token_uri: " + err.Error(), Scope: llm.ScopeCredential}
@@ -327,7 +272,6 @@ func fetchToken(ctx context.Context, sa *serviceAccount) (string, time.Time, err
 		if ctx.Err() != nil {
 			return "", time.Time{}, ctx.Err()
 		}
-		// No request reached the model, so another account may serve this one.
 		return "", time.Time{}, &llm.Error{Code: llm.CodeUnavailable, Message: "service account token endpoint unreachable: " + err.Error(), Scope: llm.ScopeCredential, Retryable: true}
 	}
 	defer resp.Body.Close()
@@ -336,7 +280,6 @@ func fetchToken(ctx context.Context, sa *serviceAccount) (string, time.Time, err
 		if ctx.Err() != nil {
 			return "", time.Time{}, ctx.Err()
 		}
-		// A reply that broke off says nothing about the key: it is not a refusal of it.
 		return "", time.Time{}, &llm.Error{Code: llm.CodeUnavailable, Message: "service account token endpoint reply broke off: " + err.Error(), Scope: llm.ScopeCredential, Retryable: true}
 	}
 	var tr struct {
@@ -358,8 +301,6 @@ func fetchToken(ctx context.Context, sa *serviceAccount) (string, time.Time, err
 	case resp.StatusCode == http.StatusOK:
 		return "", time.Time{}, &llm.Error{Code: llm.CodeUpstream, Message: "service account token endpoint sent no access token", Scope: llm.ScopeCredential, Retryable: true}
 	}
-	// The code and the description are the endpoint's text, shown to the client at login, before
-	// any credential exists for core to redact: both are bounded and cleaned.
 	code := sdk.LoginCode(tr.Error)
 	msg := "the token endpoint refused the service account key"
 	if code != "" {
@@ -368,13 +309,9 @@ func fetchToken(ctx context.Context, sa *serviceAccount) (string, time.Time, err
 			msg += " (" + d + ")"
 		}
 	}
-	// The key itself was refused (invalid_grant and the like): no request reached the model.
 	return "", time.Time{}, &llm.Error{Code: llm.CodeAuth, Message: msg, Scope: llm.ScopeCredential, Retryable: true, ProviderCode: code}
 }
 
-// signAssertion returns the JWT a service account presents to its token endpoint (Google's
-// server-to-server OAuth guide): RS256, issued by the account's email for the cloud-platform
-// scope, with the token endpoint as audience, valid for an hour.
 func signAssertion(sa *serviceAccount, now time.Time) (string, error) {
 	header := map[string]string{"alg": "RS256", "typ": "JWT"}
 	if sa.PrivateKeyID != "" {
@@ -398,10 +335,8 @@ func signAssertion(sa *serviceAccount, now time.Time) (string, error) {
 	return signing + "." + base64.RawURLEncoding.EncodeToString(sig), nil
 }
 
-// errNoServiceAccount is returned by a service account login without a key.
 var errNoServiceAccount = errors.New("no service account key given")
 
-// loopback reports whether host names this machine.
 func loopback(host string) bool {
 	if host == "localhost" {
 		return true

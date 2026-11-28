@@ -13,8 +13,6 @@ import (
 )
 
 func TestWebSearchToolChoiceGemini(t *testing.T) {
-	// Responses request with tool_choice: "required" and only web_search must NOT send
-	// toolConfig.functionCallingConfig and MUST report a dropped loss at tool_choice.
 	req, err := openairesponses.ParseRequest([]byte(`{
 		"model":"gemini-2.5-flash",
 		"input":"latest news",
@@ -46,7 +44,6 @@ func TestWebSearchToolChoiceGemini(t *testing.T) {
 		t.Errorf("dropped = %v, want tool_choice in losses %+v", tr.DroppedPaths(), losses)
 	}
 
-	// Named tool choice with only translated web_search: no toolConfig, dropped loss at tool_choice.
 	reqNamed, err := openairesponses.ParseRequest([]byte(`{
 		"model":"gemini-2.5-flash",
 		"input":"latest news",
@@ -71,7 +68,6 @@ func TestWebSearchToolChoiceGemini(t *testing.T) {
 		t.Errorf("named choice: dropped = %v, want tool_choice", (&llm.Translation{Losses: lossesNamed}).DroppedPaths())
 	}
 
-	// tool_choice: "auto" with only translated web_search: no toolConfig, no loss.
 	reqAuto, err := openairesponses.ParseRequest([]byte(`{
 		"model":"gemini-2.5-flash",
 		"input":"latest news",
@@ -96,7 +92,6 @@ func TestWebSearchToolChoiceGemini(t *testing.T) {
 		t.Errorf("auto choice: unexpected losses %+v", lossesAuto)
 	}
 
-	// Gemini client's own native tools keep today's behaviour (toolConfig preserved).
 	ownReq, err := geminigenerate.ParseRequest("gemini-2.5-flash", false, []byte(`{
 		"contents":[{"role":"user","parts":[{"text":"hi"}]}],
 		"tools":[{"googleSearch":{}}],
@@ -125,8 +120,6 @@ func TestWebSearchToolChoiceGemini(t *testing.T) {
 	}
 }
 
-// Google documents structured output beside a built-in tool (including Grounding with Google
-// Search) only on Gemini 3 and 4 (https://ai.google.dev/gemini-api/docs/structured-output#tools).
 func TestWebSearchWithStructuredOutput(t *testing.T) {
 	for model, want := range map[string]bool{
 		"gemini-2.5-flash":                   false,
@@ -266,7 +259,6 @@ func TestWebSearchWithStructuredOutput(t *testing.T) {
 		if got.GenerationConfig.ResponseMimeType != "application/json" {
 			t.Errorf("own Gemini request: responseMimeType = %q, want application/json", got.GenerationConfig.ResponseMimeType)
 		}
-		// Encoding with WebSearch: false produces the exact same bytes for a Gemini client's own body.
 		bodyNoOpt, lossesNoOpt, err := geminigenerate.EncodeRequestWith(req, geminigenerate.EncodeOptions{})
 		if err != nil {
 			t.Fatal(err)

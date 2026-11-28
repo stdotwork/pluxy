@@ -16,8 +16,6 @@ func TestLoginErrorTextIsBounded(t *testing.T) {
 	sdktest.CheckLoginError(t, "token as code", loginFailure(400, withJWT), false)
 }
 
-// The error a browser callback carries reaches the client before any credential exists: it is
-// bounded and cleaned too.
 func TestCallbackErrorTextIsBounded(t *testing.T) {
 	_, _, err := signInResult(url.Values{"state": {"s"}, "error": {sdktest.HostileCode + ": " + sdktest.HostileText()}}, "s")
 	sdktest.CheckLoginError(t, "callback error", err, true)

@@ -76,7 +76,6 @@ func TestCodeExecutionToClaude(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := roundTripRequest(t, tc.parse(t))
-			// Official Anthropic host gets code_execution_20250825 with no dropped losses.
 			body, tr, err := buildBodyWith(req, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, req, defaultBaseURL))
 			if err != nil {
 				t.Fatalf("official host: %v", err)
@@ -94,7 +93,6 @@ func TestCodeExecutionToClaude(t *testing.T) {
 				t.Errorf("official host: unexpected dropped losses: %+v", tr.Losses)
 			}
 
-			// Third-party base_url gets no code execution tool and a dropped loss.
 			body3p, tr3p, err := buildBodyWith(req, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, req, "https://proxy.example.com"))
 			if err != nil {
 				t.Fatalf("custom host: %v", err)
@@ -159,7 +157,6 @@ func TestCodeExecutionToClaudeUnsupportedSettings(t *testing.T) {
 					t.Errorf("dropped = %v, want %q in losses %+v", dropped, want, tr.Losses)
 				}
 			}
-			// Under drop_policy: reject, unsupported settings must be refused.
 			reqReject := req
 			reqReject.DropPolicy = llm.DropReject
 			if _, _, err := buildBodyWith(reqReject, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, reqReject, defaultBaseURL)); err == nil {
@@ -284,7 +281,6 @@ func TestCodeExecutionToClaudeWithFunctionsAndWebSearch(t *testing.T) {
 }
 
 func TestCodeExecutionToClaudeToolChoice(t *testing.T) {
-	// Forced code_interpreter on supported model and official host -> {"type":"tool","name":"code_execution"}.
 	req, err := openairesponses.ParseRequest([]byte(`{
 		"model":"claude-sonnet-4-6",
 		"input":"compute",
@@ -310,8 +306,6 @@ func TestCodeExecutionToClaudeToolChoice(t *testing.T) {
 		t.Errorf("unexpected dropped losses: %+v", tr.Losses)
 	}
 
-	// Forced code_interpreter on a Claude model that refuses forced tool choice (claude-opus-5-5):
-	// FitThinking approximates tool_choice to auto.
 	reqNoForce := req
 	reqNoForce.Model = "claude-opus-5-5"
 	bodyNF, trNF, err := buildBodyWith(reqNoForce, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, reqNoForce, defaultBaseURL))
@@ -329,7 +323,6 @@ func TestCodeExecutionToClaudeToolChoice(t *testing.T) {
 		t.Errorf("claude-opus-5-5: unexpected dropped losses: %+v", trNF.Losses)
 	}
 
-	// Forced code_interpreter when tool is dropped (third-party base_url) -> no tool_choice, dropped loss at tool_choice.
 	bodyDrop, trDrop, err := buildBodyWith(req, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, req, "https://proxy.example.com"))
 	if err != nil {
 		t.Fatal(err)
@@ -349,7 +342,6 @@ func TestCodeExecutionToClaudeToolChoice(t *testing.T) {
 		t.Errorf("dropped host: dropped = %v, want tool_choice in %+v", trDrop.DroppedPaths(), trDrop.Losses)
 	}
 
-	// Forced code_interpreter beside a function tool when code tool is dropped -> function kept, tool_choice omitted + loss.
 	reqWithFn, err := openairesponses.ParseRequest([]byte(`{
 		"model":"claude-sonnet-4-6",
 		"input":"compute",
@@ -382,7 +374,6 @@ func TestCodeExecutionToClaudeToolChoice(t *testing.T) {
 		t.Errorf("dropped beside fn: dropped = %v, want tool_choice", trFn.DroppedPaths())
 	}
 
-	// tool_choice: "required" when code_interpreter is the only tool and is dropped -> no tool_choice + loss.
 	reqReq, err := openairesponses.ParseRequest([]byte(`{
 		"model":"claude-sonnet-4-6",
 		"input":"compute",

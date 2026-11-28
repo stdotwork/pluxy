@@ -19,13 +19,10 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// echoFields are the request fields a Response object repeats, in the order today's core writes
-// them.
 var echoFields = []string{"instructions", "max_output_tokens", "max_tool_calls", "parallel_tool_calls", "previous_response_id",
 	"prompt_cache_key", "reasoning", "safety_identifier", "service_tier", "store", "temperature", "text", "tool_choice", "tools",
 	"top_logprobs", "top_p", "truncation", "user", "metadata"}
 
-// echo returns the fields of the client's Responses request that a Response object repeats.
 func echo(req llm.Request) map[string]json.RawMessage {
 	out := map[string]json.RawMessage{}
 	if req.Native == nil || req.Native.Format != format {
@@ -40,7 +37,6 @@ func echo(req llm.Request) map[string]json.RawMessage {
 	return out
 }
 
-// upstreamEvent returns the Responses event type of raw when raw is a Responses stream event.
 func upstreamEvent(raw json.RawMessage) string {
 	if len(raw) == 0 || raw[0] != '{' {
 		return ""
@@ -71,48 +67,35 @@ func writeEvent(w io.Writer, typ string, data []byte) error {
 	return err
 }
 
-// item is one output item being rebuilt from model events.
 type item struct {
-	kind   string
-	id     string
-	callID string
-	name   string
-	text   strings.Builder
-	done   bool
-	// opaque is a reasoning item's opaque record from another provider (an Anthropic thinking
-	// signature), written as its encrypted_content so the client can replay it.
-	opaque string
-	// citations are the web search citations attached to a message item's text.
-	citations []llm.Citation
-	// out is the item's output_index: model items and web searches share one count.
-	out int
-	// A web search (websearch.go): its query, the input it is read from, its status once done
-	// and its results.
+	kind       string
+	id         string
+	callID     string
+	name       string
+	text       strings.Builder
+	done       bool
+	opaque     string
+	citations  []llm.Citation
+	out        int
 	query      string
 	input      strings.Builder
 	streamed   bool
 	status     string
 	results    json.RawMessage
 	hasResults bool
-	// ref is the client's tool when the call is to a function that stands for a custom, namespaced
-	// or tool_search tool (clienttools), and decoder reads a custom tool's text as it arrives.
-	ref     *clienttools.Ref
-	decoder clienttools.InputDecoder
-	// finalInput is a finished custom tool call's text, read once from its arguments, and
-	// inputWhole whether they were one whole input string.
+	ref        *clienttools.Ref
+	decoder    clienttools.InputDecoder
 	finalInput string
 	inputWhole bool
 	inputRead  bool
 }
 
-// builder rebuilds Responses output from model events whose upstream format is not Responses.
-// It keeps what the stream and the final Response object both need.
 type builder struct {
 	req      llm.Request
 	id       string
 	created  int64
 	items    map[int]*item
-	order    []*item // every output item, in output order
+	order    []*item
 	nextOut  int
 	search   searches
 	messages int
@@ -123,7 +106,6 @@ type builder struct {
 	lost     map[string]bool
 	lossSize int
 	upFormat string
-	// refs are the request's tools that went upstream as functions standing for something else.
 	refs     map[string]clienttools.Ref
 	refsRead bool
 }
@@ -156,12 +138,8 @@ func (b *builder) start(r *llm.ResponseInfo) {
 	}
 }
 
-// lose records a loss once per path. Past llm.MaxLosses the list is closed: llm.AddLoss has written
-// its last entry, and nothing more is recorded. lossSize counts what the losses hold, which comes
-// from upstream data, so an aggregator can bound it with the reply.
 func (b *builder) lose(path, detail string) { b.note(llm.LossDropped, path, detail) }
 
-// note records a loss of the given kind, once per path, as lose says.
 func (b *builder) note(kind, path, detail string) {
 	if b.lost[path] || len(b.losses) > llm.MaxLosses {
 		return
@@ -200,9 +178,6 @@ func (b *builder) open(idx int, s *llm.ItemStart) *item {
 	return it
 }
 
-// loseMedia reports generated media a Response cannot hold: its image_generation_call item needs
-// an ID only OpenAI issues, which the client would send back on its next turn, and it has no output
-// audio item.
 func (b *builder) loseMedia(m *llm.OutputMedia) {
 	if m != nil {
 		b.lose("media."+m.Kind, "a Response has no safe place for this generated media")
@@ -229,9 +204,6 @@ func textPart(text string, annotations []any) obj {
 	return obj{"type": "output_text", "annotations": annotations, "logprobs": []any{}, "text": text}
 }
 
-// urlAnnotations builds Responses url_citation annotation objects from canonical citations.
-// Valid rune ranges are preserved. Responses requires both indices, so a citation with nil or
-// out-of-range offsets covers the whole text, which is what a citation with no narrower range means.
 func urlAnnotations(citations []llm.Citation, text string) []any {
 	if len(citations) == 0 {
 		return []any{}
@@ -252,8 +224,6 @@ func urlAnnotations(citations []llm.Citation, text string) []any {
 	return out
 }
 
-// reportUncitedSources records a loss when the upstream returned web search sources that were
-// neither cited in reply text nor carried in a Claude web_search_call item.
 func (b *builder) reportUncitedSources(sources []llm.Source) {
 	if len(sources) == 0 || b.upFormat == format || b.upFormat == llm.FormatAnthropicMessages {
 		return
@@ -272,8 +242,6 @@ func (b *builder) reportUncitedSources(sources []llm.Source) {
 	}
 }
 
-// doneItem is an item as response.output_item.done and the final output list show it. final
-// leaves out fields today's core writes only in the done event.
 func (b *builder) doneItem(it *item, final bool) obj {
 	switch it.kind {
 	case itemWebSearch:
@@ -294,8 +262,6 @@ func (b *builder) doneItem(it *item, final bool) obj {
 	return b.callItem(it, b.itemStatus(), true)
 }
 
-// clientTool returns the tool a call's function stands for, or nil for a plain function. A
-// Responses upstream was sent the client's own tools, so its calls are left as they are.
 func (b *builder) clientTool(name string) *clienttools.Ref {
 	if b.upFormat == format {
 		return nil
@@ -309,8 +275,6 @@ func (b *builder) clientTool(name string) *clienttools.Ref {
 	return nil
 }
 
-// callItem is a tool call as an output item, in the shape the client declared the tool in. done
-// is false for the added event, which has none of the call's input yet.
 func (b *builder) callItem(it *item, status string, done bool) obj {
 	if it.ref != nil {
 		switch it.ref.Kind {
@@ -347,8 +311,6 @@ func (b *builder) callItem(it *item, status string, done bool) obj {
 	return o
 }
 
-// customInput is a custom tool call's text, from the arguments of the function it was sent as, and
-// whether they were one whole input string.
 func (b *builder) customInput(it *item) (string, bool) {
 	if !it.inputRead {
 		it.finalInput, it.inputWhole = clienttools.CustomInput(it.text.String())
@@ -368,11 +330,6 @@ func (b *builder) deliverable(it *item) bool {
 	return whole
 }
 
-// undelivered settles the custom tool calls that were held back, once the reply has finished. A
-// reply cut off by the token limit or a filter explains them: it stays incomplete, and each is
-// reported as dropped. On any other finish the upstream sent a call it should not have, which is
-// an error. The extensions report that error first (CustomCallCheck), so that core counts the
-// reply as failed; this keeps an extension built without the check from showing a success.
 func (b *builder) undelivered() *llm.Error {
 	for _, it := range b.order {
 		if it.kind != llm.ItemToolCall || it.done || it.ref == nil || it.ref.Kind != clienttools.KindCustom {
@@ -386,7 +343,6 @@ func (b *builder) undelivered() *llm.Error {
 	return nil
 }
 
-// response returns the Response object at the end of the reply.
 func (b *builder) response(stream bool) obj {
 	r := obj{"id": b.id, "object": "response", "created_at": b.created, "status": "completed", "background": false, "error": nil}
 	for k, v := range echo(b.req) {
@@ -405,8 +361,6 @@ func (b *builder) response(stream bool) obj {
 		r["incomplete_details"] = obj{"reason": reason}
 	}
 	if b.finish != nil && b.finish.RawReason == "pause_turn" {
-		// Claude paused a turn of server tool use (web search): the response is complete but
-		// the turn is not, and the client continues it, as today's core marks it.
 		r["end_turn"] = false
 	}
 	output := []any{}
@@ -446,14 +400,11 @@ func (b *builder) response(stream bool) obj {
 	return r
 }
 
-// usageKnown reports whether the upstream reported any count at all: a usage with none is left
-// out of a Response rather than written as an object of zeros.
 func usageKnown(u *llm.Usage) bool {
 	return u.InputTokens != nil || u.OutputTokens != nil || u.CachedInputTokens != nil ||
 		u.CacheWriteInputTokens != nil || u.ReasoningTokens != nil
 }
 
-// unmodelledUsage lists Chat usage fields a Response's usage has no place for.
 func unmodelledUsage(raw json.RawMessage) []string {
 	m := rawjson.Object(raw)
 	var out []string
@@ -468,9 +419,6 @@ func unmodelledUsage(raw json.RawMessage) []string {
 	return out
 }
 
-// errorFields are the fields of the error event a Responses client gets when the reply fails
-// after it started: code, message and param, as OpenAI's error event has them, and the same
-// error nested under error, as today's core writes it.
 func errorFields(e *llm.Error) obj {
 	_, body := openaichat.ErrorResponse(e)
 	var b struct {
@@ -480,41 +428,27 @@ func errorFields(e *llm.Error) obj {
 	return obj{"code": b.Error["code"], "message": b.Error["message"], "param": b.Error["param"], "error": b.Error}
 }
 
-// StreamWriter writes events to a client as a Responses stream. When the reply came from a
-// Responses upstream it writes the upstream's events as they came; otherwise it rebuilds the
-// Responses event sequence from the model events.
 type StreamWriter struct {
-	w io.Writer
-	// send, when set, takes each event instead of w: its type and its JSON (a WebSocket
-	// client gets each event as one message).
-	send    func(typ string, data []byte) error
-	b       *builder
-	native  bool
-	ended   bool  // an upstream terminal event was passed through
-	seq     int   // last sequence number written
-	pending []int // items whose end waits for the next event, which may say they are incomplete
-	// done holds the items an upstream's response.output_item.done events finished, by
-	// output_index, and those without one in order (see repairOutput).
-	done      map[int]json.RawMessage
-	unindexed []json.RawMessage
-	// KeepOutput, set by the caller before the first Write, passes a terminal event's output on
-	// as the upstream sent it: an empty output stays empty. Today's core does so for a
-	// Responses-lite WebSocket turn on a Codex account.
+	w          io.Writer
+	send       func(typ string, data []byte) error
+	b          *builder
+	native     bool
+	ended      bool
+	seq        int
+	pending    []int
+	done       map[int]json.RawMessage
+	unindexed  []json.RawMessage
 	KeepOutput bool
 }
 
-// NewStreamWriter returns a writer for one client stream of req.
 func NewStreamWriter(w io.Writer, req llm.Request) *StreamWriter {
 	return &StreamWriter{w: w, b: newBuilder(req)}
 }
 
-// NewMessageWriter returns a writer for one turn of a WebSocket client of req: send gets each
-// event's type and JSON, one event per call.
 func NewMessageWriter(send func(typ string, data []byte) error, req llm.Request) *StreamWriter {
 	return &StreamWriter{send: send, b: newBuilder(req)}
 }
 
-// Losses returns what the reply had that the client format could not carry.
 func (s *StreamWriter) Losses() []llm.Loss { return s.b.losses }
 
 func (s *StreamWriter) out(typ string, data []byte) error {
@@ -539,12 +473,6 @@ func (s *StreamWriter) emit(typ string, fields obj) error {
 	return s.out(typ, data)
 }
 
-// repairOutput keeps the items the upstream's response.output_item.done events finish, and gives
-// a response.completed, response.incomplete or response.failed whose response has no output
-// (absent, null or empty) those items as its output, as today's core does: some upstreams send
-// the final response with an empty output. Items are ordered by output_index, then those without
-// one in the order they came. Every other event, and a response with output, is returned
-// unchanged.
 func (s *StreamWriter) repairOutput(typ string, raw json.RawMessage) json.RawMessage {
 	switch typ {
 	case "response.output_item.done":
@@ -604,7 +532,6 @@ func (s *StreamWriter) repairOutput(typ string, raw json.RawMessage) json.RawMes
 	return b
 }
 
-// passthrough writes an upstream event unchanged.
 func (s *StreamWriter) passthrough(typ string, raw json.RawMessage) error {
 	var n struct {
 		Seq *int `json:"sequence_number"`
@@ -615,7 +542,6 @@ func (s *StreamWriter) passthrough(typ string, raw json.RawMessage) error {
 	return s.out(typ, raw)
 }
 
-// Write writes the stream events for one model event.
 func (s *StreamWriter) Write(ev llm.Event) error {
 	if ev.Type == llm.EventResponseStart {
 		s.native = ev.Response.Format == format && upstreamEvent(ev.Raw) != ""
@@ -623,7 +549,6 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	if s.native {
 		raw := ev.Raw
 		if ev.Type == llm.EventError {
-			// An upstream error or response.failed event travels as the error's raw.
 			raw = ev.Error.Raw
 		}
 		if typ := upstreamEvent(raw); typ != "" {
@@ -692,7 +617,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 				}
 				return s.emit("response.custom_tool_call_input.delta", obj{"output_index": it.out, "item_id": it.id, "call_id": it.callID, "delta": text})
 			case clienttools.KindSearch:
-				return nil // the client reads a search's arguments from its done item
+				return nil
 			}
 		}
 		return s.emit("response.function_call_arguments.delta", obj{"output_index": it.out, "item_id": it.id, "delta": ev.Delta})
@@ -715,7 +640,6 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		return nil
 	case llm.EventNative:
 		if b.upFormat == llm.FormatAnthropicMessages && isBlockStart(ev.Raw) {
-			// A search with its results ends when the next block starts.
 			if err := s.searchesDone(b.readySearches()); err != nil {
 				return err
 			}
@@ -757,8 +681,6 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	return nil
 }
 
-// flushEnds writes the done events of items that ended before ev. A finish event decides
-// whether they completed.
 func (s *StreamWriter) flushEnds(ev llm.Event) error {
 	if len(s.pending) == 0 {
 		return nil
@@ -815,7 +737,6 @@ func (s *StreamWriter) flushEnds(ev llm.Event) error {
 	return nil
 }
 
-// callInputDone writes the event that ends a tool call's input, for the kind of tool it is.
 func (s *StreamWriter) callInputDone(it *item, text string) error {
 	if it.ref != nil {
 		switch it.ref.Kind {
@@ -829,7 +750,6 @@ func (s *StreamWriter) callInputDone(it *item, text string) error {
 	return s.emit("response.function_call_arguments.done", obj{"output_index": it.out, "item_id": it.id, "arguments": text})
 }
 
-// searchesDone writes the done events of web searches that ended.
 func (s *StreamWriter) searchesDone(ended []*item) error {
 	for _, it := range ended {
 		if err := s.emit("response.output_item.done", obj{"output_index": it.out, "item": searchItem(it, false)}); err != nil {
@@ -839,14 +759,6 @@ func (s *StreamWriter) searchesDone(ended []*item) error {
 	return nil
 }
 
-// CustomCallCheck is what a provider extension runs on a translated reply: it ends the reply with
-// an upstream error when a call to one of the client's custom tools is not one whole input string
-// and the finish does not explain it (a token limit or a filter), so core handles the reply as it
-// does any failed one. Use one per reply. A nil check passes everything.
-//
-// It reads candidate 0 only. A Responses client is shown no other candidate (the writers drop
-// them and report the loss), so a call in one never reaches it, and failing the reply for such a
-// call would fail a reply whose client got a whole one.
 type CustomCallCheck struct {
 	refs map[string]clienttools.Ref
 	open map[int]*customCall
@@ -858,8 +770,6 @@ type customCall struct {
 	decoder clienttools.InputDecoder
 }
 
-// NewCustomCallCheck returns the check for a reply to req translated as tr, or nil when no call in
-// it can be to a custom tool: a body passed through, a Responses upstream, no custom tool declared.
 func NewCustomCallCheck(req llm.Request, tr *llm.Translation) *CustomCallCheck {
 	if tr == nil || tr.Passthrough || tr.To == format {
 		return nil
@@ -876,8 +786,6 @@ func NewCustomCallCheck(req llm.Request, tr *llm.Translation) *CustomCallCheck {
 	return &CustomCallCheck{refs: refs, open: map[int]*customCall{}}
 }
 
-// Check reads one event of the reply, with its tool names already the client's, and returns the
-// error to end the reply with in place of a finish event.
 func (c *CustomCallCheck) Check(ev llm.Event) error {
 	if c == nil {
 		return nil
@@ -902,7 +810,7 @@ func (c *CustomCallCheck) Check(ev llm.Event) error {
 		}
 	case llm.EventFinish:
 		if ev.Finish != nil && (ev.Finish.Reason == llm.FinishLength || ev.Finish.Reason == llm.FinishContentFilter) {
-			return nil // the writer leaves the calls out of the incomplete reply
+			return nil
 		}
 		for _, call := range c.list {
 			if !call.decoder.Whole() {
@@ -913,23 +821,18 @@ func (c *CustomCallCheck) Check(ev llm.Event) error {
 	return nil
 }
 
-// Aggregator collects events into a non-streamed Response object. A reply from a Responses
-// upstream is returned as the upstream's final Response object.
 type Aggregator struct {
 	b     *builder
 	final json.RawMessage
 	size  int
 }
 
-// NewAggregator returns an aggregator for a reply to req.
 func NewAggregator(req llm.Request) *Aggregator {
 	return &Aggregator{b: newBuilder(req)}
 }
 
-// Losses returns what the reply had that the client format could not carry.
 func (a *Aggregator) Losses() []llm.Loss { return a.b.losses }
 
-// Add records one event.
 func (a *Aggregator) Add(ev llm.Event) {
 	b := a.b
 	a.size += len(ev.Delta)
@@ -938,10 +841,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 		b.start(ev.Response)
 		a.size += len(b.id)
 		if b.upFormat == format {
-			a.final = finalResponse(ev.Raw) // a stream that opened with its terminal event
+			a.final = finalResponse(ev.Raw)
 		}
 	case llm.EventItemStart:
-		// An item's id holds the response id or the call id.
 		it := b.open(ev.Index, ev.Item)
 		a.size += len(it.id) + len(ev.Item.CallID) + len(ev.Item.Name) + itemOverhead
 	case llm.EventTextDelta, llm.EventReasoningDelta, llm.EventToolInputDelta:
@@ -971,7 +873,6 @@ func (a *Aggregator) Add(ev llm.Event) {
 			if added {
 				a.size += len(it.id) + itemOverhead
 			}
-			// The search's query input and results come in these events.
 			a.size += len(ev.Raw)
 		} else if b.upFormat != format {
 			b.lose("choices", "reply data in "+b.upFormat+" with no place in a Response")
@@ -1001,18 +902,10 @@ func (a *Aggregator) Add(ev llm.Event) {
 	}
 }
 
-// itemOverhead is about the JSON an output item adds around its ID, call ID, name and text.
 const itemOverhead = len(`{"id":"","type":"function_call","status":"completed","call_id":"","name":"","arguments":""},`)
 
-// Size is about how many bytes of content the response holds so far: its id, the text,
-// reasoning and tool calls of its items with their ids, its web searches as the upstream sent
-// them, the upstream's final Response object, its
-// finish reason and usage as the upstream sent them, and what it reports as lost, before JSON
-// escaping. Callers use it to bound what they collect.
 func (a *Aggregator) Size() int { return a.size + len(a.final) + a.b.lossSize }
 
-// finalResponse returns the Response object in a terminal event's raw: the response of a
-// response.completed or response.incomplete event, or a whole Response object.
 func finalResponse(raw json.RawMessage) json.RawMessage {
 	m := rawjson.Object(raw)
 	if m == nil {
@@ -1030,7 +923,6 @@ func finalResponse(raw json.RawMessage) json.RawMessage {
 	return nil
 }
 
-// Response returns the response body.
 func (a *Aggregator) Response() ([]byte, error) {
 	if len(a.final) > 0 {
 		return a.final, nil

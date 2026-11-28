@@ -17,12 +17,8 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// codexSummarizationPrompt is the handoff summary instruction the Codex CLI sends when
-// compacting locally (codex-rs/prompts/templates/compact/prompt.md).
 const codexSummarizationPrompt = "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.\n\nInclude:\n- Current progress and key decisions made\n- Important context, constraints, or user preferences\n- What remains to be done (clear next steps)\n- Any critical data, examples, or references needed to continue\n\nBe concise, structured, and focused on helping the next LLM seamlessly continue the work."
 
-// codexSummaryPrefix starts the user message that holds a compaction summary in the Codex CLI's
-// conversation (codex-rs/prompts/templates/compact/summary_prefix.md).
 const codexSummaryPrefix = "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:"
 
 type bodySender interface {
@@ -35,16 +31,6 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return compactTo(ctx, call, out)
 }
 
-// compactTo serves Responses compaction (POST /v1/responses/compact and
-// /backend-api/codex/responses/compact) on an OpenAI-compatible account by its wire_api:
-//   - "responses": passes the client's body through to POST {base_url}/responses/compact
-//     unchanged and returns the upstream's reply as it came;
-//   - "chat": translates the Responses conversation to one non-streamed Chat Completions request
-//     with tool_choice "none", structured output and stop sequences cleared, and the Codex CLI's
-//     compaction prompt appended as a last user message, and returns OpenAI's response.compaction
-//     JSON object;
-//   - "messages" and "gemini": answers unsupported with scope credential so core tries another
-//     account.
 func compactTo(ctx context.Context, call sdk.Call, out bodySender) error {
 	format := ""
 	if call.Request.Native != nil {
@@ -104,12 +90,6 @@ func compactResponses(ctx context.Context, call sdk.Call, s settings, wire wireI
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, responseUsage(r.Usage))
 }
 
-// noEndpoint scopes to the request a 404 from a side endpoint, {base_url} plus path, that does not
-// say the model is unknown, as the Codex and xAI extensions do for their endpoints. Many vendors
-// have no such path, and that says nothing about the model's generation on the account, which a
-// model-scoped error would block for hours. The message names the endpoint (name) and the path the
-// request went to. A 404 that says the model does not exist is left as it is, and so is any other
-// error.
 func noEndpoint(err error, name, path string) error {
 	var e *llm.Error
 	if !errors.As(err, &e) || e.Code != llm.CodeNotFound || e.Retryable {
@@ -120,11 +100,6 @@ func noEndpoint(err error, name, path string) error {
 	return e
 }
 
-// noCountEndpoint answers a 404 from a token count path that does not say the model is unknown as
-// an account that cannot count (unsupported, on the credential), so core answers with its estimate,
-// or with this error when token_count_estimate is off. It stays non-retryable, so that error keeps
-// its 404 and names the endpoint (name) and the path. A 404 that says the model does not exist is left as it is, and so is
-// any other error.
 func noCountEndpoint(err error, name, path string) error {
 	var e *llm.Error
 	if !errors.As(err, &e) || e.Code != llm.CodeNotFound || e.Retryable {
@@ -140,7 +115,6 @@ func compactChat(ctx context.Context, call sdk.Call, s settings, wire wireInfo, 
 	if err != nil {
 		return err
 	}
-	// The compaction request is shaped for the vendor like any Chat request (shaping.go).
 	body, _, err := upstreamBody(req, wire.format, s)
 	if err != nil {
 		return err
@@ -171,10 +145,6 @@ func compactChat(ctx context.Context, call sdk.Call, s settings, wire wireInfo, 
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, usage)
 }
 
-// compactionRequest reads the client's Responses body as a non-streamed Chat Completions request
-// for the call's model, clears options incompatible with a prose summary (stop sequences and
-// structured output), sets tool_choice to none so the model answers in text while keeping tool
-// declarations for any tool history, and appends the Codex compaction prompt.
 func compactionRequest(call llm.Request) (llm.Request, error) {
 	req, err := openairesponses.ParseRequest(call.Native.Body)
 	if err != nil {
@@ -199,10 +169,6 @@ func compactionRequest(call llm.Request) (llm.Request, error) {
 	return req, nil
 }
 
-// compactionReply turns a non-streamed Chat Completions response into OpenAI's response.compaction
-// JSON object for model, created at the given Unix time, and its usage. Reasoning content is
-// excluded from the summary; an incomplete or empty summary is reported as an error on this
-// request.
 func compactionReply(raw []byte, model string, created int64) ([]byte, *llm.Usage, error) {
 	events, err := openaichat.DecodeResponse(raw)
 	if err != nil {
@@ -293,7 +259,6 @@ func compactionReply(raw []byte, model string, created int64) ([]byte, *llm.Usag
 	return body, usage, nil
 }
 
-// responseUsage reads a Responses usage object; nil when there is none.
 func responseUsage(raw json.RawMessage) *llm.Usage {
 	var u struct {
 		InputTokens        *int64 `json:"input_tokens"`

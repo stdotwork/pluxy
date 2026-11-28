@@ -22,7 +22,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk/sdktest"
 )
 
-// inputOf returns the input items of a shaped request body, each as a map.
 func inputOf(t *testing.T, m map[string]json.RawMessage) []map[string]any {
 	t.Helper()
 	var items []map[string]any
@@ -44,7 +43,6 @@ func typesOf(items []map[string]any) []string {
 	return out
 }
 
-// lossAt returns the loss reported at path, if any.
 func lossAt(tr *llm.Translation, path string) (llm.Loss, bool) {
 	for _, l := range tr.Losses {
 		if l.Path == path {
@@ -54,12 +52,8 @@ func lossAt(tr *llm.Translation, path string) (llm.Loss, bool) {
 	return llm.Loss{}, false
 }
 
-// wantInterrupted is the output sent for a tool call that has none, as the Claude repairs word it.
 const wantInterrupted = "Tool call was interrupted before any output was recorded."
 
-// A tool call the conversation has no output for gets an interrupted output right after it, which
-// Codex needs ("No tool output found for function call"), and each is reported. Calls that have
-// their output, wherever it is, are left alone.
 func TestMissingToolOutputs(t *testing.T) {
 	body := `{"model":"gpt-6.1-sol","input":[
 		{"role":"user","content":"go"},
@@ -97,16 +91,12 @@ func TestMissingToolOutputs(t *testing.T) {
 		t.Errorf("an answered call was reported: %+v", ur.tr.Losses)
 	}
 
-	// Nothing to repair: the body goes as it came, with no loss.
 	ur, m = shapeWith(t, responsesReq("gpt-6.1-sol", `{"model":"gpt-6.1-sol","input":[{"type":"function_call","call_id":"c","name":"f","arguments":"{}"},{"type":"function_call_output","call_id":"c","output":"ok"}]}`, nil), settings{}, account{subscription: true})
 	if n := len(inputOf(t, m)); n != 2 || len(ur.tr.Losses) != 0 {
 		t.Errorf("a paired conversation changed: %d items, losses %+v", n, ur.tr.Losses)
 	}
 }
 
-// The Responses API answers a local_shell_call with a function_call_output or a
-// local_shell_call_output. Either is an answer: no interrupted output is made beside it. A local
-// shell call with neither still gets one.
 func TestLocalShellCallAnswers(t *testing.T) {
 	call := func(id string) string {
 		return `{"type":"local_shell_call","call_id":"` + id + `","status":"completed","action":{"type":"exec","command":["ls"]}}`
@@ -136,8 +126,6 @@ func TestLocalShellCallAnswers(t *testing.T) {
 	}
 }
 
-// Claude Code on a Codex model: a tool_use its session stopped before answering (the next turn
-// has no tool_result for it) reaches Codex with an interrupted output, not as a call Codex refuses.
 func TestMessagesToolUseWithoutResultOnCodex(t *testing.T) {
 	body := `{"model":"gpt-6.1-sol","max_tokens":1024,"messages":[
 		{"role":"user","content":"list files"},
@@ -166,9 +154,6 @@ func TestMessagesToolUseWithoutResultOnCodex(t *testing.T) {
 	}
 }
 
-// Codex never stores a response (store is always false), so an item_reference in input can name
-// nothing it has: over HTTP it is dropped and reported. Over the WebSocket, where a turn continues
-// the socket's previous response, it is left for the upstream.
 func TestItemReferences(t *testing.T) {
 	body := `{"model":"gpt-6.1-sol","input":[{"type":"item_reference","id":"rs_1"},{"role":"user","content":"hi"}]}`
 	ur, m := shapeWith(t, responsesReq("gpt-6.1-sol", body, nil), settings{}, account{subscription: true})
@@ -189,7 +174,6 @@ func TestItemReferences(t *testing.T) {
 		t.Errorf("WebSocket input types %v, want the reference kept", got)
 	}
 
-	// A client that asked for refusal over loss gets it.
 	req := responsesReq("gpt-6.1-sol", body, nil)
 	req.DropPolicy = llm.DropReject
 	if _, err := buildRequest(req, "acct", settings{}, account{subscription: true}, false); err == nil {
@@ -197,10 +181,6 @@ func TestItemReferences(t *testing.T) {
 	}
 }
 
-// agent_message items, which the Codex client sends for its subagents, go to a subscription as they
-// came. A SIWC account refuses them (subscription_sharing_unsupported_capability), and every Codex
-// upstream refuses one without its author or recipient: those are sent as user messages, with
-// encrypted parts, which no one but the upstream that made them can read, dropped and reported.
 func TestAgentMessages(t *testing.T) {
 	body := `{"model":"gpt-6.1-sol","input":[
 		{"type":"agent_message","author":"/root","recipient":"/root/probe","content":[{"type":"input_text","text":"Reply OK."},{"type":"encrypted_content","encrypted_content":"gAAAAAsecret"}]},
@@ -236,9 +216,6 @@ func TestAgentMessages(t *testing.T) {
 	}
 }
 
-// An assistant message's phase (commentary or final_answer), which Codex takes on every account and
-// asks clients to send back, reaches the upstream even when history repairs rewrite the input, and
-// a Codex reply carrying those phases is reported as opaque output for non-Responses clients.
 func TestPhaseReachesCodex(t *testing.T) {
 	body := `{"model":"gpt-6.1-sol","input":[{"role":"user","content":"go"},
 		{"type":"item_reference","id":"rs_stored"},
@@ -271,8 +248,6 @@ func TestPhaseReachesCodex(t *testing.T) {
 	}
 }
 
-// A reasoning item whose ID is over Codex's limit cannot be sent, and its encrypted content cannot
-// be read under another ID: it is left out, and that is reported.
 func TestLongReasoningIDIsReported(t *testing.T) {
 	body := `{"model":"gpt-6.1-sol","input":[{"type":"reasoning","id":"rs_` + strings.Repeat("a", 80) + `","summary":[],"encrypted_content":"gAAAAAx"},{"role":"user","content":"hi"}]}`
 	ur, m := shapeWith(t, responsesReq("gpt-6.1-sol", body, nil), settings{}, account{subscription: true})
@@ -286,8 +261,6 @@ func TestLongReasoningIDIsReported(t *testing.T) {
 
 const foreignReasoningRefusal = `{"error":{"message":"The encrypted content gAAA...Vw== could not be verified. Reason: Encrypted content could not be decrypted or parsed.","type":"invalid_request_error","param":null,"code":"invalid_encrypted_content"}}`
 
-// reasoningUpstream answers its first n requests with refusal (status 400) and the rest with a
-// short text stream, and keeps every request body.
 type reasoningUpstream struct {
 	*httptest.Server
 	mu     sync.Mutex
@@ -329,7 +302,6 @@ func (u *reasoningUpstream) requests() []map[string]any {
 	return append([]map[string]any(nil), u.bodies...)
 }
 
-// replayBody is a Responses client's next turn, replaying reasoning another account produced.
 const replayBody = `{"model":"gpt-6.1-sol","input":[{"role":"user","content":"hi"},
 	{"type":"reasoning","id":"rs_other","summary":[],"encrypted_content":"gAAAAAforeign"},
 	{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]},
@@ -345,9 +317,6 @@ func hasReasoning(body map[string]any) bool {
 	return false
 }
 
-// Through the real extension program: Codex refuses the replayed reasoning of another account
-// (invalid_encrypted_content); the extension sends the request once more without the reasoning
-// items, the client gets the reply, and the reply's translation report names what was left out.
 func TestForeignReasoningRetryThroughTheExtension(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	ext, err := host.Start(manifest, host.Options{Log: io.Discard})
@@ -399,8 +368,6 @@ func TestForeignReasoningRetryThroughTheExtension(t *testing.T) {
 	}
 }
 
-// The retry happens once, only for that refusal, only when there is reasoning to leave out, and
-// not for a client that asked for refusal over loss.
 func TestForeignReasoningRetryLimits(t *testing.T) {
 	call := func(u *reasoningUpstream, body string, policy string) error {
 		settingsJSON, _ := json.Marshal(map[string]any{"base_url": u.URL})

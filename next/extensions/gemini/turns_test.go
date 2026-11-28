@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// shapes returns a body's contents as role:kind pairs: "user:text" for a text part ("user:empty"
-// for the empty one the fix adds), "model:thought", "model:call", "model:response".
 func shapes(t *testing.T, body []byte) string {
 	t.Helper()
 	var b struct {
@@ -105,7 +103,6 @@ func TestFixTurns(t *testing.T) {
 			if tt.wantUnchanged && !bytes.Equal(got, body) {
 				t.Errorf("body was rewritten: %s", got)
 			}
-			// Every other field comes through as it was, large numbers and markup included.
 			for _, keep := range []string{`"seed":9007199254740993`, `"note":"<a&b>"`} {
 				if !bytes.Contains(got, []byte(keep)) {
 					t.Errorf("body lost %s: %s", keep, got)
@@ -115,7 +112,6 @@ func TestFixTurns(t *testing.T) {
 	}
 }
 
-// The turn added is exactly the one today's core adds.
 func TestFixTurnsAddedTurn(t *testing.T) {
 	got := fixTurns([]byte(`{"contents":[{"role":"model","parts":[{"text":"a"}]}]}`), false, false, false)
 	var b struct {
@@ -131,7 +127,6 @@ func TestFixTurnsAddedTurn(t *testing.T) {
 	}
 }
 
-// A body that is not a request with contents is sent as it is.
 func TestFixTurnsLeavesOtherBodies(t *testing.T) {
 	for _, body := range []string{``, `not json`, `[]`, `{}`, `{"contents":[]}`, `{"contents":"x"}`, `{"contents":null}`, `{"generateContentRequest":{"contents":[{"role":"model","parts":[]}]}}`} {
 		if got := fixTurns([]byte(body), true, true, true); string(got) != body {
@@ -140,7 +135,6 @@ func TestFixTurnsLeavesOtherBodies(t *testing.T) {
 	}
 }
 
-// countTokens gets the leading turn only, and only on a top-level contents.
 func TestFixLeadingTurn(t *testing.T) {
 	got := fixLeadingTurn([]byte(`{"contents":[{"role":"model","parts":[{"text":"a"}]}]}`))
 	if s := shapes(t, got); s != "user:empty model:text" {

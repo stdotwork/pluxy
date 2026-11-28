@@ -14,17 +14,14 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// maxEndpointReply limits what is read of an upstream's whole (not streamed) endpoint reply.
 const maxEndpointReply = 64 << 20
 
-// inputTokensBody is the part of sdk.Stream an input-token count writes its reply through.
 type inputTokensBody interface {
 	StartBody(format, contentType string) error
 	Body(chunk string) error
 	Finish(f llm.Finish, usage *llm.Usage) error
 }
 
-// endpoint serves endpoint calls: requests to Codex endpoints beyond generation.
 func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	format := ""
 	if call.Request.Native != nil {
@@ -34,9 +31,6 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return clientModels(call, out)
 	}
 	if isSIWC(call.Account.Credential) {
-		// A SIWC account serves compaction only: today's core makes its images through
-		// Responses instead, which this extension does not, and sends its Alpha Search with the
-		// ChatGPT sign-in's own token, which a SIWC account does not have.
 		switch {
 		case format != llm.FormatOpenAIResponsesCompact:
 			return siwcUnsupported(fmt.Sprintf("%q", format))
@@ -60,12 +54,6 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		Message: fmt.Sprintf("the Codex extension does not serve %q", format)}
 }
 
-// compact serves Responses compaction: the client's body goes to {base_url}/responses/compact
-// as today's core sends it, nearly as it came (the stream flag removed, instructions given unless
-// the request is Responses-lite, the model renamed, a thinking suffix's effort applied and clamped
-// to the model's levels, and a small max_output_tokens raised to 16 as on /responses), and the
-// upstream's JSON reply comes back as it is. The Codex CLI calls it to shorten a long conversation; the reply's compaction item
-// goes back in the next request's input.
 func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -87,10 +75,8 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		m["parallel_tool_calls"] = raw(false)
 	}
 	if a.siwc {
-		// Today's core leaves store to the OpenAI API's default on a SIWC compaction.
 		delete(m, "store")
 	}
-	// A Responses-lite request goes without instructions when it has none, as on /responses.
 	if v, ok := m["instructions"]; (!ok || string(v) == "null") && !lite {
 		m["instructions"] = raw("")
 	}
@@ -103,8 +89,6 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		r["effort"] = raw(llm.ThinkingEffort(sfx))
 		m["reasoning"] = raw(r)
 	}
-	// The prompt cache key, as on /responses: the client's, or one derived from the
-	// conversation's start when the client names no session.
 	sh := shaper{m: map[string]json.RawMessage{"prompt_cache_key": m["prompt_cache_key"], "input": m["input"]}, req: req,
 		model: req.Model, accountID: call.Account.ID}
 	if err := sh.input(); err != nil {
@@ -120,11 +104,7 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	fit := shaper{m: m, model: req.Model}
 	fit.minOutputTokens()
 	fit.clampEffort()
-	// Replayed web searches need a web search tool, as on /responses. Lite is read from the whole
-	// body, since client_metadata may say it.
 	webSearchForHistory(m, lite)
-	// The endpoint rejects the same tool schema forms as /responses; today's core rewrites them
-	// in compaction requests too.
 	var tools []json.RawMessage
 	if json.Unmarshal(m["tools"], &tools) == nil && fixToolSchemas(tools, "tools", nil) {
 		m["tools"] = raw(tools)
@@ -168,9 +148,6 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, responseUsage(r.Usage))
 }
 
-// inputTokens counts a Responses request's input tokens on an API-key account. OpenAI's API
-// takes the same request at {base_url}/responses/input_tokens. A ChatGPT subscription has no
-// such endpoint; an account that cannot count answers unsupported so core estimates it.
 func inputTokens(ctx context.Context, call sdk.Call, out inputTokensBody) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -193,8 +170,6 @@ func inputTokens(ctx context.Context, call sdk.Call, out inputTokensBody) error 
 	var named string
 	_ = json.Unmarshal(m["model"], &named)
 	if req.Model != "" && named != req.Model {
-		// The account may know the model by another name (an alias or prefix): the upstream
-		// counts for the model routing chose.
 		m["model"] = raw(req.Model)
 		if body, err = json.Marshal(m); err != nil {
 			return err
@@ -240,9 +215,6 @@ func inputTokens(ctx context.Context, call sdk.Call, out inputTokensBody) error 
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
 }
 
-// endpointStatusError is statusError for an endpoint call. A 404 that does not name a missing
-// model means the upstream has no such endpoint; that says nothing about the model's generation on
-// the account, which a model-scoped error would block, so it is scoped to the request.
 func endpointStatusError(resp *http.Response, model string) *llm.Error {
 	e := statusError(resp, model)
 	if e.Code == llm.CodeNotFound && !e.Retryable {
@@ -251,10 +223,6 @@ func endpointStatusError(resp *http.Response, model string) *llm.Error {
 	return e
 }
 
-// alphaSearch serves Codex's search endpoint: the client's body goes to {base_url}/alpha/search
-// as today's core sends it, nearly as it came, and the upstream's reply comes back whole. A
-// subscription always serves it; an API key only when its account sets alpha_search, since not
-// every upstream has the endpoint, and names its base_url.
 func alphaSearch(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -269,9 +237,6 @@ func alphaSearch(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 			Message: "this API key does not serve Alpha Search (the account's alpha_search setting is off)"}
 	}
 	if !a.subscription && strings.TrimSpace(s.BaseURL) == "" {
-		// Today's core keeps no Codex API key without a base URL, so such a key never serves
-		// search there; the search is not sent to the default API host, which has no such
-		// endpoint, and core tries another account.
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: "this API key does not serve Alpha Search (the account has no base_url)"}
 	}
@@ -280,12 +245,9 @@ func alphaSearch(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err := json.Unmarshal(req.Native.Body, &m); err != nil || m == nil {
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "the request body is not a JSON object", Scope: llm.ScopeRequest}
 	}
-	// The search endpoint takes no prompt cache hints; today's core removes them too.
 	delete(m, "prompt_cache_key")
 	delete(m, "prompt_cache_retention")
 	if _, ok := m["model"]; ok && req.Model != "" {
-		// The account may know the model by another name (an alias or prefix). Routing renames
-		// the body's model for every endpoint call; today's core does so only for an API key.
 		m["model"] = raw(req.Model)
 	}
 	body, err := json.Marshal(m)
@@ -335,15 +297,10 @@ func alphaSearch(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
 }
 
-// alphaSearchOriginator is the originator header of a search request: the Codex CLI's own name,
-// which today's core sends here whatever the client's.
 const alphaSearchOriginator = "codex_cli_rs"
 
-// alphaSearchHeaders are the client's request headers a search request carries on (lower-case,
-// as the request's native headers name them), the ones today's core passes.
 var alphaSearchHeaders = []string{"version", "user-agent", "session_id", "x-client-request-id"}
 
-// readReply reads an upstream's whole endpoint reply; what names the reply in an error message.
 func readReply(ctx context.Context, resp *http.Response, what string) ([]byte, error) {
 	reply, err := io.ReadAll(io.LimitReader(resp.Body, maxEndpointReply+1))
 	if err != nil {
@@ -358,7 +315,6 @@ func readReply(ctx context.Context, resp *http.Response, what string) ([]byte, e
 	return reply, nil
 }
 
-// baseURL returns where the account's requests go, without a trailing slash.
 func baseURL(s settings, a account) string {
 	base := s.BaseURL
 	if base == "" {
@@ -370,7 +326,6 @@ func baseURL(s settings, a account) string {
 	return strings.TrimRight(base, "/")
 }
 
-// requestFailed turns a failed upstream request into a structured error.
 func requestFailed(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -378,7 +333,6 @@ func requestFailed(ctx context.Context, err error) error {
 	return &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: sdk.Retryable(err)}
 }
 
-// responseUsage reads a Responses usage object; nil when there is none.
 func responseUsage(raw json.RawMessage) *llm.Usage {
 	var u struct {
 		InputTokens        *int64 `json:"input_tokens"`
@@ -397,8 +351,6 @@ func responseUsage(raw json.RawMessage) *llm.Usage {
 		ReasoningTokens: u.OutputTokensDetails.ReasoningTokens, Raw: raw}
 }
 
-// imageModels are the image models the Codex upstream serves on its Images API, listed for every
-// account as today's core lists them (its Codex built-ins), with the names and dates it gives.
 var imageModels = []protocol.Model{
 	{ID: "gpt-image-1.5", DisplayName: "GPT Image 1.5", Version: "gpt-image-1.5", Created: 1704067200},
 	{ID: "gpt-image-2", DisplayName: "GPT Image 2", Version: "gpt-image-2", Created: 1704067200},
@@ -407,8 +359,6 @@ var imageModels = []protocol.Model{
 	{ID: "gpt-image-2.5", DisplayName: "GPT Image 2.5", Version: "gpt-image-2.5", Created: 1704067200},
 }
 
-// imageModel returns the image model a request names, as the upstream knows it (any letter
-// case), or "" for a model that is not one.
 func imageModel(name string) string {
 	for _, m := range imageModels {
 		if strings.EqualFold(name, m.ID) {
@@ -418,13 +368,6 @@ func imageModel(name string) string {
 	return ""
 }
 
-// images serves the Images API (generations and edits) through the account's Codex upstream:
-// the client's JSON body goes to {base_url}{path}, the model named as the upstream knows it and
-// stream left out unless it is true, and the upstream's reply comes back as it is: JSON, or
-// server-sent events for a stream. An upstream that ignores stream=true and answers JSON to a
-// streaming client gets its images turned into the streaming events (imageStreamEvents). A
-// multipart edit arrives in its JSON form (core reads it), as today's core also sends it. A free
-// ChatGPT plan, and an account whose "images" setting is false, do not serve it.
 func images(ctx context.Context, call sdk.Call, out *sdk.Stream, path string) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -507,7 +450,6 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream, path string) er
 	if err := out.StartBody(call.Request.Native.Format, ct); err != nil {
 		return err
 	}
-	// A stream goes on piece by piece as it arrives; a JSON reply is kept too, for its usage.
 	var kept bytes.Buffer
 	var dst io.Writer = out.BodyWriter()
 	bw := dst.(*sdk.BodyWriter)
@@ -541,10 +483,6 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream, path string) er
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, responseUsage(r.Usage))
 }
 
-// imageStreamEvents turns an Images API JSON reply into the server-sent events OpenAI's Images
-// API streaming defines for the endpoint: one image_edit.completed (or
-// image_generation.completed) per image, carrying the image, the reply's own fields and its
-// usage. Codex's native edits endpoint answers so when it ignores stream=true.
 func imageStreamEvents(path string, raw []byte) (string, error) {
 	var r struct {
 		Created      int64           `json:"created"`
@@ -588,8 +526,6 @@ func imageStreamEvents(path string, raw []byte) (string, error) {
 	return b.String(), nil
 }
 
-// limitedBuffer keeps at most max bytes of what is written to it and drops the rest, never
-// failing a write.
 type limitedBuffer struct {
 	b   *bytes.Buffer
 	max int

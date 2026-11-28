@@ -19,8 +19,6 @@ func loginWith(t *testing.T, srv *geminitest.Server, method string, input map[st
 	return g
 }
 
-// A service account login names who signed in by the key's client_email, which differs between
-// accounts; an API key login has no identity.
 func TestLoginIdentity(t *testing.T) {
 	tokens = &tokenCache{entries: map[string]*tokenEntry{}}
 	srv := geminitest.New(t)

@@ -17,10 +17,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// quota reads a signed-in account's usage from Kimi Code's own usage endpoint,
-// {base_url}/v1/usages, and its plan name from {base_url}/v1/me, with the bearer token and the
-// device headers the account's requests carry (protocol minor version 5). Neither call spends
-// from the plan. The plan is optional: a failed /v1/me leaves it empty.
 func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -53,7 +49,6 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 			UserID        string `json:"user_id"`
 			UserLevelName string `json:"user_level_name"`
 		}
-		// The plan counts only from a reply that names the user, as Kimi's own account page does.
 		if json.Unmarshal(me, &p) == nil {
 			raw["profile"] = me
 			if strings.TrimSpace(p.UserID) != "" {
@@ -65,8 +60,6 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	return q, nil
 }
 
-// kimiGet reads one of Kimi's account endpoints: at most 1 MiB of the reply of a 200, else an
-// error as generate's failures are.
 func kimiGet(ctx context.Context, url, token, deviceID string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -87,7 +80,6 @@ func kimiGet(ctx context.Context, url, token, deviceID string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		e := upstreamError(resp, "")
 		if e.Code == llm.CodeNotFound {
-			// A missing usage page is not a missing model.
 			e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
 		}
 		return nil, e
@@ -121,8 +113,6 @@ func (n *flexNum) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// kimiDetail is what a limit, or the usage summary, says about one allowance. A limit's detail
-// may sit in its "detail" object or in the limit itself.
 type kimiDetail struct {
 	Name      string  `json:"name"`
 	Title     string  `json:"title"`
@@ -156,8 +146,6 @@ type kimiUsage struct {
 	} `json:"usages"`
 }
 
-// limits maps Kimi's usage reply to limits: each entry of limits, the usage summary (the weekly
-// limit unless it is named), and the monthly ratios of usages.
 func (u *kimiUsage) limits(now time.Time) []protocol.QuotaLimit {
 	var out []protocol.QuotaLimit
 	for i, l := range u.Limits {
@@ -165,7 +153,6 @@ func (u *kimiUsage) limits(now time.Time) []protocol.QuotaLimit {
 		if l.Detail != nil {
 			d = l.Detail
 		}
-		// The window's length is in the window object, else on the limit or its detail.
 		duration, unit := l.Duration, l.TimeUnit
 		if l.Window != nil {
 			duration, unit = l.Window.Duration, l.Window.TimeUnit
@@ -191,7 +178,6 @@ func (u *kimiUsage) limits(now time.Time) []protocol.QuotaLimit {
 			out = append(out, lim)
 		}
 	}
-	// The monthly limits are ratios, not counts.
 	for _, m := range []struct{ key, id, label string }{
 		{"limit_month_total", "month_total", "Monthly limit"},
 		{"limit_month_code", "month_code", "Monthly coding limit"},
@@ -206,7 +192,6 @@ func (u *kimiUsage) limits(now time.Time) []protocol.QuotaLimit {
 	return out
 }
 
-// limit maps one allowance. It is not a limit when Kimi gives neither a count used nor a limit.
 func (d *kimiDetail) limit(id, label string, now time.Time) (protocol.QuotaLimit, bool) {
 	used, limit := d.Used, d.Limit
 	if !used.ok && limit.ok && d.Remaining.ok {
@@ -256,8 +241,6 @@ func firstNonEmpty(ss ...string) string {
 
 func clampPercent(p float64) float64 { return math.Min(100, math.Max(0, p)) }
 
-// unixOf reads an RFC 3339 time (Kimi gives nanoseconds, which Go reads) as Unix seconds; 0 when
-// s is not one.
 func unixOf(s string) int64 {
 	t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(s))
 	if err != nil {
@@ -266,8 +249,6 @@ func unixOf(s string) int64 {
 	return t.Unix()
 }
 
-// windowSeconds is the length of a window in seconds. Kimi names the unit like
-// TIME_UNIT_MINUTE; a missing or unknown unit counts as minutes. 0 when there is no duration.
 func windowSeconds(duration flexNum, unit string) int64 {
 	if !duration.ok || duration.v <= 0 {
 		return 0
@@ -287,8 +268,6 @@ func windowSeconds(duration flexNum, unit string) int64 {
 	return int64(duration.v * per)
 }
 
-// windowLabel names a window by its length, as Pluxy names every provider's: 5, 24 and 168 hours
-// and 28 to 31 days by name, any other length in its largest whole unit.
 func windowLabel(seconds int64) string {
 	const minute, hour, day = 60, 3600, 86400
 	switch {

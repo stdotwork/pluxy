@@ -59,9 +59,6 @@ func TestEncodeParallelToolCallsFalse(t *testing.T) {
 	}
 }
 
-// TestThoughtSignatureCarriesOver follows a Gemini thought signature through a Messages and a
-// Responses client: the decoder gives it as a reasoning item's opaque data, and when the client
-// replays it, the encoder puts it back on the part after it.
 func TestThoughtSignatureCarriesOver(t *testing.T) {
 	d := NewStreamDecoder()
 	evs, err := d.Decode([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"f","args":{}},"thoughtSignature":"` + geminiSig + `"}]},"index":0}]}`))
@@ -120,7 +117,6 @@ func TestThoughtSignatureCarriesOver(t *testing.T) {
 		}
 	}
 
-	// A Claude signature is not Gemini's: it is dropped and reported.
 	claude, _ := anthropicmessages.ParseRequest([]byte(`{"model":"m","max_tokens":5,"messages":[{"role":"user","content":"hi"},
 		{"role":"assistant","content":[{"type":"thinking","thinking":"hm","signature":"EqQBCkgIARABGAIiQ"},{"type":"text","text":"ok"}]}]}`))
 	body, losses, _ := EncodeRequest(claude)
@@ -132,8 +128,8 @@ func TestThoughtSignatureCarriesOver(t *testing.T) {
 func TestIsThoughtSignature(t *testing.T) {
 	for s, want := range map[string]bool{
 		geminiSig:                  true,
-		"EqQBCkgIARABGAIiQ":        false, // Claude
-		"gAAAAABpZ3VhcmQ":          false, // OpenAI
+		"EqQBCkgIARABGAIiQ":        false,
+		"gAAAAABpZ3VhcmQ":          false,
 		"":                         false,
 		"Cg==":                     true,
 		"C!notbase64":              false,
@@ -145,8 +141,6 @@ func TestIsThoughtSignature(t *testing.T) {
 	}
 }
 
-// An audio part from a Chat client reaches Gemini as inline data with the audio MIME type its
-// format names.
 func TestEncodeChatAudioInput(t *testing.T) {
 	req, err := openaichat.ParseRequest([]byte(`{"model":"gemini-x","messages":[{"role":"user","content":[
 		{"type":"text","text":"Transcribe this."},

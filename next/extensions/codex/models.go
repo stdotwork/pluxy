@@ -19,24 +19,14 @@ import (
 )
 
 const (
-	// modelsOwner is the owned_by of models an account's config lists itself, as in today's core.
 	modelsOwner = "openai"
 	// codexClientVersion is the default Codex CLI version in the User-Agent and the ChatGPT
 	// backend model list's client_version; older or missing versions omit newer models.
 	codexClientVersion = "0.159.0"
-	// modelsTimeout stays under core's 15 s model-list read, so a hung provider still yields the built-in list.
-	modelsTimeout = 10 * time.Second
-	modelsMaxBody = 8 << 20
+	modelsTimeout      = 10 * time.Second
+	modelsMaxBody      = 8 << 20
 )
 
-// modelsJSON holds the model list of each ChatGPT plan, copied from the codex-free, codex-team,
-// codex-plus and codex-pro lists of today's core (core/internal/registry/models/models.json; to
-// refresh them by hand, take those sections of models.json in https://github.com/router-for-me/models, the file the
-// old core copied).
-// Every list ends with the image models (imageModels), as today's core adds its gpt-image-*
-// models to every list (WithCodexBuiltins in core/internal/registry/model_definitions.go): they
-// serve the Images API.
-//
 //go:embed models.json
 var modelsJSON []byte
 
@@ -51,12 +41,6 @@ var planModels = func() map[string][]protocol.Model {
 	return m
 }()
 
-// listModels lists the models an account serves when its config lists none. A ChatGPT
-// subscription reads its backend's /models catalog with the account's credential; on failure or
-// empty results, and for API-key and SIWC accounts (whose OpenAI /v1/models list has no token
-// limits and mixes non-Codex models), it falls back to the built-in plan list: an API key gets
-// the pro list, and a subscription or SIWC login gets the list of its plan (team, business and
-// go share the team list; a SIWC account leaves out the image models).
 func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, error) {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -75,9 +59,6 @@ func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, 
 	return builtin, nil
 }
 
-// fillFromBuiltin gives a model of the account's live list the fields it lacks from the built-in
-// entry of the same slug in list: the live list names only some fields, and core merges the
-// built-in list only for a list that is not live. A value the live list gives is never replaced.
 func fillFromBuiltin(m protocol.Model, list []protocol.Model) protocol.Model {
 	i := slices.IndexFunc(list, func(b protocol.Model) bool { return b.ID == m.ID })
 	if i < 0 {
@@ -134,12 +115,10 @@ func builtinModels(c *protocol.Credential) *protocol.ModelList {
 	}
 }
 
-// fetchCodexModels reads the account's live model list, each model filled from the built-in entry of
-// its slug in builtin.
 func fetchCodexModels(ctx context.Context, call sdk.ModelsCall, s settings, a account, builtin []protocol.Model) ([]protocol.Model, bool) {
 	fail := func(reason string) ([]protocol.Model, bool) {
 		if errors.Is(ctx.Err(), context.Canceled) {
-			return nil, false // the caller is gone; nobody is served the built-in list
+			return nil, false
 		}
 		modelReadFailed(call.Account.ID, call.Account.Credential, reason)
 		return nil, false

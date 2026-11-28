@@ -8,8 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// benchRequest returns a request near the size an upstream sees, translated from another
-// format: a 100 KB user turn, tools whose schemas nest, a call and its result, and options.
 func benchRequest() llm.Request {
 	text := strings.Repeat("The quick brown fox jumps over the lazy dog. ", 2500)
 	schema := json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"},` +
@@ -31,7 +29,6 @@ func benchRequest() llm.Request {
 	}
 }
 
-// BenchmarkEncodeRequest measures writing the translated request, as it was and as it is.
 func BenchmarkEncodeRequest(b *testing.B) {
 	req := benchRequest()
 	b.Run("new", func(b *testing.B) {

@@ -1,21 +1,3 @@
-// Command devin is pluxy's provider extension for Devin (Cognition's coding agent, formerly
-// Windsurf's Codeium): the models a Devin account gets, through Devin's API server, signed in as
-// Devin's CLI signs in (login.go) or with a session token.
-//
-// Account settings (all optional):
-//
-//	{"base_url": "https://server.codeium.com", "device_seed": "..."}
-//
-// base_url is Devin's API server; chat requests go to
-// {base_url}/exa.api_server_pb.ApiServerService/GetChatMessage. device_seed makes the device
-// fingerprint each request carries the same every time; without it the fingerprint is random, as
-// today's core sends it. Tests move Devin's sign-in page and login API to a fake with
-// app_base_url and api_base_url (sdk.TestLoginHost); in a normal run they are ignored.
-// callback_listen false keeps the login from listening for the browser's
-// return.
-//
-// Every client format is sent as Devin's protobuf chat request over Connect (request.go,
-// wire.go), always streamed, and the reply's frames become the reply's events.
 package main
 
 import (
@@ -48,10 +30,8 @@ const (
 	defaultAPIBaseURL = "https://api.devin.ai"
 	chatPath          = "/exa.api_server_pb.ApiServerService/GetChatMessage"
 
-	// maxBody is how much of a refusal's body, or of a quota reply, is read. A longer body is cut.
 	maxBody = 1 << 20
 
-	// opaqueFormat names Devin's reasoning signatures in a reply's reasoning items.
 	opaqueFormat = llm.OpaqueDevin
 )
 
@@ -98,8 +78,6 @@ func readSettings(raw json.RawMessage) (settings, error) {
 	return s, nil
 }
 
-// sessionToken returns the account's Devin session token: a credential's API key, or a login's
-// access token.
 func sessionToken(c *protocol.Credential) string {
 	if c == nil {
 		return ""
@@ -113,8 +91,6 @@ func sessionToken(c *protocol.Credential) string {
 	return ""
 }
 
-// tokenPrefix starts a Devin session token. A token given as the bare JWT inside it gets the
-// prefix, as today's core reads it.
 const tokenPrefix = "devin-session-token$"
 
 func formatToken(t string) string {
@@ -125,10 +101,6 @@ func formatToken(t string) string {
 	return t
 }
 
-// client has no timeouts after the connection is made: a long generation is not a failure, and
-// cancellation comes from the call's context. It does not ask for compressed replies, as Devin's
-// CLI does not, and follows a redirect only to the same scheme and host, since the redirect
-// would carry the session token.
 var client = &http.Client{
 	Transport: sdk.Upstream(&http.Transport{
 		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -151,7 +123,6 @@ var client = &http.Client{
 
 func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error { return chat(ctx, call, out) }
 
-// chat sends a request to Devin and its reply's events to out.
 func chat(ctx context.Context, call sdk.Call, out sender) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -198,8 +169,6 @@ func chat(ctx context.Context, call sdk.Call, out sender) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			// The body broke off, perhaps inside a credential the upstream echoed: as with a cut
-			// body, the error says only the status.
 			return statusError(resp.StatusCode, "", nil, resp.Header.Get("Retry-After"))
 		}
 		msg, keep := connectMessage(raw, secrets)
@@ -208,8 +177,6 @@ func chat(ctx context.Context, call sdk.Call, out sender) error {
 	return newRelay(out, req.Model, tr, secrets).run(ctx, resp.Body)
 }
 
-// setHeaders sets the headers Devin's CLI sends with every call: the session token twice as
-// Basic credentials, Connect's version, and no User-Agent.
 func setHeaders(h http.Header, token string) {
 	h.Set("Authorization", "Basic "+token+"-"+token)
 	h.Set("Connect-Protocol-Version", "1")
@@ -218,59 +185,48 @@ func setHeaders(h http.Header, token string) {
 	h["User-Agent"] = []string{""}
 }
 
-// sentryTrace returns a new Sentry trace header (trace ID, span ID, sampled), as the CLI sends.
 func sentryTrace() string {
 	b := make([]byte, 24)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b[:16]) + "-" + hex.EncodeToString(b[16:]) + "-1"
 }
 
-// sender takes the reply's events; *sdk.Stream is one.
 type sender interface{ Send(llm.Event) error }
 
-// relay turns the reply's Connect frames into events as they arrive. Each data frame carries
-// pieces of reasoning, text and tool calls. Items may overlap, as the protocol allows: reasoning
-// stays open until the reply ends or new reasoning follows other output, so a signature that
-// comes after the answer began still reaches it; each tool call stays open, found by its ID, so
-// a call can continue after another one started.
 type relay struct {
-	out   sender
-	model string
-	tr    *llm.Translation
-	// secrets are the account's, for sdk.UpstreamText to remove from an end frame's error.
+	out     sender
+	model   string
+	tr      *llm.Translation
 	secrets []string
 
-	started bool // response.start was sent
-	ran     bool // a data frame came: Devin ran the request
-	next    int  // index of the next item
+	started bool
+	ran     bool
+	next    int
 
-	text      int // index of the open message item, or -1
-	reasoning int // index of the open reasoning item, or -1
-	// afterReasoning is set once other output came after the open reasoning item began.
+	text           int
+	reasoning      int
 	afterReasoning bool
 	sig            []byte
 	textBuf        utf8Buffer
 	thinkBuf       utf8Buffer
 
-	calls    []*callSlot          // tool calls in the order they came
-	byID     map[string]*callSlot // tool calls by ID
-	lastCall *callSlot            // the call a piece naming no ID continues
+	calls    []*callSlot
+	byID     map[string]*callSlot
+	lastCall *callSlot
 
 	stop  uint64
 	usage usage
 }
 
-// callSlot is one tool call of the reply. It is started once both its ID and name are known;
-// arguments that come before are held.
 type callSlot struct {
 	id, name string
-	index    int // item index, or -1 until started
+	index    int
 	held     string
 	args     utf8Buffer
 }
 
 type usage struct {
-	seen                                 bool // a usage message came
+	seen                                 bool
 	input, output, cacheWrite, cacheRead int64
 }
 
@@ -289,14 +245,12 @@ func (r *relay) send(ev llm.Event) error {
 	return r.out.Send(ev)
 }
 
-// start opens a new item and returns its index.
 func (r *relay) start(kind, callID, name string) (int, error) {
 	idx := r.next
 	r.next++
 	return idx, r.send(llm.Event{Type: llm.EventItemStart, Index: idx, Item: &llm.ItemStart{Kind: kind, CallID: callID, Name: name}})
 }
 
-// endText closes the open message item.
 func (r *relay) endText() error {
 	if r.text < 0 {
 		return nil
@@ -311,7 +265,6 @@ func (r *relay) endText() error {
 	return r.send(llm.Event{Type: llm.EventItemEnd, Index: idx})
 }
 
-// endReasoning closes the open reasoning item with the signature it got.
 func (r *relay) endReasoning() error {
 	if r.reasoning < 0 {
 		return nil
@@ -329,18 +282,11 @@ func (r *relay) endReasoning() error {
 	return r.send(ev)
 }
 
-// Bounds on what is read of a reply after its end frame (readToEnd): more than Connect's end of
-// the transfer, which comes at once, and short enough not to hold the reply's end back for long.
 const (
 	afterEndBytes = 64 << 10
 	afterEndWait  = time.Second
 )
 
-// readToEnd reads what comes after a reply's end frame, which Connect says is nothing but the
-// end of the transfer, so that the body is read to its end: its capture for the request log is
-// then not taken for a body whose read stopped, whose end the log would leave out. It gives up
-// after afterEndBytes, or after afterEndWait while the server holds the stream open, leaving the
-// body as not read to its end; what is still reading then ends when the caller closes the body.
 func readToEnd(ctx context.Context, body io.Reader) {
 	ctx, cancel := context.WithTimeout(ctx, afterEndWait)
 	defer cancel()
@@ -371,7 +317,6 @@ func (r *relay) run(ctx context.Context, body io.Reader) error {
 		if end {
 			readToEnd(ctx, body)
 			if e := trailerError(payload, r.secrets); e != nil {
-				// Once Devin sent a data frame, the model ran: trying again is not safe.
 				e.Retryable = e.Retryable && !r.ran
 				e.Usage = r.usage.llm()
 				return e
@@ -385,8 +330,6 @@ func (r *relay) run(ctx context.Context, body io.Reader) error {
 	}
 }
 
-// data handles one data frame. A frame Devin's format does not allow is skipped, as today's core
-// skips it.
 func (r *relay) data(payload []byte) error {
 	fields, err := parseFields(payload)
 	if err != nil {
@@ -444,8 +387,6 @@ func (r *relay) data(payload []byte) error {
 	return nil
 }
 
-// openReasoning makes sure a reasoning item is open for new reasoning. Reasoning that follows
-// other output since the open item began starts a new item, after that output.
 func (r *relay) openReasoning() error {
 	if r.reasoning >= 0 && !r.afterReasoning {
 		return nil
@@ -464,10 +405,6 @@ func (r *relay) openReasoning() error {
 	return nil
 }
 
-// toolCall handles a piece of a tool call: its ID and name, and a piece of its arguments, as JSON
-// (field 3) or, when Devin could not make them JSON, as text (field 4). A piece with an ID
-// continues that call or starts a new one; a piece with none continues the call last added to,
-// or starts one with a made-up ID.
 func (r *relay) toolCall(b []byte) error {
 	fields, err := parseFields(b)
 	if err != nil {
@@ -519,7 +456,6 @@ func (r *relay) toolCall(b []byte) error {
 			c.held += d
 			return nil
 		}
-		// Text before the call is done; text after it is a new item, after the call.
 		if err := r.endText(); err != nil {
 			return err
 		}
@@ -536,7 +472,6 @@ func (r *relay) toolCall(b []byte) error {
 	return r.send(llm.Event{Type: llm.EventToolInputDelta, Index: c.index, Delta: d})
 }
 
-// Devin's stop reasons that end a reply early.
 const (
 	stopIncomplete    = 1
 	stopMaxTokens     = 3
@@ -623,10 +558,6 @@ func (u usage) llm() *llm.Usage {
 	return l
 }
 
-// trailerError returns the error an end frame carries ({"error": {"code", "message"}}), or nil
-// for a clean end. An end frame that is not such JSON is a clean end, as today's core reads it.
-// Its code and message are cleaned (cleanConnectError), and its Raw is the frame rebuilt from
-// them: any other field of the frame is dropped.
 func trailerError(payload []byte, secrets []string) *llm.Error {
 	var t struct {
 		Error *struct {
@@ -644,13 +575,11 @@ func trailerError(payload []byte, secrets []string) *llm.Error {
 	return e
 }
 
-// connectError is a Connect error's code and message, as Raw keeps them.
 type connectError struct {
 	Code    string `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
 }
 
-// connectCodes are Connect's error codes. Another code is the upstream's text.
 var connectCodes = map[string]bool{
 	"canceled": true, "unknown": true, "invalid_argument": true, "deadline_exceeded": true, "not_found": true,
 	"already_exists": true, "permission_denied": true, "resource_exhausted": true, "failed_precondition": true,
@@ -658,11 +587,6 @@ var connectCodes = map[string]bool{
 	"data_loss": true, "unauthenticated": true,
 }
 
-// cleanConnectError returns a Connect error's code and message cleaned by sdk.UpstreamText with
-// secrets, the account's (sdk.AccountSecrets): one line, bounded, without the pieces of a secret
-// the upstream echoed. Core removes such pieces from an error's message and raw body too
-// (protocol.RemovePieces), but not from its code, and applies none of UpstreamText's other rules.
-// A code that is one of Connect's stays as it is.
 func cleanConnectError(code, msg string, secrets []string) connectError {
 	if !connectCodes[code] {
 		code = sdk.UpstreamText(code, secrets...)
@@ -670,11 +594,8 @@ func cleanConnectError(code, msg string, secrets []string) connectError {
 	return connectError{Code: code, Message: sdk.UpstreamText(msg, secrets...)}
 }
 
-// statusCancelled is the status of a call Devin cancelled, nginx's 499, as today's core gives it.
 const statusCancelled = 499
 
-// connectStatus maps a Connect error code to the HTTP status it means, as today's core maps it:
-// a few codes depend on the message, which says whether a refusal is about quota or demand.
 func connectStatus(code, msg string) int {
 	m := strings.ToLower(msg)
 	switch code {
@@ -709,16 +630,6 @@ func connectStatus(code, msg string) int {
 	return http.StatusBadGateway
 }
 
-// connectMessage returns the message of a refusal's body and the Raw to keep. A Connect error body
-// ({"code", "message"}) gives its message and, as Raw, the body rebuilt from its code and message,
-// both cleaned (cleanConnectError); any other field of the body is dropped. Any other body gives
-// its text as the message, cleaned by sdk.UpstreamText with secrets, the account's
-// (sdk.AccountSecrets), and no Raw: the body can hold part of a secret the upstream echoed, split
-// across lines, cut short by the upstream, or cut by the read, which core's whole-copy redaction
-// misses, and other secrets (a Bearer value, a long token) that only UpstreamText's other rules
-// catch: core's piece rule (protocol.RemovePieces) covers the account's secrets only.
-// The caller passes only a body whose read ended without an error; one that fills maxBody may
-// still have been cut there, so it gives no message.
 func connectMessage(raw []byte, secrets []string) (string, []byte) {
 	var e struct {
 		Code    json.RawMessage `json:"code"`
@@ -737,12 +648,8 @@ func connectMessage(raw []byte, secrets []string) (string, []byte) {
 	return sdk.UpstreamText(string(raw), secrets...), nil
 }
 
-// statusError classifies a refusal by its HTTP status. A 429 holds back only the model, as
-// today's core cools only the model, unless Devin says the account's daily or weekly quota is
-// used up: the period, "quota" and "exhausted" must all be in the message, so a monthly or
-// unnamed quota holds back only the model, as in today's core.
 func statusError(status int, msg string, raw []byte, retryAfterHeader string) *llm.Error {
-	retryAfterHeader = strings.TrimSpace(retryAfterHeader) // sdk.RetryAfter reads a padded date as malformed
+	retryAfterHeader = strings.TrimSpace(retryAfterHeader)
 	if msg == "" {
 		msg = fmt.Sprintf("Devin answered %d %s", status, http.StatusText(status))
 	}
@@ -766,7 +673,6 @@ func statusError(status int, msg string, raw []byte, retryAfterHeader string) *l
 			e.Code, e.Scope = llm.CodeQuota, llm.ScopeCredential
 		}
 	case status == http.StatusServiceUnavailable:
-		// Not retry-safe: Devin may have started the request.
 		e.Code, e.Scope = llm.CodeUnavailable, llm.ScopeEndpoint
 		e.RetryAfterMS = sdk.RetryAfter(retryAfterHeader, time.Now())
 	case status >= 500:

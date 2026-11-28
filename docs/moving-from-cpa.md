@@ -48,7 +48,7 @@ see the result notes in step 3.)
 - **Changed**: what comes across differently, with what it was (`FROM`), what it becomes (`TO`), why,
   and, for the address, what to write to keep the old behaviour (`KEEP WITH`).
 - **Not brought**: what stays behind, with the reason. A row that ends with "it is off, empty or at
-  today's default here, so nothing is lost" costs you nothing; read the others.
+  CLIProxyAPI's default here, so nothing is lost" costs you nothing; read the others.
 - **Needs**: the provider packages the imported accounts need and pluxy has not installed yet.
   It appears only when there are some.
 

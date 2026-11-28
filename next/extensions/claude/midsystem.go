@@ -5,14 +5,6 @@ import (
 	"strings"
 )
 
-// moveSystemMessages moves the text of every message with role system into the top-level system
-// prompt, after what it already holds, and removes those messages: for a Claude-compatible
-// upstream that refuses system messages in the conversation (the account setting
-// rebuild_mid_system_message). Text blocks keep their fields (cache_control); a plain string
-// becomes a text block; blank text and blocks that are not text are left out. A body with no
-// system message, or whose system messages hold no text, is returned unchanged, as today's core
-// does. Only a Messages client's own body can have such messages: a translated request already
-// has all its system and developer messages in the system prompt.
 func moveSystemMessages(body []byte) ([]byte, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
@@ -49,9 +41,6 @@ func moveSystemMessages(body []byte) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// textBlocks returns the non-blank text of a system prompt or message content as text blocks: a
-// string becomes one block, a list keeps its text blocks as they are (and turns strings in it into
-// blocks).
 func textBlocks(raw json.RawMessage) []json.RawMessage {
 	block := func(s string) json.RawMessage {
 		b, _ := json.Marshal(map[string]string{"type": "text", "text": s})

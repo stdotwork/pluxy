@@ -11,8 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// TestConformance runs the extension conformance kit against this extension, with the fake Devin
-// acting out each scenario.
 func TestConformance(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	conformance.Run(t, conformance.Target{
@@ -82,8 +80,6 @@ func prepareLogin(t *testing.T, s conformance.LoginScenario, method string) conf
 	return conformance.LoginSetup{}
 }
 
-// browserUser plays the user of the browser login: it opens the sign-in URL without following the
-// redirect and pastes back the address the browser was sent to.
 func browserUser(t *testing.T, p protocol.Prompt) map[string]string {
 	t.Helper()
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

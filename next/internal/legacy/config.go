@@ -526,7 +526,7 @@ func (x *translator) payloadRules(rules tree) (tree, error) {
 			case i >= 0 && known[i] == k:
 				out[k] = m[k]
 			case i >= 0:
-				ignored = append(ignored, fmt.Sprintf("%s.%s (today's core reads %s)", where, k, known[i]))
+				ignored = append(ignored, fmt.Sprintf("%s.%s (CLIProxyAPI reads %s)", where, k, known[i]))
 			default:
 				ignored = append(ignored, fmt.Sprintf("%s.%s (not a payload key)", where, k))
 			}
@@ -576,7 +576,7 @@ func (x *translator) payloadRules(rules tree) (tree, error) {
 					for c, cond := range conditions(f) {
 						for _, path := range slices.Sorted(maps.Keys(cond)) {
 							if why := notJSON(cond[path]); why != "" {
-								drop(at, fmt.Sprintf("match[%d][%q] is not JSON (%s), model dropped: today's core never matched it", c, path, why))
+								drop(at, fmt.Sprintf("match[%d][%q] is not JSON (%s), model dropped: CLIProxyAPI never matched it", c, path, why))
 								return nil, false
 							}
 						}
@@ -598,7 +598,7 @@ func (x *translator) payloadRules(rules tree) (tree, error) {
 						nm := tree{}
 						for _, path := range slices.Sorted(maps.Keys(cond)) {
 							if why := notJSON(cond[path]); why != "" {
-								drop(at, fmt.Sprintf("not-match[%d][%q] is not JSON (%s), condition dropped: it never equalled a value in today's core", c, path, why))
+								drop(at, fmt.Sprintf("not-match[%d][%q] is not JSON (%s), condition dropped: in CLIProxyAPI it never equalled a value, so it never excluded a request", c, path, why))
 								continue
 							}
 							nm[path] = plain(cond[path])
@@ -628,7 +628,7 @@ func (x *translator) payloadRules(rules tree) (tree, error) {
 				// Today's core drops the whole rule for a string param that is not JSON text.
 				for _, name := range slices.Sorted(maps.Keys(params)) {
 					if s, isText := plain(params[name]).(string); isText && !rawText(s) {
-						drop(at, fmt.Sprintf("param %q is a string that is not JSON, rule dropped: today's core dropped the whole rule and logged a warning", name))
+						drop(at, fmt.Sprintf("param %q is a string that is not JSON, rule dropped: CLIProxyAPI dropped the whole rule and logged a warning", name))
 						return nil, false
 					}
 				}
@@ -665,13 +665,13 @@ func (x *translator) payloadRules(rules tree) (tree, error) {
 		out[list] = items(lists[list], rule(list))
 	}
 	if len(ignored) > 0 {
-		x.notes = append(x.notes, "config.yaml: payload keys ignored, as today's core ignores them (it matches key names exactly): "+strings.Join(dedupe(ignored), ", "))
+		x.notes = append(x.notes, "config.yaml: payload keys ignored, as CLIProxyAPI ignores them (it matches key names exactly): "+strings.Join(dedupe(ignored), ", "))
 	}
 	for _, d := range dedupe(dropped) {
 		x.notes = append(x.notes, "config.yaml: "+d)
 	}
 	if _, err := json.Marshal(out); err != nil {
-		return nil, fmt.Errorf("requests.payload: a value is not JSON where today's core reads another type: %w", err)
+		return nil, fmt.Errorf("requests.payload: a value is not JSON where CLIProxyAPI reads another type: %w", err)
 	}
 	return out, nil
 }
@@ -724,22 +724,22 @@ func paramValue(raw bool, v any) (any, string) {
 	if raw {
 		switch v := v.(type) {
 		case nil:
-			return nil, "null, dropped: today's core skipped the param"
+			return nil, "null, dropped: CLIProxyAPI skipped the param"
 		case string:
 			return v, ""
 		case time.Time:
 			b, err := json.Marshal(v)
 			if err != nil {
-				return nil, fmt.Sprintf("not JSON (%v), dropped: today's core skipped the param", err)
+				return nil, fmt.Sprintf("not JSON (%v), dropped: CLIProxyAPI skipped the param", err)
 			}
 			return string(b), ""
 		}
 	}
 	if why := notJSON(v); why != "" {
 		if raw {
-			return nil, fmt.Sprintf("not JSON (%s), dropped: today's core skipped the param", why)
+			return nil, fmt.Sprintf("not JSON (%s), dropped: CLIProxyAPI skipped the param", why)
 		}
-		return nil, fmt.Sprintf("not JSON (%s), dropped: today's core skipped the param or wrote invalid JSON into the body", why)
+		return nil, fmt.Sprintf("not JSON (%s), dropped: CLIProxyAPI skipped the param or wrote invalid JSON into the body", why)
 	}
 	return v, ""
 }
@@ -886,7 +886,7 @@ func (x *translator) move(from, to string) {
 	leaves(from, v, func(p string) {
 		rest := trail(p, from)
 		if has && occupied(cur, rest) {
-			x.mark(NotBrought, p, Row{Why: "the file sets " + display(to+rest) + " too, and today's core reads that one"})
+			x.mark(NotBrought, p, Row{Why: "the file sets " + display(to+rest) + " too, and CLIProxyAPI reads that one"})
 			return
 		}
 		x.origin[to+rest] = x.fileKey(p)
@@ -952,7 +952,7 @@ func (x *translator) run() error {
 			set(x.t, "access.api-keys", v)
 			x.origin["access.api-keys"] = "api-keys"
 		} else {
-			x.mark(NotBrought, "api-keys", Row{Why: "the file sets access.api-keys too, and today's core reads that one"})
+			x.mark(NotBrought, "api-keys", Row{Why: "the file sets access.api-keys too, and CLIProxyAPI reads that one"})
 		}
 		delete(x.t, "api-keys")
 	case tree:
@@ -1222,7 +1222,7 @@ func (x *translator) routing() error {
 	default:
 		// Today's core uses round-robin for a name it does not know.
 		x.notes = append(x.notes, fmt.Sprintf("config.yaml: routing.strategy %q is not known: using round-robin", s))
-		x.mark(Changed, "routing.strategy", Row{From: s, To: "round-robin", Why: "today's core does not know the name either, and uses round-robin"})
+		x.mark(Changed, "routing.strategy", Row{From: s, To: "round-robin", Why: "CLIProxyAPI does not know the name either, and uses round-robin"})
 	}
 	if on, err := flag(x.t, "routing.session-affinity"); err != nil {
 		return err
@@ -1459,7 +1459,7 @@ func (x *translator) providers(v8 tree) error {
 			}
 			groups = list
 			if inOld {
-				x.markAll(NotBrought, f.old, oldv, Row{Why: "the file sets " + path + " too, and today's core reads that one"})
+				x.markAll(NotBrought, f.old, oldv, Row{Why: "the file sets " + path + " too, and CLIProxyAPI reads that one"})
 			}
 		} else if inOld && oldv != nil {
 			list, isList := oldv.([]any)
@@ -1557,8 +1557,8 @@ func (x *translator) providers(v8 tree) error {
 				// key is dropped and named in the log. A key added by a login, which asks for no
 				// base_url, still gets the extension's default.
 				if st, _ := a["settings"].(map[string]any); f.v8 == "codex" && st["base_url"] == nil {
-					x.note(fmt.Sprintf("config.yaml: %s key %s has no base-url: dropped, as today's core drops a Codex API key without one", display(path), id),
-						fmt.Sprintf("keys[%d] has no base-url: today's core drops a Codex API key without one too", ki))
+					x.note(fmt.Sprintf("config.yaml: %s key %s has no base-url: dropped, as CLIProxyAPI drops a Codex API key without one", display(path), id),
+						fmt.Sprintf("keys[%d] has no base-url: CLIProxyAPI drops a Codex API key without one too", ki))
 					continue
 				}
 				accounts[f.extension] = append(accounts[f.extension], a)
@@ -1593,7 +1593,7 @@ func (x *translator) providers(v8 tree) error {
 			list := Brought
 			switch {
 			case disabled:
-				list, why = NotBrought, []string{"disabled: true, so today's core did not use it either"}
+				list, why = NotBrought, []string{"disabled: true, so CLIProxyAPI did not use it either"}
 			case len(made) == 0:
 				list = NotBrought
 			default:
@@ -1761,7 +1761,7 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		slices.Sort(names)
 		for _, pub := range pooled {
 			members := append([]string{public[pub]}, dropped[pub]...)
-			x.notes = append(x.notes, fmt.Sprintf("config.yaml: %s key %s: models: the alias %q lists %d upstream models, which today's core rotates over as a pool; this core tries them in order as the fallback chain routing.chains.%s",
+			x.notes = append(x.notes, fmt.Sprintf("config.yaml: %s key %s: models: the alias %q lists %d upstream models, which CLIProxyAPI rotates over as a pool; pluxy tries them in order as the fallback chain routing.chains.%s",
 				display(path), id, pub, len(members), pub))
 			x.pools = append(x.pools, pool{name: pub, ext: f.extension, account: id, item: x.item, models: members})
 			// Each model of the pool is listed under its own name, which the chain's steps name.
@@ -2030,8 +2030,8 @@ func (x *translator) oauthModels() error {
 		}
 		pkg, ok := channels[strings.ToLower(strings.TrimSpace(ch))]
 		if !ok {
-			x.notes = append(x.notes, fmt.Sprintf("config.yaml: oauth.model-alias.%s: no extension serves the %s accounts of today's core; ignored", ch, ch))
-			x.mark(NotBrought, item, Row{Why: "no pluxy extension serves the " + ch + " accounts of today's core"})
+			x.notes = append(x.notes, fmt.Sprintf("config.yaml: oauth.model-alias.%s: no pluxy extension serves CLIProxyAPI's %s accounts; ignored", ch, ch))
+			x.mark(NotBrought, item, Row{Why: "no pluxy extension serves CLIProxyAPI's " + ch + " accounts"})
 			continue
 		}
 		e, err := section(pkg)
@@ -2073,8 +2073,8 @@ func (x *translator) oauthModels() error {
 		}
 		pkg, ok := channels[strings.ToLower(strings.TrimSpace(ch))]
 		if !ok {
-			x.notes = append(x.notes, fmt.Sprintf("config.yaml: oauth.excluded-models.%s: no extension serves the %s accounts of today's core; ignored", ch, ch))
-			x.mark(NotBrought, item, Row{Why: "no pluxy extension serves the " + ch + " accounts of today's core"})
+			x.notes = append(x.notes, fmt.Sprintf("config.yaml: oauth.excluded-models.%s: no pluxy extension serves CLIProxyAPI's %s accounts; ignored", ch, ch))
+			x.mark(NotBrought, item, Row{Why: "no pluxy extension serves CLIProxyAPI's " + ch + " accounts"})
 			continue
 		}
 		x.mark(Brought, item, Row{As: pkg + " excluded_models for accounts added by sign-in"})
@@ -2163,9 +2163,9 @@ const (
 func statusWhy(status int) string {
 	switch status {
 	case dead:
-		return "it did nothing in today's core either"
+		return "it did nothing in CLIProxyAPI either"
 	case unknown:
-		return "not a key today's core or pluxy reads"
+		return "not a key CLIProxyAPI or pluxy reads"
 	}
 	return ""
 }
@@ -2186,7 +2186,7 @@ func (x *translator) markRule(path string, v any, status int, note string, quiet
 		return
 	}
 	if quiet && status != dead {
-		why += "; it is off, empty or at today's default here, so nothing is lost"
+		why += "; it is off, empty or at CLIProxyAPI's default here, so nothing is lost"
 	}
 	x.markAll(NotBrought, path, v, Row{Why: why})
 }
@@ -2348,7 +2348,7 @@ func (x *translator) chains() error {
 		for _, s := range st {
 			text = append(text, s.String())
 		}
-		why := fmt.Sprintf("today's core shared %q among %s in turn; pluxy tries them in this order as the fallback chain routing.chains.%s", n, strings.Join(text, ", "), n)
+		why := fmt.Sprintf("CLIProxyAPI shared %q among %s in turn; pluxy tries them in this order as the fallback chain routing.chains.%s", n, strings.Join(text, ", "), n)
 		if len(cut) > 0 {
 			why += fmt.Sprintf(" (a chain has at most %d steps: %s left out)", route.MaxChainSteps, strings.Join(cut, ", "))
 		}

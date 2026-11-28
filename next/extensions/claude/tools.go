@@ -9,11 +9,6 @@ import (
 	"strings"
 )
 
-// Repairs to every Messages body before it is sent, a client's own Messages body included, for
-// parts Anthropic refuses that a client may still send. Today's core makes the same two.
-
-// fixBody removes empty domain lists from built-in web search tools and replaces tool call IDs
-// Anthropic does not take. It returns body unchanged when there is nothing to repair.
 func fixBody(body []byte) ([]byte, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
@@ -65,16 +60,12 @@ func dropEmptyDomains(raw json.RawMessage) (json.RawMessage, bool) {
 	return b, true
 }
 
-// toolIDPrefix starts a tool call ID made from one Anthropic does not take; today's core uses the
-// same, so a conversation keeps its IDs when it moves between the two cores.
 const toolIDPrefix = "cpa_tid_v1_"
 
 // maxToolID is the longest tool call ID Anthropic takes, and the upstreams that carry a Messages
 // body under their own limits: letters, digits, underscores and hyphens, at most 64.
 const maxToolID = 64
 
-// portableID reports whether Anthropic takes id as a tool call ID: one or more letters, digits,
-// underscores and hyphens, at most 64.
 func portableID(id string) bool {
 	if id == "" || len(id) > maxToolID {
 		return false
@@ -88,13 +79,6 @@ func portableID(id string) bool {
 	return true
 }
 
-// repairToolIDs replaces each tool_use id and tool_result tool_use_id Anthropic does not take
-// (calls replayed from another provider can have dots, colons or other characters, or be longer
-// than 64) with the prefix and the ID in unpadded URL-safe base64, or, when that would be over
-// 64, with the prefix and a SHA-256 digest of the ID. The same ID becomes the same new ID, so
-// each result still names its call, and two different IDs never become one. A new ID that is
-// already in use gets underscores in front until it is not, or another digest when even that
-// would be too long. Valid IDs are left alone.
 func repairToolIDs(raw json.RawMessage) (json.RawMessage, bool) {
 	var messages []map[string]json.RawMessage
 	if json.Unmarshal(raw, &messages) != nil {
@@ -153,10 +137,6 @@ func repairToolIDs(raw json.RawMessage) (json.RawMessage, bool) {
 	return b, true
 }
 
-// encodeToolID makes the ID Anthropic takes from one it does not, at most 64 bytes: the prefix
-// and the ID in unpadded URL-safe base64, or, when that is too long, the prefix and a SHA-256
-// digest of the ID. A taken ID gets an underscore in front, as today's core gives it, or, when
-// that would be too long, another digest. The same ID always comes out the same.
 func encodeToolID(id string, used map[string]bool) string {
 	enc := toolIDPrefix + base64.RawURLEncoding.EncodeToString([]byte(id))
 	for used[enc] {

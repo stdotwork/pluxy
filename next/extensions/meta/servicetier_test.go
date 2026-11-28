@@ -8,8 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 )
 
-// A Chat request goes to Meta without the service tier and verbosity: nothing says Meta's API takes
-// them, so each is reported as dropped, at the client's field.
 func TestServiceTierAndVerbosityNotSent(t *testing.T) {
 	req, err := openaichat.ParseRequest([]byte(`{"model":"muse-test","service_tier":"priority","verbosity":"low","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {

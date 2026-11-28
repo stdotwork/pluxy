@@ -38,32 +38,20 @@ import (
 //     beside `$ref`, `allOf`, `anyOf` or `oneOf`), where closing each object would refuse input
 //     the combination accepts. A single-branch `allOf` combines nothing and stays closable.
 
-// unionToEnumBranches is how many branches a union needs before it becomes an enum. Smaller
-// unions are left as written.
 const unionToEnumBranches = 8
 
-// boundKeywords are the numeric bound keywords of JSON Schema.
 var boundKeywords = [...]string{"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"}
 
-// subschemaMaps are keywords whose value is an object of subschemas.
 var subschemaMaps = [...]string{"properties", "$defs", "definitions", "dependentSchemas", "dependencies"}
 
-// combinedKeywords are the keywords that test a schema's object against other schemas or against
-// the negation of one. An object under one of them cannot be closed (see schemaIsOpen).
 var combinedKeywords = [...]string{"if", "then", "else", "not", "dependentSchemas", "dependencies"}
 
-// subschemas are keywords whose value is a subschema or a list of them.
 var subschemas = [...]string{
 	"items", "prefixItems", "contains", "additionalProperties", "propertyNames",
 	"unevaluatedProperties", "unevaluatedItems", "additionalItems", "contentSchema",
 	"anyOf", "oneOf", "allOf", "not", "if", "then", "else",
 }
 
-// fixToolSchemas applies the rules to the parameters of every function tool in tools, also
-// those inside namespace tools (the Codex app groups MCP tools that way), and reports whether
-// it changed any. A tool it changes is replaced in the slice; the others stay as sent. A strict
-// tool whose schema cannot be made strict is sent with strict false; lose, when not nil, is told
-// the tool's path (path, then its index in tools) and why.
 func fixToolSchemas(tools []json.RawMessage, path string, lose func(path, detail string)) bool {
 	changed := false
 	for i, t := range tools {
@@ -100,17 +88,11 @@ func fixToolSchemas(tools []json.RawMessage, path string, lose func(path, detail
 	return changed
 }
 
-// fixSchema returns the schema with the rules applied, and whether that changed it. A schema
-// that is not a JSON object is left alone. Numbers are read as text so a large bound or enum
-// value keeps its digits.
 func fixSchema(schema json.RawMessage) (json.RawMessage, bool) {
 	out, changed, _ := fixSchemaForMode(schema, false)
 	return out, changed
 }
 
-// fixSchemaForMode is fixSchema for a tool that is strict or not. strictOff is true when the tool
-// is strict but its schema cannot be made strict: the result then has only the rewrites that
-// apply to any tool, and the caller must send the tool with strict false.
 func fixSchemaForMode(schema json.RawMessage, strict bool) (out json.RawMessage, changed, strictOff bool) {
 	dec := json.NewDecoder(bytes.NewReader(schema))
 	dec.UseNumber()
@@ -154,9 +136,6 @@ func fixSchemaForMode(schema json.RawMessage, strict bool) (out json.RawMessage,
 	return raw(obj), true, strictOff
 }
 
-// dropRejected removes the patterns and bounds the endpoint rejects from v and every schema
-// under it, and reports whether it removed any. Only keywords that hold schemas are entered,
-// so an `enum`, `const` or `default` that happens to look like a schema is not touched.
 func dropRejected(v any) bool {
 	changed := false
 	switch s := v.(type) {
@@ -208,9 +187,6 @@ func dropRejected(v any) bool {
 	return changed
 }
 
-// rejectedPattern reports whether a regular expression uses \p{...}, \P{...}, \0, or an unescaped
-// lookahead ((?=...), (?!...)) outside a character class, which the endpoint fails to compile.
-// All of these are legal in the dialects clients write; the endpoint's validator does not take them.
 func rejectedPattern(p string) bool {
 	inClass := false
 	for i := 0; i < len(p); i++ {
@@ -226,7 +202,7 @@ func rejectedPattern(p string) bool {
 					return true
 				}
 			}
-			i++ // the escaped character is not the start of another escape, as in \\p or \(?!
+			i++
 			continue
 		}
 		if inClass {
@@ -252,13 +228,6 @@ func rejectedPattern(p string) bool {
 	return false
 }
 
-// unionToEnum turns a property's oneOf or anyOf into an enum when it holds at least
-// unionToEnumBranches branches and every branch is a distinct scalar `const` (a `description`
-// or `title` beside it does not matter), and reports whether it changed the property. Where
-// the property already has an enum with the same values, the union is redundant and only the
-// union is removed. A property with both a oneOf and an anyOf, an enum that differs, or any
-// branch that says more than a constant is left as written: the union may mean more than a
-// list of values.
 func unionToEnum(prop map[string]any) bool {
 	_, hasOneOf := prop["oneOf"]
 	_, hasAnyOf := prop["anyOf"]
@@ -301,8 +270,6 @@ func unionToEnum(prop map[string]any) bool {
 		if !ok || len(list) != len(values) {
 			return false
 		}
-		// The union's values are distinct, so an enum of the same length whose values are all in
-		// the union and distinct too is the same set.
 		seen := make(map[string]bool, len(list))
 		for _, e := range list {
 			key, ok := valueKey(e)
@@ -319,8 +286,6 @@ func unionToEnum(prop map[string]any) bool {
 	return true
 }
 
-// valueKey names a scalar JSON value so that equal values have equal names: 1, 1.0 and 1e0 are
-// one number. It reports false for an object or an array.
 func valueKey(v any) (string, bool) {
 	switch v := v.(type) {
 	case string:
@@ -343,8 +308,6 @@ func valueKey(v any) (string, bool) {
 	return "", false
 }
 
-// outsideInt64 reports whether n is a whole number that does not fit in an int64. A number
-// with a fraction, such as 1.5, is not whole and is kept; so is 1e3, which is 1000.
 func outsideInt64(n json.Number) bool {
 	neg, digits, exp := splitNumber(n)
 	if digits == "" || exp.Sign() < 0 {
@@ -365,9 +328,6 @@ func outsideInt64(n json.Number) bool {
 	return err != nil
 }
 
-// splitNumber writes n (JSON number syntax, as the decoder has checked) as sign, digits and a
-// power of ten: the value is ±digits × 10^exp, where digits has no leading or trailing zeros
-// and is empty for zero. The exponent is a big.Int because JSON allows one of any length.
 func splitNumber(n json.Number) (neg bool, digits string, exp *big.Int) {
 	s := string(n)
 	if strings.HasPrefix(s, "-") {
@@ -388,9 +348,6 @@ func splitNumber(n json.Number) (neg bool, digits string, exp *big.Int) {
 	return neg, trimmed, exp
 }
 
-// flattenRootUnion rewrites a root anyOf/oneOf schema into an object schema. Existing root
-// properties win; properties introduced only by branches keep a single copy when identical or an
-// anyOf of distinct branch schemas; fields required in every object branch stay required.
 func flattenRootUnion(obj map[string]any) bool {
 	_, hasAny := obj["anyOf"]
 	_, hasOne := obj["oneOf"]
@@ -551,8 +508,6 @@ func schemaCanBeObject(s map[string]any) bool {
 	}
 }
 
-// addMissingArrayItems adds items: {"type":"string"} to every array schema (without $ref or items)
-// under v, recursing only into schema-valued keywords.
 func addMissingArrayItems(v any) bool {
 	changed := false
 	switch s := v.(type) {
@@ -613,9 +568,6 @@ func hasArrayType(t any) bool {
 	return false
 }
 
-// eachSchema calls fn on every schema under v (v included) and reports whether any call did. Only
-// keywords that hold schemas are entered, so an `enum`, `const` or `default` that happens to look
-// like a schema is not visited. fn runs on a schema before the schemas under it.
 func eachSchema(v any, fn func(map[string]any) bool) bool {
 	changed := false
 	switch s := v.(type) {
@@ -657,12 +609,6 @@ func eachSchema(v any, fn func(map[string]any) bool) bool {
 	return changed
 }
 
-// schemaIsOpen reports whether a schema under v cannot be closed without changing what it accepts,
-// which strict mode cannot express. That is a schema that accepts keys beyond its properties:
-// `additionalProperties` true or a schema, or an object type with no `properties` (a free-form
-// map). It is also a schema that combines its object with other schemas, where closing the object
-// would refuse input the combination accepts: an `allOf` of more than one branch, any of the
-// `combinedKeywords`, or `properties` beside `$ref`, `allOf`, `anyOf` or `oneOf`.
 func schemaIsOpen(v any) bool {
 	open := false
 	eachSchema(v, func(s map[string]any) bool {
@@ -706,8 +652,6 @@ func hasObjectType(t any) bool {
 	return false
 }
 
-// closeObjects gives every schema with a `properties` key (an empty one counts) and no
-// `additionalProperties` the value false, and reports whether it changed any.
 func closeObjects(v any) bool {
 	return eachSchema(v, func(s map[string]any) bool {
 		if _, ok := s["properties"].(map[string]any); !ok {
@@ -721,9 +665,6 @@ func closeObjects(v any) bool {
 	})
 }
 
-// makeOptionalPropsNullable enforces Codex strict mode's requirement that every property of every
-// object schema is listed in required: properties missing from required are appended to it and
-// made nullable.
 func makeOptionalPropsNullable(v any) bool {
 	return eachSchema(v, func(s map[string]any) bool {
 		props, ok := s["properties"].(map[string]any)
@@ -750,11 +691,6 @@ func makeOptionalPropsNullable(v any) bool {
 	})
 }
 
-// nullableSchema makes a schema accept null. A schema whose only limit is a plain `type`, an
-// `enum`, an `anyOf` or a `oneOf` gets null in it. Any other schema (a `$ref`, `const` or
-// `allOf`, or several of those four keywords together) is wrapped in `anyOf` with a null branch,
-// since null added to one keyword would still fail the other: `description` and `title` move
-// outside.
 func nullableSchema(pm map[string]any) map[string]any {
 	if schemaAllowsNull(pm) {
 		return pm
@@ -801,9 +737,6 @@ func nullableSchema(pm map[string]any) map[string]any {
 	return pm
 }
 
-// schemaAllowsNull reports whether null passes the schema: it has at least one of `type`, `enum`,
-// `const`, `anyOf` and `oneOf`, and null passes every one it has. A `$ref` or `allOf` is not
-// followed, so a schema with one is taken to refuse null.
 func schemaAllowsNull(pm map[string]any) bool {
 	if _, ok := pm["$ref"]; ok {
 		return false

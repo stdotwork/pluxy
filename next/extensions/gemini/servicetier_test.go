@@ -14,19 +14,11 @@ import (
 )
 
 var (
-	// apiSettings is an account at the Gemini API, vertexSettingsTest one on Vertex AI and customHost
-	// one whose base_url is a third-party host.
 	apiSettings        = settings{BaseURL: defaultBaseURL}
 	vertexSettingsTest = settings{Vertex: &vertexSettings{}}
 	customHost         = settings{BaseURL: "https://llm.example.com"}
 )
 
-// A client's service tier reaches the Gemini API as its serviceTier: default is standard, flex and
-// priority are themselves (a Chat or Responses client's fast is priority, a Messages client's fast
-// speed too). Auto, scale, ultrafast and a tier the model does not know have none: they are
-// reported as dropped at the client's field, never moved to another tier, and refuse the request
-// under the reject drop policy. Verbosity has no place in a GenerateContent request. Vertex AI has
-// no service tier at all.
 func TestServiceTierTranslated(t *testing.T) {
 	chat := func(extra string) llm.Request {
 		r, err := openaichat.ParseRequest([]byte(`{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"hi"}]` + extra + `}`))
@@ -52,7 +44,7 @@ func TestServiceTierTranslated(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		req     llm.Request
-		tier    string // serviceTier of the body; "" for none
+		tier    string
 		dropped []string
 	}{
 		{"chat default", chat(`,"service_tier":"default"`), "standard", nil},
@@ -97,7 +89,6 @@ func TestServiceTierTranslated(t *testing.T) {
 					t.Errorf("reject policy: %v, want unsupported naming %q", err, c.dropped)
 				}
 			}
-			// Vertex AI sends no tier, and reports the one it would have sent.
 			vbody, vtr, err := buildBodyOn(c.req, vertexSettingsTest)
 			if err != nil {
 				t.Fatal(err)
@@ -119,7 +110,6 @@ func TestServiceTierTranslated(t *testing.T) {
 	}
 }
 
-// A Gemini client's body goes as it wrote it, on the Gemini API and on Vertex AI alike.
 func TestServiceTierGeminiPassthrough(t *testing.T) {
 	body := `{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"serviceTier":"flex"}`
 	req := llm.Request{Model: "gemini-2.5-pro", Native: &llm.Native{Format: llm.FormatGeminiGenerate, Body: json.RawMessage(body)}}
@@ -134,9 +124,6 @@ func TestServiceTierGeminiPassthrough(t *testing.T) {
 	}
 }
 
-// An account whose base_url is not the Gemini API's gets no service tier from a translated request,
-// as Vertex AI does not: the same loss at the client's field, and the request still goes (and is
-// refused under the reject drop policy, as a Vertex one is).
 func TestServiceTierCustomHost(t *testing.T) {
 	parsed, err := openaichat.ParseRequest([]byte(`{"model":"m","service_tier":"priority","verbosity":"low","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
@@ -160,7 +147,6 @@ func TestServiceTierCustomHost(t *testing.T) {
 			t.Errorf("%s: a tier was not refused under reject", name)
 		}
 	}
-	// The Gemini API's host, in any letter case and with a path or port, takes one.
 	for _, base := range []string{"https://generativelanguage.googleapis.com", "https://GenerativeLanguage.googleapis.com/v1beta"} {
 		body, _, err := buildBodyOn(req, settings{BaseURL: base})
 		if err != nil || !strings.Contains(string(body), `"serviceTier":"priority"`) {
@@ -169,9 +155,6 @@ func TestServiceTierCustomHost(t *testing.T) {
 	}
 }
 
-// overProtocol returns r as the extension gets it: encoded to JSON and decoded again, as the
-// extension protocol carries a request from core, so a test of a body builder starts from a client's
-// real body parsed by its format's own parser and sent the way core sends it.
 func overProtocol(t *testing.T, r llm.Request) llm.Request {
 	t.Helper()
 	b, err := json.Marshal(r)

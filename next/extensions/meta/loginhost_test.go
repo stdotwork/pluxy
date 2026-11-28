@@ -6,8 +6,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// A stored account's settings must not decide where a login's codes and a refresh token go: they
-// move Meta's login host and key endpoint only in a test run, which sets protocol.EnvTestLoginHosts.
 func TestSettingsMoveLoginHostOnlyUnderTest(t *testing.T) {
 	const raw = `{"auth_base_url":"http://127.0.0.1:9","mint_url":"http://127.0.0.1:9/key"}`
 	t.Setenv(protocol.EnvTestLoginHosts, "")

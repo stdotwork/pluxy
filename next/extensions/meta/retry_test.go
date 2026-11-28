@@ -16,8 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk/sdktest"
 )
 
-// A renewal's error is retryable only when the request never reached Meta, or when Meta rate
-// limited it.
 func TestMintRetryOnlyWhenNotSent(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -59,7 +57,6 @@ func TestMintRetryOnlyWhenNotSent(t *testing.T) {
 	}
 }
 
-// The first call of a device login has the same rule.
 func TestDeviceStartRetryOnlyWhenNotSent(t *testing.T) {
 	srv := metatest.New(t)
 	set, _ := readSettings(srv.Settings())
@@ -73,7 +70,6 @@ func TestDeviceStartRetryOnlyWhenNotSent(t *testing.T) {
 	sdktest.WantError(t, err, llm.CodeUnavailable, false)
 }
 
-// A poll that fails after it was sent stops the login.
 func TestPollStopsAfterSendFailure(t *testing.T) {
 	srv := metatest.New(t)
 	var polls atomic.Int32
@@ -93,10 +89,8 @@ func TestPollStopsAfterSendFailure(t *testing.T) {
 	}
 }
 
-// A poll whose request never left this machine is tried again at the next interval.
 func TestPollContinuesWhenNotSent(t *testing.T) {
 	srv := metatest.New(t)
-	// Every request opens its own connection; the second connection (the first poll) is refused.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DisableKeepAlives = true
 	var dials atomic.Int32

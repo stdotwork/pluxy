@@ -12,10 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Messages has no allowed tool list. A choice that names one is carried by defining only the
-// allowed tools, which is what the list asks for, under Messages' own mode: required as any, auto
-// as auto. A tool the client defined but did not allow is off this request, so nothing is reported
-// as lost.
 func TestAllowedToolsNarrowMessagesTools(t *testing.T) {
 	for _, c := range []struct{ mode, wantType string }{
 		{"required", "any"},
@@ -68,9 +64,6 @@ func TestAllowedToolsNarrowMessagesTools(t *testing.T) {
 	}
 }
 
-// A hosted tool goes too: an allowed list names the function tools the model may call, and
-// Messages' definition of the tools is its only narrowing, so a hosted tool the list does not
-// name is off the request, without a loss of its own.
 func TestAllowedToolsDropHostedTools(t *testing.T) {
 	in := `{"model":"m","stream":true,
 	 "tools":[{"type":"function","name":"weather","parameters":{"type":"object"}},
@@ -111,10 +104,6 @@ func TestAllowedToolsDropHostedTools(t *testing.T) {
 	}
 }
 
-// An allowed list that leaves no tool to define cannot be carried, and sending the request anyway
-// would let the model answer with text or call a tool the client did not allow: it is an invalid
-// request naming the allowed names this request does not define. A name that matches nothing while
-// others do is reported as dropped, at the choice's path.
 func TestAllowedToolsMatchNoTool(t *testing.T) {
 	request := func(t *testing.T, allowed string) llm.Request {
 		t.Helper()
@@ -167,8 +156,6 @@ func TestAllowedToolsMatchNoTool(t *testing.T) {
 	}
 }
 
-// A Responses request's allowed_tools list reaches Messages the same way: the allowed tools are
-// all Messages defines, and the mode it came with becomes Messages' own.
 func TestAllowedToolsFromResponsesToMessages(t *testing.T) {
 	in := `{"model":"m","stream":true,
 	 "tools":[{"type":"function","name":"get_weather","parameters":{"type":"object"}},

@@ -32,13 +32,10 @@ type vertexPredictEmbedRequest struct {
 	Parameters *vertexEmbedParams           `json:"parameters,omitempty"`
 }
 
-// geminiEmbedContent serves Gemini's POST /v1beta/models/{model}:embedContent on a Gemini account.
 func geminiEmbedContent(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return geminiEmbedTo(ctx, call, out, llm.FormatGeminiEmbedContent)
 }
 
-// geminiBatchEmbedContents serves Gemini's POST /v1beta/models/{model}:batchEmbedContents on a
-// Gemini account.
 func geminiBatchEmbedContents(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return geminiEmbedTo(ctx, call, out, llm.FormatGeminiBatchEmbedContents)
 }
@@ -90,8 +87,6 @@ func geminiEmbedTo(ctx context.Context, call sdk.Call, out sender, format string
 		}()
 	}
 
-	// Gemini API: pass the client's body and the upstream's reply through unchanged, rewriting
-	// the body's model only when an account alias changed it.
 	if s.Vertex == nil {
 		reqBody, err := geminiAPIPassthroughBody(call.Request.Native.Body, rawMap, model, isBatch)
 		if err != nil {
@@ -118,7 +113,6 @@ func geminiEmbedTo(ctx context.Context, call sdk.Call, out sender, format string
 		return send.Finish(llm.Finish{Reason: llm.FinishStop}, usage)
 	}
 
-	// Vertex AI: translate only what the model's Vertex endpoint needs.
 	if isVertexEmbedContentModel(model) {
 		if !isBatch {
 			reqBody, err := buildVertexEmbedContentBody(rawMap)
@@ -181,7 +175,6 @@ func geminiEmbedTo(ctx context.Context, call sdk.Call, out sender, format string
 		return writeGeminiEmbedReply(send, format, true, vectors, promptTokens, hasUsage && !missing)
 	}
 
-	// Vertex AI :predict models (gemini-embedding-001 at batch size 1; other models up to 250).
 	var items []geminiEmbedItem
 	if isBatch {
 		rawItems, err := readGeminiBatchRawItems(rawMap)
@@ -210,8 +203,6 @@ func geminiEmbedTo(ctx context.Context, call sdk.Call, out sender, format string
 	return writeGeminiEmbedReply(send, format, isBatch, vectors, promptTokens, hasUsage)
 }
 
-// geminiAPIPassthroughBody returns raw unchanged when the body's model fields already match
-// models/<model> (or are omitted), and updates them only when an account alias renamed the model.
 func geminiAPIPassthroughBody(raw []byte, rawMap map[string]json.RawMessage, model string, isBatch bool) ([]byte, error) {
 	want := "models/" + model
 	if !isBatch {
@@ -267,8 +258,6 @@ func geminiAPIPassthroughBody(raw []byte, rawMap map[string]json.RawMessage, mod
 	return json.Marshal(updated)
 }
 
-// checkGeminiBatchItems refuses a batch whose requests is not a list of objects, so a model name
-// the client wrote in an item is never left in a body that could not be rewritten.
 func checkGeminiBatchItems(reqsRaw json.RawMessage) error {
 	var items []json.RawMessage
 	if err := json.Unmarshal(reqsRaw, &items); err != nil {
@@ -282,16 +271,12 @@ func checkGeminiBatchItems(reqsRaw json.RawMessage) error {
 	return nil
 }
 
-// geminiBatchLen is the number of requests in a batch body that checkGeminiBatchItems accepted.
 func geminiBatchLen(rawMap map[string]json.RawMessage) int {
 	var items []json.RawMessage
 	_ = json.Unmarshal(rawMap["requests"], &items)
 	return len(items)
 }
 
-// checkGeminiEmbedReply refuses a 200 that is not a full answer, as the translated paths do:
-// an error object, an embedding without values, or (for a batch) fewer or more embeddings than
-// the want requests sent. Passing it to the client would record the request as a success.
 func checkGeminiEmbedReply(raw []byte, vendor string, isBatch bool, want int) error {
 	var resp struct {
 		Error     json.RawMessage `json:"error"`
@@ -306,8 +291,6 @@ func checkGeminiEmbedReply(raw []byte, vendor string, isBatch bool, want int) er
 		return upstreamEmbeddingError(vendor + "'s embedding reply is not JSON")
 	}
 	if e := bytes.TrimSpace(resp.Error); len(e) > 0 && string(e) != "null" {
-		// Fixed text: the upstream's own message can name the account's project, which the
-		// masking of a normal error reply would remove.
 		return upstreamEmbeddingError(vendor + " answered 200 with an error")
 	}
 	hasValues := func(v json.RawMessage) bool {
@@ -579,7 +562,6 @@ func runVertexPredictGeminiItems(ctx context.Context, t target, model string, it
 			}
 		}
 	}
-	// A total over only some of the inputs would understate the usage: report none instead.
 	return all, promptTokens, hasUsage && !missing, nil
 }
 

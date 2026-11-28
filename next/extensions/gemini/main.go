@@ -1,29 +1,3 @@
-// Command gemini is pluxy's provider extension for Google's Gemini models: the Gemini API with an
-// API key, and Vertex AI with a service account or an API key (vertex.go).
-//
-// Account settings (all optional):
-//
-//	{"base_url": "https://generativelanguage.googleapis.com", "interactions": false}
-//
-// base_url is where the Gemini API lives; requests go to
-// {base_url}/v1beta/models/{model}:generateContent, or :streamGenerateContent?alt=sse for a
-// stream, with the API key in x-goog-api-key. Vertex accounts are described in vertex.go.
-//
-// An account check (core's check call) of a Gemini API account reads the model list,
-// GET {base_url}/v1beta/models with x-goog-api-key, which costs the account nothing. A Vertex
-// account, and any credential that is not an API key, is left not checked, without a request.
-//
-// An account whose settings say "interactions": true also serves Gemini's Interactions API to
-// Interactions clients, as endpoint calls (interactions.go); any other account answers them
-// unsupported.
-//
-// A Gemini GenerateContent request is sent as the client wrote it, thought signatures included,
-// apart from the repairs Google needs (tool schemas in schema.go; turns and the order of function
-// responses in turns.go). A reply that ends with MALFORMED_FUNCTION_CALL before the client has been
-// sent any content (a thought, answer text or a call) is asked for once more (relayReply); a
-// stream is never held back past its first content, so reasoning streams live. Requests in
-// other formats (Chat Completions, Responses, Messages) are translated to GenerateContent, with
-// the client's reasoning effort turned into Gemini's thinking settings (thinking.go).
 package main
 
 import (
@@ -54,7 +28,6 @@ const (
 	version = "0.1.0"
 )
 
-// defaultBaseURL is the Gemini API.
 const defaultBaseURL = "https://generativelanguage.googleapis.com"
 
 func main() {
@@ -76,16 +49,12 @@ func main() {
 	}
 }
 
-// settings are an account's settings.
 type settings struct {
-	BaseURL string `json:"base_url"`
-	// Vertex, when set, sends the account's requests to Vertex AI (vertex.go).
-	Vertex *vertexSettings `json:"vertex"`
-	// Interactions serves Gemini's Interactions API to Interactions clients (interactions.go).
-	Interactions bool `json:"interactions"`
+	BaseURL      string          `json:"base_url"`
+	Vertex       *vertexSettings `json:"vertex"`
+	Interactions bool            `json:"interactions"`
 }
 
-// readSettings reads an account's settings and fills in the defaults.
 func readSettings(raw json.RawMessage) (settings, error) {
 	var s settings
 	if len(raw) > 0 && string(raw) != "null" {
@@ -117,8 +86,6 @@ var client = &http.Client{
 	CheckRedirect: sameOrigin,
 }
 
-// sameOrigin refuses a redirect to another scheme or host; the redirect reply is then treated as
-// the upstream's answer.
 func sameOrigin(req *http.Request, via []*http.Request) error {
 	first := via[0].URL
 	if req.URL.Scheme != first.Scheme || req.URL.Host != first.Host {
@@ -130,7 +97,6 @@ func sameOrigin(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// method returns the GenerateContent method for a request, with the query a stream needs.
 func method(stream bool) string {
 	if stream {
 		return ":streamGenerateContent?alt=sse"
@@ -138,23 +104,17 @@ func method(stream bool) string {
 	return ":generateContent"
 }
 
-// target is where one request goes and how it is authorised.
 type target struct {
 	url       string
 	authorize func(http.Header)
-	// token and sa are set for a service account: the access token fetched for this request, which
-	// core does not know to redact, and the key it came from.
-	token string
-	sa    *serviceAccount
+	token     string
+	sa        *serviceAccount
 }
 
-// resolve returns where an account's GenerateContent request for model goes.
 func resolve(ctx context.Context, s settings, cred *protocol.Credential, model string, stream bool) (target, error) {
 	return resolveMethod(ctx, s, cred, model, method(stream))
 }
 
-// resolveMethod returns where an account's request for model's method m (such as
-// ":countTokens", with any query) goes.
 func resolveMethod(ctx context.Context, s settings, cred *protocol.Credential, model, m string) (target, error) {
 	if s.Vertex != nil {
 		return s.Vertex.resolve(ctx, s.BaseURL, cred, model, m)
@@ -173,10 +133,8 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return generateTo(ctx, call, out)
 }
 
-// sender takes the events of a reply: the call's stream, or a test's recorder.
 type sender interface{ Send(llm.Event) error }
 
-// generateTo answers a generate call, sending the reply's events to out.
 func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	ctx = withAccountID(ctx, call.Account.ID)
 	s, err := readSettings(call.Account.Settings)
@@ -201,8 +159,6 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 		return err
 	}
 	if t.token != "" {
-		// Core redacts what the credential holds; the fetched access token is redacted here, in
-		// case an upstream or a proxy between echoes it.
 		send.redact = protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: t.token})
 		defer func() {
 			if e, ok := err.(*llm.Error); ok {
@@ -213,8 +169,6 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	if s.Vertex != nil && !vertexCallIDs(tr.From) {
 		body = stripCallIDs(body)
 	}
-	// A reply that ends with MALFORMED_FUNCTION_CALL (the model wrote a function call Gemini
-	// could not parse) is asked for once more, as long as the client has seen none of it.
 	for first := true; ; first = false {
 		resp, err := postBody(ctx, t, body, call.Request.Stream, call.Request.Model)
 		if err != nil {
@@ -236,11 +190,6 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	}
 }
 
-// relayReply sends one upstream reply to send and closes its body. With mayRetry, a reply that
-// ends with MALFORMED_FUNCTION_CALL before send has been given any content is not sent: again
-// reports that it should be asked for once more. A stream is held back from send only until its
-// first content event (holding), so a reply that fails before that can still be asked for again,
-// while one that fails after content went out reaches the client as the error.
 func relayReply(ctx context.Context, resp *http.Response, send sender, mayRetry bool, req *llm.Request) (again bool, err error) {
 	defer resp.Body.Close()
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
@@ -281,14 +230,10 @@ func relayReply(ctx context.Context, resp *http.Response, send sender, mayRetry 
 	return false, nil
 }
 
-// holding keeps back from out the events that carry no content (the response start and native
-// chunks that decode to nothing) until the first content event of any kind (a thought, answer
-// text or a call) or the end of the reply; then it sends what it held and every event after it.
-// Until then the reply can be dropped and asked for again without the client seeing any of it.
 type holding struct {
 	out  sender
 	held []llm.Event
-	open bool // the held events have been sent
+	open bool
 }
 
 func (h *holding) Send(ev llm.Event) error {
@@ -302,7 +247,6 @@ func (h *holding) Send(ev llm.Event) error {
 	return h.flush()
 }
 
-// flush sends the held events and lets every later one through.
 func (h *holding) flush() error {
 	h.open = true
 	held := h.held
@@ -315,8 +259,6 @@ func (h *holding) flush() error {
 	return nil
 }
 
-// postBody sends body to target t and returns the upstream's successful reply; a failure is
-// returned as the error to report. stream asks for a stream.
 func postBody(ctx context.Context, t target, body []byte, stream bool, model string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.url, bytes.NewReader(body))
 	if err != nil {
@@ -350,12 +292,6 @@ func postBody(ctx context.Context, t target, body []byte, stream bool, model str
 	return resp, nil
 }
 
-// buildBody returns the GenerateContent body for req and how it was built. A GenerateContent
-// request is sent unchanged; any other is rebuilt from the model, with its reasoning effort as
-// thinking settings and any Messages thinking.display or Responses reasoning.summary as
-// includeThoughts. A thinking suffix on the model name sets the thinking settings either way, in
-// place of the request's own. Under the reject drop policy a translation that drops anything is
-// refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	return buildBodyOn(req, settings{BaseURL: defaultBaseURL})
 }
@@ -371,10 +307,6 @@ func takesServiceTier(s settings) bool {
 	return err == nil && strings.EqualFold(u.Hostname(), "generativelanguage.googleapis.com")
 }
 
-// takesWebSearch reports whether the account's upstream is known to take Google's googleSearch
-// tool: the Gemini API at generativelanguage.googleapis.com, or a Vertex AI account at Google's
-// own aiplatform.googleapis.com hosts (default, global, regional {location}-aiplatform.googleapis.com,
-// or multi-regional aiplatform.{us,eu}.rep.googleapis.com). Any other base_url returns false.
 func takesWebSearch(s settings) bool {
 	if s.Vertex != nil {
 		if s.BaseURL == "" {
@@ -402,7 +334,6 @@ func takesCandidateCount(s settings, stream bool) bool {
 	return takesServiceTier(s)
 }
 
-// isVertexHost reports whether host is one of Google's own Vertex AI endpoints.
 func isVertexHost(host string) bool {
 	h := strings.ToLower(strings.TrimSpace(host))
 	if h == "aiplatform.googleapis.com" || h == "aiplatform.us.rep.googleapis.com" || h == "aiplatform.eu.rep.googleapis.com" {
@@ -414,9 +345,6 @@ func isVertexHost(host string) bool {
 	return false
 }
 
-// buildBodyOn builds the body as buildBody does for the Gemini API, for the account with settings
-// s. A translated request's service tier is left out of the body, and reported as dropped, for an
-// account that does not take one (takesServiceTier).
 func buildBodyOn(req llm.Request, s settings) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatGeminiGenerate}
 	if n := req.Native; n != nil {
@@ -439,10 +367,6 @@ func buildBodyOn(req llm.Request, s settings) ([]byte, *llm.Translation, error) 
 	}
 	var extra []llm.Loss
 	if tr.From == llm.FormatAnthropicMessages && req.Options.MaxOutputTokens != nil {
-		// Messages makes max_tokens mandatory, so a Messages client's value says nothing about
-		// the limit it wants, and it is often above what a Gemini model can write (Claude
-		// Code sends 32000 and more). Today's core leaves it out too; Gemini then uses the
-		// model's own limit.
 		req.Options.MaxOutputTokens = nil
 		extra = append(extra, llm.Loss{Kind: llm.LossDropped, Path: "max_tokens", Detail: "a Messages client's required max_tokens is left to the Gemini model's own limit"})
 	}
@@ -497,7 +421,6 @@ func buildBodyOn(req llm.Request, s settings) ([]byte, *llm.Translation, error) 
 	return body, tr, nil
 }
 
-// dropLoss removes the loss at path from losses.
 func dropLoss(losses []llm.Loss, path string) []llm.Loss {
 	out := losses[:0]
 	for _, l := range losses {
@@ -508,22 +431,17 @@ func dropLoss(losses []llm.Loss, path string) []llm.Loss {
 	return out
 }
 
-// reporting adds the translation report to the reply's response.start event, and gives each tool
-// call the client's own name for the tool when the request was sent under another (names).
 type reporting struct {
-	out    sender
-	tr     *llm.Translation
-	redact *protocol.Redactor // nil, or what else to remove from upstream data
-	known  []string           // the account's own Google project and identity, which an error must not name
-	names  map[string]string  // GenerateContent name -> the client's
-	// schemas are the request's function schemas by the client's tool name, and callNames the
-	// client's name of each open call, for integralArguments; both nil on a passthrough body.
+	out       sender
+	tr        *llm.Translation
+	redact    *protocol.Redactor
+	known     []string
+	names     map[string]string
 	schemas   map[string]json.RawMessage
 	callNames map[callKey]string
 	calls     *openairesponses.CustomCallCheck
 }
 
-// callKey names one open tool call: its candidate (0 is the top-level reply) and its item.
 type callKey struct{ candidate, item int }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -551,7 +469,6 @@ func (r *reporting) Send(ev llm.Event) error {
 			}
 		}
 	}
-	// A later candidate's calls get the same two repairs as candidate 0's.
 	if ev.Type == llm.EventCandidate && ev.Candidate != nil {
 		c := *ev.Candidate
 		key := callKey{c.Index, c.Item}
@@ -578,8 +495,6 @@ func (r *reporting) Send(ev llm.Event) error {
 	return r.out.Send(r.redact.Event(ev))
 }
 
-// replyNames maps each tool name a translated request was sent under back to the client's
-// (geminigenerate.ToolNames). A GenerateContent body passed through keeps the client's names.
 func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
 	if tr.Passthrough {
 		return nil
@@ -591,8 +506,6 @@ func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
 	return back
 }
 
-// relayStream decodes the upstream GenerateContent stream and sends each event as soon as it is
-// decoded. A blocked send blocks the next upstream read.
 func relayStream(ctx context.Context, body io.Reader, out sender, bodyReaches bool) error {
 	r := sse.NewReader(body)
 	dec := geminigenerate.NewStreamDecoder()
@@ -636,11 +549,6 @@ func relayStream(ctx context.Context, body io.Reader, out sender, bodyReaches bo
 	}
 }
 
-// parseGoogleError / reason / retryDelay are defined in quota.go.
-
-// check asks the Gemini API for its model list with an API key, which costs nothing and generates
-// nothing. A Vertex account, or a credential of another kind, is answered unsupported without a
-// request.
 func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
 	ctx = withAccountID(ctx, call.Account.ID)
 	s, err := readSettings(call.Account.Settings)
@@ -683,8 +591,6 @@ func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, erro
 	return &protocol.CheckResult{Detail: fmt.Sprintf("the upstream lists %d models", len(list.Models))}, nil
 }
 
-// upstreamError turns a non-2xx GenerateContent response into a structured error. model is the
-// model the request asked for.
 func upstreamError(resp *http.Response, model string) *llm.Error {
 	var ctx context.Context
 	if resp != nil && resp.Request != nil {
@@ -705,7 +611,6 @@ func upstreamErrorFor(ctx context.Context, resp *http.Response, model string, re
 	}
 	switch s := resp.StatusCode; {
 	case s >= 300 && s < 400:
-		// A redirect sameOrigin refused to follow.
 		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
 		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
 	case s == http.StatusForbidden && parsed.hasReason("CONSUMER_SUSPENDED"):
@@ -729,14 +634,11 @@ func upstreamErrorFor(ctx context.Context, resp *http.Response, model string, re
 	case s == http.StatusTooManyRequests:
 		now := time.Now()
 		observeRateLimit(ctx, resp.Header, raw, &parsed, hasParsed, model, redact, now)
-		// Only the model waits on this account, as today's core cools only the model that answered.
 		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
 		if model == "" {
-			// A call for no model (login or the model list): the account is the one limited.
 			e.Scope = llm.ScopeCredential
 		}
 		if parsed.Error.Status == "RESOURCE_EXHAUSTED" && parsed.reason() == "QUOTA_EXHAUSTED" {
-			// A quota is used up, not a request rate exceeded (RATE_LIMIT_EXCEEDED).
 			e.Code = llm.CodeQuota
 		}
 		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), now)
@@ -748,7 +650,6 @@ func upstreamErrorFor(ctx context.Context, resp *http.Response, model string, re
 		e.Code, e.Scope = llm.CodeUnavailable, llm.ScopeEndpoint
 		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	case s >= 500:
-		// The upstream may have run the request before failing, so retrying is not known safe.
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
 		if s == 529 {
 			e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
@@ -765,8 +666,6 @@ func upstreamErrorFor(ctx context.Context, resp *http.Response, model string, re
 	return e
 }
 
-// isAccountClosed reports whether a 401 or 403 reply says the account itself has been
-// deactivated, disabled or suspended (distinct from VALIDATION_REQUIRED verification prompts).
 func isAccountClosed(status int, msg string) bool {
 	if status != http.StatusUnauthorized && status != http.StatusForbidden {
 		return false

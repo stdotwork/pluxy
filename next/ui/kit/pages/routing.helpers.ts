@@ -262,15 +262,23 @@ export function draftProblem(d: FallbackDraft, names: readonly string[]): string
 export const skipsItself = (d: FallbackDraft) =>
   d.name.trim() !== "" && !d.steps.some((s) => s.model.trim() === d.name.trim());
 
+export function stepParts(
+  step: ChainStep,
+  accountNames: (id: string) => string,
+): { model: string; detail?: string } {
+  const parts = [step.provider ? providerName(step.provider) : ""];
+  if (step.accounts?.length) parts.push(t("only", { accounts: step.accounts.map(accountNames).join(", ") }));
+  const detail = parts.filter(Boolean).join(", ");
+  return detail ? { model: step.model, detail } : { model: step.model };
+}
+
 /**
  * A step as one phrase: its model, then in brackets its provider and, when limited, "only" and the
  * accounts' names. A model alone, with no provider, is just the model.
  */
 export function stepWords(step: ChainStep, accountNames: (id: string) => string): string {
-  const parts = [step.provider ? providerName(step.provider) : ""];
-  if (step.accounts?.length) parts.push(t("only", { accounts: step.accounts.map(accountNames).join(", ") }));
-  const inside = parts.filter(Boolean).join(", ");
-  return inside ? `${step.model} (${inside})` : step.model;
+  const { model, detail } = stepParts(step, accountNames);
+  return detail ? `${model} (${detail})` : model;
 }
 
 /** The accounts of one provider by name, for a step's checkboxes: ones set in the settings file too. */

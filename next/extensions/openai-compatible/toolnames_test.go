@@ -6,8 +6,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A reply's tool call comes back to the client under the client's own name for the tool, for a
-// Chat upstream and a GenerateContent one; a request passed through keeps its names.
 func TestReplyNamesRestoresClientToolNames(t *testing.T) {
 	req := llm.Request{
 		Tools: []llm.Tool{{Name: "mcp/server.tool"}, {Name: "get_weather"}},
@@ -30,7 +28,6 @@ func TestReplyNamesRestoresClientToolNames(t *testing.T) {
 		if got := ev.Item.Name; got != c.reply {
 			t.Errorf("%s: sent name = %q, want %q", c.to, got, c.reply)
 		}
-		// A call whose name was not changed is left alone.
 		ev = llm.Event{Type: llm.EventItemStart, Item: &llm.ItemStart{
 			Kind: llm.ItemToolCall, CallID: "c1", Name: "get_weather"}}
 		(&reporting{names: names}).restore(&ev)
@@ -41,7 +38,6 @@ func TestReplyNamesRestoresClientToolNames(t *testing.T) {
 	if names := replyNames(req, &llm.Translation{To: llm.FormatOpenAIChat, Passthrough: true}); names != nil {
 		t.Errorf("passthrough names = %v, want none", names)
 	}
-	// A Responses target is sent the client's names.
 	if names := replyNames(req, &llm.Translation{To: llm.FormatOpenAIResponses}); names != nil {
 		t.Errorf("Responses target names = %v, want none", names)
 	}

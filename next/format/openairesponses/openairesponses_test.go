@@ -16,8 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A Responses request translated to Chat Completions reports each thing Chat Completions has no
-// place for, by its path in the client's body, and carries over what it can.
 func TestTranslationToChatReportsLosses(t *testing.T) {
 	in := `{"model":"m","previous_response_id":"resp_1","store":true,"metadata":{"k":"v"},
 	"text":{"format":{"type":"json_schema","name":"r","schema":{"type":"object"},"x_schema":true}},
@@ -43,15 +41,15 @@ func TestTranslationToChatReportsLosses(t *testing.T) {
 	}
 	slices.Sort(got)
 	want := []string{
-		"approximated input[1]",              // reasoning summary becomes reasoning_content
-		"dropped input[0].content[1]",        // a file by URL
-		"dropped input[1].encrypted_content", // opaque reasoning
-		"dropped input[4]",                   // an item reference
+		"approximated input[1]",
+		"dropped input[0].content[1]",
+		"dropped input[1].encrypted_content",
+		"dropped input[4]",
 		"dropped metadata",
 		"dropped previous_response_id",
 		"dropped store",
-		"dropped text",     // x_schema inside text.format
-		"dropped tools[1]", // a hosted tool
+		"dropped text",
+		"dropped tools[1]",
 	}
 	slices.Sort(want)
 	if !reflect.DeepEqual(got, want) {
@@ -71,9 +69,6 @@ func TestTranslationToChatReportsLosses(t *testing.T) {
 	}
 }
 
-// An input_audio part is carried as a file part whose inline data is audio: a Responses target
-// gets it back as the flat input_audio part the Responses API spells, and a Chat target as
-// Chat's nested one. An input_file carrying audio is audio input too.
 func TestInputAudioPart(t *testing.T) {
 	in := `{"model":"m","input":[{"role":"user","content":[
 		{"type":"input_text","text":"Transcribe this."},
@@ -128,7 +123,6 @@ func TestInputAudioPart(t *testing.T) {
 	}
 	samePart(t, "Chat part", chatBody.Messages[0].Content[1], `{"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}}`)
 
-	// The flat spelling, and an input_file whose inline data is audio, are audio input too.
 	for name, in := range map[string]string{
 		"flat input_audio": `{"type":"input_audio","data":"UklGRg==","format":"wav"}`,
 		"input_file":       `{"type":"input_file","file_data":"data:audio/wav;base64,UklGRg==","filename":"a.wav"}`,
@@ -160,7 +154,6 @@ func TestInputAudioPart(t *testing.T) {
 	}
 }
 
-// samePart compares two JSON values for equality, whatever their key order or spacing.
 func samePart(t *testing.T, what string, got []byte, want string) {
 	t.Helper()
 	var g, w any
@@ -175,8 +168,6 @@ func samePart(t *testing.T, what string, got []byte, want string) {
 	}
 }
 
-// Events of an upstream Responses stream keep the upstream event in Raw, events the model has no
-// place for become native events, and the stream follows the protocol's ordering rules.
 func TestStreamDecoderKeepsUpstreamEvents(t *testing.T) {
 	stream := []string{
 		`{"type":"response.created","sequence_number":0,"response":{"id":"resp_1","object":"response","created_at":7,"status":"in_progress","model":"up","output":[]}}`,
@@ -222,8 +213,6 @@ func TestStreamDecoderKeepsUpstreamEvents(t *testing.T) {
 	}
 }
 
-// A stream that ends without a terminal event is an error, and response.failed is an error that
-// keeps the upstream event.
 func TestStreamDecoderFailures(t *testing.T) {
 	dec := NewStreamDecoder()
 	if _, err := dec.Decode([]byte(`{"type":"response.created","sequence_number":0,"response":{"id":"r"}}`)); err != nil {
@@ -244,8 +233,6 @@ func TestStreamDecoderFailures(t *testing.T) {
 		t.Errorf("response.failed gave %v", err)
 	}
 
-	// A failed Response that reports usage keeps it on the error, so the tokens the upstream
-	// counted are not lost with the reply.
 	dec = NewStreamDecoder()
 	_, err = dec.Decode([]byte(`{"type":"response.failed","response":{"id":"r","status":"failed","usage":{"input_tokens":9,"output_tokens":2},"error":{"code":"server_error","message":"boom"}}}`))
 	if e, ok := err.(*llm.Error); !ok || e.Usage == nil || e.Usage.InputTokens == nil || *e.Usage.InputTokens != 9 || e.Usage.OutputTokens == nil || *e.Usage.OutputTokens != 2 {
@@ -253,8 +240,6 @@ func TestStreamDecoderFailures(t *testing.T) {
 	}
 }
 
-// A reply from a Chat upstream to a Responses client becomes the Responses event sequence, and
-// what Chat had that a Response cannot hold is reported.
 func TestStreamWriterRebuildsEvents(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","input":"hi","stream":true}`))
 	if err != nil {
@@ -294,8 +279,6 @@ func TestStreamWriterRebuildsEvents(t *testing.T) {
 	}
 }
 
-// A failure after the reply started reaches a Responses client as an error event with code,
-// message and param at its top level, as OpenAI's error event has them.
 func TestStreamWriterErrorEvent(t *testing.T) {
 	req, _ := ParseRequest([]byte(`{"model":"m","input":"hi","stream":true}`))
 	var out strings.Builder
@@ -324,9 +307,6 @@ func TestStreamWriterErrorEvent(t *testing.T) {
 	}
 }
 
-// A Responses client gets an upstream Responses stream's events unchanged and once each, also
-// when the stream does not open with response.created, carries items the model has no place
-// for, or opens with its terminal event.
 func TestNativeStreamPassesThrough(t *testing.T) {
 	for name, stream := range map[string][]string{
 		"no response.created": {
@@ -382,8 +362,6 @@ func checkPassthrough(t *testing.T, stream []string) {
 	}
 }
 
-// Encrypted reasoning and annotations are listed by their path in the Response, from a stream's
-// item event or from the whole Response.
 func TestOpaqueOutput(t *testing.T) {
 	item := `{"type":"response.output_item.done","output_index":2,"item":{"type":"reasoning","encrypted_content":"gAAA","summary":[]}}`
 	if got := OpaqueOutput(json.RawMessage(item)); !reflect.DeepEqual(got, []string{"output[2].encrypted_content"}) {
@@ -396,8 +374,6 @@ func TestOpaqueOutput(t *testing.T) {
 	}
 }
 
-// An assistant message's phase, which Codex sets on its output messages, is listed: a client in
-// another format has no place for it.
 func TestOpaqueOutputPhase(t *testing.T) {
 	item := `{"type":"response.output_item.done","output_index":1,"item":{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Looking."}]}}`
 	if got := OpaqueOutput(json.RawMessage(item)); !reflect.DeepEqual(got, []string{"output[1].phase"}) {
@@ -409,8 +385,6 @@ func TestOpaqueOutputPhase(t *testing.T) {
 	}
 }
 
-// A phased assistant message from a Responses reply is reported as opaque output for other formats,
-// and keeps its phase when replayed and encoded again for a Responses upstream.
 func TestPhaseSurvivesEncoding(t *testing.T) {
 	reply := `{"id":"r1","object":"response","model":"m","status":"completed","output":[{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Looking."}]}]}`
 	evs, err := DecodeResponse([]byte(reply))
@@ -444,7 +418,6 @@ func TestPhaseSurvivesEncoding(t *testing.T) {
 	}
 }
 
-// Opaque reasoning data the aggregator keeps counts toward its size, which core bounds.
 func TestAggregatorSizeCountsOpaque(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","input":"hi"}`))
 	if err != nil {
@@ -460,7 +433,6 @@ func TestAggregatorSizeCountsOpaque(t *testing.T) {
 	}
 }
 
-// A Claude web search's query, which comes in input deltas, counts toward the aggregator's size.
 func TestAggregatorSizeCountsSearchInput(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","input":"hi","tools":[{"type":"web_search"}]}`))
 	if err != nil {
@@ -483,8 +455,6 @@ func TestAggregatorSizeCountsSearchInput(t *testing.T) {
 	}
 }
 
-// A reply with more distinct losses than llm.MaxLosses lists the first MaxLosses, then one entry
-// that says more were left out, and nothing after it.
 func TestStreamWriterBoundsLosses(t *testing.T) {
 	raw := map[string]int{}
 	for i := range 150 {
@@ -512,9 +482,6 @@ func TestStreamWriterBoundsLosses(t *testing.T) {
 	}
 }
 
-// Decoding a non-streamed reply takes work in proportion to its bytes: joining each text part onto
-// the text so far copies about 200 MiB for 2,000 parts of 100 bytes, where the joined text is
-// 200 KB.
 func TestDecodeResponseJoinsTextPartsInLinearBytes(t *testing.T) {
 	const parts, size = 2000, 100
 	const maxAlloc = 32 << 20
@@ -559,8 +526,6 @@ func TestDecodeResponseJoinsTextPartsInLinearBytes(t *testing.T) {
 	}
 }
 
-// writeStream runs an upstream Responses stream through the decoder and a stream writer and
-// returns what the client got.
 func writeStream(t *testing.T, stream []string) string {
 	t.Helper()
 	req, _ := ParseRequest([]byte(`{"model":"m","input":"hi","stream":true}`))
@@ -584,8 +549,6 @@ func writeStream(t *testing.T, stream []string) string {
 	return out.String()
 }
 
-// writeNative runs an upstream Responses stream through writeStream and returns the data of each
-// event the client got.
 func writeNative(t *testing.T, stream []string) []string {
 	t.Helper()
 	var datas []string
@@ -597,9 +560,6 @@ func writeNative(t *testing.T, stream []string) []string {
 	return datas
 }
 
-// A passed-through response.completed whose output is empty, null or absent gets the items the
-// stream's output_item.done events finished, by output_index and then those without one, as
-// today's core rebuilds it; one with output is left alone, and so is response.incomplete.
 func TestNativeStreamRepairsEmptyOutput(t *testing.T) {
 	done := []string{
 		`{"type":"response.output_item.done","sequence_number":1,"output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"f","arguments":"{}"}}`,
@@ -627,7 +587,6 @@ func TestNativeStreamRepairsEmptyOutput(t *testing.T) {
 				t.Fatal(err)
 			}
 			if c.name == "absent" || c.want != rebuilt {
-				// The events before the last pass through unchanged either way.
 				for i, d := range append(stream[:0:0], stream...) {
 					if got[i] != d {
 						t.Errorf("event %d = %s, want %s", i, got[i], d)
@@ -644,9 +603,6 @@ func TestNativeStreamRepairsEmptyOutput(t *testing.T) {
 	}
 }
 
-// An upstream Codex stream can carry a keepalive frame, with an event name or without one, between
-// its deltas or before response.created. No client event or data line carries keepalive: the reply's
-// events still arrive, in order, with its text intact.
 func TestUpstreamKeepaliveNeverReachesResponsesClient(t *testing.T) {
 	events := []string{
 		`{"type":"response.created","sequence_number":0,"response":{"id":"resp_1","object":"response","created_at":7,"status":"in_progress","model":"up","output":[]}}`,
@@ -657,8 +613,6 @@ func TestUpstreamKeepaliveNeverReachesResponsesClient(t *testing.T) {
 		`{"type":"response.completed","sequence_number":6,"response":{"id":"resp_1","object":"response","status":"completed","model":"up","output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}]}}`,
 	}
 	const keepalive = `{"type":"keepalive","sequence_number":5}`
-	// upstream is the SSE text Codex receives: the events, with the keepalive frame before
-	// events[at], named as "event: keepalive" when named is set.
 	upstream := func(at int, named bool) string {
 		var b strings.Builder
 		frame := func(name, data string) {
@@ -875,9 +829,6 @@ func TestRenderUsageCacheWrite(t *testing.T) {
 	}
 }
 
-// A Response's usage with any count at all carries every field OpenAI's ResponseUsage requires,
-// a missing input or output count as 0; a usage with no counts is left out, and a count reported as
-// zero stays zero.
 func TestRenderUsageUnknownStaysAbsent(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","input":"hi"}`))
 	if err != nil {

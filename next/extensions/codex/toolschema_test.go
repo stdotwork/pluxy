@@ -26,17 +26,17 @@ func TestRejectedPattern(t *testing.T) {
 		{`^[^\0]*$`, true},
 		{`^(?!__.*__$)[a-z]+$`, true},
 		{`foo(?=bar)`, true},
-		{`a\\(?=b)`, true},      // escaped backslash, then unescaped lookahead
-		{`[^]a](?=b)`, true},    // literal ] after [^ does not close class prematurely
-		{`foo\(?!bar\)`, false}, // escaped paren is not a lookahead
-		{`[(?=a)(?!b)]`, false}, // inside a character class
-		{`[^](?=a)]`, false},    // still inside the character class
-		{`(?<name>a)`, false},   // named capture group
-		{`(?:a|b)`, false},      // non-capturing group
-		{`(?i)a`, false},        // inline flag
-		{`a\\p{L}`, false},      // an escaped backslash, then a literal p
+		{`a\\(?=b)`, true},
+		{`[^]a](?=b)`, true},
+		{`foo\(?!bar\)`, false},
+		{`[(?=a)(?!b)]`, false},
+		{`[^](?=a)]`, false},
+		{`(?<name>a)`, false},
+		{`(?:a|b)`, false},
+		{`(?i)a`, false},
+		{`a\\p{L}`, false},
 		{`a\\0`, false},
-		{`^\d+\p`, false}, // \p with no brace is not a property escape
+		{`^\d+\p`, false},
 		{`^[a-z]+\.\w{2,3}$`, false},
 		{`é`, false},
 		{`trailing\`, false},
@@ -48,7 +48,6 @@ func TestRejectedPattern(t *testing.T) {
 	}
 }
 
-// fixed runs fixSchema on schema and returns the result as a JSON value, and whether it changed.
 func fixed(t *testing.T, schema string) (any, bool) {
 	t.Helper()
 	out, changed := fixSchema(json.RawMessage(schema))
@@ -71,8 +70,6 @@ func sameJSON(t *testing.T, got any, want string) {
 	}
 }
 
-// A rejected pattern goes wherever a schema can sit, a patternProperties key goes with its
-// schema, and what is not a schema (an enum, a const, a default) is not read as one.
 func TestFixSchemaDropsRejectedPatterns(t *testing.T) {
 	got, changed := fixed(t, `{
 		"type": "object",
@@ -104,8 +101,6 @@ func TestFixSchemaDropsRejectedPatterns(t *testing.T) {
 	}`)
 }
 
-// A bound goes only when it is a whole number outside the int64 range; the digits of every other
-// bound stay as the client wrote them.
 func TestFixSchemaDropsBoundsOutsideInt64(t *testing.T) {
 	for _, tc := range []struct {
 		bound string
@@ -121,12 +116,12 @@ func TestFixSchemaDropsBoundsOutsideInt64(t *testing.T) {
 		{"9.3e18", true},
 		{"-1e400", true},
 		{"1e99999999999999999999", true},
-		{"922337203685477580.7e1", false}, // 9223372036854775807
+		{"922337203685477580.7e1", false},
 		{"1e18", false},
 		{"1e3", false},
 		{"0.5e1", false},
 		{"1.5", false},
-		{"123456789012345678901234567890.5", false}, // not a whole number
+		{"123456789012345678901234567890.5", false},
 		{"1e-400", false},
 		{"0", false},
 		{"0e99999999999999999999", false},
@@ -156,7 +151,6 @@ func mustJSON(t *testing.T, b []byte) any {
 	return v
 }
 
-// A bound that is not a number (a malformed schema) is not the rule's business.
 func TestFixSchemaLeavesOtherShapesAlone(t *testing.T) {
 	for _, schema := range []string{
 		`{"type":"object","properties":{"n":{"minimum":"1e400"}}}`,
@@ -173,7 +167,6 @@ func TestFixSchemaLeavesOtherShapesAlone(t *testing.T) {
 	}
 }
 
-// consts builds n const branches "v0", "v1", ... each with a description.
 func consts(n int) string {
 	var b []string
 	for i := 0; i < n; i++ {
@@ -187,7 +180,7 @@ func TestUnionToEnum(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		prop string
-		want string // the property after, or "" for unchanged
+		want string
 	}{
 		{"oneOf becomes an enum", `{"type":"string","description":"p","oneOf":` + consts(8) + `}`,
 			`{"type":"string","description":"p","enum":` + enum8 + `}`},
@@ -245,7 +238,6 @@ func TestUnionToEnum(t *testing.T) {
 	}
 }
 
-// The enum keeps the digits of a number const, and the order of the branches.
 func TestUnionToEnumKeepsConstDigits(t *testing.T) {
 	out, changed := fixSchema(json.RawMessage(`{"type":"object","properties":{"n":{"oneOf":[
 		{"const":12345678901234567890123},{"const":1.50},{"const":"x"},{"const":true},
@@ -258,8 +250,6 @@ func TestUnionToEnumKeepsConstDigits(t *testing.T) {
 	}
 }
 
-// Only a property of the tool's parameters is converted from a const union to an enum: a root
-// union is flattened rather than turned into an enum, and a deeper nested union is left alone.
 func TestUnionToEnumOnlyForParameterProperties(t *testing.T) {
 	schema := `{"type":"object","oneOf":` + consts(8) + `,"properties":{"o":{"type":"object","properties":{"deep":{"oneOf":` + consts(8) + `}}}}}`
 	got, changed := fixed(t, schema)
@@ -436,7 +426,6 @@ func TestFixSchemaStrictOptionalProperties(t *testing.T) {
 		}
 	}`
 
-	// Non-strict leaves optional properties untouched (except adding missing array items).
 	nonStrict, changed := fixed(t, in)
 	if !changed {
 		t.Fatal("expected missing array items change in non-strict mode")
@@ -446,7 +435,6 @@ func TestFixSchemaStrictOptionalProperties(t *testing.T) {
 		t.Fatalf("non-strict changed required = %v, want [req]", req)
 	}
 
-	// Strict makes every optional property required and nullable recursively.
 	out, changed, strictOff := fixSchemaForMode(json.RawMessage(in), true)
 	if strictOff {
 		t.Fatal("a closable schema turned strict off")
@@ -488,9 +476,6 @@ func TestFixSchemaStrictOptionalProperties(t *testing.T) {
 	}`)
 }
 
-// The rules apply to every function tool: a Responses client's own, one inside a namespace tool,
-// and one translated from another format. Tools of other types, and tools with nothing to fix,
-// go out as they came.
 func TestBuildRequestFixesToolSchemas(t *testing.T) {
 	bad := `{"type":"object","properties":{"id":{"type":"string","pattern":"^\\p{L}+$"},"n":{"type":"integer","maximum":1e30},` +
 		`"mode":{"oneOf":` + consts(8) + `}}}`
@@ -555,15 +540,13 @@ func TestBuildRequestFixesToolSchemas(t *testing.T) {
 			}
 			p := params(t, got[0]).(map[string]any)
 			if format == llm.FormatGeminiGenerate {
-				delete(p, "additionalProperties") // closedSchema adds it at the top
+				delete(p, "additionalProperties")
 			}
 			sameJSON(t, p, wantBad)
 		}
 	})
 }
 
-// A compaction request's tools go upstream with the same schema rewrites as on /responses, as
-// today's core sends them.
 func TestCompactFixesToolSchemas(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	ext, err := host.Start(manifest, host.Options{Log: io.Discard})
@@ -588,8 +571,6 @@ func TestCompactFixesToolSchemas(t *testing.T) {
 	}
 }
 
-// A compaction request whose client_metadata says it is Responses-lite has its replayed web
-// searches removed, as on /responses.
 func TestCompactLiteFromClientMetadata(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	ext, err := host.Start(manifest, host.Options{Log: io.Discard})
@@ -617,10 +598,6 @@ func TestCompactLiteFromClientMetadata(t *testing.T) {
 	}
 }
 
-// TestStrictToolSchemasThroughTheExtension runs the real extension process against a fake Codex
-// upstream and checks that a tool schema combining all four CX7 forms (an array without items, a
-// regex lookahead in pattern, an optional property under strict: true, and a root anyOf) arrives
-// rewritten — both for a strict Responses passthrough request and for a translated Messages request.
 func TestStrictToolSchemasThroughTheExtension(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	srv := codextest.New(t)
@@ -719,8 +696,6 @@ func TestStrictToolSchemasThroughTheExtension(t *testing.T) {
 	}`)
 }
 
-// strictTools sends a Responses client's tools through buildRequest and returns the tools that
-// would go upstream, with the translation's losses.
 func strictTools(t *testing.T, tools string) ([]map[string]json.RawMessage, *llm.Translation) {
 	t.Helper()
 	body := `{"model":"gpt-test","input":[],"tools":` + tools + `}`
@@ -747,8 +722,6 @@ func strictFlag(t *testing.T, tool map[string]json.RawMessage) bool {
 	return b
 }
 
-// everyObjectIsClosed reports each schema that has a properties key and no additionalProperties
-// false, by walking the whole value (properties, $defs, items, anyOf and the rest alike).
 func unclosedObjects(v any, path string, out *[]string) {
 	switch s := v.(type) {
 	case []any:
@@ -769,7 +742,6 @@ func unclosedObjects(v any, path string, out *[]string) {
 	}
 }
 
-// Under strict: true every object schema that has properties is closed, wherever it sits.
 func TestStrictClosesEveryObject(t *testing.T) {
 	in := `{"type":"object","properties":{
 		"nested":{"type":"object","properties":{"deep":{"type":"object","properties":{"x":{"type":"string"}}}}},
@@ -793,8 +765,6 @@ func TestStrictClosesEveryObject(t *testing.T) {
 	}
 }
 
-// A schema that accepts more than its properties cannot be made strict without changing what the
-// tool accepts: the tool goes out non-strict, with the non-strict rules' result, and one loss.
 func TestStrictOpenSchemaGoesNonStrict(t *testing.T) {
 	for name, params := range map[string]string{
 		"a free-form map":                `{"type":"object","properties":{"meta":{"type":"object"},"tags":{"type":"array"}}}`,
@@ -819,9 +789,6 @@ func TestStrictOpenSchemaGoesNonStrict(t *testing.T) {
 			if strictFlag(t, tools[0]) {
 				t.Fatalf("sent strict: %s", tools[0]["parameters"])
 			}
-			// What the non-strict rules leave: nothing added to required, no nullability, and
-			// the missing array items still filled in. Equal to that result means no strict
-			// rewrite was applied, whether or not the input already has required lists.
 			want, _ := fixed(t, params)
 			sameJSON(t, mustJSON(t, tools[0]["parameters"]), mustMarshal(t, want))
 			if len(tr.Losses) != 1 {
@@ -835,8 +802,6 @@ func TestStrictOpenSchemaGoesNonStrict(t *testing.T) {
 	}
 }
 
-// A single-branch allOf of a $ref combines nothing, so the tool stays strict and the referenced
-// object is closed like any other.
 func TestStrictSingleBranchAllOfStaysStrict(t *testing.T) {
 	in := `{"type":"object","properties":{"c":{"allOf":[{"$ref":"#/$defs/Foo"}],"description":"x"}},"$defs":{"Foo":{"type":"object","properties":{"f":{"type":"string"}}}}}`
 	tools, tr := strictTools(t, `[{"type":"function","name":"f","strict":true,"parameters":`+in+`}]`)
@@ -873,7 +838,6 @@ func mustMarshal(t *testing.T, v any) string {
 	return string(b)
 }
 
-// Inside a namespace tool, each function tool is judged on its own, and its loss names its path.
 func TestStrictNamespaceTools(t *testing.T) {
 	closed := `{"type":"object","properties":{"a":{"type":"string"}}}`
 	open := `{"type":"object","properties":{"a":{"type":"string"},"m":{"type":"object"}}}`
@@ -894,8 +858,6 @@ func TestStrictNamespaceTools(t *testing.T) {
 	}
 }
 
-// A tool that is not strict goes out as the rules for any tool leave it: no closing, no
-// required, no nullability, no strict flag turned on or off, and no loss.
 func TestNonStrictToolsAreNotClosed(t *testing.T) {
 	params := `{"type":"object","properties":{"a":{"type":"string"},"m":{"type":"object"},"o":{"type":"object","properties":{"k":{"type":"string"}}}}}`
 	for name, tool := range map[string]string{
@@ -917,8 +879,6 @@ func TestNonStrictToolsAreNotClosed(t *testing.T) {
 	}
 }
 
-// acceptsNull reads a schema's shape, not its words: null passes when every one of type, enum,
-// const, anyOf and oneOf that the schema has lets it through.
 func acceptsNull(s map[string]any) bool {
 	seen := false
 	if v, ok := s["type"]; ok {
@@ -966,7 +926,6 @@ func acceptsNull(s map[string]any) bool {
 	return seen
 }
 
-// An optional property is made required, so null must pass every keyword that constrains it.
 func TestStrictOptionalPropertyAcceptsNull(t *testing.T) {
 	props := map[string]string{
 		"plainType":       `{"type":"string"}`,
@@ -997,8 +956,6 @@ func TestStrictOptionalPropertyAcceptsNull(t *testing.T) {
 			t.Errorf("%s refuses null: %s", name, mustMarshal(t, got[name]))
 		}
 	}
-	// The forms that already took a null keep their shape; the rest are wrapped, with the
-	// description and title outside.
 	sameJSON(t, got["plainType"], `{"type":["string","null"]}`)
 	sameJSON(t, got["typeList"], `{"type":["string","integer","null"]}`)
 	sameJSON(t, got["plainAnyOf"], `{"anyOf":[{"type":"string"},{"type":"number"},{"type":"null"}]}`)

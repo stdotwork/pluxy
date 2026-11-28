@@ -1,6 +1,3 @@
-// Package formattest gathers the client requests that tests of the format parsers run through
-// them: every request the corpus cases send, and every JSON object the format packages' tests
-// hold as a string literal, as a request to each route that reads that package's format.
 package formattest
 
 import (
@@ -18,17 +15,14 @@ import (
 	"github.com/stdotwork/pluxy/next/corpus"
 )
 
-// Request is one client HTTP request.
 type Request struct {
-	Source  string // "corpus" or "format tests"
+	Source  string
 	Name    string
 	Path    string
 	Headers map[string]string
 	Body    []byte
 }
 
-// CorpusRequests returns the POST requests of every corpus case (client and then), as the case
-// files under next (the module's folder) hold them. Not all are generate requests.
 func CorpusRequests(next string) ([]Request, error) {
 	cases, err := corpus.LoadCases(filepath.Join(next, "corpus", "cases"))
 	if err != nil {
@@ -53,7 +47,6 @@ func CorpusRequests(next string) ([]Request, error) {
 	return out, nil
 }
 
-// literalRoutes are the routes that read each format package's requests.
 var literalRoutes = map[string][]string{
 	"openaichat":        {"/v1/chat/completions", "/v1/completions"},
 	"openairesponses":   {"/v1/responses"},
@@ -61,9 +54,6 @@ var literalRoutes = map[string][]string{
 	"geminigenerate":    {"/v1beta/models/gemini-x:generateContent", "/v1beta/models/gemini-x:streamGenerateContent"},
 }
 
-// LiteralRequests returns every string literal in the format packages' tests under next (the
-// module's folder) that is a JSON object, as a request to each route that reads the package's
-// format, ordered by name. Not all are requests.
 func LiteralRequests(next string) ([]Request, error) {
 	var out []Request
 	for pkg, routes := range literalRoutes {
