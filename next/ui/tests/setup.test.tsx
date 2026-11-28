@@ -475,7 +475,7 @@ test("Refresh in step 2 asks pluxy to look again and tells the host", async () =
   const w = world({ accounts: [ACC] });
   const m = await w.mount(<SetupPage options={{ onRefresh: () => refreshed++ }} />);
   await press(buttonIn(step(m.root, 2), "Refresh"));
-  expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
+  expect(w.sent("POST", "/setup/scan")).toHaveLength(2); // the one as the page opened, and this
   expect(refreshed).toBe(1);
 });
 
@@ -524,7 +524,7 @@ test("the test sends no model by default, says what passed, and offers Finish se
   const m = await w.mount(<SetupPage />);
   const three = step(m.root, 3);
   expect(three.textContent).toContain(
-    "This sends one short test message through Work. It counts against that account's use.",
+    "This sends one short test message through Work. The provider counts it against that account's limits. pluxy does not list it in Activity or Usage.",
   );
   expect(all(three, "select")).toHaveLength(0);
   await press(buttonIn(three, "Send a test request"));
@@ -942,7 +942,7 @@ test("a lost reply to Import now says it is not known whether it ran, and Refres
   expect(withPart(m.root, "setup-report")).toHaveLength(0);
   expect(hasButton(line(m.root), "Import now")).toBe(false);
   await press(buttonIn(line(m.root), "Refresh"));
-  expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
+  expect(w.sent("POST", "/setup/scan")).toHaveLength(2); // the one as the page opened, and this
   // Core has no record of the import: it did not run, and a new preview can start.
   expect(line(m.root).textContent).not.toContain("not known whether the import ran");
   expect(line(m.root).textContent).toContain("The import did not run: pluxy has no record of it.");
@@ -1055,7 +1055,7 @@ test("Try again after a 400 looks again, then starts a new preview of what the n
   const m = await w.mount(<SetupPage />);
   await press(buttonIn(line(m.root), "Preview import"));
   await press(buttonIn(line(m.root), "Try again"));
-  expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
+  expect(w.sent("POST", "/setup/scan")).toHaveLength(2); // the one as the page opened, and this
   expect(imports(w)).toEqual([true, true]);
   expect(w.sent("POST", "/setup/import").map((c) => (c.body as { auth_dir?: string }).auth_dir)).toEqual([
     "~/.cli-proxy-api/auths",
@@ -1140,6 +1140,24 @@ test("the kinds button names the long kind as a phrase: Add Claude and another s
 });
 
 // ---- step 2 follows the tool's settings --------------------------------------------------------
+
+test("opening the page asks pluxy to look at the tools again, so a tool connected on another page shows at once", async () => {
+  // Claude Code was connected on its own page after pluxy's last look: the kept scan says it is not.
+  const w = world({
+    accounts: [ACC],
+    clients: [client("claude-code", "Claude Code")],
+    reply: (c) => {
+      if (c.path === "/setup/scan") {
+        w.state.setup.found.clients = [client("claude-code", "Claude Code", { state: "configured" })];
+      }
+      return undefined;
+    },
+  });
+  const m = await w.mount(<SetupPage />);
+  expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
+  expect(step(m.root, 2).textContent).toContain("1 connected");
+  expect(step(m.root, 2).textContent).not.toContain("0 connected");
+});
 
 test("step 2 reads the tools again when the person comes back to the page, so pasted settings show", async () => {
   const w = world({ accounts: [ACC], clients: [client("claude-code", "Claude Code")] });

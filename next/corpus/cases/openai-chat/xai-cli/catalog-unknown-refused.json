@@ -19,7 +19,7 @@
       "reason": "For an unknown model the old core says unknown provider (invalid_request_error, param model); the new core says no account serves the model (model_not_found).",
       "want": {
         "code": "model_not_found",
-        "message": "no account serves model \"corpus-not-in-catalog\"",
+        "message": "no account serves model \"corpus-not-in-catalog\". pluxy serves: grok-3-mini, grok-3-mini-fast, grok-4.20-0309-non-reasoning, grok-4.20-0309-reasoning, grok-4.20-multi-agent-0309, grok-4.3, grok-4.5, grok-4.6 and 4 more (pluxy model list shows them all). Set the tool's model to one of them, or add a model alias to an account so that \"corpus-not-in-catalog\" goes to one of them.",
         "type": "invalid_request_error",
         "pluxy": "(volatile)"
       }
