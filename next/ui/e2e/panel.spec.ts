@@ -496,23 +496,24 @@ test("a change of page opens the new page at its top; a change inside a page kee
     await expect(page.locator('[data-part="status"]')).toBeInViewport({ ratio: 1 });
   };
 
-  // A tab of the Config page is in the address, and is the same page: the pane stays put.
+  // A section of the Config page is in the address, and is the same page: the pane is not sent
+  // back to its top, only to the section the address names.
   await page.evaluate(() => {
     location.hash = "#/config";
   });
-  await expect(page.getByRole("tab", { name: "Common", exact: true })).toHaveAttribute(
+  await expect(page.getByRole("tab", { name: "Settings", exact: true })).toHaveAttribute(
     "aria-selected",
     "true",
   );
   await scrollDown();
   await page.evaluate(() => {
-    location.hash = "#/config/network";
+    location.hash = "#/config/logging";
   });
-  await expect(page.getByRole("tab", { name: "Network", exact: true })).toHaveAttribute(
+  await expect(page.locator("#logging h2")).toBeInViewport();
+  await expect(page.getByRole("tab", { name: "Settings", exact: true })).toHaveAttribute(
     "aria-selected",
     "true",
   );
-  // The Network tab is shorter, so the pane may move up to its end, but not to its top.
   expect(await scrolled()).toBeGreaterThan(0);
 
   // Another page, by a navigation entry and by the address: each opens at its top.

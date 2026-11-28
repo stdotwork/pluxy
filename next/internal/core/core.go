@@ -469,11 +469,26 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 	return nil
 }
 
+// keepListen leaves the address core serves on as it is when the config holds another one: core
+// takes a new address only when it starts, and the rest of the config applies meanwhile. The
+// extension pages' address, which follows the host of listen unless the config names one, stays too.
+func keepListen(cfg *server.Config, prev *snapshot) {
+	if prev == nil || cfg.Listen == prev.Config.Listen {
+		return
+	}
+	log.Printf("config: listen %q waits for a restart; core keeps serving on %q", cfg.Listen, prev.Config.Listen)
+	followed := func(listen, pages string) bool {
+		host, _, err := net.SplitHostPort(listen)
+		return err == nil && pages == net.JoinHostPort(host, "0")
+	}
+	if followed(cfg.Listen, cfg.ExtensionPages.Listen) && followed(prev.Config.Listen, prev.Config.ExtensionPages.Listen) {
+		cfg.ExtensionPages.Listen = prev.Config.ExtensionPages.Listen
+	}
+	cfg.Listen = prev.Config.Listen
+}
+
 // fixed refuses a config that changes a setting that cannot change while core runs.
 func (c *Core) fixed(cfg *server.Config, prev *snapshot) error {
-	if prev != nil && cfg.Listen != prev.Config.Listen {
-		return fmt.Errorf("config: listen cannot change while core runs (%q to %q); restart core to apply it", prev.Config.Listen, cfg.Listen)
-	}
 	if prev != nil && cfg.ExtensionPages.Listen != prev.Config.ExtensionPages.Listen {
 		return fmt.Errorf("config: extension_pages.listen cannot change while core runs (%q to %q); restart core to apply it", prev.Config.ExtensionPages.Listen, cfg.ExtensionPages.Listen)
 	}
@@ -505,6 +520,7 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 	if err != nil {
 		return nil, err
 	}
+	keepListen(cfg, prev)
 	if err := c.fixed(cfg, prev); err != nil {
 		return nil, err
 	}

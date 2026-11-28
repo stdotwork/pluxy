@@ -61,6 +61,8 @@ const t = strings("accountSettings", {
   headersHint:
     "JSON object of HTTP headers. Secrets show as redacted placeholders; type a new value to replace them, or leave empty to clear.",
   aliases: "Account model aliases",
+  aliasHint:
+    "A request for the Alias goes to the Model name. Model name is a model this account serves, as its provider names it; Alias is the name a tool asks for.",
   aliasName: "Alias",
   aliasDisplay: "Display name",
   aliasFork: "Keep the original model in listings",
@@ -180,7 +182,14 @@ export function AccountEdit(props: {
   onChanged: () => void;
   disabled?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  // An address with ?alias=<name> (from a request no account served) opens the form with that
+  // name already in a new alias row, once.
+  const [alias] = useState(aliasInAddress);
+  const [open, setOpen] = useState(alias !== undefined);
+  const close = () => {
+    setOpen(false);
+    if (alias !== undefined) forgetAlias();
+  };
   return (
     <>
       <Button disabled={props.disabled} onClick={() => setOpen(true)}>
@@ -190,9 +199,10 @@ export function AccountEdit(props: {
         <EditForm
           account={props.account}
           name={props.name}
-          close={() => setOpen(false)}
+          startAlias={alias}
+          close={close}
           saved={() => {
-            setOpen(false);
+            close();
             props.onChanged();
           }}
         />
@@ -201,11 +211,42 @@ export function AccountEdit(props: {
   );
 }
 
-function EditForm(props: { account: Account; name: string; close: () => void; saved: () => void }) {
+/** The alias an address asks the account form to start with: #/accounts/<id>?alias=<name>. */
+function aliasInAddress(): string | undefined {
+  const at = location.hash.indexOf("?");
+  const alias = at < 0 ? null : new URLSearchParams(location.hash.slice(at + 1)).get("alias");
+  return alias || undefined;
+}
+
+/** Takes ?alias out of the address, so the form does not open again on a reload. */
+function forgetAlias() {
+  const at = location.hash.indexOf("?");
+  if (at < 0) return;
+  const query = new URLSearchParams(location.hash.slice(at + 1));
+  query.delete("alias");
+  const rest = query.toString();
+  history.replaceState(null, "", `${location.hash.slice(0, at)}${rest ? `?${rest}` : ""}`);
+}
+
+function EditForm(props: {
+  account: Account;
+  name: string;
+  /** A name a tool asks for: the form starts with a new alias row holding it. */
+  startAlias?: string;
+  close: () => void;
+  saved: () => void;
+}) {
   const { api } = useKit();
   const p = usePrivacy();
   const a = props.account;
-  const [draft, setDraft] = useState<SettingsDraft>(() => draftOf(a));
+  const [draft, setDraft] = useState<SettingsDraft>(() => {
+    const d = draftOf(a);
+    const start = props.startAlias;
+    if (start && !d.aliases.some((r) => r.alias === start)) {
+      d.aliases.push({ name: "", alias: start, display_name: "", fork: false });
+    }
+    return d;
+  });
   const [invalid, setInvalid] = useState<InvalidField>();
   const [leave, setLeave] = useState<{ go: () => void }>();
   const save = useAction(props.saved);
@@ -225,6 +266,12 @@ function EditForm(props: { account: Account; name: string; close: () => void; sa
     if (Object.keys(r.change).length === 0) return props.close();
     void save.run(() => api.setAccount(a.id, r.change));
   };
+  // The form comes from a request no account served: the new alias row's Model name is the one box
+  // left to fill, and the form is long, so it takes the focus when the dialog opens (which scrolls
+  // to it).
+  const startRow = props.startAlias
+    ? draft.aliases.findIndex((r) => r.alias === props.startAlias && !r.name)
+    : -1;
   const settings = settingsObject(draft.settings);
   const rows = <R,>(list: R[], next: (l: R[]) => void) => ({
     edit: (i: number, row: Partial<R>) => next(list.map((r, j) => (j === i ? { ...r, ...row } : r))),
@@ -395,6 +442,7 @@ function EditForm(props: { account: Account; name: string; close: () => void; sa
           </label>
           <fieldset class="field account-edit-rows" data-part="field">
             <legend class="label">{t("aliases")}</legend>
+            <small class="hint">{t("aliasHint")}</small>
             {draft.aliases.map((r, i) => (
               <div class="account-edit-row" data-part="account-edit-row" key={i}>
                 <input
@@ -403,6 +451,8 @@ function EditForm(props: { account: Account; name: string; close: () => void; sa
                   aria-label={t("modelName")}
                   placeholder={t("modelName")}
                   value={r.name}
+                  // biome-ignore lint/a11y/noAutofocus: the person followed a link that asks for this one box
+                  autoFocus={i === startRow}
                   onInput={(e) => aliases.edit(i, { name: e.currentTarget.value })}
                 />
                 <input

@@ -184,7 +184,7 @@ func commandFlags(cmd *command) []string {
 	return names
 }
 
-// plannedCommands are commands the management README's Resources tables name before they exist
+// plannedCommands are commands the management API docs (docs/management-api.md) name before they exist
 // (laterCommands in cli_test.go lists the calls behind them). The list only shrinks: a command
 // added to the CLI comes out of it.
 var plannedCommands = []string{"config validate", "config apply", "ext config"}
@@ -345,7 +345,7 @@ func docsEnvVars(t *testing.T) {
 		_, allowed := undocumentedEnv[n]
 		switch {
 		case !documented[n] && !allowed:
-			t.Errorf("shipped code reads %s and no doc names it: add it to the doc that lists the variables it belongs with (next/README.md for core's), or to undocumentedEnv in next/cmd/pluxy/docs_test.go, a list that may only shrink", n)
+			t.Errorf("shipped code reads %s and no doc names it: add it to the doc that lists the variables it belongs with (docs/config.md for core's), or to undocumentedEnv in next/cmd/pluxy/docs_test.go, a list that may only shrink", n)
 		case documented[n] && allowed:
 			t.Errorf("%s is named in a doc now: take it out of undocumentedEnv in next/cmd/pluxy/docs_test.go", n)
 		}

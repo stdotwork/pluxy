@@ -1,6 +1,6 @@
 // Package management holds the management API's request and reply types and a client for it.
 // Core's handlers write these types and the pluxy command reads them, so the two cannot drift.
-// README.md in this folder describes the API and the command.
+// docs/management-api.md describes the API; docs/cli.md describes the command.
 package management
 
 import (
@@ -135,7 +135,7 @@ type RegistriesReply struct {
 	Registries []Registry `json:"registries"`
 }
 
-// Health is an account's health (Account.Health; the README's "Accounts").
+// Health is an account's health (Account.Health; docs/management-api.md, "Account fields").
 type Health = route.Health
 
 // Health states (Health.State) and where a block's end came from (Health.Source).
@@ -495,6 +495,16 @@ type Settings struct {
 	ProxyURL string `json:"proxy-url"`
 	// Payload is the payload rules, with today's core's names; absent when there are none.
 	Payload *payload.Rules `json:"payload,omitempty"`
+	// ManagementAllowRemote is management.allow-remote, under this core's own name: whether
+	// computers other than the one core runs on may use the management API.
+	ManagementAllowRemote bool `json:"management_allow_remote"`
+	// Listen is the address core serves on now, as host:port.
+	Listen string `json:"listen"`
+	// ListenAfterRestart is the address the config file holds when it is not the one core serves
+	// on: core takes a new address only when it starts. Absent when the two are the same.
+	ListenAfterRestart string `json:"listen_after_restart,omitempty"`
+	// FromThisComputer is whether this call came from the computer core runs on.
+	FromThisComputer bool `json:"from_this_computer"`
 }
 
 // ObservabilitySettings are the log and usage settings in Settings.
@@ -749,6 +759,12 @@ type ClientPaste struct {
 	Files []ClientPasteFile `json:"files"`
 	// Note says what the files need besides themselves; left out when nothing.
 	Note string `json:"note,omitempty"`
+	// Model is the model the files name for the tool to start with: the one the call asked for
+	// (its model parameter), else the best match among Models; empty when no model is served and
+	// none was asked for, and the files then hold the placeholder <model-id>.
+	Model string `json:"model,omitempty"`
+	// Models are the names of the models pluxy serves now, to choose Model from.
+	Models []string `json:"models"`
 }
 
 // ClientPasteFile is one file of a ClientPaste: where it goes (from the home folder, ~) and

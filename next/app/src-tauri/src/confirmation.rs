@@ -326,6 +326,9 @@ pub struct Prepared {
     /// On Windows, a confirmed launch of `pluxy/execution`'s own program in its `open` or `app`
     /// mode, which starts with no console (`confirmation_open::windowless`).
     windowless: bool,
+    /// The confirming button's label (GTK mnemonic form): `text::CONFIRM` unless the app's own
+    /// action names what it does (`confirm_app_as`).
+    confirm: &'static str,
 }
 impl Prepared {
     fn check(&self) -> Result<(), String> {
@@ -1245,6 +1248,7 @@ impl Confirmations {
             origin,
             own: false,
             plain: false,
+            confirm: text::CONFIRM,
             exact: ExactAction {
                 what: action.what,
                 chain: action.chain,
@@ -1567,6 +1571,8 @@ pub(crate) mod text {
     pub(crate) const NOTICE_TITLE: &str = "pluxy launch notice";
     pub(crate) const CANCEL: &str = "_Cancel";
     pub(crate) const CONFIRM: &str = "C_onfirm";
+    /// The confirming button of a management key rotation, which the app calls replacing the key.
+    pub(crate) const REPLACE_KEY: &str = "_Replace key";
     pub(crate) const SETTINGS_CLOSE: &str = "Close";
     pub(crate) const NO_LAUNCHES: &str = "No remembered launches.";
     pub(crate) const REVOKE: &str = "_Revoke remembered launch";
@@ -1589,6 +1595,29 @@ pub(crate) mod text {
             out.push(c);
         }
         out
+    }
+
+    /// The width a bottom button needs for label (GTK mnemonic form) in the dialog's own units: at
+    /// least min, otherwise per_char for each character that shows and pad for the button's edges.
+    #[cfg_attr(not(any(test, windows, target_os = "macos")), allow(dead_code))]
+    fn fitted(label: &str, min: f64, per_char: f64, pad: f64) -> f64 {
+        (plain(label).chars().count() as f64 * per_char + pad)
+            .max(min)
+            .ceil()
+    }
+
+    /// A bottom button's width in Windows' dialog units (about 4 to a character): 50, or more for
+    /// a label that does not fit in that.
+    #[cfg_attr(not(any(test, windows)), allow(dead_code))]
+    pub(crate) fn button_width_win(label: &str) -> f64 {
+        fitted(label, 50.0, 4.5, 12.0)
+    }
+
+    /// A bottom button's width on macOS, in points (about 7 to a character, and the button's
+    /// rounded edges): 110, or more for a label that does not fit in that.
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+    pub(crate) fn button_width_mac(label: &str) -> f64 {
+        fitted(label, 110.0, 7.0, 28.0)
     }
 
     /// Label, GTK mnemonic form, in Win32's: `&` before the access key, `&&` for a `&`.
@@ -1629,11 +1658,35 @@ pub(crate) mod text {
 
     #[cfg(test)]
     mod tests {
+        /// The key window's trust button (`key_entry::text::TRUST_OK`) is the longest label a bottom
+        /// button gets, and shows whole on Windows and macOS; the others keep the width they had.
+        #[test]
+        fn a_long_button_label_gets_a_wider_button() {
+            let trust = crate::key_entry::text::TRUST_OK;
+            let shown = super::plain(trust).chars().count() as f64;
+            assert_eq!(shown, 30.0);
+            assert!(super::button_width_win(trust) >= shown * 4.0 + 12.0);
+            assert!(super::button_width_mac(trust) >= shown * 7.0 + 12.0);
+            for short in [
+                super::CANCEL,
+                super::CONFIRM,
+                super::SETTINGS_CLOSE,
+                crate::key_entry::text::OK,
+                crate::key_entry::text::COPY,
+            ] {
+                assert_eq!(super::button_width_win(short), 50.0, "{short}");
+                assert_eq!(super::button_width_mac(short), 110.0, "{short}");
+            }
+        }
+
         #[test]
         fn labels_render_for_each_toolkit() {
             assert_eq!(super::plain("C_onfirm"), "Confirm");
             assert_eq!(super::win32("C_onfirm"), "C&onfirm");
             assert_eq!(super::access_key("C_onfirm"), Some('o'));
+            assert_eq!(super::plain(super::REPLACE_KEY), "Replace key");
+            assert_eq!(super::win32(super::REPLACE_KEY), "&Replace key");
+            assert_eq!(super::access_key(super::REPLACE_KEY), Some('r'));
             let secrets = "_Remember this exact executable, argv, cwd and secrets: a__b & c";
             assert_eq!(
                 super::plain(secrets),
@@ -1663,6 +1716,8 @@ pub(crate) struct Review {
     pub page: bool,
     /// The app's own action, which shows its own outcome (no launch notice).
     pub own: bool,
+    /// The confirming button's label (GTK mnemonic form).
+    pub confirm: &'static str,
 }
 
 /// Marks pending confirmation id as showing and says what its dialog shows. Refused when it is
@@ -1681,6 +1736,7 @@ pub(crate) fn begin(app: &tauri::AppHandle, id: &str) -> Result<Review, String> 
         summary: pending.prepared.notice(),
         page: pending.page,
         own: pending.prepared.own,
+        confirm: pending.prepared.confirm,
     })
 }
 
@@ -1773,10 +1829,22 @@ pub(crate) fn confirm_app(
     what: String,
     generation: u64,
 ) -> Result<bool, String> {
+    confirm_app_as(app, what, generation, text::CONFIRM)
+}
+
+/// `confirm_app` with the confirming button labelled confirm (GTK mnemonic form), which names
+/// what the action does, such as `text::REPLACE_KEY`.
+pub(crate) fn confirm_app_as(
+    app: &tauri::AppHandle,
+    what: String,
+    generation: u64,
+    confirm: &'static str,
+) -> Result<bool, String> {
     let id = {
         let st = app.state::<crate::App>();
         let mut c = st.confirmations.lock().unwrap();
-        let prepared = c.prepare_app(what, generation)?;
+        let mut prepared = c.prepare_app(what, generation)?;
+        prepared.confirm = confirm;
         c.queue(prepared)?
     };
     let st = app.state::<crate::App>();

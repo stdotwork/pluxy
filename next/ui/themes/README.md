@@ -14,7 +14,7 @@ theme can change three things:
 
 Tokens and layout options are the stable part of the contract: a theme that only uses them keeps
 working as the UI changes. Custom CSS can only rely on the hooks listed under
-[Custom CSS](#custom-css); anything else in the UI's markup can change in any release.
+[Custom CSS](#custom-css); anything else in the UI's markup can change whenever the UI does.
 
 ## The file
 
@@ -48,7 +48,7 @@ working as the UI changes. Custom CSS can only rely on the hooks listed under
 | Field | Required | What it is |
 | --- | --- | --- |
 | `theme_version` | yes (pluxy files) | The contract version the file is written for. This page describes `0`. Omit for a [T3 Code theme](#t3-code-themes). |
-| `id` | yes (pluxy files) | `publisher/name`. Each part is 1 to 64 characters from `a-z`, `0-9` and `-`. Optional in a T3 Code theme, where the ID becomes `t3/<id>` or is derived from `name`. |
+| `id` | yes (pluxy files) | `publisher/name`. Each part is 1 to 64 characters from `a-z`, `0-9` and `-`; core refuses to store a theme whose publisher is `current`. Optional in a T3 Code theme, where the ID becomes `t3/<id>` or is derived from `name`. |
 | `name` | yes | The name people see. 1 to 64 characters. |
 | `description` | no | One line, up to 200 characters. |
 | `appearance` | no (yes for T3 Code) | `both` (the default for pluxy files), `light` or `dark`: the appearances the theme offers. See [Appearance](#appearance). In a `both` file, T3 Code's `canvas`, `accent` and `colors` apply to one appearance only: the one `variants` does not cover, else dark when the `canvas` seed (or, without one, `colors.canvas`) is a dark colour, else light. |
@@ -76,8 +76,6 @@ A theme file is at most 256 KiB.
   offer falls back to that option's default; an unknown `appearance` falls back to `both`; custom
   CSS containing `@import` is dropped as a whole.
 
-So a theme written for a later version 0 UI, with tokens this UI does not know yet, still loads.
-
 ## Tokens
 
 Each token becomes a CSS custom property: the name with dots replaced by dashes and `--px-` in
@@ -89,72 +87,120 @@ anything.
 
 ### Colour
 
+The default colours are zinc neutrals with one blue for actions, the palette T3 Code's own look
+uses, so a T3 Code theme file lands on the ground it was written for. Tokens added for a T3 Code
+colour role take that role's name (`color.chrome`, `color.message-action`); the
+[role-to-token map](#role-to-token-map) lists them all.
+
 | Token | Used for | Default (light / dark) |
 | --- | --- | --- |
-| `color.bg` | Page background | `#fdfcf9` / `#171614` |
-| `color.surface` | Cards, panes, table rows | `#fdfcf9` / `#171614` |
-| `color.surface-raised` | Hover and selected rows, inputs | `#f2f0e9` / `#24231f` |
-| `color.text` | Body text | `#1b1a17` / `#eceae3` |
-| `color.text-muted` | Labels, secondary text | `#55524a` / `#b5b2a7` |
-| `color.border` | Borders and dividers | `#e3e0d6` / `#34322d` |
-| `color.accent` | Main buttons, selection, links | `#1b1a17` / `#eceae3` |
-| `color.accent-text` | Text on `color.accent` | `#fdfcf9` / `#171614` |
-| `color.ok` | Healthy states | `#1f7a43` / `#86d3a0` |
-| `color.warn` | Degraded states | `#8f5600` / `#e5b866` |
-| `color.danger` | Errors, destructive actions | `#b3261e` / `#ff8f80` |
-| `color.focus` | Keyboard focus ring | `#1b1a17` / `#eceae3` |
-| `color.meter-track` | The empty part of a limit's gauge | `var(--px-color-surface-raised)` |
-| `color.meter-fill` | What is left of a limit, on its gauge | `var(--px-color-accent)` |
-| `color.chart-success` | Successful requests in Home's chart of the last 7 days | `var(--px-color-text)` |
-| `color.chart-failure` | Failed requests in Home's chart of the last 7 days | `var(--px-color-danger)` |
-| `color.diff-add` | Added lines in a diff | `#1f7a43` / `#86d3a0` |
-| `color.diff-remove` | Removed lines in a diff | `#b3261e` / `#ff8f80` |
-| `color.nav` | Navigation background | `color-mix(in srgb, var(--px-color-surface) 97%, black)` / `color-mix(in srgb, var(--px-color-surface) 80%, black)` |
-| `color.nav-text` | The product name in the navigation, and a hovered entry's text | `var(--px-color-text)` |
+| `color.bg` | The page's background: the content panel with the `inset` frame, the whole window with `flat` | `#fcfcfc` / `#111113` |
+| `color.chrome` | The window's ground, around the content panel with the `inset` frame, and the navigation's background unless `color.nav` is set | `color-mix(in srgb, var(--px-color-bg) 96.5%, black)` / `color-mix(in srgb, var(--px-color-bg) 53%, black)` |
+| `color.surface` | Cards, panes, table rows | `#ffffff` / `#161618` |
+| `color.surface-raised` | Hover and selected rows, inputs | `#f6f6f7` / `#1c1c1f` |
+| `color.text` | Body text | `#18181b` / `#f2f2f4` |
+| `color.text-muted` | Labels, secondary text | `#6b6b73` / `#9898a1` |
+| `color.secondary-label` | The faintest text: column headings, reset times, the Free plan | `var(--px-color-text-muted)` |
+| `color.border` | Borders and dividers | `#e6e6e9` / `#242428` |
+| `color.accent` | Selection, links, the current tab's underline | `#2f5bea` / `#4f7bff` |
+| `color.accent-text` | Text on `color.accent`: selected text | `#ffffff` / `#0a0d1a` |
+| `color.message-action` | A view's one filled button, and a switch that is on | `var(--px-color-accent)` / `color-mix(in srgb, var(--px-color-accent) 85%, black)` |
+| `color.message-action-foreground` | Text on `color.message-action` | `var(--px-color-accent-text)` / `#ffffff` |
+| `color.message-action-hover` | The filled button while hovered | `color-mix(in srgb, var(--px-color-message-action) 88%, black)` |
+| `color.ok` | Healthy states: text, and a badge's word | `#15803d` / `#4ade80` |
+| `color.warn` | Degraded states: text, and a badge's word | `#b45309` / `#fbbf24` |
+| `color.danger` | Errors, destructive actions: text, and a badge's word | `#c42b31` / `#ff7a7e` |
+| `color.success` | The solid colour of a healthy state: a badge's dot, a full limit's bar | `#14923f` / `#2fbf6a` |
+| `color.success-surface` | Background of a notice with good news | `color-mix(in srgb, var(--px-color-success) 8%, var(--px-color-bg))` / `color-mix(in srgb, var(--px-color-success) 16%, var(--px-color-bg))` |
+| `color.warning` | The solid colour of a degraded state: dots and bars | `#c26a06` / `#f5b42a` |
+| `color.error` | The solid colour of an error: dots and bars | `#e5484d` / `#f2555a` |
+| `color.info` | The solid colour of a neutral notice: its bar and a badge's dot | `#3b82f6` / `#60a5fa` |
+| `color.info-foreground` | Text of a neutral notice's badge | `#1d4ed8` / `#93c5fd` |
+| `color.info-surface` | Background of a neutral notice | `color-mix(in srgb, var(--px-color-info) 8%, var(--px-color-bg))` / `color-mix(in srgb, var(--px-color-info) 16%, var(--px-color-bg))` |
+| `color.update` | The solid colour of an update that is ready | `var(--px-color-info)` |
+| `color.update-foreground` | Its text | `var(--px-color-info-foreground)` |
+| `color.update-surface` | Its notice's background | `var(--px-color-info-surface)` |
+| `color.focus` | Keyboard focus ring | `var(--px-color-accent)` |
+| `color.meter-track` | The empty part of a limit's gauge | `color-mix(in srgb, var(--px-color-text) 8%, var(--px-color-surface))` |
+| `color.meter-fill` | What is left of a limit, on its gauge, with `meter.mid-below` percent left or more | `var(--px-color-success)` |
+| `color.meter-mid` | A gauge under `meter.mid-below` percent left | `var(--px-color-warning)` |
+| `color.meter-low` | A gauge under `meter.low-below` percent left, or used up | `var(--px-color-error)` |
+| `color.meter-unknown` | The hatching of a gauge whose limit was not read | `color-mix(in srgb, var(--px-color-text) 22%, var(--px-color-surface))` |
+| `color.chart-success` | Requests that went through, in the charts of requests | `color-mix(in srgb, var(--px-color-text) 78%, var(--px-color-bg))` |
+| `color.chart-failure` | Failed requests, stacked on top | `var(--px-color-error)` |
+| `color.chart-1` | The first series of a chart split by provider or model (`data-series="1"`) | `#cf6a49` / `#e08a6d` |
+| `color.chart-2` | The second series | `#5b6bf5` / `#7684f7` |
+| `color.chart-3` | The third series | `#3b7bf5` / `#6c9eff` |
+| `color.chart-4` | The fourth series | `var(--px-color-text)` |
+| `color.chart-5` | The fifth series | `#0f9a8b` / `#2dd4bf` |
+| `color.chart-6` | The sixth series | `#a855f7` / `#b875f8` |
+| `color.plan-top` | Background of the plan pill of the largest plans (`data-plan-tier="top"`): a warm metal | `linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 20%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 40%, var(--px-color-surface)))` / `linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 26%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 14%, var(--px-color-surface)))` |
+| `color.plan-top-text` | Its text | `color-mix(in srgb, var(--px-color-warning) 35%, var(--px-color-text))` / `color-mix(in srgb, var(--px-color-warning) 55%, var(--px-color-text))` |
+| `color.plan-top-border` | Its border | `color-mix(in srgb, var(--px-color-warning) 55%, var(--px-color-surface))` / `color-mix(in srgb, var(--px-color-warning) 40%, var(--px-color-surface))` |
+| `color.plan-high` | Background of the next plans' pill (`high`): a cool metal | `linear-gradient(180deg, var(--px-color-surface), color-mix(in srgb, var(--px-color-text) 10%, var(--px-color-surface)))` / `linear-gradient(180deg, color-mix(in srgb, var(--px-color-text) 18%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-text) 8%, var(--px-color-surface)))` |
+| `color.plan-high-text` | Its text | `var(--px-color-text)` |
+| `color.plan-high-border` | Its border | `color-mix(in srgb, var(--px-color-text) 24%, var(--px-color-surface))` |
+| `color.plan-mid-text` | Text of the other plans' pill (`mid`), an outline | `var(--px-color-text)` |
+| `color.plan-mid-border` | Its outline | `var(--px-color-input-border)` |
+| `color.plan-free-text` | The Free plan (`free`), plain text | `var(--px-color-secondary-label)` |
+| `color.diff-add` | Added lines in a diff | `var(--px-color-ok)` |
+| `color.diff-remove` | Removed lines in a diff | `var(--px-color-danger)` |
+| `color.nav` | Navigation background | `var(--px-color-chrome)` |
+| `color.nav-text` | The product name and the current entry in the navigation, and a hovered entry's text | `var(--px-color-text)` |
 | `color.nav-muted` | Navigation entries, and the status block's second line | `var(--px-color-text-muted)` |
-| `color.nav-hover` | Background of a hovered navigation entry | `var(--px-color-surface-raised)` |
-| `color.nav-selected` | Background of the current navigation entry, which also has a 2px bar in `color.accent` and its text in `color.accent` | `color-mix(in srgb, var(--px-color-accent) 7%, transparent)` / `color-mix(in srgb, var(--px-color-accent) 9%, transparent)` |
-| `color.nav-border` | The navigation's border, and the line over its status block | `var(--px-color-border)` |
-| `color.overlay` | Dialog background | `var(--px-color-surface)` |
-| `color.card` | Background of a card and of the detail pane. `transparent` draws a card as a section: its heading, a hairline and its content | `transparent` |
-| `color.card-border` | Border of a card and of the detail pane (the detail pane always has a `color.border` line on the list's side) | `transparent` |
-| `color.input-border` | Border of text inputs, selects and text areas | `color-mix(in srgb, var(--px-color-text-muted) 70%, var(--px-color-surface))` |
+| `color.nav-hover` | Background of a hovered navigation entry | `color-mix(in srgb, var(--px-color-text) 5%, var(--px-color-nav))` |
+| `color.nav-active` | Background of a navigation entry while it is pressed | `color-mix(in srgb, var(--px-color-text) 9%, var(--px-color-nav))` |
+| `color.nav-selected` | Background of the current navigation entry, which also has a ring in `color.nav-border` | `var(--px-color-surface)` / `var(--px-color-surface-raised)` |
+| `color.nav-border` | The navigation's border, the line over its status block, and the current entry's ring | `var(--px-color-border)` |
+| `color.overlay` | Background of dialogs and menus | `var(--px-color-surface)` |
+| `color.card` | Background of a card and of the detail pane. `transparent` draws a card as a section: its heading, a hairline and its content | `var(--px-color-surface)` |
+| `color.card-border` | Border of a card and of the detail pane (the detail pane always has a `color.border` line on the list's side) | `var(--px-color-border)` |
+| `color.input-border` | Border of text inputs, selects, text areas and outlined buttons, at 3:1 or more against `color.surface` by default | `color-mix(in srgb, var(--px-color-text-muted) 80%, var(--px-color-surface))` / `color-mix(in srgb, var(--px-color-text-muted) 65%, var(--px-color-surface))` |
 | `color.placeholder` | Placeholder text in an empty input | `var(--px-color-text-muted)` |
 | `color.selected` | Background of a selected table row and of the selected tab | `var(--px-color-surface-raised)` |
 | `color.selected-text` | Text of a selected list item | `var(--px-color-text)` |
-| `color.danger-surface` | Background of an error notice, which has a 3px bar in `color.danger` at its start | `transparent` |
-| `color.warn-surface` | Background of a warning notice, which has a 3px bar in `color.warn` at its start | `transparent` |
+| `color.danger-surface` | Background of an error notice, which has a 3px bar in `color.error` at its start | `color-mix(in srgb, var(--px-color-error) 8%, var(--px-color-bg))` / `color-mix(in srgb, var(--px-color-error) 16%, var(--px-color-bg))` |
+| `color.warn-surface` | Background of a warning notice, which has a 3px bar in `color.warning` at its start | `color-mix(in srgb, var(--px-color-warning) 8%, var(--px-color-bg))` / `color-mix(in srgb, var(--px-color-warning) 16%, var(--px-color-bg))` |
 | `color.code-bg` | Background of the configuration source editor, log views and diffs | `var(--px-color-surface-raised)` |
 | `color.code-text` | Their text | `var(--px-color-text)` |
+| `color.search-match-background` | Background of text that matches a search (a `mark` element) | `#ffde8b` / `#8c6c1f` |
+| `color.search-match-foreground` | Its text | `#21180a` / `#f5f5f5` |
 
-A default written as `var(--px-…)` follows another token, so a theme that sets only the older
-tokens gets matching colours for these. It does not look exactly as it did before they existed:
-placeholder text now has one colour and full opacity in every browser (`color.placeholder`), and a
-configuration diff now has a background (`color.code-bg`), where each had only the browser's or no
-colour of its own.
+A default written as `var(--px-…)` follows another token, so a theme that does not set it gets a
+colour that matches the tokens it does set. A default written as `color-mix(…)` is mixed from
+other tokens in the same way: the window's ground is a shade darker than `color.bg`, a tinted
+notice is its solid colour faded into `color.bg`, and the plan pills are mixed from
+`color.warning` (the largest plans' warm metal) and `color.text` (the next plans' cool one) into
+`color.surface`. So a theme that sets only the main colours, a T3 Code theme among them, gets
+meters, plan pills, tinted notices and a window ground in its own palette.
 
-`color.nav` and `color.input-border` are mixed from other tokens in the same way: the navigation
-is a shade darker than `color.surface`, and an input's border is `color.text-muted` faded towards
-`color.surface`, which keeps it at least 3:1 against the surface in the default theme.
+A state is never shown by colour alone: a badge, a notice and a gauge always have their words
+beside them. `color.ok`, `color.warn`, `color.danger` and `color.info-foreground` are for text and
+reach 4.5:1 against `color.bg`, `color.surface` and their own surface; `color.success`,
+`color.warning`, `color.error` and `color.info` are for dots and bars and reach 3:1 against
+`color.meter-track` and `color.surface`.
 
 ### Type
 
 | Token | Used for | Default |
 | --- | --- | --- |
-| `font.body` | All text | `"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif` |
-| `font.mono` | IDs, versions, code | `"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace` |
-| `font.size` | Body text size | `13px` |
-| `font.size-small` | Labels, table headings | `12px` |
+| `font.body` | All text | `"Inter Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif` |
+| `font.mono` | IDs, versions, code | `"IBM Plex Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace` |
+| `font.size` | Body text size | `14px` |
+| `font.size-small` | Secondary lines, table headings | `12px` |
+| `font.size-label` | The smallest text: chart labels and capital-letter labels | `11px` |
 | `font.size-title` | Page titles, in the header strip | `14px` |
-| `font.size-mono` | Monospaced values inside text, such as addresses, IDs and versions | `12px` |
+| `font.size-mono` | Monospaced values inside text, such as addresses, IDs and versions | `13px` |
 | `font.line-height` | Body line height | `1.4` |
+| `font.weight-medium` | Buttons, navigation entries, plan pills | `500` |
 | `font.weight-strong` | Headings, emphasis | `600` |
 
-The UI ships IBM Plex Sans (weights 400, 500 and 600) and IBM Plex Mono (400 and 500), Latin
-characters only, as files of its own: the default `font.body` and `font.mono` look the same on
-every machine and load nothing from elsewhere. A character they lack comes from the device's own
-fonts, as does a family a theme names that the device has. Digits all have one width, so numbers
-in a column line up.
+The UI ships Inter (as one variable font, weights 100 to 900) and IBM Plex Sans (weights 400, 500
+and 600) and IBM Plex Mono (400 and 500), Latin characters only, as files of its own: the default
+`font.body` and `font.mono` look the same on every machine and load nothing from elsewhere, and a
+theme can name `"IBM Plex Sans"` too. A character they lack comes from the device's own fonts, as
+does a family a theme names that the device has. Digits all have one width, so numbers in a column
+line up.
 
 ### Spacing and density
 
@@ -162,18 +208,19 @@ in a column line up.
 | --- | --- | --- |
 | `space.unit` | The spacing step; paddings and gaps are multiples of it | `4px` |
 | `density` | Multiplies every spacing step: `0.75` is compact, `1.25` roomy. A number from `0.5` to `2`. | `1` |
-| `size.nav` | Width of the side navigation | `200px` |
+| `size.nav` | Width of the side navigation | `232px` |
 | `size.rail` | Width of the navigation as a rail of icons | `48px` |
-| `size.header` | Height of the header strip over the page, and of the product name's row in the navigation. The strip grows when its content needs more | `44px` |
+| `size.header` | Height of the header strip over the page, and of the product name's row in the navigation. The strip grows when its content needs more | `48px` |
 | `size.topics` | Width of the list of topics beside a page | `180px` |
-| `size.row` | Height of a one-line row in a list | `36px` |
-| `size.row-tall` | Height of a row with a second line under its name, such as a reason | `44px` |
+| `size.row` | Height of a one-line row in a list | `32px` |
+| `size.row-tall` | Height of a row with a second line under its name, such as a reason | `40px` |
 | `size.control` | Height of buttons, inputs, selects and segmented choices | `28px` |
 | `size.control-main` | Height of a page's one main action | `32px` |
-| `size.width-wide` | Content width for the `wide` width option | `1200px` |
-| `size.width-narrow` | Content width for the `narrow` width option | `760px` |
-| `size.detail` | Width of the detail pane beside a list | `360px` |
-| `size.card-padding` | Room inside a card's border. With `color.card` and `color.card-border` it draws cards as boxes, as Paper does | `0px` |
+| `size.width-wide` | Content width for the `wide` width option | `1240px` |
+| `size.width-narrow` | Content width for the `narrow` width option | `880px` |
+| `size.detail` | Width of the detail pane beside a list | `380px` |
+| `size.card-padding` | Room inside a card's border. `0px`, with `color.card` and `color.card-border` set to `transparent`, draws cards as sections instead of boxes | `14px` |
+| `size.frame-gap` | Room between the window's edge, the navigation and the content panel with the `inset` frame | `8px` |
 
 `density` does not change the four heights (`size.row`, `size.row-tall`, `size.control` and
 `size.control-main`): a theme that wants shorter rows sets them. Buttons, inputs, selects, a
@@ -187,19 +234,43 @@ control stays at least 24 pixels to hit, whatever these are set to.
 
 | Token | Used for | Default |
 | --- | --- | --- |
-| `shape.radius` | Corners of cards, panes, buttons and inputs | `4px` |
+| `shape.radius` | Corners of buttons and inputs; every other corner is a multiple of it | `8px` |
 | `shape.border` | Border width | `1px` |
-| `shadow.raised` | Shadow of cards and panes | `none` |
+| `shape.icon-stroke` | Line width of the icons, in pixels of a 16-pixel icon | `1.75` |
+| `shadow.raised` | Shadow of cards and panes | `0 1px 2px rgb(0 0 0 / 0.04)` / `none` |
+| `shadow.panel` | Shadow of the content panel with the `inset` frame | `0 0 0 1px rgb(0 0 0 / 0.04), 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.1)` / `0 0 0 1px rgb(255 255 255 / 0.04), 0 12px 32px -16px rgb(0 0 0 / 0.7)` |
+| `shadow.overlay` | Shadow of menus | `0 16px 40px -18px rgb(0 0 0 / 0.55)` / `0 16px 40px -18px rgb(0 0 0 / 0.8)` |
+| `shadow.dialog` | Shadow of dialogs | `0 24px 64px -24px rgb(0 0 0 / 0.65)` |
+
+Corners follow `shape.radius`: chips and small marks have half of it, small buttons three quarters,
+cards one and a half times, the content panel one and three quarters, dialogs twice, and pills
+are round. `0px` makes every corner square.
 
 ### Motion
 
 | Token | Used for | Default |
 | --- | --- | --- |
-| `motion.duration` | Length of hover and pane transitions | `120ms` |
-| `motion.easing` | Their timing function | `ease-out` |
+| `motion.duration` | Length of hover and press transitions | `120ms` |
+| `motion.duration-menu` | Length of a menu opening. Reserved for the menus to come (the command menu): nothing reads it yet | `160ms` |
+| `motion.duration-slow` | Length of a pane or dialog opening | `240ms` |
+| `motion.easing` | The timing function of the first two | `cubic-bezier(0.2, 0, 0, 1)` |
+| `motion.easing-drawer` | The timing function of anything that slides in | `cubic-bezier(0.32, 0.72, 0, 1)` |
+| `motion.press-scale` | How far a button shrinks while pressed | `0.97` |
 
-When the system asks for reduced motion, the UI sets `motion.duration` to `0ms` whatever the theme
-says.
+When the system asks for reduced motion, the UI sets `motion.duration`, `motion.duration-menu` and
+`motion.duration-slow` to `0ms` and `motion.press-scale` to `1` whatever the theme says. Nothing
+animates when the theme or the appearance changes: while a new theme is applied, the root element
+carries `data-theme-switching` and transitions are off.
+
+### Limits
+
+| Token | Used for | Default |
+| --- | --- | --- |
+| `meter.mid-below` | A limit's gauge turns `color.meter-mid` under this share left, in percent | `70` |
+| `meter.low-below` | It turns `color.meter-low` under this share left, in percent | `30` |
+
+Both are numbers from `0` to `100`, and `meter.low-below` may not be above `meter.mid-below`: a
+`tokens` or `dark` field that puts it there gets a warning, and both keep their defaults.
 
 ## Layout options
 
@@ -208,6 +279,7 @@ reader announces stay the same in every layout.
 
 | Option | Values (default first) | What it changes |
 | --- | --- | --- |
+| `frame` | `inset`, `flat` | The page on its own rounded panel in `color.bg`, inset from the window's ground in `color.chrome` with the navigation on that ground, or the page flush with the window and the navigation beside it |
 | `nav` | `sidebar`, `rail`, `top` | Navigation as a labelled side column, a narrow column of icons, or a row across the top |
 | `list` | `table`, `cards` | Lists of accounts and extensions as table rows or as cards |
 | `detail` | `side`, `below` | Where the details of a selected item open: in a pane beside the list, or under it |
@@ -216,10 +288,12 @@ reader announces stay the same in every layout.
 
 The window is a frame that does not scroll: the navigation, the header strip over the page and
 the status block at the navigation's foot stay where they are, and only the page area scrolls.
+With the `inset` frame the header strip sits at the top of the content panel; under 820 pixels wide
+the panel loses its inset and corners and the page fills the window beside the rail.
 
 A narrow window overrides `nav`, and the `data-part="shell"` element's `data-frame` says what is
-drawn. Under 820 pixels wide the navigation is the rail whatever the theme says, and a list beside
-the page (topics, or tabs with `tabs: side`) becomes a select above it. Under 560 pixels the
+drawn. Under 820 pixels wide the navigation is the rail whatever the theme says, topics become a select
+above the page, and a destination's tabs go back to the header strip even with `tabs: side`. Under 560 pixels the
 navigation is a row of icons across the top (`data-frame="bar"`). Under 720 pixels `side` shows as
 `below`.
 
@@ -235,7 +309,7 @@ The UI is light or dark. What decides it is the theme's `appearance`:
 
 | `appearance` | Light | Dark | The person's choice |
 | --- | --- | --- | --- |
-| `both` | light defaults, then `tokens` | dark defaults, then `tokens`, then `dark` | light, dark, or "system", which follows the operating system |
+| `both` | light defaults, then `tokens` | dark defaults, then `tokens`, then `dark` | Light, Dark or Follow the system (General's Appearance setting) |
 | `light` | light defaults, then `tokens` | not offered | has no effect |
 | `dark` | not offered | dark defaults, then `tokens`, then `dark` | has no effect |
 
@@ -258,16 +332,16 @@ What custom CSS cannot do:
 
 ### Hooks you can rely on
 
-Until pluxy's first release the contract stays at version 0, and these hooks can still change
-under it when a page is rebuilt: the Setup page's hooks were replaced this way. From the first
-release on, they stay stable within a theme contract version:
+When these hooks can change is in [Changes to this contract](#changes-to-this-contract).
 
 | Hook | Where |
 | --- | --- |
 | `data-appearance="light"` or `"dark"` | Root element |
 | `class="dark"` | Root element, while the appearance is dark |
-| `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `account` (one account's page), `add-account`, `routing`, `logs`, `usage` (Requests), `activity/usage` (Usage), `setup`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
+| `data-frame`, `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value (the shell's own `data-frame`, below, is another attribute on another element) |
+| `data-theme-switching` | Root element, while a new theme or appearance is being applied; transitions are off |
+| `data-series="1"` to `"6"` | A mark in a chart split by provider or model; the kit paints it in `color.chart-1` to `color.chart-6` |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `account` (one account's page), `add-account`, `routing`, `logs`, `usage` (Requests), `activity/usage` (Usage), `tools`, `settings` (General), `setup`, `config`, `system`, `extensions`, `themes`, a desktop app page's ID, or an extension page's ID; `signin` while signed out |
 | `data-part="shell"` | The whole UI below the root. Signed in, `data-frame` says how the navigation is drawn: `sidebar`, `rail` or `top` (the `nav` option), or `bar` in a very narrow window; `data-narrow` is set while the window is under 820 pixels wide |
 | `data-part="nav"` | The navigation |
 | `data-part="nav-idle"` | The navigation drawn where nothing in it can be chosen yet: the desktop app before it is connected. It has the same content and the same `data-slot` |
@@ -294,9 +368,9 @@ release on, they stay stable within a theme contract version:
 | `data-part="card"` | A card or panel grouping related content |
 | `data-part="settings-section"` | A section of the Themes page: its heading, a hairline and what it holds. Always a hairline section, never a box |
 | `data-part="button"` | A button; `data-variant` is `primary` (a view's main action, filled), `quiet` (the ordinary button, outlined), `ghost` (no border until hovered) or `danger` (outlined, in the danger colour) |
-| `data-part="badge"` | A state badge; `data-tone` is `ok`, `warn`, `danger` or `muted` |
+| `data-part="badge"` | A state badge; `data-tone` is `ok`, `warn`, `danger`, `muted`, `info` or `update` |
 | `data-part="field"` | A labelled form control |
-| `data-part="meter"` | A limit's gauge of what is left, beside "{n}% left": full is plenty. `data-mode` is `left`; `data-tone` is `ok`, `warn` (10% left or less) or `danger` (used up). Its child is the fill; warning and danger use the matching state colour. |
+| `data-part="meter"` | A limit's gauge of what is left, beside "{n}% left": full is plenty. `data-mode` is `left`; `data-tone` is `ok`, `warn` (under `meter.mid-below` percent left) or `danger` (under `meter.low-below` percent left, or used up), and `none` on a gauge whose limit was not read, which is hatched. Its child is the fill, in `color.meter-fill`, `color.meter-mid` or `color.meter-low`. |
 | `data-part="tabs"` | A group of tabs |
 | `data-part="tab"` | One tab |
 | `data-part="tab-panel"` | The panel shown by the selected tab |
@@ -305,7 +379,7 @@ release on, they stay stable within a theme contract version:
 | `data-part="diff-line"` | One diff line; context lines have no change attribute; `data-change` is `add` or `remove` |
 | `data-part="dialog"` | A dialog window |
 | `data-part="log"` | A core log or request log text view |
-| `data-part="log-line"` | One core log line; `data-level` is `info`, `warn` or empty for a line without a level |
+| `data-part="log-line"` | One core log line; `data-level` is `info`, `warn`, `error` or empty for a line without a level |
 | `data-part="select"` | An item's batch selection checkbox |
 | `data-part="batch"` | All accounts' bar of actions for the selected accounts, while Select is on |
 | `data-part="upload-results"` | The result of each CLIProxyAPI auth file imported on Add an account: the account it became, or why it was not added |
@@ -350,8 +424,8 @@ release on, they stay stable within a theme contract version:
 | `data-part="setting-row"` | One setting: its name and what it does beside its control. `data-disabled` is set while the control cannot be used |
 | `data-part="tool-row"` | One coding tool: its name, version, state and settings file. `data-state` is `configured`, `not-configured`, `needs-update`, `refused`, `not_installed` or `unchecked` |
 | `data-part="state-pane"` | What a whole pane shows while it loads, when it is empty, or when it could not be read; `data-kind` is `loading`, `empty` or `failed` |
-| `data-part="plan-pill"` | An account's plan as a word; `data-plan-tier` is `top` (the largest plans), `mid` or `free`. The default theme sets the tiers apart by ink weight only, never colour |
-| `data-part="limits"` | An account's limits on its row; `data-state` is `read`, `reading`, `none` or `failed` |
+| `data-part="plan-pill"` | An account's plan as a word; `data-plan-tier` is `top` (the largest plans: Max 20x, Ultra, API), `high` (the next: Max 5x), `mid` (any other plan) or `free`. The default theme draws them as a warm metal pill, a cool metal pill, an outline and plain text, from the `color.plan-*` tokens; never in a state's colour |
+| `data-part="limits"` | An account's limits on its row; `data-state` is `read`, `unread`, `reading`, `none` or `failed` |
 | `data-part="activity"` | The body of the Requests and Usage tabs |
 | `data-part="activity-filters"` | The Requests tab's filter row: All or Failed, then the lists of providers, accounts, models and keys |
 | `data-part="usage-chart"` | The Usage tab's chart of requests, a bar per hour or per day; its bars carry `data-outcome` (`success` or `failure`) |
@@ -374,7 +448,7 @@ CSS of a theme written for T3 Code matches the parts both UIs have:
 | `data-slot="dialog-popup"` | A dialog window (`data-part="dialog"`) |
 | `data-slot="sidebar"` | The navigation (`data-part="nav"`), in every `nav` layout |
 
-Every other class name, element and attribute can change in any release.
+Every other class name, element and attribute can change whenever the UI does.
 
 ## Where themes are kept
 
@@ -388,7 +462,8 @@ On the Themes page:
 
 - **Add a theme** takes a theme file, or JSON pasted into the box. The UI checks it first: a file
   it refuses is not stored, and the page says why. A theme that is added is turned on at once.
-- **Save theme file** saves the file of the theme that is on as `<name>.json`, a built-in theme's too. The
+- **Save theme file** saves the file of the theme that is on, a built-in theme's too, named after the part of its ID
+  after `/` (`pluxy/paper` saves as `paper.json`). The
   file holds the JSON that was added; its spacing and the order of its fields can differ. The
   panel downloads it; the desktop app saves it in your Downloads folder and says where. To add a
   built-in theme's file back as a theme of your own, change its `id` first: the page refuses a
@@ -439,7 +514,7 @@ extensions, shown on System.)
 
 - On the Themes page: the "Custom CSS" switch.
 - If custom CSS hides that switch: open the panel with `?safe` in the address, for example
-  `http://127.0.0.1:8400/panel/?safe`. Custom CSS then stays off, also after reloading, until the
+  `http://127.0.0.1:8317/panel/?safe`. Custom CSS then stays off, also after reloading, until the
   switch on the Themes page is turned on. The panel's sign-in page says so too, with `safeAddress` set on
   the shell: a host whose address cannot take `?safe`, such as the desktop app, leaves it out.
 
@@ -448,7 +523,8 @@ extensions, shown on System.)
 - Adding a token, a layout option, a layout value or a hook does not change `theme_version`. A UI
   that does not know them ignores them, as described above.
 - Renaming or removing any of them, or changing what one means, raises `theme_version`. A renamed
-  token keeps its old name as an alias for the whole next version.
+  token keeps its old name as an alias for the whole next version. The one exception: while
+  `theme_version` is 0, a page that is rebuilt can rename or drop its own hooks without raising it.
 - A UI refuses a theme whose `theme_version` is newer than it supports and keeps the theme it had.
 
 ## T3 Code themes
@@ -461,9 +537,6 @@ of T3 Code's file shapes are accepted when `theme_version` is absent, `name` is 
 - **Exported files** (`version: 1`, `id`, `name`, `appearance`, `colors`, and optional `canvas`,
   `accent`, `variants`, `collection`, `managed`, `css`).
 - **Short files** without `version` or `id`, using `canvas` and `accent`, `colors`, or both.
-
-A T3 Code file may also include pluxy's `tokens`, `dark`, and `layout` fields, and a pluxy
-`theme_version: 0` file may include `canvas`, `accent`, `colors`, and `variants`.
 
 ### What each field does
 
@@ -487,16 +560,19 @@ appearance is dark).
 
 ### Role-to-token map
 
-These 26 T3 Code roles set pluxy tokens:
+These 39 T3 Code roles set pluxy tokens. As in T3 Code, a filled button takes
+`messageAction`, not `accent`, and secondary text takes `mutedForeground`, not `textMuted`:
 
 | T3 Code role | Pluxy token |
 | --- | --- |
 | `canvas` | `color.bg` |
+| `chrome` | `color.chrome` |
 | `surface` | `color.surface` |
 | `surfaceRaised` | `color.surface-raised` |
 | `surfaceOverlay` | `color.overlay` |
 | `text` | `color.text` |
-| `textMuted` | `color.text-muted` |
+| `mutedForeground` | `color.text-muted` |
+| `secondaryLabel` | `color.secondary-label` |
 | `border` | `color.border` |
 | `input` | `color.input-border` |
 | `placeholder` | `color.placeholder` |
@@ -505,16 +581,27 @@ These 26 T3 Code roles set pluxy tokens:
 | `accentForeground` | `color.accent-text` |
 | `accentSurface` | `color.selected` |
 | `accentSurfaceForeground` | `color.selected-text` |
+| `messageAction` | `color.message-action` |
+| `messageActionForeground` | `color.message-action-foreground` |
+| `messageActionHover` | `color.message-action-hover` |
+| `error` | `color.error` |
 | `errorForeground` | `color.danger` |
 | `errorSurface` | `color.danger-surface` |
+| `warning` | `color.warning` |
 | `warningForeground` | `color.warn` |
 | `warningSurface` | `color.warn-surface` |
+| `update` | `color.update` |
+| `updateForeground` | `color.update-foreground` |
+| `updateSurface` | `color.update-surface` |
 | `codeBackground` | `color.code-bg` |
 | `codeForeground` | `color.code-text` |
+| `searchMatchBackground` | `color.search-match-background` |
+| `searchMatchForeground` | `color.search-match-foreground` |
 | `sidebar` | `color.nav` |
 | `sidebarForeground` | `color.nav-text` |
 | `sidebarMutedForeground` | `color.nav-muted` |
 | `sidebarRowHover` | `color.nav-hover` |
+| `sidebarRowActive` | `color.nav-active` |
 | `sidebarRowSelected` | `color.nav-selected` |
 | `sidebarBorder` | `color.nav-border` |
 
@@ -525,27 +612,27 @@ T3 Code's `--app-theme-<kebab-role>` CSS custom property on `:root` (`terminalSe
 `--app-theme-terminal-selection-background`) in the same stylesheet as the `--px-*` tokens. A
 theme without T3 Code fields sets none of them.
 
-The remaining 35 roles have no pluxy token and are set only as `--app-theme-*` custom properties:
-`chrome`, `toolbar`, `toolbarForeground`, `toolbarBorder`, `toolbarControl`,
-`toolbarControlForeground`, `toolbarControlHover`, `secondary`, `secondaryForeground`, `muted`,
-`mutedForeground`, `secondaryLabel`, `iconMuted`, `error`, `warning`, `update`, `updateForeground`,
-`updateSurface`, `messageSurface`, `messageForeground`, `messageAction`, `messageActionForeground`,
-`messageActionHover`, `searchMatchBackground`, `searchMatchForeground`,
-`searchMatchActiveBackground`, `searchMatchActiveForeground`, `sidebarControlSurface`,
-`sidebarRowActive`, `terminalBackground`, `terminalForeground`, `terminalCursor`,
-`terminalSelection`, `terminalScrollbar`, and `terminalScrollbarHover`.
+The remaining 22 roles have no pluxy token and are set only as `--app-theme-*` custom properties:
+`toolbar`, `toolbarForeground`, `toolbarBorder`, `toolbarControl`, `toolbarControlForeground`,
+`toolbarControlHover`, `textMuted`, `secondary`, `secondaryForeground`, `muted`, `iconMuted`,
+`messageSurface`, `messageForeground`, `searchMatchActiveBackground`,
+`searchMatchActiveForeground`, `sidebarControlSurface`, `terminalBackground`, `terminalForeground`,
+`terminalCursor`, `terminalSelection`, `terminalScrollbar`, and `terminalScrollbarHover`.
 
-For custom CSS written for T3 Code, `class="dark"` on the root element and the six `data-slot`
-attributes listed under [Hooks you can rely on](#hooks-you-can-rely-on) (`button`, `input`,
-`switch`, `select-trigger`, `dialog-popup`, and `sidebar`) match here. Every other T3 Code class
+A T3 Code theme has no roles for pluxy's own meanings, so they follow the roles it does give:
+`color.success` and `color.info` keep pluxy's colours (T3 Code keeps success fixed too), the gauges
+take `success`, `warning` and `error`, the largest plans' pill is mixed from `warning` into the
+theme's `surface`, and the chart's successful requests from its `text`.
+
+For custom CSS written for T3 Code, `class="dark"` on the root element and the `data-slot`
+attributes listed under [Hooks you can rely on](#hooks-you-can-rely-on) match here. Every other T3 Code class
 name or selector matches nothing.
 
 ### Departures from T3 Code
 
 - **Missing roles keep pluxy defaults:** a role a file neither gives nor generates keeps pluxy's
   default token value instead of falling back to T3 Code's built-in default palette.
-- **Custom CSS uses pluxy's rules:** CSS over 128 KiB or containing `@import` is dropped with a
-  warning, and the panel's Content Security Policy blocks remote loads such as `url(https://...)`.
+- **Custom CSS uses pluxy's rules** ([Custom CSS](#custom-css)), not T3 Code's.
 
 ## Built-in themes
 

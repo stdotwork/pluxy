@@ -91,6 +91,15 @@ type Event struct {
 	// ChainStep is the step of the model's fallback chain the last attempt was for, from 1;
 	// absent for a model with no chain.
 	ChainStep int `json:"chain_step,omitempty"`
+	// Why is why routing chose the last attempt's account over the others that serve the model:
+	// pinned (the request named it), session (it served the conversation's last request), only
+	// (no other account serves the model), first (it is alone in the first group of its
+	// provider's order), only-free (the others in the first group could not take the request
+	// then), backup (no account in the groups above it could), or the routing strategy's name
+	// (round-robin, weighted, fill-first, least-active, soonest-reset) when it chose among several
+	// in the first group. Absent for a request that never reached an account, and in records from
+	// before core kept it.
+	Why string `json:"why,omitempty"`
 	// Attempts is how many accounts the request went to, the number X-Pluxy-Attempts carries;
 	// absent for a request that never reached one.
 	Attempts int `json:"attempts,omitempty"`
@@ -382,11 +391,14 @@ type Totals struct {
 	Failure  int64 `json:"failure_count"`
 	// SuccessRate is Success over Requests, from 0 to 1; 0 with no requests.
 	SuccessRate float64 `json:"success_rate"`
-	// AverageLatencyMS is the mean latency; 0 with no requests.
+	// AverageLatencyMS is the mean latency of the requests that reached an account; 0 when none
+	// did. A request refused before any account was tried (no account serves its model, a bad
+	// key) took no time on any account, and is left out of the mean.
 	AverageLatencyMS int64       `json:"average_latency_ms"`
 	Tokens           TokenTotals `json:"tokens"`
 
-	latency int64
+	// latency adds the latency of the timed requests, those that reached an account.
+	latency, timed int64
 }
 
 // TokenTotals adds up the tokens events reported; one that reported none adds nothing.
@@ -406,7 +418,10 @@ func (t *Totals) add(e *Event) {
 	} else {
 		t.Success++
 	}
-	t.latency += e.LatencyMS
+	if e.Account != "" {
+		t.latency += e.LatencyMS
+		t.timed++
+	}
 	k := e.Tokens
 	t.Tokens.Input += deref(k.Input)
 	t.Tokens.Output += deref(k.Output)
@@ -423,7 +438,10 @@ func (t *Totals) addRow(r summaryRow) {
 	} else {
 		t.Success += r.Requests
 	}
-	t.latency += r.LatencyMS
+	if r.Account != "" {
+		t.latency += r.LatencyMS
+		t.timed += r.Requests
+	}
 	t.Tokens.Input += r.Input
 	t.Tokens.Output += r.Output
 	t.Tokens.Reasoning += r.Reasoning
@@ -435,7 +453,9 @@ func (t *Totals) addRow(r summaryRow) {
 func (t *Totals) finish() {
 	if t.Requests > 0 {
 		t.SuccessRate = float64(t.Success) / float64(t.Requests)
-		t.AverageLatencyMS = t.latency / t.Requests
+	}
+	if t.timed > 0 {
+		t.AverageLatencyMS = t.latency / t.timed
 	}
 }
 

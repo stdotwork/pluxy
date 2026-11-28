@@ -316,11 +316,14 @@ func (c *Client) SetupApply(ctx context.Context, picks []string) (SetupApplyRepl
 }
 
 // ClientPaste is GET /setup/clients/{id}/paste. keyID, when not empty, names the client key
-// the reply's Key placeholder points at.
-func (c *Client) ClientPaste(ctx context.Context, id, keyID string) (ClientPaste, error) {
-	var q url.Values
+// the reply's Key placeholder points at; model, when not empty, the model the files name.
+func (c *Client) ClientPaste(ctx context.Context, id, keyID, model string) (ClientPaste, error) {
+	q := url.Values{}
 	if keyID != "" {
-		q = url.Values{"key_id": {keyID}}
+		q.Set("key_id", keyID)
+	}
+	if model != "" {
+		q.Set("model", model)
 	}
 	var v ClientPaste
 	err := c.get(ctx, "/setup/clients/"+url.PathEscape(id)+"/paste", q, &v)

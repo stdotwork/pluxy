@@ -38,8 +38,7 @@ difference fails its case, and the test changes each value of pluxy's reply in t
 the case still passes, so an exception cannot hide a difference it was not written for.
 
 The bar covers what pluxy keeps. A CLIProxyAPI setting that pluxy leaves out is listed with its
-reason in [What each setting does here](../next/README.md#what-each-setting-does-here); for the
-panel, see [panel.md](panel.md).
+reason in [What each setting does](config.md#what-each-setting-does).
 
 ## The recorded replies
 

@@ -1,14 +1,9 @@
-# Extension pages, version 0
+# Extension pages
 
 An extension package can bring its own pages for the panel and the desktop app, and a
-settings form the panel draws for it. This is the contract for both: what goes in the package,
-how core serves the pages, what a page may do, and the message channel a page talks to the
-panel through.
-
-The short version: a page is a document from the extension's own files, shown in a sandboxed
-frame from a **separate site**. It cannot reach the panel, core's management API, storage, or
-any site but the pages site. It can only ask the panel, over a message channel, for the few things its manifest
-declares. It never receives the management key.
+settings form the panel draws for it. This is the contract for both, version 0: what goes in the
+package, how core serves the pages, what a page may do, and the message channel a page talks to
+the panel through.
 
 ## What a page can and cannot do
 
@@ -33,10 +28,7 @@ A page **cannot**, whatever its code does:
 - navigate the panel, open windows or pop-ups, submit forms, or show dialogs (`alert`,
   `confirm`, `prompt`): the frame's sandbox does not allow them;
 - navigate its own frame to another site: the panel's policy lets its frames show only the pages
-  site, and Chromium, Firefox and WebKit refuse any other address in the frame (the browser
-  test checks this; the specification does not spell it out for a navigation the frame starts
-  itself). Whenever the frame gets another document (an error page, or the page reloading
-  itself), the panel closes the page's channel;
+  site, and Chromium, Firefox and WebKit refuse any other address in the frame;
 - read the clipboard: the frame is given no permissions (`allow=""`);
 - keep anything in storage, or read another extension's settings: there is no method for it.
 
@@ -92,15 +84,15 @@ the manifest's and the protocol's.
 | `version` | Version of this contract: the page rules and the message channel. Version 0 is described here. Core refuses a manifest with a version it does not serve. |
 | `dir` | The folder, inside the package, that holds every file the pages load. Core serves nothing outside it. It may hold only regular files and folders, at most 1,000 files and 32 MiB in all. |
 | `permissions` | What the pages may ask the panel for, beyond the theme: `config.read` (read this extension's settings) and `config.write` (change them). Anything else is refused at install. A page that calls a method its extension did not declare gets an error. |
-| `pages` | 1 to 20 pages, each shown as its own entry in the navigation. |
+| `pages` | 1 to 20 pages, each listed as a topic of Settings, in the group From extensions. |
 
 Each page:
 
 | Field | Meaning |
 | --- | --- |
-| `id` | 1 to 32 lower-case letters, digits and `-`, unique in the package. The page's address in the panel is `#/ext/<publisher>/<name>/<id>`. |
-| `title` | The page's name in the navigation and its heading, 1 to 60 characters. |
-| `short` | A label of up to 8 characters, for the rail navigation. |
+| `id` | 1 to 32 lower-case letters, digits and `-`, not starting with `-`, unique in the package. The page's address in the panel is `#/ext/<publisher>/<name>/<id>`. |
+| `title` | The page's name in that list and its heading, 1 to 60 characters. |
+| `short` | A short label, 1 to 8 characters. Core checks it and lists it; the panel and the desktop app do not show it. |
 | `path` | The page's HTML file, relative to `dir`, ending in `.html`. |
 
 The files under `dir` count toward the package's fingerprint, as the manifest and program do:
@@ -128,14 +120,12 @@ it, so the form and a page that writes settings get the same answer.
 | `minimum`, `maximum` | number and integer fields | Bounds, inclusive. |
 | `writeOnly` | string field | A secret, such as a token: it can be set and cleared, but core never shows its value again, to the panel or to a page. The form shows whether it is set. A value saved as a secret stays one: if a later version of the schema drops `writeOnly`, the value is not shown but dropped, and the field has its default. |
 
-Any other keyword is refused at install, so a schema never means something core does not
-check. Settings are kept by core, per extension, in `{packages.dir}/.settings/<publisher>/<name>.json`
+Any other keyword is refused at install. Settings are kept by core, per extension, in `{packages.dir}/.settings/<publisher>/<name>.json`
 (readable only by core's user and, on Windows, SYSTEM), and survive upgrades: a field the new version no longer
 declares is dropped the next time the settings change. On Windows the `.settings` folder is checked
-and made private, as core's [credentials folder](../../README.md#accounts-added-by-login) is,
+and made private, as core's [credentials folder](../../../docs/providers.md#how-accounts-added-by-sign-in-are-kept-and-renewed) is,
 each time settings are loaded or saved; a settings file that another account owns is skipped, as
-if none were stored, and the next save replaces it. Core does not send settings to the
-extension's program yet; in version 0 they are for the extension's pages.
+if none were stored, and the next save replaces it. Settings reach the extension's pages, not its program.
 
 ## How core serves pages
 
@@ -181,7 +171,7 @@ Config:
 | `listen` | Address of the pages listener. Default: the host of `listen` with a free port core picks at start. Cannot change without a restart. |
 | `url` | The pages site's origin as browsers reach it (scheme, host and port only). Default: derived for loopback as above. |
 
-Every response from the pages site carries:
+Every page file the pages site serves carries:
 
 - `Content-Security-Policy: sandbox allow-scripts; default-src 'none'; script-src <files>; style-src <files>; img-src <files> data: blob:; font-src <files> data:; media-src <files> data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'`,
   where `<files>` is the page's own folder on the pages site. The `sandbox` directive makes the
@@ -191,12 +181,14 @@ Every response from the pages site carries:
   load its module scripts and fonts with CORS. The files are public package files; no request
   to the pages site carries or needs a credential.
 - `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-cache`
-  with an `ETag`. Replies that are not page files (not found, wrong method) carry
-  `Content-Security-Policy: sandbox; default-src 'none'`.
+  with an `ETag`.
+
+Every other reply (not found, wrong method) carries `Content-Security-Policy: sandbox;
+default-src 'none'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and
+`Cache-Control: no-store`.
 
 Only these file types are served: `.html`, `.js`, `.mjs`, `.css`, `.json`, `.svg`, `.png`,
-`.jpg`, `.jpeg`, `.gif`, `.webp`, `.ico`, `.woff`, `.woff2`, `.txt`. The pages site is on while
-the management API is.
+`.jpg`, `.jpeg`, `.gif`, `.webp`, `.ico`, `.woff`, `.woff2`, `.txt`.
 
 The management API lists what the panel can show:
 
@@ -211,13 +203,12 @@ The management API lists what the panel can show:
 The panel shows each page in an `iframe` with `sandbox="allow-scripts"` (no `allow-same-origin`,
 `allow-forms`, `allow-popups`, `allow-top-navigation`, `allow-modals` or `allow-downloads`) and
 `referrerpolicy="no-referrer"`. The panel's own Content Security Policy allows frames only from
-the pages site (`frame-src <pages origin>/`), which is what stops a page from navigating its
-frame to another site in the browsers tested.
+the pages site (`frame-src <pages origin>/`).
 
 The panel binds each frame it creates to the extension that owns the page, as listed by core.
 Nothing a page sends can name another extension: there is no such parameter. The panel accepts
-one `hello` per frame; when the frame loads a second document (the page navigated or reloaded
-itself), the panel closes the channel and shows a button to load the page again.
+one `hello` per frame; when the frame loads another document (an error page, or the page
+navigated or reloaded itself), the panel closes the channel and shows a button to load the page again.
 
 ## The message channel
 
@@ -268,7 +259,7 @@ theme choices or privacy mode change.
 {
   "theme_version": 0,
   "appearance": "dark",
-  "layout": {"nav": "sidebar", "list": "table", "detail": "side", "width": "wide"},
+  "layout": {"nav": "sidebar", "list": "table", "detail": "side", "width": "wide", "tabs": "top"},
   "tokens": {"color.bg": "#111214", "color.text": "#e7e7ea", "...": "..."},
   "privacy": false
 }
@@ -302,13 +293,10 @@ pluxy.on("theme", (theme) => { /* the library already applied it */ });
 sets `data-appearance`, the layout options and `data-privacy` (`on` or `off`) as `data-*`
 attributes there, and does it again on every `theme` event.
 
-## Limits of version 0
+## Limits
 
 - The desktop app shows each page in a webview of its own, which can call no app command, with
-  the page in the same sandboxed frame and the same channel ([the app's README](../../app/README.md#extension-pages)).
-  Its native transport enforces the call schema, size, rate and in-flight limits before forwarding,
-  including direct scheme requests from a frame. It also bounds package totals and queued replies,
-  permits one hello per document, and binds messages to the native webview and document generation.
+  the page in the same sandboxed frame and the same channel, and enforces the channel's limits
+  natively ([the app's README](../../app/README.md#extension-pages)).
 - A package needs a program even when it only brings pages.
-- Settings reach the extension's pages, not its program.
 - The page's frame has a fixed size within the panel's content area; a page cannot resize it.

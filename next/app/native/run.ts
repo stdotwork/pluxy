@@ -145,9 +145,9 @@
 // replaced target refuses, settings of another schema refuse; its recipe starts a stand-in terminal
 // and claude through the launcher with no key in argv or environment; the key and a login canary
 // stay out of every window answer, confirmation and the app's output, and removing the package
-// leaves no process. Then Beginner Mode (easy_mode_native.rs) signs in with test/alpha's API-key
-// method in its Add an account and installs, enables, applies and starts Claude Code through the
-// guide; a cancelled apply keeps the file and the guide cannot answer the enable confirmation.
+// leaves no process. Then Claude Code's row on the Tools page (tools_native.rs) installs and turns
+// on its add-on, and its page applies and starts Claude Code; a cancelled apply keeps the file and
+// the row cannot answer the turn-on confirmation.
 // The Codex check (codex.ts, codex_native.rs) runs in one more session with that build:
 // pluxy/codex-setup (next/app-tools/codex, built here) with the execution program imports the
 // core's served models into catalog entries, applies, clears and restores Codex's config.toml and

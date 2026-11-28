@@ -335,7 +335,8 @@ test("once a kind runs the list folds, and Add an account offers only the added 
   });
   const m = await w.mount(<SetupPage />);
   const one = step(m.root, 1);
-  expect(one.textContent).toContain("Added: Claude and ChatGPT (Codex).");
+  expect(one.textContent).toContain("pluxy can now connect to Claude and ChatGPT (Codex).");
+  expect(one.textContent).not.toContain("Added:");
   expect(one.textContent).toContain(
     "Claude Code is signed in on this computer. Sign in below with the same account.",
   );
@@ -456,12 +457,25 @@ test("the host's tool button and its own tools are used in step 2", async () => 
   expect(hasButton(two, "Set up")).toBe(false);
 });
 
+test("the host's notes are shown in step 2", async () => {
+  const m = await world({ accounts: [ACC] }).mount(
+    <SetupPage
+      options={{ notes: () => ({ above: <p>Above the list.</p>, below: <p>Under the list.</p> }) }}
+    />,
+  );
+  await press(buttonIn(step(m.root, 1), "Open"));
+  await press(buttonIn(step(m.root, 2), "Open"));
+  const two = step(m.root, 2);
+  expect(two.textContent).toContain("Above the list.");
+  expect(two.textContent).toContain("Under the list.");
+});
+
 test("Refresh in step 2 asks pluxy to look again and tells the host", async () => {
   let refreshed = 0;
   const w = world({ accounts: [ACC] });
   const m = await w.mount(<SetupPage options={{ onRefresh: () => refreshed++ }} />);
   await press(buttonIn(step(m.root, 2), "Refresh"));
-  expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
+  expect(w.sent("POST", "/setup/scan")).toHaveLength(2); // the one as the page opened, and this
   expect(refreshed).toBe(1);
 });
 
@@ -510,7 +524,7 @@ test("the test sends no model by default, says what passed, and offers Finish se
   const m = await w.mount(<SetupPage />);
   const three = step(m.root, 3);
   expect(three.textContent).toContain(
-    "This sends one short test message through Work. It counts against that account's use.",
+    "This sends one short test message through Work. The provider counts it against that account's limits. pluxy does not list it in Activity or Usage.",
   );
   expect(all(three, "select")).toHaveLength(0);
   await press(buttonIn(three, "Send a test request"));
@@ -928,7 +942,7 @@ test("a lost reply to Import now says it is not known whether it ran, and Refres
   expect(withPart(m.root, "setup-report")).toHaveLength(0);
   expect(hasButton(line(m.root), "Import now")).toBe(false);
   await press(buttonIn(line(m.root), "Refresh"));
-  expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
+  expect(w.sent("POST", "/setup/scan")).toHaveLength(2); // the one as the page opened, and this
   // Core has no record of the import: it did not run, and a new preview can start.
   expect(line(m.root).textContent).not.toContain("not known whether the import ran");
   expect(line(m.root).textContent).toContain("The import did not run: pluxy has no record of it.");
@@ -1041,7 +1055,7 @@ test("Try again after a 400 looks again, then starts a new preview of what the n
   const m = await w.mount(<SetupPage />);
   await press(buttonIn(line(m.root), "Preview import"));
   await press(buttonIn(line(m.root), "Try again"));
-  expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
+  expect(w.sent("POST", "/setup/scan")).toHaveLength(2); // the one as the page opened, and this
   expect(imports(w)).toEqual([true, true]);
   expect(w.sent("POST", "/setup/import").map((c) => (c.body as { auth_dir?: string }).auth_dir)).toEqual([
     "~/.cli-proxy-api/auths",
@@ -1080,4 +1094,82 @@ test("kinds are grouped found, main, more; an import's needs count as found", ()
   expect(orderedKinds(setup)).toHaveLength(8);
   expect(joinNames(["A"])).toBe("A");
   expect(joinNames(["A", "B", "C"])).toBe("A, B and C");
+});
+
+// ---- the words: which computer, and what was added ------------------------------------------------
+
+test("what pluxy found says which computer when pluxy runs on another: step 1's tool and sign-in lines", async () => {
+  const picks = [
+    pick("pluxy/claude", "Claude", { suggested: true, because: "Claude Code is installed on this computer" }),
+  ];
+  const signIns = [
+    { provider: "pluxy/claude", from: "~/.claude", label: "Claude Code is signed in on this computer" },
+  ];
+  const remote = await world({ picks, signIns, address: "http://10.0.0.5:8317" }).mount(<SetupPage />);
+  expect(kindRow(remote.root, "Claude").textContent).toContain(
+    "Claude Code is installed on the computer pluxy runs on",
+  );
+  expect(remote.text()).not.toContain("this computer");
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+  // The page on pluxy's own computer keeps "this computer".
+  const here = await world({ picks, signIns }).mount(<SetupPage />);
+  expect(kindRow(here.root, "Claude").textContent).toContain("Claude Code is installed on this computer");
+});
+
+test("a kind that only runs is not an account: the line says pluxy can connect to it, and the long kind name reads as a phrase", async () => {
+  const api = pick("pluxy/openai-compatible", "OpenAI Compatible", { installed: true });
+  const m = await world({ picks: [CLAUDE_PICK, api], running: ["pluxy/openai-compatible"] }).mount(
+    <SetupPage />,
+  );
+  const one = step(m.root, 1);
+  expect(one.textContent).toContain("pluxy can now connect to another service. Add your account below.");
+  expect(one.textContent).not.toContain("Added");
+  expect(one.textContent).not.toContain("connect to Another service with an API key");
+});
+
+test("the kinds button names the long kind as a phrase: Add Claude and another service", async () => {
+  const w = world({
+    picks: [CLAUDE_PICK, pick("pluxy/openai-compatible", "OpenAI Compatible")],
+  });
+  const m = await w.mount(<SetupPage />);
+  await tick(must(box(kindRow(m.root, "Claude"))), true);
+  await tick(must(box(kindRow(m.root, "Another service with an API key"))), true);
+  expect(hasButton(m.root, "Add Claude and another service")).toBe(true);
+  expect(m.text()).not.toContain("Add Claude and Another service");
+});
+
+// ---- step 2 follows the tool's settings --------------------------------------------------------
+
+test("opening the page asks pluxy to look at the tools again, so a tool connected on another page shows at once", async () => {
+  // Claude Code was connected on its own page after pluxy's last look: the kept scan says it is not.
+  const w = world({
+    accounts: [ACC],
+    clients: [client("claude-code", "Claude Code")],
+    reply: (c) => {
+      if (c.path === "/setup/scan") {
+        w.state.setup.found.clients = [client("claude-code", "Claude Code", { state: "configured" })];
+      }
+      return undefined;
+    },
+  });
+  const m = await w.mount(<SetupPage />);
+  expect(w.sent("POST", "/setup/scan")).toHaveLength(1);
+  expect(step(m.root, 2).textContent).toContain("1 connected");
+  expect(step(m.root, 2).textContent).not.toContain("0 connected");
+});
+
+test("step 2 reads the tools again when the person comes back to the page, so pasted settings show", async () => {
+  const w = world({ accounts: [ACC], clients: [client("claude-code", "Claude Code")] });
+  const m = await w.mount(<SetupPage />);
+  expect(step(m.root, 2).textContent).toContain("0 connected");
+  const before = w.sent("POST", "/setup/scan").length;
+  // The settings are pasted into the tool's file; the person comes back to this window.
+  w.state.setup.found.clients = [client("claude-code", "Claude Code", { state: "configured" })];
+  fakeWindow().dispatch("focus");
+  await tickTimers();
+  expect(w.sent("POST", "/setup/scan").length).toBe(before + 1);
+  expect(step(m.root, 2).textContent).toContain("1 connected");
+  expect(step(m.root, 2).textContent).toContain("Connected");
+  expect(step(m.root, 2).textContent).not.toContain("0 connected");
 });

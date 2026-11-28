@@ -4,6 +4,7 @@
 
 import {
   DEFAULT_LAYOUT,
+  DURATION_TOKENS,
   LAYOUT_OPTIONS,
   type Layout,
   type Theme,
@@ -83,7 +84,10 @@ export function resolve(theme: Theme, choices: Choices, env: Environment): Resol
       warnings.push("your density is not a number from 0.5 to 2");
     else tokens.density = choices.density;
   }
-  if (env.reducedMotion) tokens["motion.duration"] = "0ms";
+  if (env.reducedMotion) {
+    for (const name of DURATION_TOKENS) tokens[name] = "0ms";
+    tokens["motion.press-scale"] = "1";
+  }
 
   const layout: Layout = { ...DEFAULT_LAYOUT, ...theme.layout };
   for (const option of LAYOUT_OPTIONS) {
@@ -120,6 +124,12 @@ export class ThemeApplier {
 
   apply(r: Resolved) {
     const root = this.doc.documentElement;
+    // Nothing animates into a new theme: transitions are off until the next frame has painted it.
+    root.dataset.themeSwitching = "";
+    const raf = this.doc.defaultView?.requestAnimationFrame?.bind(this.doc.defaultView);
+    const done = () => delete root.dataset.themeSwitching;
+    if (raf) raf(() => raf(done));
+    else done();
     root.dataset.appearance = r.appearance;
     // The class CSS written for T3 Code picks the dark appearance by.
     root.classList.toggle("dark", r.appearance === "dark");

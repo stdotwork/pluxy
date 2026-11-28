@@ -36,6 +36,11 @@ export interface Connection {
   };
   /** Why the app is not connected, when it is not. */
   error?: string;
+  /** How what the app sends reaches the core it is connected to: over https, to this computer,
+   * only over Tailscale (which this computer carries; nothing is sent when it does not), only
+   * over Tailscale but not known to carry it now (nothing is sent until it does), or over plain
+   * http on a network the person said in the key window that they trust. */
+  link?: "https" | "here" | "tailscale" | "tailscale_off" | "plain";
 }
 
 /** What the person sets on the Connection page. */
@@ -90,6 +95,15 @@ export interface KeyEntryResult {
 }
 export const keyEntry = (change?: ConnectionChange) =>
   invoke<KeyEntryResult>("key_entry", { change: change ?? null });
+/** Asks for a certificate authority file in the native file chooser: its path, or null when the
+ * person cancelled. Only where canChooseFiles says the app has one. */
+export const certificateChoose = () => invoke<string | null>("certificate_choose");
+/** Whether the app has a native chooser for opening a file here: Linux only, as the native side's
+ * other choosers. The window learns its system from its webview. */
+export const canChooseFiles = () =>
+  typeof navigator !== "undefined" &&
+  /\bLinux\b/.test(navigator.userAgent) &&
+  !/Android/.test(navigator.userAgent);
 export const coreRestart = () => invoke<Connection>("core_restart");
 export const coreVersions = () => invoke<Versions>("core_versions");
 /** Each opens the native confirmation and returns; the app sends pluxy-connection when done. */
@@ -106,6 +120,17 @@ export const coreAction = (c: Connection) => (c.core?.state === "running" ? core
 
 /** Core's rotation route. The window never calls it: the native side rotates the key itself. */
 const ROTATE = "/management-key/rotate";
+
+/**
+ * The reasons the native rotation command (management_key_rotate in src-tauri/src/lib.rs) refuses
+ * with before it starts, so nothing was replaced. Any other failure may have come after core
+ * replaced the key: that one is reported as no answer.
+ */
+const ROTATION_REFUSALS = new Set([
+  "finish native key entry first",
+  "a rotation is already in progress",
+  "only the app's window may call this",
+]);
 
 function read(name: string): string | null {
   try {
@@ -136,14 +161,22 @@ export function appHost(
   refreshed: (c: Connection) => void = () => {},
 ): Host {
   let signed = conn.signed_in;
-  const features = new Set<Feature>(["rotateManagementKey"]);
+  // The native side asks before it replaces the key, so the page does not ask too.
+  const features = new Set<Feature>(["rotateManagementKey", "confirmsKeyReplacement"]);
   if (conn.mode === "local" || conn.mode === "remote") features.add("signOut");
   return {
     async call<T>(method: Method, path: string, body?: unknown): Promise<Reply<T>> {
       try {
         // Native, behind a native confirmation: the reply says how the new key is kept, never the key.
         if (method === "POST" && path === ROTATE) {
-          const reply = await invoke<Reply<T>>("management_key_rotate");
+          let reply: Reply<T>;
+          try {
+            reply = await invoke<Reply<T>>("management_key_rotate");
+          } catch (e) {
+            const why = String(e);
+            if (ROTATION_REFUSALS.has(why)) return { status: 409, error: { code: "refused", message: why } };
+            throw e;
+          }
           connectionGet().then(refreshed, () => {});
           return reply;
         }

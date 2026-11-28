@@ -175,14 +175,27 @@ test("the address decides the mode the native side holds it to, and anything it 
   expect(kind("https://127.0.0.1:8317", "/etc/ca.pem")).toEqual([true, "remote"]);
   expect(kind("https://pluxy.example")).toEqual([true, "remote"]);
   expect(kind("https://pluxy.example", "/etc/ca.pem")).toEqual([true, "remote"]);
-  expect(kind("http://pluxy.example")).toEqual([false, undefined]);
-  expect(kind("http://10.0.0.5:8317")).toEqual([false, undefined]);
+  // Plain http to another computer, whatever its shape: the key window finds out whether
+  // Tailscale carries it, and asks about the network when it does not.
+  for (const elsewhere of [
+    "http://pluxy.example",
+    "http://10.0.0.5:8317",
+    "http://100.101.102.103:8317",
+    "http://[fd7a:115c:a1e0::1]:8317",
+    "http://home-server.tail1234.ts.net:8317",
+    "http://.ts.net:8317",
+  ]) {
+    expect(kind(elsewhere)).toEqual([true, "remote"]);
+    expect(addressKind(elsewhere).hint).toBe(
+      "On another computer, over plain http. Unless Tailscale carries it, the key window warns that others on the network could read what is sent, and asks whether you trust this network.",
+    );
+  }
+  // This computer, also written with a trailing dot.
+  expect(kind("http://localhost.:8317")).toEqual([true, "local"]);
+  expect(kind("http://LOCALHOST..:8317")).toEqual([true, "local"]);
   expect(kind("ftp://pluxy.example")).toEqual([false, undefined]);
   expect(kind("pluxy.example")).toEqual([false, undefined]);
   expect(kind("")).toEqual([false, undefined]);
-  expect(addressKind("http://pluxy.example").hint).toBe(
-    "Another computer needs an https:// address, so its key is never sent where others can read it.",
-  );
 });
 
 async function connectStep(handlers: Handlers = {}) {
@@ -194,7 +207,9 @@ async function connectStep(handlers: Handlers = {}) {
 
 test("Connect shows the form under its title, with the hint following what is typed, and Back returns", async () => {
   const { m } = await connectStep();
-  expect(m.text()).toContain("Such as https://pluxy.example, or http://127.0.0.1:8317 on this computer.");
+  expect(m.text()).toContain(
+    "Such as https://pluxy.example, a Tailscale address, or http://127.0.0.1:8317 on this computer.",
+  );
   expect((m.button("Continue") as FakeNode).disabled).toBe(true);
   await m.input("Address", "http://127.0.0.1:8317");
   expect(m.text()).toContain("On this computer. It runs on its own; the app only connects to it.");
@@ -206,8 +221,7 @@ test("Connect shows the form under its title, with the hint following what is ty
   expect(m.text()).toContain("It uses a certificate I made myself");
   expect(m.text()).toContain("Next, a small window asks for its management key.");
   await m.input("Address", "http://pluxy.example");
-  expect(m.text()).toContain("Another computer needs an https:// address");
-  expect((m.button("Continue") as FakeNode).disabled).toBe(true);
+  expect(m.text()).toContain("On another computer, over plain http.");
   await m.click("Back");
   expect(m.text()).toContain("Where should pluxy run?");
   expect(m.labels().length).toBe(2);
@@ -215,7 +229,7 @@ test("Connect shows the form under its title, with the hint following what is ty
 
 test("an address the native side would refuse is refused before any call is made", async () => {
   const { m } = await connectStep({ key_entry: never });
-  await m.input("Address", "http://pluxy.example");
+  await m.input("Address", "ftp://pluxy.example");
   await m.submit();
   await m.input("Address", "not an address");
   await m.submit();
@@ -227,7 +241,7 @@ test("Continue sends only the mode, the address and the certificate file; no key
     key_entry: (): KeyEntryResult => ({ status: "cancelled", connection: view() }),
   });
   await m.input("Address", " https://pluxy.example ");
-  await m.input("Certificate file", "/etc/pluxy/ca.pem");
+  await m.input("Certificate authority file", "/etc/pluxy/ca.pem");
   await m.submit();
   expect(m.commands("key_entry")).toEqual([
     { change: { mode: "remote", url: "https://pluxy.example", ca_file: "/etc/pluxy/ca.pem" } },
@@ -245,10 +259,10 @@ test("a refused key or an unreachable address says why above the buttons and kee
   let result: KeyEntryResult = { status: "wrong_key", connection: view() };
   const { m, changed } = await connectStep({ key_entry: () => result });
   await m.input("Address", "https://pluxy.example");
-  await m.input("Certificate file", "/etc/pluxy/ca.pem");
+  await m.input("Certificate authority file", "/etc/pluxy/ca.pem");
   await m.submit();
   expect(m.text()).toContain("That pluxy refused the key. Check it and try again.");
-  result = { status: "error", connection: view({ error: "the connection to core timed out" }) };
+  result = { status: "error", connection: view({ error: "The connection to pluxy timed out." }) };
   await m.submit();
   expect(m.text()).toContain("It did not answer in time.");
   expect(m.text()).not.toContain("That pluxy refused the key");
@@ -259,7 +273,7 @@ test("a refused key or an unreachable address says why above the buttons and kee
     }),
   };
   await m.submit();
-  expect(m.text()).toContain("The certificate file /etc/pluxy/ca.pem could not be read.");
+  expect(m.text()).toContain("The certificate authority file /etc/pluxy/ca.pem could not be read.");
   // A key window that was closed says nothing, and nothing the person typed is gone.
   result = { status: "cancelled", connection: view() };
   await m.submit();
@@ -281,6 +295,139 @@ test("an accepted key hands the new connection over; while the key window is ope
   await act(async () => answer({ status: "signed_in", connection }));
   await settle();
   expect(changed).toEqual([connection]);
+});
+
+test("plain http to another computer goes to the key window with no trust from the page, so none carries over to another address", async () => {
+  const { m } = await connectStep({
+    key_entry: (): KeyEntryResult => ({ status: "cancelled", connection: view() }),
+  });
+  const box = () => all(m.root, "input").some((i) => m.attr(i, "type") === "checkbox");
+  await m.input("Address", "http://10.0.0.2:37575");
+  expect(m.text()).toContain("On another computer, over plain http.");
+  expect(m.text()).not.toContain("encrypts");
+  expect(box()).toBe(false);
+  expect((m.button("Continue") as FakeNode).disabled).toBe(false);
+  await m.submit();
+  await m.input("Address", "http://192.168.1.20:8317");
+  expect(box()).toBe(false);
+  await m.submit();
+  // A Tailscale-shaped address is not said to be encrypted: only the native side can tell.
+  await m.input("Address", "http://100.101.102.103:8317");
+  expect(m.text()).not.toContain("encrypts");
+  await m.submit();
+  expect(m.commands("key_entry")).toEqual([
+    { change: { mode: "remote", url: "http://10.0.0.2:37575" } },
+    { change: { mode: "remote", url: "http://192.168.1.20:8317" } },
+    { change: { mode: "remote", url: "http://100.101.102.103:8317" } },
+  ]);
+});
+
+test("the certificate box asks for the certificate authority's file, says which file that is, and Choose fills it in", async () => {
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)" },
+  });
+  try {
+    let chosen: string | null = "/home/me/pluxy/ca.pem";
+    const { m } = await connectStep({ certificate_choose: () => chosen });
+    await m.input("Address", "https://10.0.0.2:37575");
+    expect(m.text()).toContain("Certificate authority file");
+    expect(m.text()).toContain(
+      "The file of the certificate authority that signed its certificate, often ca.pem, or rootCA.pem if mkcert made it. Not the certificate pluxy itself uses.",
+    );
+    await m.click("Choose…");
+    expect(m.commands("certificate_choose")).toEqual([{}]);
+    expect(all(m.root, "input").map((i) => i.value)).toEqual([
+      "https://10.0.0.2:37575",
+      "/home/me/pluxy/ca.pem",
+    ]);
+    expect(m.text()).toContain("Over https, trusting that certificate authority file.");
+    // Cancelled: what was there stays.
+    chosen = null;
+    await m.click("Choose…");
+    expect(all(m.root, "input").map((i) => i.value)[1]).toBe("/home/me/pluxy/ca.pem");
+  } finally {
+    Reflect.deleteProperty(globalThis, "navigator");
+  }
+  // Where the app has no file chooser to open, there is no button for one.
+  const { m } = await connectStep();
+  await m.input("Address", "https://10.0.0.2:37575");
+  expect(m.labels()).not.toContain("Choose…");
+});
+
+test("a certificate that does not check out says to give the authority's file, and what to do when it signed itself", async () => {
+  const tls = "TLS verification or handshake failed; check the certificate authority";
+  const { m } = await connectStep({
+    key_entry: (): KeyEntryResult => ({ status: "error", connection: view({ error: tls }) }),
+  });
+  await m.input("Address", "https://10.0.0.2:37575");
+  await m.submit();
+  expect(m.text()).toContain(
+    'Its certificate could not be checked. If you made it yourself, open "It uses a certificate I made myself" and give the file of the certificate authority that signed it.',
+  );
+  await m.input("Certificate authority file", "/srv/pluxy/tls/leaf.pem");
+  await m.submit();
+  expect(m.text()).toContain(
+    "Its certificate could not be checked with that file. Give the file of the certificate authority that signed it, not the certificate pluxy itself uses.",
+  );
+  expect(m.text()).toContain("use its Tailscale address, or its http:// address on a network you trust.");
+  expect(m.text()).not.toContain("give the app its certificate file");
+});
+
+test("the form says where the management key is without a command, as well as with one", async () => {
+  const { m } = await connectStep();
+  expect(m.text()).toContain(
+    "On the computer pluxy runs on, it is the management_key line in pluxy's config.json (pluxy help there says where that file is), and pluxy key management --show-key prints it.",
+  );
+});
+
+test("once connected, the form says Connected and asks for nothing until another address is typed", async () => {
+  const connected = view({
+    mode: "remote",
+    url: "http://10.0.0.2:37575",
+    target: "http://10.0.0.2:37575",
+    signed_in: true,
+    link: "plain",
+  });
+  const m = await mount(page(connected), settings({ key_entry: never }));
+  expect(m.text()).toContain("Connected to 10.0.0.2:37575");
+  expect(m.text()).toContain("Over plain http, on a network you said you trust.");
+  expect(m.labels()).toContain("Connected");
+  expect((m.button("Connected") as FakeNode).disabled).toBe(true);
+  expect(m.labels()).not.toContain("Connect");
+  expect(m.text()).not.toContain("Next, a small window asks for its management key.");
+  await m.submit();
+  expect(m.commands("key_entry")).toEqual([]);
+  // Another address: Connect again, with the note.
+  await m.input("Address", "https://pluxy.example");
+  expect(m.labels()).toContain("Connect");
+  expect((m.button("Connect") as FakeNode).disabled).toBe(false);
+  expect(m.text()).toContain("Next, a small window asks for its management key.");
+  // Signed out of the same address: Connect, to sign in again.
+  const out = await mount(page({ ...connected, signed_in: false }), settings({ key_entry: never }));
+  expect(out.labels()).toContain("Connect");
+  // How it travels is as the native side found it, never from the address's shape.
+  const at = (link: Connection["link"]) =>
+    mount(
+      page(
+        view({
+          mode: "remote",
+          url: "http://100.101.102.103:8317",
+          target: "http://100.101.102.103:8317",
+          signed_in: true,
+          link,
+        }),
+      ),
+      settings(),
+    );
+  expect((await at("tailscale")).text()).toContain("Only over Tailscale, which encrypts the connection.");
+  // Not carried now, or not looked up yet since the app started: never said to be encrypted.
+  const off = await at("tailscale_off");
+  expect(off.text()).toContain("Only over Tailscale: nothing is sent unless Tailscale is on and reaches it.");
+  expect(off.text()).not.toContain("Tailscale, which encrypts");
+  const plain = await at("plain");
+  expect(plain.text()).toContain("Over plain http, on a network you said you trust.");
+  expect(plain.text()).not.toContain("Tailscale, which encrypts");
 });
 
 // ---- not running ------------------------------------------------------------------------------------------
@@ -387,12 +534,12 @@ const cases: Case[] = [
       mode: "remote",
       url: "https://pluxy.example",
       target: "https://pluxy.example",
-      error: "core refused this key",
+      error: "This management key was not accepted.",
     }),
     heading: "Not signed in to pluxy at pluxy.example",
     buttons: ["Enter management key", "Change where pluxy runs"],
     says: ["That pluxy refused the key. Check it and try again."],
-    not: ["core refused this key"],
+    not: ["This management key was not accepted."],
   },
   {
     name: "remote, not answering",
@@ -400,12 +547,12 @@ const cases: Case[] = [
       mode: "remote",
       url: "https://pluxy.example",
       target: "https://pluxy.example",
-      error: "the connection to core timed out",
+      error: "The connection to pluxy timed out.",
     }),
     heading: "pluxy at pluxy.example is not answering",
     buttons: ["Enter management key", "Change where pluxy runs"],
     says: ["https://pluxy.example", "It did not answer in time."],
-    not: ["the connection to core timed out"],
+    not: ["The connection to pluxy timed out."],
   },
   {
     name: "this computer, not answering",
@@ -413,7 +560,7 @@ const cases: Case[] = [
       mode: "local",
       url: "http://127.0.0.1:8317",
       target: "http://127.0.0.1:8317",
-      error: "core could not be reached or its reply could not be read",
+      error: "Could not reach pluxy, or could not read its reply.",
     }),
     heading: "pluxy on this computer is not answering",
     buttons: ["Enter management key", "Change where pluxy runs"],
@@ -424,7 +571,7 @@ const cases: Case[] = [
     connection: view({
       mode: "remote",
       url: "https://pluxy.example",
-      error: "core's host name could not be resolved",
+      error: "The host name could not be resolved.",
     }),
     heading: "Cannot connect to pluxy at pluxy.example",
     buttons: ["Change where pluxy runs"],
@@ -645,9 +792,10 @@ test("a failed action's message sits beside it and the page keeps its fields", a
 
 test("Where: picking the other choice shows its controls only, and switching says what it stops", async () => {
   const m = await mount(page(remote), settings({ connection_set: () => remote }));
-  // The choice in use shows its controls: the form, with the address as it is now.
+  // The choice in use shows its controls: the form, with the address as it is now, which it is
+  // already connected to.
   expect(m.labels()).not.toContain("Switch to this computer");
-  expect(m.labels()).toContain("Connect");
+  expect(m.labels()).toContain("Connected");
   expect(all(m.root, "input").map((i) => i.value)).toContain("https://pluxy.example");
   const radios = whereRadios(m);
   expect(radios.length).toBe(2);
@@ -657,7 +805,7 @@ test("Where: picking the other choice shows its controls only, and switching say
     "Switching stops using pluxy.example. Tools set up for it stop getting answers until you switch back.",
   );
   expect(m.labels()).toContain("Switch to this computer");
-  expect(m.labels()).not.toContain("Connect");
+  expect(m.labels()).not.toContain("Connected");
   await m.click("Switch to this computer");
   expect(m.commands("connection_set")).toEqual([{ change: { mode: "managed" } }]);
 });

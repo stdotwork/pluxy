@@ -17,14 +17,13 @@ gives another word: an account's "Renewal time" reads "Subscription ends".
 
 Parity did not mean the same logic. The new core does things its own way, and the panel shows
 what it does. Old features were carried over only where they were worth keeping. Each one left out
-has a reason, listed page by page in
-[What each page leaves out, and why](../next/ui/README.md#what-each-page-leaves-out-and-why).
+has a reason.
 
 ## A minimal panel
 
 The panel shows what core itself does, in compact pages, and nothing core cannot do. A setting
-gets a field only when core runs it; the rest of the config file stays editable as text in the
-Config Panel's Source tab, and a setting gets its field when core starts running it.
+gets a field only when core runs it; the rest of the config file stays editable as text in
+Config's Settings file tab, and a setting gets its field when core starts running it.
 
 Richer views and tools the panel does not have, such as the local usage of coding agents and the
 tools that set those agents up, belong to the desktop app. The app shows the same core pages in
@@ -45,7 +44,7 @@ account.
 | Add an account | Replaced OAuth Login. It adds API keys as well as sign-ins, from the login methods each running extension offers under the provider's name, so "OAuth" no longer describes it. A person never types an account ID: core makes it, and the account is named after the sign-in. The importer for CLIProxyAPI auth files is at the end of it. |
 | System | Replaced Management Center Info. "Management Center" was the upstream panel's product name. |
 | Order & fallback | Replaced Routing, whose tiers, "Failover" and "Gateway policy" a person had to know the product to read. It is the second tab of Accounts. It shows, for each provider with two or more accounts, which goes first (`First`, `Backup 1`…): pluxy only ever picks among one provider's accounts, so a mixed list would have made another provider's account look like a backup. Under it are the fallbacks (what pluxy tries when no account can serve a model, such as ChatGPT when Claude runs out) and the rules by which accounts share requests, two shown and eight under "More rules". |
-| Config Panel | The old panel's name: this page does the same job as the old one did. |
+| Config | Replaced the old panel's Config Panel. It has two tabs: Settings, whose network, other-computers (remote management and the address pluxy listens on), logging and key settings each save the moment they change, and Settings file, the file itself, saved after a review of the changes. The routing settings are on Order & fallback and the client keys on Tools, each linked from Settings, so no setting is on two pages. |
 | Logs | Replaced the old panel's Logs Viewer. It holds two things, pluxy's own log and the full logs of failed requests, and "viewer" named neither. |
 | (Quota Management) | Gone: every account's row on All accounts shows its two shortest limits, and its page shows every limit. The old address `#/quota` opens All accounts. |
 | Requests, Usage | The two tabs of Activity; see [The Activity page](#the-activity-page). Requests keeps the ID `usage` of the page it replaced, so `#/usage` and `data-page="usage"` still work; Usage is `activity/usage`. |
@@ -116,7 +115,7 @@ with one file per account, readable only by core's user and, on Windows, SYSTEM 
 reply shows it again.
 
 Accounts set in the config are listed in the panel but changed only in the config. Keys already in
-`config.yaml` keep working, and are edited in the Config Panel's Source tab. Keeping panel-added
+`config.yaml` keep working, and are edited in Config's Settings file tab. Keeping panel-added
 keys out of the config file means core needs no structured write of config accounts for both
 config layouts it reads, and a key is never shown after it is added.
 

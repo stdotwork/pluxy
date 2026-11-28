@@ -188,20 +188,21 @@ fn create_temp(tmp: &Path) -> io::Result<fs::File> {
 /// its `init` (`init(path)` runs it, `init_config`): listening on this computer, on a free port
 /// that then stays the core's, with fresh keys; its folders are beside it. After that it is the person's to edit (core
 /// reloads it), and the app only reads the management key. On macOS dir is first emptied of
-/// extended access list entries (`clear_core_folder`).
+/// extended access list entries (`clear_core_folder`). Before `init`, dir is made private on
+/// Unix (`core_folder`), since `init` refuses a folder group or others can write in.
 fn prepare_config(
     dir: &Path,
     init: impl FnOnce(&Path) -> Result<(), String>,
 ) -> Result<PathBuf, String> {
     let path = dir.join("config.json");
     #[cfg(target_os = "macos")]
-    fs::create_dir_all(dir)
+    core_folder(dir, false)
         .and_then(|_| clear_core_folder(dir))
         .map_err(|e| format!("{}: {e}", dir.display()))?;
     if path.exists() {
         return Ok(path);
     }
-    fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    core_folder(dir, true).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     init(&path)?;
     if !path.exists() {
         return Err(format!("the core wrote no config at {}", path.display()));
@@ -336,6 +337,44 @@ fn clear_core_folder(dir: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The core folder at dir, made when it is missing: on Unix 0700 whatever the umask (the folders
+/// above it as the umask makes them), as the vault's folder is made. With private set, an
+/// existing folder of this user's that group or others may use, such as one an earlier version
+/// of the app made under umask 002, is made 0700 too. It is opened, never through a link; a link
+/// or another user's folder is left as it is, for the core's `init` to refuse.
+#[cfg(unix)]
+fn core_folder(dir: &Path, private: bool) -> io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+    if let Some(parent) = dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    match fs::DirBuilder::new().mode(0o700).create(dir) {
+        Err(e) if e.kind() != io::ErrorKind::AlreadyExists => return Err(e),
+        _ => {}
+    }
+    if !private {
+        return Ok(());
+    }
+    let f = match fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(dir)
+    {
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => return Ok(()),
+        f => f?,
+    };
+    let m = f.metadata()?;
+    if m.uid() == unsafe { libc::geteuid() } && m.mode() & 0o077 != 0 {
+        f.set_permissions(fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn core_folder(dir: &Path, _private: bool) -> io::Result<()> {
+    fs::create_dir_all(dir)
 }
 
 /// The address core is to listen on, from `listen` in the core config at path: an IP address and
@@ -1170,6 +1209,31 @@ mod tests {
             assert!(!has(p), "{}", p.display());
         }
         assert!(has(&outside));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    /// Unix: the core's `init` refuses a folder group or others can write in, so before it runs
+    /// the core folder is 0700 whatever the umask: one made here, and one an earlier start made
+    /// 0775 under umask 002.
+    #[cfg(unix)]
+    #[test]
+    fn init_finds_the_core_folder_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let base = temp("core-mode");
+        let made = base.join("data").join("core");
+        let earlier = base.join("earlier");
+        fs::create_dir(&earlier).unwrap();
+        fs::set_permissions(&earlier, fs::Permissions::from_mode(0o775)).unwrap();
+        for dir in [&made, &earlier] {
+            let mut seen = None;
+            prepare_config(dir, |path| {
+                seen = Some(mode(path.parent().unwrap()));
+                write_private(path, b"{}").map_err(|e| e.to_string())
+            })
+            .unwrap();
+            assert_eq!(seen, Some(0o700), "{}", dir.display());
+        }
         fs::remove_dir_all(base).unwrap();
     }
 

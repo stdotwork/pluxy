@@ -2,8 +2,8 @@
 
 The desktop app is the UI kit's second build ([`../ui`](../ui/README.md)), in a Tauri 2 window,
 with a tray icon. It shows core's pages in the same places and with the same themes as the web
-panel, then adds its own: Beginner Mode, Manage Clients and the client pages as topics beside the Tools page, and Where pluxy runs, Updates, Add-ons
-and Launcher among the Settings topics. Extension pages, from core and
+panel, then adds its own: the eight coding tools' pages, which open from the rows of Tools and of the
+guided setup, and Where pluxy runs, Updates, Add-ons and Launcher among the Settings topics. Extension pages, from core and
 from packages installed on this device, open in webviews of their own.
 
 Linux is the only platform the app supports now; Windows, macOS and WSL are later work
@@ -32,15 +32,29 @@ server and to the person's other computers.
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
 | On this computer (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start has the core write that config (`pluxy init -port 0`): a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
-| Connect to a pluxy that is already running, on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address (`http://` is accepted only here) and management key. | Leaves it running. The app never starts or stops it. |
-| Connect to a pluxy that is already running, on another computer (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
+| Connect to a pluxy that is already running, on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`, also written `localhost.`), such as a system service. You give its address (`http://` or `https://`) and management key. | Leaves it running. The app never starts or stops it. |
+| Connect to a pluxy that is already running, on another computer (`remote`) | Connects over https, or over plain http. Plain http is taken as over Tailscale, which encrypts it, only when this computer has a Tailscale interface (an interface address in `100.64.0.0/10` or `fd7a:115c:a1e0::/48`, from the system's interface list) and the address the core's name resolves to is in those ranges and is not this computer's own; the shape of an address alone is not enough, since `100.64.0.0/10` is also the shared address space ISPs use. That is checked again before each new connection, and nothing is sent at a moment it does not hold. The status line says the connection is over Tailscale only while that check holds for the address a connection last went to; just after the app starts, before any connection, it says only that nothing is sent unless Tailscale is on and reaches the address. For any other plain http address, the key window warns that anyone on that network could read the key and everything the app and your tools send, and its confirm button, **Trust this network and connect**, is the person's answer that they trust the network; the app keeps that answer with that address only (`trust_network` in `connection.json`), and the page cannot give it. Plain http never goes through a proxy from the environment. You can name the PEM file of the certificate authority that signed its certificate, for a certificate you made yourself (the form's **Choose…** opens the file chooser, on Linux); without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
-Addresses are origins only (scheme, host and port). A key you give is checked against that core
-(`GET /v0/management/status`) before the app switches to it. It is kept in `connection.json` only
+Addresses are origins only (scheme, host and port). Before the key window opens, the app resolves
+the address once, and sends both the call with no key and the call with the key to the address it
+found (the request still names the host, and https still checks the certificate for that name;
+through a proxy from the environment, https only, the proxy's address is resolved instead). It
+asks that core `GET /v0/management/status` with no key, so a wrong address, a certificate it
+cannot check, or remote management being off is said before any key is typed (core refuses
+another computer before it looks for a key, and does not count a call with no key toward its
+lockout). A key you give is checked against that core (`GET /v0/management/status`) before the app
+switches to it. When that check fails for another reason than the key, the app holds the key in
+memory and uses it on the next try at the same address with the same certificate authority file
+instead of asking again; a key the core refused is not held. A held key is overwritten and dropped
+10 minutes after it was typed, at a try at another address or with another certificate authority
+file, when the connection is changed or signed out of, and when the window closes to the tray. It
+is kept in `connection.json` only
 when you tick "Keep the key on this device"; otherwise it lasts until the app quits.
 
 The native side holds the management key. "Enter management key" (on the not-running pane and on Where pluxy runs), and Continue and Connect on the address form, open a
-native dialog with a hidden entry, "Keep the key on this device", and OK/Cancel: a GTK dialog on
+native dialog with a hidden entry, "Keep the key on this device", and OK/Cancel (OK reads
+**Trust this network and connect**, and is not the default button, where the dialog asks about the
+network): a GTK dialog on
 Linux, a Win32 dialog with a password edit control on Windows, and a sheet on the window with an
 `NSSecureTextField` on macOS. On Windows and macOS the dialog is modal to the app's window only:
 the app's other native dialogs and the tray stay usable meanwhile.
@@ -59,8 +73,10 @@ The window calls core through the
 `<core>/v0/management/...` only, following no redirects and, for a core on this computer, no
 proxy from the environment. Path segments that are, or decode to, `.` or `..` are refused.
 
-Rotate on the Config page's Connectivity tab rotates the management key natively: the app opens
-its native confirmation, which names the core and how the new key will be kept, then
+Replace key in the Keys section of the Config page rotates the management key natively. The
+page asks nothing itself (the app's host says it confirms natively, `confirmsKeyReplacement`):
+the app opens its native confirmation, which names the core and how the new key will be kept,
+with Replace key and Cancel, then
 calls core's `POST /v0/management/management-key/rotate` itself. It keeps the new key as the old
 one was kept (in `connection.json`, for this session only, or, for the app's own core, in that
 core's config file, which core writes) and shows it once in a native window with Copy and
@@ -441,6 +457,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `connection_get` | The connection, without the key |
 | `connection_set` | Changes connection settings without accepting a key |
 | `key_entry` | Opens native key entry, checks the key against core, and returns only signed-in, wrong-key, cancelled or error status plus the connection without its key |
+| `certificate_choose` | Opens the native file chooser (Linux only) for the certificate authority file of a pluxy to connect to, and returns its path, or null when cancelled; the file is read only when the person connects |
 | `core_start` | Starts the app's own core only if it is not running (managed mode) |
 | `core_stop` | Stops the app's own core, as the tray's Stop does (managed mode); refused in local and remote modes, which it never stops |
 | `core_restart` | Starts the app's own core again (managed mode) |
@@ -1268,7 +1285,10 @@ the tool is installed.
 The Claude Code page (`src/claudeCode.tsx`) needs the curated native tool `pluxy/claude-code`
 ([app tools](../app-tools/README.md#claude-code)). Its default file is Claude Code's user settings
 (`~/.claude/settings.json`); the others are a file (a link, as stow makes, is followed and kept)
-or a file in a folder. A file Claude Code would not take (not strict JSON, or another `$schema`)
+or a file in a folder. Before Claude Code has ever run, there is no `~/.claude`: the page reads that
+as not connected and says Claude Code has not run yet, and Connect makes the folder in the same
+write (its confirmation names it), so Claude Code's first start uses pluxy and asks for no sign-in.
+A file Claude Code would not take (not strict JSON, or another `$schema`)
 is one pluxy will not change. **Models** holds Opus, Sonnet, Haiku and Fable (each with **1M
 context**; Fable follows Sonnet when empty), **Starts with** (a model, or one of Claude Code's
 aliases), **Subagents**, and under **Context and auto-compaction** the **Auto-compact window**, the
@@ -1421,6 +1441,8 @@ default in its agent folder (`~/.pi/agent`), or in a folder (the one `PI_CODING_
 the folder may be a link, as chezmoi can make), or as the linked files in a folder (links, as stow
 makes, are followed and kept). While the plugin is not installed, Connect is **Install plugin**: one
 press makes the key, installs the plugin and writes pluxy's address, the key and Pi's defaults.
+Before Pi has ever run, there is no `~/.pi/agent`: the page says Pi has not run yet, and Install
+plugin makes the folder first, in the same write (its confirmation names it).
 When a folder of the plugin's name is there that pluxy did not install, the head says so and Install
 plugin is held until it is moved. The head also notes when `settings.json` still lists the npm copy
 an older app installed, which Connect replaces. **Models** holds the **Default model**, the model Pi
@@ -1467,49 +1489,50 @@ and one test request. It opens once the app is connected and signed in, so the f
 still comes first. After it is finished the page stays among the Settings topics, every step
 folded.
 
-The app adds one thing to the page, through `SetupOptions.toolAction`. In step 2, a coding tool
-core found gets a **Set up** link at the end of its row when the window has a page for it and its
-optional tool is installed on this device or offered by a registry, which is the list Beginner
-Mode offers. Set up opens the tool's own page, where the app writes the tool's settings itself
-after its native confirmation; a tool that is not installed or enabled yet is named there. A tool
-whose settings file pluxy would not change gets no link, and its row keeps the panel's own steps,
-as every other row does. With a remote core the link is left out: the page then lists the tools on
-core's machine, and the app sets a tool up on this computer only.
+The app adds to step 2, and to the Tools page (`#/tools`), which shows the same rows, through the
+kit's `SetupOptions` and `ToolsOptions` (`src/toolHooks.ts` gives both the same tools, links and
+refresh; only Tools also gets `keyOwners`).
 
-`SETUP_CLIENT_PAGES` in `src/agentPages.ts` maps core's ID for each tool to the ID of its
-page here, and `setupClientPage` beside it decides which tools get the link. Beginner Mode
-is still there and unchanged.
+## Tools and the guided setup
 
-## Beginner Mode
+Each coding tool is a row, on Tools and in step 2 of the guided setup: the five tools core scans, and
+Claude Desktop, Grok Build and Hermes Agent, which the app reads itself (`readExtraTools` in
+`src/clientPage.tsx`, passed as `extraTools` as Tools or the setup opens, when this device's add-ons
+change, and on Refresh). Each tool has a page in this window (`#/claude-code`, `#/codex`,
+`#/claude-desktop`, `#/opencode`, `#/omp`, `#/grok-build`, `#/hermes`, `#/pi`). It opens as
+`Tools / {Tool}`, is not in the navigation, and writes the tool's settings itself after its native
+confirmation.
 
-Beginner Mode (`src/easyMode.tsx`, a topic of Tools; the Tools entry itself opens the kit's Tools page) is the guided setup of the old app's Easy
-mode, in its two steps. **Connect a model** is the Add an account page's own sign-in (every browser,
-device code and API-key method core's extensions offer); it counts core's accounts, and **Next:
-connect an agent** stays off until there is one. **Connect an agent** lists the agent clients this
-window can set up (the eight client pages above, Claude Code to Pi) whose optional tool is
-installed on this device or offered by a registry, and the launcher (`pluxy/execution`) that each
-page's **Start** runs through: **Install** installs a tool from its registry, **Enable** opens the
-tool's native confirmation ("full access to your user account"), answered in that dialog only,
-and **Set up** shows the client's own page below, where its configuration is applied and the
-client started as on that page. The guide writes nothing itself and keeps no draft: a cancelled
-confirmation, or leaving the guide, leaves files and packages as they were; Disconnect and Restore backup on the client's page undo an
-apply.
+One function, `toolAction` in `src/agentPages.ts`, gives a row its one button, by the tool's add-on
+(`items` in `src/addonItems.ts`: each add-on is on, installed but off, or offered by a registry):
 
-A client joins the list by being an agent page: a window page that names the package it drives
-(`AgentPage` in `src/easyMode.tsx`), listed in `agentPages` in `src/agentPages.ts`. The list itself
-(`src/easyModeItems.ts`) has no per-client code.
+| The tool's add-on | The row's button |
+| --- | --- |
+| On | **Open** when the tool is Connected, else **Set up**; both open the tool's page |
+| Installed, off | **Turn on add-on**: the native confirmation (it names "full access to your user account"), answered in that dialog only; meanwhile "Answer the confirmation window to go on." |
+| Offered by a registry | **Install add-on** (quiet), then **Installing…**, then **Turn on add-on** |
+| Still being read | "Checking add-ons…" |
+| None to be had | no app button: the row keeps the kit's own **Set up** or **Needs its add-on** |
 
-### Manage Clients
+In safe mode, or when this device's add-ons cannot be read, a row offers **Open** or **Set up** only,
+and a warning above the list says tool add-ons are paused. A failed step says why in one line under
+its row (`Could not install the add-on.` or `Could not turn on the add-on.`) and can be pressed again; a
+cancelled confirmation says nothing. One step runs at a time for each add-on (`src/toolRows.tsx`).
+Lines under the list (`toolNotes`) say when a listed tool has no add-on to be had and when the
+Launcher add-on is not on. Add-ons are read as the window opens (`src/main.tsx`); registries are read
+only for a pluxy on this computer (`setupOffersNeeded`).
 
-Tools lists a client's page among its topics only while the person wants it there. By default (automatic) it
-lists the clients whose tool is installed on this device, enabled or not, with the installed ones
-first; a tool a registry only offers is not listed, since Beginner Mode is where it is installed. The
-**Manage Clients** page (a topic of Tools) has a checkbox for every client with a search box, **Restore
-automatic display** and **Save**; Save is off for an empty selection ("Keep at least one client
-visible."). The choice is kept in the window's prefs (`pluxy.agent-clients`, on this device, like the
-Themes page's layout choices), and saving automatic removes it. Whichever client page is open stays listed while it is
-open, so hiding it never strands the person. Beginner Mode still offers every client, and the list
-logic is in `src/clientListItems.ts`.
+From step 2, **Set up** or **Open** opens the tool's page with a strip above it, "Setting up pluxy."
+and **Back to setup**; the strip is kept in memory only and goes once the person leaves the page.
+Connected to a pluxy on another computer (`isRemote`), the list is that computer's tools, with the
+kit's own steps on each row, no add-on button, no extra rows, and links to the eight pages for this
+computer under the list. `keyOwners` (`src/keyOwners.ts`) names each key the app made for a tool
+from the vault's list (names only, never a key's value), for keys of the connected pluxy only.
+
+`SETUP_CLIENT_PAGES` in `src/agentPages.ts` maps core's ID for each tool to the ID of its page. A
+tool joins the list by being an agent page: a window page that names the add-on it drives
+(`AgentPage` in `src/addonItems.ts`), listed in `agentPages`. The old addresses `#/easy-mode` and
+`#/clients` go to `#/setup` and `#/tools`.
 
 ## Build and check
 
@@ -1672,17 +1695,17 @@ session's Downloads folder with the theme file's JSON (read from disk at the pat
 and the next launch paints in it. The session ends on the Themes page in that theme.
 
 One more managed session (`native/setup.ts`, with the stages in `src-tauri/src/native_setup.rs`)
-walks [Setup](../management/README.md#setup) on the app's first start, on the build with
+walks [Setup](../../docs/management-api.md#setup) on the app's first start, on the build with
 `artifact-test-trust`. Its core is a first run: nothing installed and no accounts, a bundled
 registry that offers `pluxy/claude` as a pick (`native/core-steps.ts` `firstRunSource`), and a
 stand-in `claude` printing `2.4.1 (Claude Code)` first on the PATH it inherits from the app; a
 curated registry offers the Claude Code page's package (`native/first-run.ts`). The window opens
 on Setup by itself (`#/setup`, "Set up pluxy") with step 1 open; the Claude kind is ticked,
 saying Claude Code is installed on this computer; "Add Claude" adds it, step 1 then says
-"Added: Claude.", and `GET /packages` through the app's host lists it; step 2's Claude Code row
+"pluxy can now connect to Claude.", and `GET /packages` through the app's host lists it; step 2's Claude Code row
 has the app's "Set up" link to `#/claude-code`, and pressing it opens the app's Claude Code page;
 back on `#/setup`, "Leave setup for now" lands on Home and `GET /setup` has `first_run` false. The next launch opens on Home; Setup, opened, is titled "Setup" with
-every step folded and no "Leave setup for now", and step 1 says Claude is added. The session keeps a
+every step folded and no "Leave setup for now", and step 1 says pluxy can connect to Claude. The session keeps a
 screenshot of each screen it holds (the kind found, after Add, step 2, finished) and ends on that
 page in GTK's dark variant.
 

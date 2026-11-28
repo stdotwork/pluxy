@@ -145,8 +145,10 @@ All of this is built.
   it. Usage is broken down by model, provider, account and key, and counts cache writes. Planned:
   the cost of each request.
 
-Details: [routing.md](routing.md) (accounts, routing, fallback chains, window ignition),
-[config.md](config.md) (every setting) and [usage-and-logs.md](usage-and-logs.md).
+Details: [routing](routing.md) (accounts, routing, fallback chains, window ignition),
+[config](config.md) (every setting and [reloads](config.md#reloading)),
+[packages](extensions.md), [usage](usage-and-logs.md) and the
+[management API](management-api.md).
 
 ## The extension model
 
@@ -214,9 +216,12 @@ much alike; all three are meant to work well for agents too.
   own program. See [panel.md](panel.md).
 - **The desktop app** runs anywhere. It either runs a core on its own machine and manages it, as
   EasyCLIProxyAPI did, or connects to a core that is already running, on the same machine or on
-  another one over HTTPS. It also sets up coding tools on its own machine. Built, on Linux only
-  (CI also builds and tests it on Windows and macOS, but the app is not supported there yet). See
-  [app.md](app.md) and, for how it works inside, [app-design.md](app-design.md).
+  another one over HTTPS, over plain HTTP that Tailscale carries from this computer (a Tailscale
+  interface here, and the resolved address in Tailscale's ranges), or over plain HTTP on a network
+  the person says, in the native key window, that they trust. It also sets up coding tools on its
+  own machine. Built, on Linux only (CI also builds and tests it on Windows and macOS, but the app
+  is not supported there yet). See [app.md](app.md) and, for how it works inside,
+  [app-design.md](app-design.md).
 
 Setup should mostly detect, so a person clicks a few buttons instead of filling in forms, in all
 three surfaces. Built:
@@ -294,7 +299,8 @@ Tailscale's [state path for a user](https://github.com/tailscale/tailscale/blob/
 Ollama's [FAQ](https://github.com/ollama/ollama/blob/main/docs/faq.mdx); T3 Code's
 [background service](https://github.com/pingdotgg/t3code/blob/main/docs/user/background-service.md);
 the GitHub CLI's [environment](https://cli.github.com/manual/gh_help_environment); Go's
-[`os` package](https://pkg.go.dev/os). Details: [config.md](config.md) and [setup.md](setup.md).
+[`os` package](https://pkg.go.dev/os). Details: [pluxy's home](config.md#pluxys-home) and
+[setup](setup.md#where-pluxy-keeps-its-files).
 
 ## The UI kit and themes
 

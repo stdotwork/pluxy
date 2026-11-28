@@ -330,6 +330,20 @@ export function accountFix(a: Account, c: Condition): Fix | undefined {
 export const accountName = (a: Pick<Account, "id" | "label">) => a.label?.trim() || a.id;
 
 /**
+ * The address an account sends its requests to, as host and port (an API-key account keeps it as
+ * its base_url setting); nothing for an account with none, or one that is not a web address.
+ */
+export function accountServer(a: Pick<Account, "settings">): string | undefined {
+  const base = a.settings?.base_url;
+  if (typeof base !== "string") return undefined;
+  try {
+    return new URL(base.trim()).host || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * A client key's name: its label, else its masked value ("Key sk…48"). keys are the keys as
  * GET /client-keys lists them; label is the event's own copy of the key's name. mask is for the
  * label, a name a person gave (usePrivacy().id); the masked value never goes through it.
@@ -349,18 +363,19 @@ export function keyName(
 
 // ---- plan -------------------------------------------------------------------------------------
 
-/** How much a plan weighs on a row: top (the largest plans), mid, or free. */
-export type PlanTier = "top" | "mid" | "free";
+/** How much a plan weighs on a row: top (the largest plans), high (the next), mid, or free. */
+export type PlanTier = "top" | "high" | "mid" | "free";
 
 /**
- * The tier of a plan word: Max (5x and 20x) and Ultra are the largest plans the providers sell;
- * Free is free; any other plan, known or not, is mid. One table: themes colour the tiers by
- * data-plan-tier.
+ * The tier of a plan word: Max 20x and Ultra are the largest plans the providers sell, and an API
+ * key's pay-as-you-go plan sits with them; Max 5x and plain Max are the next; Free is free; any
+ * other plan, known or not, is mid. One table: themes colour the tiers by data-plan-tier.
  */
 export function planTier(plan: string): PlanTier {
   const p = plan.trim().toLowerCase();
   if (/^free\b/.test(p)) return "free";
-  if (/^(max|ultra)\b/.test(p)) return "top";
+  if (/^(max\s*20x|ultra|api)\b/.test(p)) return "top";
+  if (/^max\b/.test(p)) return "high";
   return "mid";
 }
 

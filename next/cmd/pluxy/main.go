@@ -1,7 +1,7 @@
 // Command pluxy is the pluxy core: pluxy serve (or pluxy with no subcommand) serves the client
 // APIs and answers through a provider extension; pluxy init writes a first config; pluxy help
 // lists the subcommands without calling core; every other subcommand is a client of a running
-// core's management API (next/management/README.md), but for pluxy key management, which reads
+// core's management API (docs/management-api.md), but for pluxy key management, which reads
 // only the config.
 package main
 
@@ -164,8 +164,13 @@ func firstStart(configPath string, inHome, inherited bool) error {
 	if errors.Is(err, fs.ErrExist) {
 		return nil // another first start wrote it in the meantime: core reads that one
 	}
-	if err != nil {
-		return fmt.Errorf("no config at %s, and a first one could not be written: %w", configPath, err)
+	show := stderrShows(os.Stderr)
+	var refused *home.Refusal
+	if errors.As(err, &refused) {
+		return errors.New(refused.Text(show)) // it says what is wrong and what to do
+	}
+	if err != nil { // it names the path, which a terminal shows escaped
+		return fmt.Errorf("no config at %s, and a first one could not be written: %s", show(configPath), show(err.Error()))
 	}
 	if inherited {
 		log.Printf("first start: wrote a new config, %s, serving on the inherited socket; its client key and management key are in that file", fc.Path)
@@ -193,6 +198,36 @@ func setupStartLine(panelBuilt bool, local, configArg, listen string) string {
 		return "first-run setup is not finished. Next: run " + command
 	}
 	return fmt.Sprintf("first-run setup is not finished. Next: open %s%s in a browser and sign in with the management key, or run %s", local, panel.Prefix, command)
+}
+
+// otherComputerLine is the line after the panel's address while first-run setup has not ended:
+// that address is this computer's own, so it says how to open the panel from another computer
+// (listen is the address pluxy serves on, file its config file, secure whether it serves HTTPS).
+// "" when another computer can already open it.
+func otherComputerLine(listen string, allowRemote bool, file string, secure bool) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return ""
+	}
+	scheme := "http"
+	if secure {
+		scheme = "https"
+	}
+	address := fmt.Sprintf("%s://<this computer's address>:%s%s", scheme, port, panel.Prefix)
+	ip := net.ParseIP(host)
+	switch {
+	case server.IsLoopbackHost(host):
+		return fmt.Sprintf(`that address works only on this computer. To open the panel from another computer, set "listen" to "0.0.0.0:%s" and "management_allow_remote" to true in %s (Config in the panel sets both), restart pluxy, then open %s there`, port, quoteArg(file), address)
+	case allowRemote:
+		if host == "" || ip != nil && ip.IsUnspecified() {
+			return fmt.Sprintf("another computer opens the panel at %s, using this computer's address in place of the one above", address)
+		}
+		return ""
+	case host == "" || ip != nil && ip.IsUnspecified():
+		return fmt.Sprintf(`another computer opens the panel at %s, using this computer's address in place of the one above, after "management_allow_remote" is set to true in %s (Config in the panel sets it), or its sign-in is refused`, address, quoteArg(file))
+	default:
+		return fmt.Sprintf(`another computer opens the panel at the address above after "management_allow_remote" is set to true in %s (Config in the panel sets it), or its sign-in is refused`, quoteArg(file))
+	}
 }
 
 // initConfig is pluxy init: it writes a first config, as a first start does, without starting
@@ -248,6 +283,11 @@ func initConfig(args []string, stdout, stderr io.Writer, getenv func(string) str
 	}
 	fc, err := core.WriteFirstConfig(path, portVal)
 	if err != nil {
+		var refused *home.Refusal
+		if errors.As(err, &refused) {
+			fmt.Fprintf(stderr, "pluxy: %s\n", refused.Text(stderrShows(stderr)))
+			return exitFailed
+		}
 		if errors.Is(err, os.ErrExist) {
 			var pe *os.PathError
 			if errors.As(err, &pe) && pe.Path != "" {
@@ -260,7 +300,7 @@ func initConfig(args []string, stdout, stderr io.Writer, getenv func(string) str
 			fmt.Fprintf(stderr, "pluxy: %s already exists. Start core with: pluxy serve -config %s, or pick another file with -config.\n", path, path)
 			return exitFailed
 		}
-		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		printError(stderr, false, err) // it names the path, which a terminal shows escaped
 		return exitFailed
 	}
 	fmt.Fprintf(stdout, "wrote %s: core listens on %s; its client key and management key are in that file\n", fc.Path, fc.Listen)
@@ -420,6 +460,15 @@ func run(configPath string, byRule, safeMode bool, watch time.Duration, bundled 
 				configArg = "" // pluxy setup finds it as core did
 			}
 			fmt.Fprintf(os.Stderr, "pluxy: %s\n", setupStartLine(panel.Built(assets), local, configArg, cfg.Listen))
+			if panel.Built(assets) {
+				abs, err := filepath.Abs(configPath)
+				if err != nil {
+					abs = configPath
+				}
+				if line := otherComputerLine(ln.Addr().String(), cfg.ManagementAllowRemote, abs, tlsConfig != nil); line != "" {
+					fmt.Fprintf(os.Stderr, "pluxy: %s\n", line)
+				}
+			}
 		}
 	}
 

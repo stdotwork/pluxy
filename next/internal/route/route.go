@@ -243,7 +243,31 @@ type Attempt struct {
 	// Step is the chain's step the attempt is for, from 1; 0 for a request whose model has no
 	// chain.
 	Step int
+	// Why is why the router chose this account over the others that serve the step: one of
+	// the Why constants, or the strategy's name when it chose among several in the first group.
+	Why string
 }
+
+// Why an attempt's account was chosen (Attempt.Why). When none of these holds, the account was
+// one of several in the first group of its provider's order that could take the request, and
+// the strategy chose it: Why is then the strategy's name, such as round-robin.
+const (
+	// WhyPinned: the request named the account (PinHeader).
+	WhyPinned = "pinned"
+	// WhySession: the account served the session's last request (session affinity).
+	WhySession = "session"
+	// WhyOnly: the account is the only one that serves the step's model.
+	WhyOnly = "only"
+	// WhyFirst: the account is alone in the first group (highest priority) of those that serve
+	// the step's model.
+	WhyFirst = "first"
+	// WhyOnlyFree: the account is in the first group with others, and none of them could take
+	// the request then (tried already, busy or resting).
+	WhyOnlyFree = "only-free"
+	// WhyBackup: the account is in a later group, and no account in the groups above it could
+	// take the request then.
+	WhyBackup = "backup"
+)
 
 // Credentials supplies the credentials of managed accounts (Account.Managed): core's
 // credential store, which renews them through the provider extension.
@@ -484,6 +508,7 @@ type call struct {
 	renewed map[string]bool // accounts whose refused credential was renewed during this request
 	fresh   bool            // the last failed attempt's credential has been renewed: try it again
 	again   *target         // the account to try next, its credential just renewed
+	why     string          // why the account of the attempt being made was chosen (Attempt.Why)
 }
 
 func (c *call) Next() llm.Event {
@@ -585,12 +610,14 @@ func (c *call) attempts() llm.Event {
 	}
 	capable := c.capable
 	if len(capable) == 0 {
-		msg := fmt.Sprintf("no account serves model %q", model)
-		if c.req.Pin != "" {
-			msg = fmt.Sprintf("account %q does not exist or does not serve model %q", c.req.Pin, model)
-		}
-		if len(c.held) != 0 {
+		var msg string
+		switch {
+		case len(c.held) != 0:
 			msg = heldMessage(c.held, model, c.req.Pin)
+		case c.req.Pin != "":
+			msg = fmt.Sprintf("account %q does not exist or does not serve model %q", c.req.Pin, model)
+		default:
+			msg = r.notServed(c.ctx, model)
 		}
 		return errorEvent(&llm.Error{Code: llm.CodeNotFound, Message: msg, ProviderCode: "model_not_found"})
 	}
@@ -667,9 +694,9 @@ func (c *call) attempts() llm.Event {
 		if len(cands) > 0 {
 			var t target
 			if c.again != nil && slices.Contains(cands, *c.again) {
-				t = *c.again
+				t = *c.again // chosen before, for the same reason
 			} else {
-				t = c.choose(cands, now)
+				t, c.why = c.choose(cands, now)
 			}
 			c.again = nil
 			a := t.a
@@ -873,14 +900,17 @@ func jsonText(v json.RawMessage) string {
 
 // choose picks one of cands, which are in step order: the session's account and model if they
 // are among them, whatever their step; otherwise, among the first step's, by priority and then
-// strategy.
-func (c *call) choose(cands []target, now time.Time) target {
+// strategy. why says why it was chosen (Attempt.Why).
+func (c *call) choose(cands []target, now time.Time) (chosen target, why string) {
 	r := c.r
+	if c.req.Pin != "" {
+		why = WhyPinned
+	}
 	if r.affinity != nil && c.req.Session != "" {
 		if b, ok := r.affinity.lookup(c.affinityKey(), now); ok {
 			for _, t := range cands {
 				if t.a.ID == b.account && t.model == b.model {
-					return t
+					return t, cmp.Or(why, WhySession)
 				}
 			}
 		}
@@ -900,7 +930,35 @@ func (c *call) choose(cands []target, now time.Time) target {
 	}
 	a := r.picker.pick(rotationKey(c.req.LLM.Model, c.chain, step), best, r.state.activeCount, r.state.rank, now)
 	i := slices.IndexFunc(cands, func(t target) bool { return t.step == step && t.a == a })
-	return cands[i]
+	return cands[i], cmp.Or(why, c.whyChosen(step, top, len(best)))
+}
+
+// whyChosen says why an account of priority chosen was chosen for step when it was one of n
+// candidates of that priority, the highest among the step's candidates now: by the accounts that
+// serve the step, whether they could take the request or not.
+func (c *call) whyChosen(step, chosen, n int) string {
+	serving := stepTargetsOf(c.capable, step)
+	if len(serving) == 1 {
+		return WhyOnly
+	}
+	top, inTop := serving[0].a.Priority, 0
+	for _, t := range serving {
+		top = max(top, t.a.Priority)
+	}
+	for _, t := range serving {
+		if t.a.Priority == top {
+			inTop++
+		}
+	}
+	switch {
+	case chosen < top:
+		return WhyBackup
+	case inTop == 1:
+		return WhyFirst
+	case n == 1:
+		return WhyOnlyFree
+	}
+	return c.r.picker.strategy
 }
 
 // pinned reports whether the request's pin names a: by its ID, or by the public ID a reply
@@ -919,7 +977,7 @@ func (c *call) affinityKey() affinityKey {
 func (c *call) try(t target, seq uint64) (ev llm.Event, started bool) {
 	r, a := c.r, t.a
 	if c.req.Attempting != nil {
-		c.req.Attempting(Attempt{Account: a.ID, Extension: a.Extension, Public: r.state.PublicID(a.ID), Model: t.model, Step: c.stepNumber(t)})
+		c.req.Attempting(Attempt{Account: a.ID, Extension: a.Extension, Public: r.state.PublicID(a.ID), Model: t.model, Step: c.stepNumber(t), Why: c.why})
 	}
 	call := a.call()
 	var version uint64
@@ -1047,6 +1105,30 @@ func coolingError(model string, wait time.Duration, reason *llm.Error) *llm.Erro
 // heldMessage is the message of a request that no account in service can serve, when the held
 // accounts that serve its model are all turned off, all waiting for a new sign-in, or both. It
 // names no account but the one the client pinned (pin): the text reaches API clients.
+// maxServedNamed is how many served models a refusal names before it says how many more.
+const maxServedNamed = 8
+
+// notServed is the message for a request for a model no account serves. A coding tool shows it to
+// the person, who most often has set the tool up without a model: it names the models pluxy
+// does serve and the two ways to get the tool to one of them.
+func (r *Router) notServed(ctx context.Context, model string) string {
+	msg := fmt.Sprintf("no account serves model %q", model)
+	var names []string
+	for _, m := range r.ServedModels(ctx) {
+		names = append(names, m.ID)
+	}
+	if len(names) == 0 {
+		return msg + ". pluxy serves no models yet: add an account first."
+	}
+	more := ""
+	if len(names) > maxServedNamed {
+		more = fmt.Sprintf(" and %d more (pluxy model list shows them all)", len(names)-maxServedNamed)
+		names = names[:maxServedNamed]
+	}
+	return fmt.Sprintf("%s. pluxy serves: %s%s. Set the tool's model to one of them, or add a model alias to an account so that %q goes to one of them.",
+		msg, strings.Join(names, ", "), more, model)
+}
+
 func heldMessage(held []target, model, pin string) string {
 	state := held[0].a.Held
 	for _, t := range held[1:] {
