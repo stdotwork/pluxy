@@ -8,7 +8,7 @@ import { useEffect, useState } from "preact/hooks";
 import type { Reply } from "../../ui/kit/host";
 import { strings } from "../../ui/kit/strings";
 import { Button, Notice } from "../../ui/kit/ui";
-import { cancelled, sentence } from "./clientPage";
+import { answeredNo, sentence } from "./clientPage";
 import { type DeviceCatalog, device } from "./device";
 import { plainReply, useShown } from "./toolWords";
 
@@ -54,9 +54,6 @@ function useAddonStatus(pkg: string): AddonStatus {
   }, []);
   return statuses.get(pkg) ?? {};
 }
-
-/** The confirmation window was answered No: the app's own word for it, or the native side's. */
-const answeredNo = (message: string) => cancelled(message) || message.startsWith("native enable cancelled;");
 
 /**
  * Runs one step of an add-on, unless one is running for it already. A person's cancel of the
