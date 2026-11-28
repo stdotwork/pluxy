@@ -480,14 +480,14 @@ On the Themes page:
   file with a built-in theme's ID.
 - **Remove** deletes the stored theme that is on from core, and the default theme comes back.
 
-A window follows a change made in another window or with `pluxy theme` when it next gets focus
+A window follows a change made in another window or with `pluxy theme set` or `pluxy theme clear` when it next gets focus
 or shows again.
 
 Each device keeps its own appearance (system, light or dark), layout and density choices, the
 person's own CSS and whether custom CSS is on. It also keeps a copy of the theme last applied, so a window opens
 in that theme before core answers and on the sign-in page.
 
-### The `pluxy theme` commands
+### The pluxy theme commands
 
 ```bash
 pluxy theme list                     # the theme that is on, and the stored themes

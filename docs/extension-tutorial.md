@@ -125,7 +125,7 @@ go build -o scripted .
 ./scripted
 ```
 
-The program prints `scripted: this program is a pluxy extension; pluxy starts it` and exits:
+The program prints "scripted: this program is a pluxy extension; pluxy starts it" and exits:
 `sdk.Serve` reads the environment pluxy sets when it starts an extension, checks the protocol
 version, listens on the socket, prints the handshake line and serves calls until pluxy closes its
 standard input.

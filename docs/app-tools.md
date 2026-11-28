@@ -139,7 +139,7 @@ journal store of its own.
 | `Merge`, `Json`, `merge_value` | The three-way merge, and the JSON one (two-space indentation, keys in the file's order, exact number digits; comments and other formatting are not kept). |
 | `Target`, `Pin`, `pin_schema()` | Resolving, pinning and checked reads and writes; `pin_schema()` is the JSON Schema of a pin, for a write operation's `targets` items. `Pin::from_json` refuses any field `Pin::to_json` does not write. |
 | `Folder::pinned(pin)`, `Folder::empty(root, name, marker)`, `put_folder`, `remove_folder` | Writes a folder a tool owns inside a selected root, known by a marker file (pi-setup's plugin folder). |
-| `backup_create`, `backup_list`, `backup_diff`, `backup_restore`, `backup_delete`; `backup_call`, `backup_operations(files)` | Manual backups, below. Every writer exports exactly these manifest entries and serves them with `backup_call`; the app's backup browser (`../app/src/backups.tsx`) calls them. |
+| `backup_create`, `backup_list`, `backup_diff`, `backup_restore`, `backup_delete`; `backup_call`, `backup_operations(files)` | Manual backups, below. Every writer exports exactly these manifest entries and serves them with `backup_call`; the app's backup browser (`next/app/src/backups.tsx`) calls them. |
 | `Leaves`, `json_leaves` | A writer's reading of a file into settings (path and value) for a diff. |
 | `toml`, `yaml` (cargo features, off by default) | In-place editors for setup tools, so a tool compiles only the parser it uses. `toml` (toml_edit) keeps comments and formatting, sets a key where it stands and merges for Clear. `yaml` (saphyr and yaml-edit) reads YAML 1.2 into a JSON value, edits only keys whose values differ through a lossless tree, re-reads the result, and merges for Clear. |
 | `hook`, `Step` (feature `test-hooks`) | Tests only: a hook at each step of a folder write. |
@@ -417,7 +417,7 @@ Extra operations and inputs:
   `apply` removes it.
 
 `auth.json` is never written. The catalog is Codex's `{"models": [...]}`. A new entry is made from
-pluxy's Codex client template for its upstream name (`../extensions/codex/client_models.json`,
+pluxy's Codex client template for its upstream name (`next/extensions/codex/client_models.json`,
 embedded at build time), keeping the fields Codex requires and those that shape how it drives the
 model, with `model_messages.instructions_template`. A full template is about 88 KB and a file is at
 most 256 KiB, so about ten models fit. A model served by another provider gets the core's non-Codex

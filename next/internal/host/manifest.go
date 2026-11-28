@@ -28,7 +28,7 @@ type Manifest struct {
 	Version         string            `json:"version"`
 	Protocol        []int             `json:"protocol"`
 	Programs        map[string]string `json:"programs"`
-	UI *UI `json:"ui,omitempty"`
+	UI              *UI               `json:"ui,omitempty"`
 	// Config is the schema of the extension's settings, if any.
 	Config *ConfigSection `json:"config,omitempty"`
 	// App belongs to the desktop host. Core never executes or serves it.
