@@ -9,8 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// An effort outside the account's levels moves to the nearest level it has, the higher of two as
-// near; auto without a level of its own is taken as medium; a name clamping does not know is left.
 func TestClampEffort(t *testing.T) {
 	for _, c := range []struct {
 		effort string
@@ -38,8 +36,6 @@ func TestClampEffort(t *testing.T) {
 	}
 }
 
-// The suffix wins over the body's effort; the result is clamped; a body without an effort and no
-// suffix is sent as it came.
 func TestApplyReasoning(t *testing.T) {
 	for _, c := range []struct {
 		name, target, body, suffix, want string
@@ -68,9 +64,6 @@ func TestApplyReasoning(t *testing.T) {
 	}
 }
 
-// The effort is read with one scan of the body: under the name written with escapes, from the
-// last of two names, and as none where the body holds no effort it can read. A body whose effort
-// is already the one it would be given comes back as it was.
 func TestApplyReasoningFastPath(t *testing.T) {
 	for _, c := range []struct {
 		name, target, body, suffix string
@@ -102,7 +95,6 @@ func TestApplyReasoningFastPath(t *testing.T) {
 			if string(out) != c.want {
 				t.Errorf("body = %s, want %s", out, c.want)
 			}
-			// A body that does not change is the bytes it came as, not a decode and an encode.
 			if c.want == c.body && len(out) > 0 && &out[0] != &body[0] {
 				t.Errorf("unchanged body was rebuilt: %s", out)
 			}
@@ -110,8 +102,6 @@ func TestApplyReasoningFastPath(t *testing.T) {
 	}
 }
 
-// A passed-through Responses body with "reasoning": null and a thinking suffix sets
-// reasoning.effort instead of panicking on a nil map; with no suffix it stays byte-identical.
 func TestUpstreamBodyNullReasoning(t *testing.T) {
 	t.Run("with thinking suffix", func(t *testing.T) {
 		raw := []byte(`{"model":"gpt-5(high)","input":"hi","reasoning":null}`)
@@ -126,7 +116,6 @@ func TestUpstreamBodyNullReasoning(t *testing.T) {
 		req.Model = model
 		req.Options.ThinkingSuffix = suffix
 		req.Options.ReasoningEffort = llm.ThinkingEffort(suffix)
-		// Mirror server.takeThinkingSuffix: rename model in Native.Body while keeping reasoning: null.
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(req.Native.Body, &m); err != nil {
 			t.Fatalf("unmarshal native: %v", err)

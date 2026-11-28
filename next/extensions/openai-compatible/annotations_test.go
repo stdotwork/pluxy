@@ -21,8 +21,6 @@ func TestReplayedAssistantAnnotations(t *testing.T) {
 		`{"role":"assistant","content":"Tokyo info","annotations":[{"type":"url_citation","url_citation":{"url":"https://example.com/tokyo","title":"Tokyo","start_index":0,"end_index":5}}]},` +
 		`{"role":"user","content":"More?"}]}`
 
-	// Hosts not documented to accept assistant annotations on Chat Completions strip them and
-	// report an approximated loss, so drop_policy=reject still sends the stripped request.
 	for _, baseURL := range []string{
 		"https://api.mistral.ai/v1",
 		"https://api.openai.com/v1",
@@ -61,8 +59,6 @@ func TestReplayedAssistantAnnotations(t *testing.T) {
 				t.Errorf("host %s reject policy translation = %+v, want non-passthrough with approximated messages[1].annotations", baseURL, tr)
 			}
 
-			// Re-encoding through buildBody -> openaichat.EncodeRequestWith under drop_policy=reject
-			// also sends the stripped request with an approximated loss.
 			reqEncode := chatRequest(t, annotated)
 			reqEncode.Native = nil
 			reqEncode.DropPolicy = llm.DropReject
@@ -79,8 +75,6 @@ func TestReplayedAssistantAnnotations(t *testing.T) {
 		})
 	}
 
-	// OpenRouter documents replaying assistant message annotations on /chat/completions: the
-	// client's body stays byte-identical with no losses.
 	t.Run("keep_openrouter", func(t *testing.T) {
 		req := chatRequest(t, annotated)
 		req.DropPolicy = llm.DropReject
@@ -96,7 +90,6 @@ func TestReplayedAssistantAnnotations(t *testing.T) {
 		}
 	})
 
-	// A request whose user text merely mentions "annotations" stays byte-identical on strict hosts.
 	t.Run("plain_mention_untouched", func(t *testing.T) {
 		const mention = `{"model":"m","messages":[{"role":"user","content":"what are \"annotations\"?"},{"role":"assistant","content":"metadata"}]}`
 		for _, baseURL := range []string{"https://api.openai.com/v1", "https://llm.example.com/v1"} {

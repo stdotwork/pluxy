@@ -7,8 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Every client format is translated to every upstream wire. A request that already speaks the
-// upstream's wire is passed through instead, which the corpus covers.
 func TestBuildBodyTranslatesEveryWire(t *testing.T) {
 	sources := []string{
 		llm.FormatOpenAIChat,

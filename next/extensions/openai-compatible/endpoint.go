@@ -10,7 +10,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// endpointCall serves the provider endpoints this extension supports.
 func endpointCall(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	format := ""
 	if call.Request.Native != nil {
@@ -35,8 +34,6 @@ func endpointCall(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 }
 
-// requireOpenAIWire refuses an endpoint the upstream's Chat or Responses wire cannot serve. Its
-// error carries credential scope so core tries the request on another account.
 func requireOpenAIWire(wire wireInfo, endpoint string) error {
 	switch wire.format {
 	case llm.FormatOpenAIChat, llm.FormatOpenAIResponses:
@@ -51,9 +48,6 @@ func requireOpenAIWire(wire wireInfo, endpoint string) error {
 	}
 }
 
-// embeddings passes an Embeddings API request through to {base_url}/embeddings on a Chat or
-// Responses account, with its key sent as for Chat, and returns the upstream's reply unchanged.
-// Messages and Gemini accounts answer unsupported so core tries another account.
 func embeddings(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	s, wire, key, err := account(call)
 	if err != nil {
@@ -62,7 +56,6 @@ func embeddings(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err := requireOpenAIWire(wire, "embeddings"); err != nil {
 		return err
 	}
-	// The key goes as Chat's does on both wires that serve embeddings.
 	chat := wireInfo{format: llm.FormatOpenAIChat}
 	reqBody, err := embeddingsBody(call)
 	if err != nil {
@@ -94,8 +87,6 @@ func embeddings(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
 }
 
-// embeddingsBody returns the client's Embeddings body, naming the model routing chose when it
-// differs from the client's (an account's alias names a model upstream by another name).
 func embeddingsBody(call sdk.Call) ([]byte, error) {
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(call.Request.Native.Body, &body); err != nil || body == nil {

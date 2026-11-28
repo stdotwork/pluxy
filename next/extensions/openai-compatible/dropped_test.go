@@ -12,10 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// A count refused under the reject drop policy names what was dropped in the error's Dropped,
-// before anything is sent, so core does not take the refusal for an account that cannot count. An
-// account whose upstream has no count endpoint (Chat Completions, Responses) answers unsupported
-// naming nothing, so core estimates.
 func TestCountTokensDropRefusalNamesDropped(t *testing.T) {
 	call := func(wire string, native string) sdk.Call {
 		return sdk.Call{

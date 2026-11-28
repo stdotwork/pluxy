@@ -29,7 +29,6 @@ func TestCandidateCountHostAndModelGating(t *testing.T) {
 		return r
 	}
 
-	// OpenAI Chat on api.openai.com: gpt-4o takes n; gpt-5 (newer model) drops n; third-party drops n.
 	for _, tc := range []struct {
 		name     string
 		base     string
@@ -70,7 +69,6 @@ func TestCandidateCountHostAndModelGating(t *testing.T) {
 		})
 	}
 
-	// Gemini wire via openai-compatible: generativelanguage.googleapis.com takes candidateCount; third-party drops.
 	body, tr, err := upstreamBody(chatReq("gemini-2.5-pro", 2), llm.FormatGeminiGenerate, settings{BaseURL: "https://generativelanguage.googleapis.com/v1beta"})
 	if err != nil {
 		t.Fatal(err)

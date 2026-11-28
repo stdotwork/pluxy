@@ -15,8 +15,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// TestConformance runs the extension conformance kit against this extension, with a fake
-// OpenAI-compatible upstream that acts out each scenario.
 func TestConformance(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	up := newScenarioUpstream(t)
@@ -66,7 +64,6 @@ func newScenarioUpstream(t *testing.T) *scenarioUpstream {
 	return u
 }
 
-// cancelledFor returns a fresh channel that closes when the next hanging request is cancelled.
 func (u *scenarioUpstream) cancelledFor(s conformance.Scenario) <-chan struct{} {
 	if s != conformance.ScenarioHang {
 		return nil
@@ -81,7 +78,6 @@ func (u *scenarioUpstream) cancelledFor(s conformance.Scenario) <-chan struct{} 
 func (u *scenarioUpstream) serve(w http.ResponseWriter, r *http.Request) {
 	scenario, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	if rest == "v1/models" && r.Method == http.MethodGet {
-		// The account check.
 		w.Header().Set("Content-Type", "application/json")
 		if r.Header.Get("Authorization") != "Bearer sk-conformance" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -136,8 +132,6 @@ func (u *scenarioUpstream) serve(w http.ResponseWriter, r *http.Request) {
 		case <-time.After(30 * time.Second):
 		}
 	case conformance.ScenarioQuiet:
-		// Some text, then SSE comments, which the extension passes on as nothing, until the
-		// request is cancelled.
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprintf(w, "data: %s\n\n", textChunk("Thinking"))
 		w.(http.Flusher).Flush()

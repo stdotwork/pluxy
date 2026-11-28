@@ -17,11 +17,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// images sends OpenAI's Images API through an OpenAI-compatible account. A generation goes as
-// JSON. An edit whose images reached core as multipart is rebuilt as multipart with the same
-// fields and file bytes, because core gives the extension the form's JSON form (the files are
-// data URLs). An edit that names an image by URL or file ID stays JSON. The upstream's reply
-// body and content type come back unchanged.
 func images(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	s, wire, key, err := account(call)
 	if err != nil {
@@ -86,10 +81,6 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
 }
 
-// imageBody returns the body and content type to send upstream. Generations and JSON edits keep
-// their JSON body, changing only the model when routing renamed it. A multipart edit is rebuilt
-// as multipart from core's JSON form: scalar and repeated fields keep their names and values, and
-// data-URL images and mask become file parts with their original bytes and media type.
 func imageBody(call sdk.Call) ([]byte, string, error) {
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(call.Request.Native.Body, &body); err != nil || body == nil {
@@ -112,15 +103,11 @@ func imageBody(call sdk.Call) ([]byte, string, error) {
 	return call.Request.Native.Body, "application/json", nil
 }
 
-// multipartImage is a multipart Images API edit body and the content type naming its boundary.
 type multipartImage struct {
 	body        []byte
 	contentType string
 }
 
-// buildImageEdit returns a multipart body when every image reference is a data URL, such as the
-// files core lifted out of a multipart request. It returns ok false for a JSON edit naming images
-// by URL or file ID, which is sent as JSON.
 func buildImageEdit(body map[string]json.RawMessage, model string) (multipartImage, bool, error) {
 	images, err := imageParts(body["images"])
 	if err != nil {
@@ -218,8 +205,6 @@ func imageParts(raw json.RawMessage) ([]imagePart, error) {
 	return out, nil
 }
 
-// writeImageFormField writes a JSON value as the form fields that carry it: scalar values once,
-// arrays as repeated fields. A nested object is not a form field, so it is sent as JSON text.
 func writeImageFormField(writer *multipart.Writer, name string, raw json.RawMessage) error {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
@@ -297,8 +282,6 @@ func extensionForMediaType(mediaType string) string {
 	return ""
 }
 
-// withModel returns body with model in place, or changed false when it already names the
-// model routing chose. The original bytes are kept in that case.
 func withModel(original []byte, body map[string]json.RawMessage, model string) ([]byte, bool, error) {
 	if model == "" {
 		return original, false, nil

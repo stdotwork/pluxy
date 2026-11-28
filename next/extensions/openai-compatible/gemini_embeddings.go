@@ -17,17 +17,12 @@ import (
 )
 
 const (
-	// maxEmbeddingsReply limits what is read of one upstream embeddings reply.
-	maxEmbeddingsReply = 64 << 20
-	// maxEmbeddingsTotalValues bounds the total embedding float values held in memory across all
-	// upstream batches of one request (~64 MiB as float64; covers 2048 x 3072 values).
+	maxEmbeddingsReply       = 64 << 20
 	maxEmbeddingsTotalValues = 8 << 20
 	// maxEmbeddingsInputs is OpenAI's documented maximum number of inputs in one /v1/embeddings call.
 	maxEmbeddingsInputs = 2048
 )
 
-// embeddingBodyChunkSize is the maximum byte size of each EventNative body piece sent to core,
-// keeping every protocol frame well below protocol.MaxFrame (64 MiB).
 var embeddingBodyChunkSize = 1 << 20
 
 type geminiToOpenAIEmbedItem struct {
@@ -41,12 +36,6 @@ type openAIEmbedRequest struct {
 	Dimensions *int   `json:"dimensions,omitempty"`
 }
 
-// geminiEmbeddings serves Gemini's :embedContent and :batchEmbedContents on an OpenAI-compatible
-// account:
-//   - wire_api "chat" or "responses": translates to POST {base_url}/embeddings and back.
-//   - wire_api "gemini": passes through to POST {base_url}/models/{model}:embedContent or
-//     :batchEmbedContents with x-goog-api-key.
-//   - wire_api "messages": answers retryable CodeUnsupported on ScopeCredential.
 func geminiEmbeddings(ctx context.Context, call sdk.Call, out *sdk.Stream, format string) error {
 	return geminiEmbeddingsTo(ctx, call, out, format)
 }
@@ -82,7 +71,6 @@ func geminiEmbeddingsTo(ctx context.Context, call sdk.Call, out bodySender, form
 		return err
 	}
 
-	// The key goes as Chat's does on both Chat and Responses wires.
 	chat := wireInfo{format: llm.FormatOpenAIChat}
 	all := make([][]float64, 0, len(items))
 	var totalValues int
@@ -141,7 +129,6 @@ func geminiEmbeddingsTo(ctx context.Context, call sdk.Call, out bodySender, form
 			missing = true
 		}
 	}
-	// A total over only some of the calls would understate the usage: report none instead.
 	hasUsage = hasUsage && !missing
 
 	var usage *llm.Usage
@@ -475,8 +462,6 @@ func streamGeminiEmbedJSON(w io.Writer, isBatch bool, vectors [][]float64, promp
 	return err
 }
 
-// chunkedBodyWriter sends written bytes through bodySender.Body in pieces of at most chunkSize
-// bytes, preserving UTF-8 character boundaries across piece splits.
 type chunkedBodyWriter struct {
 	out       bodySender
 	chunkSize int
@@ -545,8 +530,6 @@ func (w *chunkedBodyWriter) flush(all bool) error {
 	return nil
 }
 
-// geminiPassthroughBody returns raw unchanged when the body's model fields already match
-// models/<model> (or are omitted), and updates them only when an account alias renamed the model.
 func geminiPassthroughBody(raw []byte, rawMap map[string]json.RawMessage, model string, isBatch bool) ([]byte, error) {
 	want := "models/" + model
 	if !isBatch {
@@ -602,8 +585,6 @@ func geminiPassthroughBody(raw []byte, rawMap map[string]json.RawMessage, model 
 	return json.Marshal(updated)
 }
 
-// checkGeminiBatchItems refuses a batch whose requests is not a list of objects, so a model name
-// the client wrote in an item is never left in a body that could not be rewritten.
 func checkGeminiBatchItems(reqsRaw json.RawMessage) error {
 	var items []json.RawMessage
 	if err := json.Unmarshal(reqsRaw, &items); err != nil {
@@ -617,16 +598,12 @@ func checkGeminiBatchItems(reqsRaw json.RawMessage) error {
 	return nil
 }
 
-// geminiBatchLen is the number of requests in a batch body that checkGeminiBatchItems accepted.
 func geminiBatchLen(rawMap map[string]json.RawMessage) int {
 	var items []json.RawMessage
 	_ = json.Unmarshal(rawMap["requests"], &items)
 	return len(items)
 }
 
-// checkGeminiEmbedReply refuses a 200 that is not a full answer, as the translated paths do:
-// an error object, an embedding without values, or (for a batch) fewer or more embeddings than
-// the want requests sent. Passing it to the client would record the request as a success.
 func checkGeminiEmbedReply(raw []byte, vendor string, isBatch bool, want int) error {
 	var resp struct {
 		Error     json.RawMessage `json:"error"`
@@ -641,8 +618,6 @@ func checkGeminiEmbedReply(raw []byte, vendor string, isBatch bool, want int) er
 		return upstreamEmbeddingError(vendor + " embedding reply is not JSON")
 	}
 	if e := bytes.TrimSpace(resp.Error); len(e) > 0 && string(e) != "null" {
-		// Fixed text: the upstream's own message can name the account's project, which the
-		// masking of a normal error reply would remove.
 		return upstreamEmbeddingError(vendor + " answered 200 with an error")
 	}
 	hasValues := func(v json.RawMessage) bool {
@@ -670,12 +645,6 @@ func badEmbeddingRequest(message string) *llm.Error {
 	return &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest, Message: message}
 }
 
-// embeddingNotFound keeps a 404 from an embedding call from blocking the model's generation: core
-// blocks a model after a model-scoped not-found for hours, but an embedding call proves nothing
-// about generation, and a chat model can answer it with a 404 that names the model. A 404 that
-// names the model becomes a refusal on this account (retryable unsupported, so routing tries
-// another account, with 400 if none can); any other 404 fails the request only, as noEndpoint
-// says. Another error is returned as it is.
 func embeddingNotFound(err error, model, path string) error {
 	var e *llm.Error
 	if errors.As(err, &e) && e.Code == llm.CodeNotFound && e.Retryable {

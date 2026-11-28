@@ -10,24 +10,17 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Values of the account setting developer_role.
 const (
 	roleDeveloper = "developer"
 	roleSystem    = "system"
 )
 
-// shaping is how an account's Chat requests are shaped for its upstream.
 type shaping struct {
-	// developerRole is the role a developer message is sent as: roleDeveloper or roleSystem.
 	developerRole string
-	// stringContent sends a message whose content is all text parts as one string.
 	stringContent bool
-	// passback is nil to leave reasoning_content as the client sent it, true to pass the reasoning
-	// of earlier assistant turns back, and false to send none.
-	passback *bool
+	passback      *bool
 }
 
-// preset is the shaping a vendor's own documentation asks for; a field left unset is not one.
 type preset struct {
 	developerRole string
 	stringContent *bool
@@ -55,8 +48,6 @@ var presets = map[string]preset{
 	"api.mistral.ai":   {developerRole: roleSystem, passback: ptr(false)},
 }
 
-// tierFields say which of a request's service tier, verbosity, web search, code execution tools,
-// structured output, candidate count and replayed assistant annotations an upstream's API takes.
 type tierFields struct {
 	serviceTier, verbosity, webSearch, codeExecution, structuredOutput, candidateCount, assistantAnnotations bool
 }
@@ -108,7 +99,6 @@ var tierHosts = map[string]map[string]tierFields{
 	"openrouter.ai":                     {llm.FormatOpenAIChat: {assistantAnnotations: true}},
 }
 
-// tierFieldsOf returns which of the tierFields the account's upstream takes on the wire of format.
 func tierFieldsOf(s settings, format string) tierFields {
 	u, err := url.Parse(s.BaseURL)
 	if err != nil {
@@ -117,7 +107,6 @@ func tierFieldsOf(s settings, format string) tierFields {
 	return tierHosts[strings.ToLower(u.Hostname())][format]
 }
 
-// shapingOf returns the shaping for an account: its own settings where set, else its host's preset.
 func shapingOf(s settings) shaping {
 	var p preset
 	if u, err := url.Parse(s.BaseURL); err == nil {
@@ -140,7 +129,6 @@ func shapingOf(s settings) shaping {
 	return sh
 }
 
-// checkShaping returns the reason an account's shaping settings are refused, or "".
 func checkShaping(s settings) string {
 	switch s.DeveloperRole {
 	case "", roleDeveloper, roleSystem:
@@ -149,10 +137,6 @@ func checkShaping(s settings) string {
 	return fmt.Sprintf("account setting developer_role must be %q or %q", roleDeveloper, roleSystem)
 }
 
-// shapeChat shapes the body of a Chat request for the account's upstream, whether the client's own
-// or a translation: the developer role, string content, reasoning_content passback (see shaping)
-// and stripping replayed assistant annotations on hosts not documented to accept them. It returns
-// body itself when nothing changes, and the losses it causes.
 func shapeChat(body []byte, s settings) ([]byte, []llm.Loss, error) {
 	sh := shapingOf(s)
 	stripAnnotations := !tierFieldsOf(s, llm.FormatOpenAIChat).assistantAnnotations && bytes.Contains(body, []byte(`"annotations"`))
@@ -222,13 +206,11 @@ func shapeChat(body []byte, s settings) ([]byte, []llm.Loss, error) {
 	return out, losses, err
 }
 
-// hasTools reports whether the request declares tools.
 func hasTools(top map[string]json.RawMessage) bool {
 	var tools []json.RawMessage
 	return json.Unmarshal(top["tools"], &tools) == nil && len(tools) > 0
 }
 
-// thinkingOff reports whether the request turns thinking off (DeepSeek's thinking.type).
 func thinkingOff(top map[string]json.RawMessage) bool {
 	var t struct {
 		Type string `json:"type"`
@@ -236,13 +218,11 @@ func thinkingOff(top map[string]json.RawMessage) bool {
 	return json.Unmarshal(top["thinking"], &t) == nil && t.Type == "disabled"
 }
 
-// hasText reports whether raw is a string with something in it.
 func hasText(raw json.RawMessage) bool {
 	var s string
 	return json.Unmarshal(raw, &s) == nil && s != ""
 }
 
-// allText returns the text of content that is a non-empty array of text parts and nothing else.
 func allText(raw json.RawMessage) (string, bool) {
 	var parts []struct {
 		Type string  `json:"type"`

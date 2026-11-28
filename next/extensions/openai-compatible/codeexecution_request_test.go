@@ -13,7 +13,6 @@ import (
 )
 
 func TestCodeExecutionOpenAICompatibleTargets(t *testing.T) {
-	// 1. Messages -> OpenAI Responses at api.openai.com (supported model) gets code_interpreter.
 	t.Run("messages_to_responses_official", func(t *testing.T) {
 		req, err := anthropicmessages.ParseRequest([]byte(`{
 			"model":"gpt-5.4",
@@ -45,7 +44,6 @@ func TestCodeExecutionOpenAICompatibleTargets(t *testing.T) {
 			t.Errorf("unexpected dropped losses: %+v", tr.Losses)
 		}
 
-		// Third-party host drops tool and tool_choice.
 		body3p, tr3p, err := buildBody(req, llm.FormatOpenAIResponses, settings{BaseURL: "https://openrouter.ai/api/v1"})
 		if err != nil {
 			t.Fatal(err)
@@ -63,7 +61,6 @@ func TestCodeExecutionOpenAICompatibleTargets(t *testing.T) {
 		}
 	})
 
-	// 2. Chat Completions has no code execution tool even at api.openai.com.
 	t.Run("responses_to_chat_unsupported", func(t *testing.T) {
 		req, err := openairesponses.ParseRequest([]byte(`{
 			"model":"gpt-5.4",
@@ -92,7 +89,6 @@ func TestCodeExecutionOpenAICompatibleTargets(t *testing.T) {
 		}
 	})
 
-	// 3. Responses -> Anthropic Messages at api.anthropic.com gets code_execution_20250825; third-party drops.
 	t.Run("responses_to_messages", func(t *testing.T) {
 		req, err := openairesponses.ParseRequest([]byte(`{
 			"model":"claude-sonnet-4-6",
@@ -131,7 +127,6 @@ func TestCodeExecutionOpenAICompatibleTargets(t *testing.T) {
 		}
 	})
 
-	// 4. Responses -> Gemini GenerateContent at generativelanguage.googleapis.com gets codeExecution; third-party drops.
 	t.Run("responses_to_gemini", func(t *testing.T) {
 		req, err := openairesponses.ParseRequest([]byte(`{
 			"model":"gemini-4-hydrogen",
@@ -201,7 +196,6 @@ func TestCodeExecutionOpenAICompatibleSameFormatByteIdentical(t *testing.T) {
 	}
 }
 
-// A translated code tool asks for its outputs, and only where the tool is sent.
 func TestCodeExecutionOutputsIncludeOpenAICompatible(t *testing.T) {
 	req, err := geminigenerate.ParseRequest("gpt-5.2", false, []byte(`{
 		"contents":[{"role":"user","parts":[{"text":"compute"}]}],"tools":[{"codeExecution":{}}]}`))

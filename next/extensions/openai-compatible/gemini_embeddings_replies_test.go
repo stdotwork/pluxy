@@ -15,8 +15,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// embedAttempt runs one Gemini-format embedding call on an account with the wire and returns what
-// the extension sent, its error and the requests the fake upstream got.
 func embedAttempt(t *testing.T, wire, model, format, body string, handle func(w http.ResponseWriter, n int)) (*embedBodyRec, int, error) {
 	t.Helper()
 	n := 0
@@ -41,7 +39,6 @@ func embedAttempt(t *testing.T, wire, model, format, body string, handle func(w 
 	return rec, len(recorded()), err
 }
 
-// A 200 that is not a full answer becomes an error, and nothing of it reaches the client.
 func TestGeminiWireEmbedRefusesShortReplies(t *testing.T) {
 	const two = `{"requests":[{"content":{"parts":[{"text":"a"}]}},{"content":{"parts":[{"text":"b"}]}}]}`
 	const one = `{"content":{"parts":[{"text":"a"}]}}`
@@ -63,8 +60,6 @@ func TestGeminiWireEmbedRefusesShortReplies(t *testing.T) {
 	}
 }
 
-// A field of embedContentConfig that /embeddings cannot carry is refused naming the field,
-// retryable on the account so routing tries another, and is not dropped.
 func TestChatWireEmbedRefusesUnknownConfig(t *testing.T) {
 	rec, calls, err := embedAttempt(t, "chat", "text-embedding-3-small", llm.FormatGeminiEmbedContent,
 		`{"content":{"parts":[{"text":"a"}]},"embedContentConfig":{"autoTruncate":false}}`,
@@ -81,8 +76,6 @@ func TestChatWireEmbedRefusesUnknownConfig(t *testing.T) {
 	}
 }
 
-// A batch with an item that is not an object is refused, so a client's model name is never left
-// in a body the extension could not rewrite.
 func TestGeminiWireEmbedBatchWithNonObjectItem(t *testing.T) {
 	for _, body := range []string{
 		`{"requests":[{"model":"models/my-private-alias","content":{"parts":[{"text":"a"}]}},7]}`,
@@ -101,8 +94,6 @@ func TestGeminiWireEmbedBatchWithNonObjectItem(t *testing.T) {
 	}
 }
 
-// When one of several upstream calls reports no usage, no total is reported: a sum over only the
-// calls that reported would understate it.
 func TestChatWireEmbedUsageNeedsEveryCall(t *testing.T) {
 	const batch = `{"requests":[` +
 		`{"content":{"parts":[{"text":"a"}]},"outputDimensionality":2},` +
@@ -122,8 +113,6 @@ func TestChatWireEmbedUsageNeedsEveryCall(t *testing.T) {
 	}
 }
 
-// A 200 with an error object does not carry the upstream's text to the client: it can name the
-// account's project, which an ordinary error reply has masked.
 func TestGeminiWireEmbedErrorBodyDoesNotLeakProject(t *testing.T) {
 	const reply = `{"error":{"code":403,"message":"Permission denied on resource project projects/acme-prod-4821.","status":"PERMISSION_DENIED"}}`
 	rec, _, err := embedAttempt(t, "gemini", "gemini-embedding-001", llm.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"a"}]}}`,
