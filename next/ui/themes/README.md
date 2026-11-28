@@ -251,7 +251,7 @@ are round. `0px` makes every corner square.
 | Token | Used for | Default |
 | --- | --- | --- |
 | `motion.duration` | Length of hover and press transitions | `120ms` |
-| `motion.duration-menu` | Length of a menu opening. Reserved for the menus to come (the command menu): nothing reads it yet | `160ms` |
+| `motion.duration-menu` | Length of the command menu fading in when the pointer opened it. A menu the keyboard opened has no fade | `160ms` |
 | `motion.duration-slow` | Length of a pane or dialog opening | `240ms` |
 | `motion.easing` | The timing function of the first two | `cubic-bezier(0.2, 0, 0, 1)` |
 | `motion.easing-drawer` | The timing function of anything that slides in | `cubic-bezier(0.32, 0.72, 0, 1)` |
@@ -434,6 +434,16 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="usage-breakdown"` | The Usage tab's breakdown table by provider, model, account or key |
 | `data-part="tool-steps"` | The numbered steps under a coding tool's row on the Tools page: make a key, put the text in the settings file, start the tool again |
 | `data-part="tool-key"` | One key on the Tools page: its name, its use this week, Rename and Delete |
+| `data-part="search"` | The Search field under the product name in the navigation (an icon alone in the rail and the bar); it opens the command menu. The menu also opens with Command K (Control K off Apple computers) |
+| `data-part="command-backdrop"` | The scrim behind the command menu; a click on it closes the menu |
+| `data-part="command"` | The command menu's window, a dialog; `data-by` is `keyboard` or `pointer`, how it was opened. Only a menu opened by the pointer fades in, over `motion.duration-menu` |
+| `data-part="command-input"` | The menu's field, a combobox |
+| `data-part="command-list"` | The menu's list of results, a listbox: the only part of it that scrolls |
+| `data-part="command-group"` | One group of results under its heading; `data-group` is `recent`, `actions`, `pages`, `accounts` or `settings` |
+| `data-part="command-item"` | One result; the one the arrow keys are on has `aria-selected="true"`. `data-kind` is `page`, `account`, `action` or `setting` |
+| `data-part="command-shortcut"` | The keys that do a result without the menu, at the end of its row, where it has some |
+| `data-part="command-loading"` | The rows shown in place of accounts that are still being read, once the wait is noticed |
+| `data-part="command-empty"` | What the menu says when nothing matches |
 
 Some parts also carry the `data-slot` name that [T3 Code](https://github.com/pingdotgg/t3code)
 gives the same part, and the root's `dark` class is the one T3 Code uses. They exist so that the
@@ -445,7 +455,7 @@ CSS of a theme written for T3 Code matches the parts both UIs have:
 | `data-slot="input"` | A text, password, number or search input |
 | `data-slot="switch"` | The track of a switch |
 | `data-slot="select-trigger"` | A select |
-| `data-slot="dialog-popup"` | A dialog window (`data-part="dialog"`) |
+| `data-slot="dialog-popup"` | A dialog window (`data-part="dialog"`), and the command menu (`data-part="command"`) |
 | `data-slot="sidebar"` | The navigation (`data-part="nav"`), in every `nav` layout |
 
 Every other class name, element and attribute can change whenever the UI does.

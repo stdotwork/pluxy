@@ -15,6 +15,7 @@ import { HeadContext, useCopy } from "./ui";
 const t = strings("frame", {
   navigation: "Main",
   skip: "Skip to main content",
+  search: "Search",
   "dest.home": "Home",
   "dest.accounts": "Accounts",
   "dest.activity": "Activity",
@@ -33,7 +34,7 @@ const t = strings("frame", {
   working: "Working…",
 });
 
-const DEST_ICONS: Record<Destination, IconName> = {
+export const DEST_ICONS: Record<Destination, IconName> = {
   home: "home",
   accounts: "accounts",
   activity: "activity",
@@ -115,6 +116,12 @@ export function Frame(props: {
   tabs?: FrameLink[];
   /** The destination's topics, drawn beside the page; in a narrow window, as a select above it. */
   topics?: { section: TopicSection; links: FrameLink[] }[];
+  /**
+   * The Search field under the product name, which opens the command menu. Left out where there
+   * is nothing to search (a window that is not connected). by says how it was opened: a click
+   * from the keyboard (Enter or Space on the focused field) has no pointer.
+   */
+  search?: { open(by: "keyboard" | "pointer"): void; keys: string[]; shortcut: string };
   /** Controls at the header strip's right end, after the page's own actions. */
   headerEnd?: ComponentChildren;
   /** When this changes the pane goes back to its top, as a new page starts at its top. */
@@ -252,6 +259,21 @@ export function Frame(props: {
         <span class="brand" data-part="brand" title={props.brand}>
           <span>{props.brand}</span>
         </span>
+      )}
+      {props.search && (
+        <button
+          type="button"
+          class="nav-search"
+          data-part="search"
+          aria-label={t("search")}
+          aria-keyshortcuts={props.search.shortcut}
+          title={icons ? t("search") : undefined}
+          onClick={(e) => props.search?.open(e.detail === 0 ? "keyboard" : "pointer")}
+        >
+          <Icon name="search" size={14} />
+          <span class="nav-label">{t("search")}</span>
+          <kbd class="nav-search-keys">{props.search.keys.join(" ")}</kbd>
+        </button>
       )}
       <ul class="nav-list">{main.map(entry)}</ul>
       {settings && <ul class="nav-list nav-foot">{entry(settings)}</ul>}
