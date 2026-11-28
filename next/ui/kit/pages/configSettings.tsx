@@ -8,12 +8,13 @@ import type { ConfigDocument } from "../api/config";
 import type { CoreSettings } from "../api/settings";
 import type { Reply } from "../host";
 import { SettingRow, useSetting } from "../parts";
-import { Button, Card, Switch, useKit } from "../ui";
+import { Button, Switch, useKit } from "../ui";
 import { accessWarning, isLoopback, parseListen, type Warning } from "./configAccess.rules";
 import { ConfigDialog } from "./configDialog";
 import { ManagementKey, type ReplaceKey } from "./configKeys";
 import { configText as t } from "./configStrings";
 import { parseNumber, settingAt } from "./routing.rules";
+import { SettingGroup } from "./settingGroup";
 import { type Field, fields, managementKeyFile } from "./settingsFields";
 
 /** Saves one setting (only that field) and gives back core's reply; the page keeps what it saved. */
@@ -51,7 +52,13 @@ function ownLogin(text: string) {
 }
 
 function Row(
-  props: RowProps & { note?: string; saving: boolean; error?: string; children: ComponentChildren },
+  props: RowProps & {
+    note?: string;
+    saving: boolean;
+    saved: boolean;
+    error?: string;
+    children: ComponentChildren;
+  },
 ) {
   const f = props.field;
   return (
@@ -61,6 +68,7 @@ function Row(
       note={props.note ?? f.note}
       configKey={props.format && f.file[props.format]}
       saving={props.saving}
+      saved={props.saved}
       error={props.error}
       disabled={props.disabled}
     >
@@ -81,7 +89,7 @@ function SwitchRow(props: RowProps) {
     void s.set(on);
   };
   return (
-    <Row {...props} saving={s.saving} error={s.error}>
+    <Row {...props} saving={s.saving} saved={s.saved} error={s.error}>
       <Switch label={f.name} checked={s.value} onChange={(on) => void change(on)} />
     </Row>
   );
@@ -203,6 +211,7 @@ function FieldRow(props: RowProps) {
       {...props}
       note={proxy?.login ? t("proxySaved") : f.key === LISTEN ? listenNote(props.settings) : undefined}
       saving={s.saving}
+      saved={s.saved}
       error={refused ?? (lost ? t("noAnswerRow") : s.error)}
     >
       {f.kind === "number" ? (
@@ -256,17 +265,6 @@ function LinkRow(props: { name: string; about: string; label: string; href: stri
   );
 }
 
-/** A section of the tab, with the id an address scrolls to. */
-function Section(props: { id: string; title: string; children: ComponentChildren }) {
-  return (
-    <div id={props.id} class="config-section">
-      <Card title={props.title}>
-        <div class="config-rows">{props.children}</div>
-      </Card>
-    </div>
-  );
-}
-
 /**
  * The Settings tab. disabled, a sentence, turns every setting off with that reason (while the
  * settings file does not parse, core can change none); the two rows that open another page stay
@@ -300,25 +298,25 @@ export function ConfigSettings(props: {
     setAsking(undefined);
   };
   return (
-    <div class="stack config-settings">
-      <Section id="network" title={t("network")}>
+    <div class="settings-groups config-settings">
+      <SettingGroup id="network" title={t("network")}>
         <FieldRows {...rows} fields={f.network} />
         <LinkRow name={t("routing")} about={t("routingAbout")} label={t("openRouting")} href="#/routing" />
-      </Section>
-      <Section id="access" title={t("access")}>
+      </SettingGroup>
+      <SettingGroup id="access" title={t("access")}>
         <FieldRows {...rows} fields={f.access} />
-      </Section>
-      <Section id="logging" title={t("logging")}>
+      </SettingGroup>
+      <SettingGroup id="logging" title={t("logging")}>
         <FieldRows {...rows} fields={f.logging} />
-      </Section>
-      <Section id="keys" title={t("keys")}>
+      </SettingGroup>
+      <SettingGroup id="keys" title={t("keys")}>
         <LinkRow name={t("clientKeys")} about={t("clientKeysAbout")} label={t("openTools")} href="#/tools" />
         <ManagementKey
           state={props.keys}
           configKey={props.format && managementKeyFile[props.format]}
           disabled={props.disabled}
         />
-      </Section>
+      </SettingGroup>
       {asking && (
         <ConfigDialog title={asking.warning.title} close={() => close(false)}>
           {asking.warning.body.map((paragraph) => (

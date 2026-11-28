@@ -98,22 +98,86 @@ for (const theme of THEMES) {
     test(`segment labels, theme names and setting words are readable on the Themes page: ${name}`, async ({
       page,
     }) => {
-      await open(page, theme, appearance);
-      await goTo(page, "Themes");
-      const spans = page.locator(".segment span");
-      expect(await spans.count()).toBeGreaterThan(0);
-      // The text of each segment: its label, and the note under it where it has one; each theme's
-      // name and description; each setting's name and sentence.
-      const parts = page.locator(
-        ".segment span, .segment span small, .theme-name, .theme-about, .setting-name, .setting-description",
-      );
-      const measured = await measureContrast(parts);
-      const texts = await parts.allTextContents();
-      const low = measured
-        .map((m, i) => ({ text: texts[i]?.trim().slice(0, 30), ...m }))
-        .filter((m) => m.ratio < AA)
-        .map((m) => `"${m.text}": ${m.ratio.toFixed(2)}:1 (${m.fg} on ${m.bg})`);
-      expect(low).toEqual([]);
+      expect((await core.mgmt("PUT", "/themes/me/broken", { name: "Broken Thing" })).status).toBe(200);
+      try {
+        await open(page, theme, appearance);
+        await goTo(page, "Themes");
+        const spans = page.locator(".segment span");
+        expect(await spans.count()).toBeGreaterThan(0);
+        await expect(page.locator(".theme-card[data-unusable] .theme-about")).toBeVisible();
+        const parts = page.locator(
+          ".segment span, .segment span small, .theme-name, .theme-about, .setting-name, .setting-description",
+        );
+        const measured = await measureContrast(parts);
+        const texts = await parts.allTextContents();
+        const low = measured
+          .map((m, i) => ({ text: texts[i]?.trim().slice(0, 30), ...m }))
+          .filter((m) => m.ratio < AA)
+          .map((m) => `"${m.text}": ${m.ratio.toFixed(2)}:1 (${m.fg} on ${m.bg})`);
+        expect(low).toEqual([]);
+
+        const dots = await page.locator(".theme-dots i").evaluateAll((elements) => {
+          type Rgba = [number, number, number, number];
+          const ctx = document.createElement("canvas").getContext("2d");
+          const rgb = (c: string): Rgba => {
+            if (!ctx) return [0, 0, 0, 255];
+            ctx.clearRect(0, 0, 1, 1);
+            ctx.fillStyle = "#000";
+            ctx.fillStyle = c;
+            ctx.fillRect(0, 0, 1, 1);
+            const d = ctx.getImageData(0, 0, 1, 1).data;
+            return [d[0] ?? 0, d[1] ?? 0, d[2] ?? 0, d[3] ?? 255];
+          };
+          const over = (top: Rgba, below: Rgba): Rgba => {
+            const a = top[3] / 255;
+            return [
+              top[0] * a + below[0] * (1 - a),
+              top[1] * a + below[1] * (1 - a),
+              top[2] * a + below[2] * (1 - a),
+              255,
+            ];
+          };
+          const lum = ([r, g, b]: Rgba) => {
+            const l = (v: number) => {
+              const s = v / 255;
+              return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+            };
+            return 0.2126 * l(r) + 0.7152 * l(g) + 0.0722 * l(b);
+          };
+          const ratio = (a: Rgba, b: Rgba) => {
+            const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x) as [number, number];
+            return (hi + 0.05) / (lo + 0.05);
+          };
+          const bgOf = (el: Element | null) => {
+            const layers: Rgba[] = [];
+            for (let cur = el; cur; cur = cur.parentElement) {
+              const c = rgb(getComputedStyle(cur).backgroundColor);
+              if (c[3] > 0) layers.push(c);
+            }
+            let b: Rgba = [255, 255, 255, 255];
+            for (const l of layers.reverse()) b = over(l, b);
+            return b;
+          };
+          return elements.map((dot) => {
+            const style = getComputedStyle(dot);
+            const card = dot.closest(".theme-card");
+            const ground = bgOf(card);
+            const ring = over(rgb(style.borderTopColor), ground);
+            const cardName = card?.querySelector(".theme-name")?.textContent ?? "";
+            return {
+              cardName,
+              borderWidth: Number.parseFloat(style.borderTopWidth),
+              ringRatio: ratio(ring, ground),
+              fill: style.backgroundColor,
+            };
+          });
+        });
+        expect(dots.length).toBe(15);
+        expect(dots.filter((d) => d.borderWidth < 1 || d.ringRatio < 3)).toEqual([]);
+        expect(dots.filter((d) => d.cardName === "Default")[1]?.fill).toBe("rgb(252, 252, 252)");
+      } finally {
+        await core.mgmt("DELETE", "/themes/me/broken");
+      }
     });
   }
 }

@@ -146,3 +146,55 @@ test("the header strip shows Names hidden only while names are hidden, and press
   expect(w.privacy.on).toBe(false);
   expect(all(m.root, "button")).toHaveLength(0);
 });
+
+test("a change to Appearance or Hide names says Saved beside it", async () => {
+  const w = world();
+  const m = await w.mount(<GeneralPage />);
+  expect(m.text()).not.toContain("Saved");
+  const dark = all(m.root, "input").find(
+    (i) => attribute(i, "type") === "radio" && i.parentNode?.textContent === "Dark",
+  );
+  if (!dark) throw new Error("no Dark choice");
+  dark.checked = true;
+  await change(dark);
+  expect(m.text()).toContain("Saved");
+  expect(w.themes.choices.appearance).toBe("dark");
+  await m.unmount();
+
+  const hidden = await world().mount(<GeneralPage />);
+  expect(hidden.text()).not.toContain("Saved");
+  const hide = switchOf(hidden.root);
+  hide.checked = true;
+  await change(hide);
+  expect(hidden.text()).toContain("Saved");
+});
+
+test("the search field narrows the rows to what matches, and says when nothing does", async () => {
+  const w = world();
+  const m = await w.mount(<GeneralPage />);
+  const search = all(m.root, "input").find((i) => attribute(i, "type") === "search");
+  if (!search) throw new Error("no search field");
+  expect(attribute(search, "aria-label")).toBe("Search settings");
+  const names = () =>
+    all(m.root, "span")
+      .filter((s) => attribute(s, "class") === "setting-name")
+      .map((s) => s.textContent);
+  expect(names()).toEqual(["Appearance", "Hide names", "Sign out"]);
+  const type = async (text: string) => {
+    search.value = text;
+    await act(async () => {
+      search.dispatchEvent(new Event("input"));
+    });
+    await settle();
+  };
+  await type("names");
+  expect(names()).toEqual(["Hide names"]);
+  await type("browser forgets");
+  expect(names()).toEqual(["Sign out"]);
+  await type("zzzz");
+  expect(names()).toEqual([]);
+  expect(m.text()).toContain("No setting matches that.");
+  await type("");
+  expect(names()).toEqual(["Appearance", "Hide names", "Sign out"]);
+  expect(m.text()).not.toContain("No setting matches that.");
+});

@@ -4,14 +4,16 @@
 
 import type { ComponentChildren } from "preact";
 import { useEffect, useId, useRef, useState } from "preact/hooks";
-import { SettingRow, tryAgainWord } from "../parts";
+import { Icon } from "../icons";
+import { SettingRow, tryAgainWord, useSavedTick } from "../parts";
 import { useSave } from "../save";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import { type Layout, type LayoutOption, MAX_THEME_BYTES } from "../theme/contract";
-import { resolve } from "../theme/engine";
 import type { Listed } from "../theme/state";
 import { Button, type Choice, Choices, ConfirmButton, Notice, PageHead, Switch, useThemeState } from "../ui";
+import { SettingGroup, SettingsColumn } from "./settingGroup";
+import { PaletteDots, ThemePreview } from "./themePreview";
 
 const t = strings("themes", {
   title: "Themes",
@@ -25,6 +27,10 @@ const t = strings("themes", {
   notRemoved: "Could not remove {name}: {error}.",
   warnings: "{name} is on, but part of its file was not used: {warnings}.",
   unusable: "Cannot be used: {error}",
+  bothAppearances: "Light and dark",
+  lightOnly: "Light only",
+  darkOnly: "Dark only",
+  drop: "Drop a theme file here, or choose one.",
   save: "Save theme file",
   remove: "Remove",
   removeLabel: "Remove {name}",
@@ -157,41 +163,21 @@ interface Acts {
   onProblem: (problem: string) => void;
 }
 
-/** A section of the page: its heading (with actions), a hairline, what it holds. */
-function Section(props: { title: string; actions?: ComponentChildren; children: ComponentChildren }) {
-  const id = useId();
+function QuickRow(props: {
+  name: string;
+  about: string;
+  children: (flash: () => void) => ComponentChildren;
+}) {
+  const saved = useSavedTick();
   return (
-    <section class="theme-section" data-part="settings-section" aria-labelledby={id}>
-      <header class="theme-section-head">
-        <h2 id={id}>{props.title}</h2>
-        {props.actions && <div class="actions">{props.actions}</div>}
-      </header>
-      {props.children}
-    </section>
+    <SettingRow name={props.name} description={props.about} saved={saved.saved}>
+      {props.children(saved.flash)}
+    </SettingRow>
   );
 }
 
-/** A theme's own colours in its light (or only) appearance; none until its file has been read. */
-function Swatch(props: { listed: Listed }) {
-  const theme = props.listed.offered?.theme;
-  if (!theme) return <span class="swatch" data-empty aria-hidden="true" />;
-  const tokens = resolve(
-    theme,
-    { appearance: "system", layout: {}, css: "", safe: true },
-    { systemDark: theme.appearance === "dark", reducedMotion: false },
-  ).tokens;
-  return (
-    <span
-      class="swatch"
-      aria-hidden="true"
-      style={{ background: tokens["color.bg"], borderColor: tokens["color.border"] }}
-    >
-      <span style={{ background: tokens["color.surface"] }} />
-      <span style={{ background: tokens["color.accent"] }} />
-      <span style={{ background: tokens["color.text"] }} />
-    </span>
-  );
-}
+const modes = (appearance: "light" | "dark" | "both") =>
+  t(appearance === "both" ? "bothAppearances" : appearance === "light" ? "lightOnly" : "darkOnly");
 
 function ThemePicker(props: Acts) {
   const themes = useThemeState();
@@ -219,8 +205,10 @@ function ThemePicker(props: Acts) {
         l.problem ? (
           // A stored file the page cannot use: nothing to pick, and the one thing to do is remove it.
           <div key={l.id} class="theme-card" data-part="card" data-unusable="">
-            <Swatch listed={l} />
-            <span class="theme-name">{l.name}</span>
+            <span class="mini-pair" data-empty="" aria-hidden="true" />
+            <span class="theme-meta">
+              <span class="theme-name">{l.name}</span>
+            </span>
             <small class="theme-about">{t("unusable", { error: l.problem })}</small>
             <ConfirmButton
               label={t("removeLabel", { name: l.name })}
@@ -242,9 +230,22 @@ function ThemePicker(props: Acts) {
                 if (error) props.onProblem(t("notTurnedOn", { name: l.name, error }));
               }}
             />
-            <Swatch listed={l} />
-            <span class="theme-name">{l.name}</span>
-            <small class="theme-about">{l.offered?.theme.description ?? l.id}</small>
+            {l.offered ? (
+              <ThemePreview theme={l.offered.theme} />
+            ) : (
+              <span class="mini-pair" data-empty="" aria-hidden="true" />
+            )}
+            <span class="theme-meta">
+              <span class="theme-name">{l.name}</span>
+              {l.offered && <PaletteDots theme={l.offered.theme} />}
+            </span>
+            <small class="theme-about" title={l.offered?.theme.description}>
+              {l.offered?.theme.description ?? l.id}
+            </small>
+            {l.offered && <small class="theme-modes">{modes(l.offered.theme.appearance)}</small>}
+            <span class="theme-check" aria-hidden="true">
+              <Icon name="check" size={12} />
+            </span>
           </label>
         ),
       )}
@@ -257,7 +258,7 @@ function CurrentTheme(props: Acts & { onSave: (name: string, text: string) => vo
   const themes = useThemeState();
   const { theme, builtIn } = themes.current;
   return (
-    <div class="actions">
+    <>
       <Button
         onClick={() => {
           props.onAct();
@@ -281,7 +282,7 @@ function CurrentTheme(props: Acts & { onSave: (name: string, text: string) => vo
           {t("remove")}
         </ConfirmButton>
       )}
-    </div>
+    </>
   );
 }
 
@@ -297,6 +298,7 @@ function AddTheme(props: {
   const id = useId();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [over, setOver] = useState(false);
   const { result } = props;
   // What an add came to shows under the Add button, which often sits at the window's lower edge:
   // it is scrolled into view, so an add never looks as if nothing happened.
@@ -316,6 +318,16 @@ function AddTheme(props: {
     return !("error" in outcome);
   };
 
+  const addFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > MAX_THEME_BYTES) {
+      props.onAct();
+      props.onResult({ error: t("tooLarge", { limit: MAX_THEME_BYTES / 1024 }), whole: true });
+      return;
+    }
+    if (await add(await file.text())) setText("");
+  };
+
   const outcome =
     result &&
     ("error" in result ? (
@@ -328,30 +340,38 @@ function AddTheme(props: {
     ));
   return (
     <>
-      <p class="muted">{t("addAbout")}</p>
-      <label class="field" data-part="field">
-        <span class="label">{t("file")}</span>
-        <input
-          type="file"
-          accept=".json,application/json"
-          disabled={busy}
-          onChange={async (e) => {
-            const file = e.currentTarget.files?.[0];
-            e.currentTarget.value = "";
-            if (!file) return;
-            // Checked before the file is read: a theme file is a few KiB.
-            if (file.size > MAX_THEME_BYTES) {
-              props.onAct();
-              props.onResult({ error: t("tooLarge", { limit: MAX_THEME_BYTES / 1024 }), whole: true });
-              return;
-            }
-            // The pasted text was not what got added: a theme from a file leaves none behind.
-            if (await add(await file.text())) setText("");
-          }}
-        />
-      </label>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: dropping a file is a shortcut for pointers; the file field in it is the way for everyone else */}
+      <div
+        class="setting-piece theme-drop"
+        data-over={over ? "" : undefined}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setOver(true);
+        }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setOver(false);
+          void addFile(e.dataTransfer?.files?.[0]);
+        }}
+      >
+        <span class="theme-drop-text">{t("drop")}</span>
+        <label class="field" data-part="field">
+          <span class="label">{t("file")}</span>
+          <input
+            type="file"
+            accept=".json,application/json"
+            disabled={busy}
+            onChange={async (e) => {
+              const file = e.currentTarget.files?.[0];
+              e.currentTarget.value = "";
+              await addFile(file);
+            }}
+          />
+        </label>
+      </div>
       <form
-        class="field"
+        class="setting-piece field"
         data-part="field"
         onSubmit={async (e) => {
           e.preventDefault();
@@ -382,7 +402,11 @@ function AddTheme(props: {
           </Button>
         </div>
       </form>
-      {outcome && <div ref={said}>{outcome}</div>}
+      {outcome && (
+        <div class="setting-piece" ref={said}>
+          {outcome}
+        </div>
+      )}
     </>
   );
 }
@@ -429,9 +453,15 @@ export function ThemesPage() {
   return (
     <>
       <PageHead title={t("title")} />
-      <div class="theme-sections">
-        <Section title={t("theme")}>
-          <p class="muted">{t("themeAbout")}</p>
+      <SettingsColumn class="theme-sections" search>
+        <SettingGroup
+          title={t("theme")}
+          about={t("themeAbout")}
+          card={false}
+          actions={
+            <CurrentTheme {...acts} onSave={(name, text) => saved.save(name, text, "application/json")} />
+          }
+        >
           {newest === "action" && <Notice tone="danger">{problem}</Notice>}
           {newest === "load" && (
             <Notice tone="danger">
@@ -451,18 +481,17 @@ export function ThemesPage() {
           )}
           <ThemePicker {...acts} />
           {saved.notice}
-          <CurrentTheme {...acts} onSave={(name, text) => saved.save(name, text, "application/json")} />
-        </Section>
+        </SettingGroup>
 
-        <Section
+        <SettingGroup
           title={t("layout")}
           actions={<Button onClick={() => themes.resetLayout()}>{t("resetLayout")}</Button>}
         >
-          <div>
-            {LAYOUT_ORDER.flatMap((option) => {
-              const o = layout[option];
-              const row = (
-                <SettingRow key={option} name={o.label} description={o.about}>
+          {LAYOUT_ORDER.flatMap((option) => {
+            const o = layout[option];
+            const row = (
+              <QuickRow key={option} name={o.label} about={o.about}>
+                {(flash) => (
                   <Choices<string>
                     label={o.label}
                     value={r.layout[option]}
@@ -470,46 +499,58 @@ export function ThemesPage() {
                       o.choices as Choice<string>[],
                       theme.layout[option] ?? o.choices[0]?.value,
                     )}
-                    onChange={(v) => themes.setLayout(option, v as Layout[typeof option])}
+                    onChange={(v) => {
+                      themes.setLayout(option, v as Layout[typeof option]);
+                      flash();
+                    }}
                   />
-                </SettingRow>
-              );
-              // Density is a token, not a layout option; it sits after Width.
-              return option === "width"
-                ? [
-                    row,
-                    <SettingRow key="density" name={t("density")} description={t("densityAbout")}>
+                )}
+              </QuickRow>
+            );
+            return option === "width"
+              ? [
+                  row,
+                  <QuickRow key="density" name={t("density")} about={t("densityAbout")}>
+                    {(flash) => (
                       <Choices
                         label={t("density")}
                         value={r.tokens.density}
                         choices={noted(density(), theme.tokens.density ?? "1")}
-                        onChange={(v) => themes.set({ density: v })}
+                        onChange={(v) => {
+                          themes.set({ density: v });
+                          flash();
+                        }}
                       />
-                    </SettingRow>,
-                  ]
-                : [row];
-            })}
-          </div>
-        </Section>
+                    )}
+                  </QuickRow>,
+                ]
+              : [row];
+          })}
+        </SettingGroup>
 
-        <Section title={t("add")}>
+        <SettingGroup title={t("add")} about={t("addAbout")}>
           <AddTheme result={addResult} onResult={setAddResult} onAct={acts.onAct} />
-        </Section>
+        </SettingGroup>
 
-        <Section title={t("customCss")}>
-          <div>
-            <SettingRow name={t("customCss")} description={t("customCssAbout")}>
+        <SettingGroup title={t("customCss")}>
+          <QuickRow name={t("customCss")} about={t("customCssAbout")}>
+            {(flash) => (
               <Switch
                 label={t("customCss")}
                 checked={!themes.choices.safe}
-                onChange={(on) => themes.setSafe(!on)}
+                onChange={(on) => {
+                  themes.setSafe(!on);
+                  flash();
+                }}
               />
-            </SettingRow>
-          </div>
+            )}
+          </QuickRow>
           {theme.css && (
-            <p class="muted">{t(themes.choices.safe ? "ownCssOff" : "ownCssOn", { name: theme.name })}</p>
+            <p class="setting-piece muted">
+              {t(themes.choices.safe ? "ownCssOff" : "ownCssOn", { name: theme.name })}
+            </p>
           )}
-          <label class="field" data-part="field">
+          <label class="setting-piece field" data-part="field">
             <span class="label">{t("yourCss")}</span>
             <textarea
               class="mono"
@@ -521,8 +562,8 @@ export function ThemesPage() {
             />
             <small class="hint">{t("cssHint")}</small>
           </label>
-        </Section>
-      </div>
+        </SettingGroup>
+      </SettingsColumn>
     </>
   );
 }

@@ -161,55 +161,57 @@ export function ConfigSource(props: ConfigSourceProps) {
     <div class="stack config-source">
       <p class="muted config-hint">{t("hint")}</p>
       {missing && <Notice tone="muted">{t("accountNotFound")}</Notice>}
-      <div class="config-find actions">
-        <input
-          data-slot="input"
-          type="search"
-          aria-label={t("find")}
-          placeholder={t("find")}
-          value={query}
+      <div class="setting-group-card config-editor-card">
+        <div class="config-find actions">
+          <input
+            data-slot="input"
+            type="search"
+            aria-label={t("find")}
+            placeholder={t("find")}
+            value={query}
+            onInput={(e) => {
+              setQuery(e.currentTarget.value);
+              setMatch({ query: "", text: "", index: -1 });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                selectMatch(e.shiftKey ? (index < 0 ? matches.length - 1 : index - 1) : index + 1);
+              }
+            }}
+          />
+          <Button
+            disabled={!matches.length}
+            onClick={() => selectMatch(index < 0 ? matches.length - 1 : index - 1)}
+          >
+            {t("previous")}
+          </Button>
+          <Button disabled={!matches.length} onClick={() => selectMatch(index + 1)}>
+            {t("next")}
+          </Button>
+          <span role="status" class="config-find-count">
+            {query &&
+              (!matches.length
+                ? t("noMatches")
+                : index < 0
+                  ? t("found", { count: matches.length })
+                  : t("matches", { current: index + 1, count: matches.length }))}
+          </span>
+        </div>
+        <textarea
+          ref={editor}
+          data-part="code"
+          class="config-editor"
+          aria-label={t("editor")}
+          spellcheck={false}
+          disabled={busy}
+          value={props.text}
           onInput={(e) => {
-            setQuery(e.currentTarget.value);
-            setMatch({ query: "", text: "", index: -1 });
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              selectMatch(e.shiftKey ? (index < 0 ? matches.length - 1 : index - 1) : index + 1);
-            }
+            props.setText(e.currentTarget.value);
+            clear();
           }}
         />
-        <Button
-          disabled={!matches.length}
-          onClick={() => selectMatch(index < 0 ? matches.length - 1 : index - 1)}
-        >
-          {t("previous")}
-        </Button>
-        <Button disabled={!matches.length} onClick={() => selectMatch(index + 1)}>
-          {t("next")}
-        </Button>
-        <span role="status" class="config-find-count">
-          {query &&
-            (!matches.length
-              ? t("noMatches")
-              : index < 0
-                ? t("found", { count: matches.length })
-                : t("matches", { current: index + 1, count: matches.length }))}
-        </span>
       </div>
-      <textarea
-        ref={editor}
-        data-part="code"
-        class="config-editor"
-        aria-label={t("editor")}
-        spellcheck={false}
-        disabled={busy}
-        value={props.text}
-        onInput={(e) => {
-          props.setText(e.currentTarget.value);
-          clear();
-        }}
-      />
       {error && <Notice tone="danger">{p.text(error)}</Notice>}
       {message && <Notice tone="ok">{p.text(message)}</Notice>}
       <div class="actions">

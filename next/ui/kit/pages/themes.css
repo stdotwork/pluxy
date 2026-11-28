@@ -1,5 +1,18 @@
-/* The Themes page (themes.tsx). */
 @layer kit {
+  .setting-group-body {
+    display: grid;
+    gap: calc(var(--s) * 3);
+    min-width: 0;
+  }
+
+  .setting-group-body > .notice {
+    margin: 0;
+  }
+
+  .setting-group {
+    container-type: inline-size;
+  }
+
   .theme-card {
     position: relative;
   }
@@ -7,6 +20,7 @@
   /* The real input covers the whole card, so a click anywhere on it reaches the input. */
   .theme-card input {
     position: absolute;
+    z-index: 1;
     inset: 0;
     width: 100%;
     height: 100%;
@@ -20,53 +34,23 @@
     outline-offset: 2px;
   }
 
-  /* The page's sections: a heading with its actions, a hairline, what it holds. */
-
-  .theme-sections {
-    display: grid;
-    gap: calc(var(--s) * 6);
-  }
-
-  .theme-section {
-    container-type: inline-size;
-    display: grid;
-    gap: calc(var(--s) * 3);
-    align-content: start;
-    min-width: 0;
-  }
-
-  .theme-section-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: calc(var(--s) * 2);
-    min-height: var(--px-size-control);
-    padding-bottom: calc(var(--s) * 2);
-    border-bottom: var(--px-shape-border) solid var(--px-color-border);
-  }
-
-  .theme-section-head h2,
-  .theme-section p {
-    margin: 0;
-  }
-
   /* Theme picker: equal columns, every card as tall as the tallest, one gap all round. */
 
   .theme-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 12em), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 15em), 1fr));
     grid-auto-rows: 1fr;
     gap: calc(var(--s) * 3);
   }
 
   /* In a small window, two cards to a row, and one where two do not fit. */
-  @container (max-width: 44em) {
+  @container (max-width: 30em) {
     .theme-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 
-  @container (max-width: 24em) {
+  @container (max-width: 20em) {
     .theme-grid {
       grid-template-columns: minmax(0, 1fr);
     }
@@ -74,19 +58,37 @@
 
   .theme-card {
     display: grid;
-    gap: calc(var(--s) * 1);
+    gap: calc(var(--s) * 1.5);
     /* Cards in one row are as tall as the tallest: the others keep their text at the top. */
     align-content: start;
     min-width: 0;
-    padding: calc(var(--s) * 3);
-    box-shadow: none;
+    padding: calc(var(--s) * 2);
+    border: var(--px-shape-border) solid var(--px-color-card-border);
+    border-radius: var(--r-card);
+    background: var(--px-color-card);
+    box-shadow: var(--px-shadow-raised);
     cursor: pointer;
     overflow-wrap: anywhere;
+    transition: border-color var(--t);
+  }
+
+  .theme-card:not([data-unusable]):hover {
+    border-color: color-mix(in srgb, var(--px-color-text) 28%, var(--px-color-card-border));
   }
 
   .theme-card:has(input:checked) {
     border-color: var(--px-color-accent);
     box-shadow: 0 0 0 1px var(--px-color-accent);
+  }
+
+  .theme-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2);
+    padding-inline: calc(var(--s) * 1);
+    margin-top: calc(var(--s) * 0.5);
+    --theme-dot-ring: var(--px-color-text-muted);
   }
 
   .theme-name {
@@ -95,43 +97,330 @@
   }
 
   .theme-about {
+    padding-inline: calc(var(--s) * 1);
     color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
   }
 
-  .swatch {
-    display: flex;
-    gap: 6px;
-    padding: 10px;
-    border: 1px solid;
-    border-radius: var(--r-small);
-    height: 44px;
+  .theme-card:has(:focus-visible) .theme-about {
+    display: block;
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    overflow: visible;
   }
 
-  .swatch span {
-    flex: 1;
-    border-radius: var(--r-chip);
+  .theme-modes {
+    padding-inline: calc(var(--s) * 1);
+    color: var(--px-color-secondary-label);
+    font-size: var(--px-font-size-label);
   }
 
-  .swatch span:first-child {
-    flex: 2;
+  .theme-card > :last-child:not(.theme-check) {
+    align-self: end;
   }
 
-  /* A stored theme whose file has not been read yet. */
-  .swatch[data-empty] {
-    border-color: var(--px-color-border);
-    background: var(--px-color-surface-raised);
+  .theme-dots {
+    display: inline-flex;
+    flex: none;
+    gap: 3px;
+  }
+
+  .theme-dots i {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: var(--px-shape-border) solid var(--theme-dot-ring, var(--px-color-text-muted));
+  }
+
+  .theme-dots i:nth-child(1) {
+    background: var(--px-color-chrome);
+  }
+
+  .theme-dots i:nth-child(2) {
+    background: var(--px-color-bg);
+  }
+
+  .theme-dots i:nth-child(3) {
+    background: var(--px-color-surface);
+  }
+
+  .theme-dots i:nth-child(4) {
+    background: var(--px-color-text);
+  }
+
+  .theme-dots i:nth-child(5) {
+    background: var(--px-color-accent);
+  }
+
+  .theme-check {
+    position: absolute;
+    top: calc(var(--s) * 3.5);
+    inset-inline-end: calc(var(--s) * 3.5);
+    display: none;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--px-color-accent);
+    color: var(--px-color-accent-text);
+  }
+
+  .theme-card:has(input:checked) .theme-check {
+    display: grid;
   }
 
   .theme-card[data-unusable] {
     cursor: default;
   }
 
-  /* Dimmed, except its Remove button. */
-  .theme-card[data-unusable] > :not(.btn, .confirm) {
+  .theme-card[data-unusable] > .mini-pair {
     opacity: 0.7;
   }
 
   .theme-card[data-unusable] .confirm {
     flex-wrap: wrap;
+  }
+
+  .mini-pair {
+    position: relative;
+    display: block;
+    aspect-ratio: 16 / 10;
+    overflow: hidden;
+    border-radius: var(--r-small);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    background: var(--px-color-surface-raised);
+  }
+
+  .mini-half {
+    position: absolute;
+    inset: 0;
+    display: block;
+  }
+
+  .mini-pair[data-halves="2"] .mini-half[data-half="dark"] {
+    clip-path: polygon(60% 0, 100% 0, 100% 100%, 40% 100%);
+  }
+
+  .mini {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: 27% minmax(0, 1fr);
+    background: var(--px-color-chrome);
+  }
+
+  .mini i,
+  .mini b {
+    display: block;
+    font-style: normal;
+  }
+
+  .mini-nav {
+    display: grid;
+    align-content: start;
+    gap: 4px;
+    padding: 9px 8px;
+    background: var(--px-color-nav);
+  }
+
+  .mini-brand {
+    width: 52%;
+    height: 4px;
+    margin-bottom: 3px;
+    border-radius: 2px;
+    background: var(--px-color-nav-text);
+  }
+
+  .mini-entry {
+    width: 78%;
+    height: 3px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--px-color-nav-muted) 60%, transparent);
+  }
+
+  .mini-entry[data-current] {
+    background: var(--px-color-nav-text);
+  }
+
+  .mini-page {
+    display: grid;
+    align-content: start;
+    gap: 5px;
+    margin: 4px 4px 4px 0;
+    padding: 8px;
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: 6px;
+    background: var(--px-color-bg);
+  }
+
+  .mini-title {
+    width: 40%;
+    height: 5px;
+    margin-bottom: 1px;
+    border-radius: 2px;
+    background: var(--px-color-text);
+  }
+
+  .mini-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 5px;
+    border: var(--px-shape-border) solid var(--px-color-card-border);
+    border-radius: 4px;
+    background: var(--px-color-card);
+  }
+
+  .mini-dot {
+    flex: none;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+  }
+
+  .mini-dot[data-tone="ok"] {
+    background: var(--px-color-success);
+  }
+
+  .mini-dot[data-tone="warn"] {
+    background: var(--px-color-warning);
+  }
+
+  .mini-name {
+    flex: 1;
+    height: 3px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--px-color-text-muted) 70%, transparent);
+  }
+
+  .mini-bar {
+    flex: none;
+    width: 34%;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--px-color-meter-track);
+  }
+
+  .mini-bar b {
+    height: 100%;
+    border-radius: 2px;
+  }
+
+  .mini-bar[data-tone="ok"] b {
+    width: 74%;
+    background: var(--px-color-meter-fill);
+  }
+
+  .mini-bar[data-tone="warn"] b {
+    width: 40%;
+    background: var(--px-color-meter-mid);
+  }
+
+  .mini-action {
+    width: 24%;
+    height: 8px;
+    margin-top: 1px;
+    border-radius: 3px;
+    background: var(--px-color-message-action);
+  }
+
+  .mini[data-frame="flat"] {
+    background: var(--px-color-bg);
+  }
+
+  .mini[data-frame="flat"] .mini-page {
+    margin: 0;
+    border-width: 0;
+    border-inline-start-width: var(--px-shape-border);
+    border-radius: 0;
+  }
+
+  .mini[data-nav="rail"] {
+    grid-template-columns: 9% minmax(0, 1fr);
+  }
+
+  .mini[data-nav="rail"] .mini-nav {
+    padding-inline: 4px;
+  }
+
+  .mini[data-nav="rail"] .mini-brand,
+  .mini[data-nav="rail"] .mini-entry {
+    width: 100%;
+  }
+
+  .mini[data-nav="top"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 15% minmax(0, 1fr);
+  }
+
+  .mini[data-nav="top"] .mini-nav {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .mini[data-nav="top"] .mini-brand {
+    width: 14%;
+    margin: 0 4px 0 0;
+  }
+
+  .mini[data-nav="top"] .mini-entry {
+    width: 9%;
+  }
+
+  .mini[data-nav="top"] .mini-page {
+    margin: 0 4px 4px;
+  }
+
+  .mini[data-nav="top"][data-frame="flat"] .mini-page {
+    margin: 0;
+    border-inline-start-width: 0;
+    border-block-start-width: var(--px-shape-border);
+  }
+
+  .mini-pair[data-empty] {
+    border-style: dashed;
+  }
+
+  .setting-group-card > .theme-drop {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 3);
+    margin: calc(var(--s) * 3) calc(var(--s) * 4);
+    padding: calc(var(--s) * 4);
+    border: var(--px-shape-border) dashed var(--px-color-input-border);
+    border-radius: var(--r-small);
+    transition:
+      background var(--t),
+      border-color var(--t);
+  }
+
+  .setting-group-card > .theme-drop[data-over] {
+    border-color: var(--px-color-accent);
+    background: var(--px-color-info-surface);
+  }
+
+  .theme-drop-text {
+    color: var(--px-color-text-muted);
+  }
+
+  .setting-group-card > .field.setting-piece textarea,
+  .setting-group-card > label.setting-piece textarea {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .setting-group-card > form.setting-piece,
+  .setting-group-card > label.setting-piece {
+    display: grid;
+    gap: calc(var(--s) * 2);
   }
 }

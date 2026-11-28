@@ -6,8 +6,9 @@ import { Phases, providerName, StatePane } from "../parts";
 import { useAccountLabels, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
-import { Button, Card, Facts, List, Notice, PageHead, useKit, useLoad, when } from "../ui";
+import { Button, Facts, List, Notice, PageHead, useKit, useLoad, when } from "../ui";
 import { CopyButton } from "./copyButton";
+import { SettingGroup, SettingsColumn } from "./settingGroup";
 
 const t = strings("system", {
   title: "System",
@@ -127,9 +128,9 @@ export function SystemPage() {
           </Button>
         }
       />
-      <div class="stack">
+      <SettingsColumn>
         {s?.safe_mode && <Notice tone="warn">{t("safeMode")}</Notice>}
-        <Card title={t("about")}>
+        <SettingGroup title={t("about")}>
           <Phases
             load={status}
             loading={t("loadingAbout")}
@@ -172,8 +173,8 @@ export function SystemPage() {
               </div>
             )}
           </Phases>
-        </Card>
-        <Card
+        </SettingGroup>
+        <SettingGroup
           title={t("models")}
           actions={
             models.data && models.data.models.length > 0 ? (
@@ -201,7 +202,7 @@ export function SystemPage() {
               groupModels(d.models).map((g) => (
                 <section
                   key={g.extension}
-                  class="system-group"
+                  class="system-group setting-piece"
                   data-part="model-group"
                   aria-label={providerName(g.extension)}
                 >
@@ -232,11 +233,11 @@ export function SystemPage() {
               ))
             }
           </Phases>
-        </Card>
-        <Card title={t("addresses")}>
-          <p class="muted system-hint">
-            {rich(t("addressesText"), { tools: <a href="#/tools">{t("tools")}</a> })}
-          </p>
+        </SettingGroup>
+        <SettingGroup
+          title={t("addresses")}
+          about={rich(t("addressesText"), { tools: <a href="#/tools">{t("tools")}</a> })}
+        >
           {host.address ? (
             <List<ProgramAddress>
               label={t("addresses")}
@@ -261,8 +262,8 @@ export function SystemPage() {
           ) : (
             <Notice tone="muted">{t("noAddress")}</Notice>
           )}
-        </Card>
-      </div>
+        </SettingGroup>
+      </SettingsColumn>
     </>
   );
 }

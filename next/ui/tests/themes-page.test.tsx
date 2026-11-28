@@ -235,3 +235,51 @@ test("Remove asks first, names the theme, and a built-in theme has none", async 
   await until(() => w.core.calls.includes("DELETE /themes/t3/nightfall"));
   expect(w.themes.current.theme.id).toBe("pluxy/default");
 });
+
+const cssOf = (node: FakeNode) => (node.style as unknown as { cssText?: string }).cssText ?? "";
+
+test("each theme in the gallery has a miniature of pluxy's frame in its own colours, light and dark when it has both", async () => {
+  const w = world();
+  const topFlat = { theme_version: 0, id: "me/topflat", name: "Top Flat", appearance: "both" };
+  expect(
+    await w.themes.addTheme(JSON.stringify({ ...topFlat, layout: { nav: "top", frame: "flat" } })),
+  ).toEqual({ replaced: false });
+  const m = await w.mount(<ThemesPage />);
+  await settle();
+  const previews = withClass(m.root, "mini-pair");
+  expect(previews.map((p) => attribute(p, "data-halves"))).toEqual(["2", "1", "2"]);
+  const halves = (preview: FakeNode) => withClass(preview, "mini");
+  const [def, terminal, flat] = previews as [FakeNode, FakeNode, FakeNode];
+  const [light, dark] = halves(def).map(cssOf);
+  expect(light).toContain("--px-color-bg:#fcfcfc;");
+  expect(dark).toContain("--px-color-bg:#111113;");
+  expect(withClass(def, "mini-half").map((h) => attribute(h, "data-half"))).toEqual(["light", "dark"]);
+  expect(withClass(terminal, "mini-half").map((h) => attribute(h, "data-half"))).toEqual(["dark"]);
+  const [flatLight] = halves(flat) as [FakeNode];
+  expect([attribute(flatLight, "data-nav"), attribute(flatLight, "data-frame")]).toEqual(["top", "flat"]);
+  expect(attribute(halves(terminal)[0] as FakeNode, "data-nav")).toBe("rail");
+  const cards = withClass(m.root, "theme-card").map((c) => withClass(c, "theme-modes")[0]?.textContent);
+  expect(cards).toEqual(["Light and dark", "Dark only", "Light and dark"]);
+  for (const p of previews) expect(p.textContent).toBe("");
+});
+
+test("a theme file dropped on the drop zone is added like a chosen one, and an oversize one is refused unread", async () => {
+  const w = world();
+  const m = await w.mount(<ThemesPage />);
+  const zone = withClass(m.root, "theme-drop")[0] as FakeNode;
+  const drop = async (file: unknown) => {
+    const event = new Event("drop") as Event & { dataTransfer?: unknown };
+    event.dataTransfer = { files: [file] };
+    await act(async () => {
+      zone.dispatchEvent(event);
+    });
+    await settle();
+  };
+  await drop({ size: 257 * 1024, text: async () => "never read" });
+  expect(notices(m.root)).toEqual(["The file is over 256 KiB."]);
+  expect(w.core.calls.filter((c) => c.startsWith("PUT"))).toEqual([]);
+
+  await drop({ size: nightfallText.length, text: async () => nightfallText });
+  await until(() => w.themes.current.theme.id === "t3/nightfall");
+  expect(notices(m.root)).toEqual(["Added and turned on Nightfall."]);
+});

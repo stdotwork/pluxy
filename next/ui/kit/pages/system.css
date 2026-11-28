@@ -3,13 +3,19 @@
     gap: 0;
   }
   .system-facts .facts > div {
+    grid-template-columns: minmax(7em, 11em) minmax(0, 1fr);
     align-items: center;
-    min-height: var(--px-size-row);
-    padding: calc(var(--s) * 1) 0;
+    gap: calc(var(--s) * 4);
+    min-height: 44px;
+    padding: calc(var(--s) * 2) calc(var(--s) * 4);
     border-bottom: var(--px-shape-border) solid var(--px-color-border);
   }
   .system-facts .facts > div:last-child {
     border-bottom: 0;
+  }
+  .system-facts .facts dt {
+    color: var(--px-color-text);
+    font-weight: var(--px-font-weight-medium);
   }
   .system-address,
   .system-model {
@@ -17,9 +23,6 @@
     flex-wrap: wrap;
     align-items: center;
     gap: calc(var(--s) * 2);
-  }
-  .system-group + .system-group {
-    margin-top: calc(var(--s) * 4);
   }
   .system-group h3 {
     display: flex;
@@ -34,8 +37,15 @@
     font-size: var(--px-font-size-small);
     font-weight: normal;
   }
-  .system-hint {
-    margin: 0 0 calc(var(--s) * 3);
+  .setting-group-card > .system-group {
+    display: grid;
+    gap: calc(var(--s) * 2);
+  }
+  .setting-group-card > .system-group + .system-group {
+    margin-top: 0;
+  }
+  .setting-group-card > .table-frame {
+    margin: calc(var(--s) * 2) calc(var(--s) * 3);
   }
   /* The tables of one page share their columns, so the names line up from one provider to the next. */
   .system-group .table {
@@ -57,5 +67,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     vertical-align: bottom;
+  }
+
+  @container (max-width: 36em) {
+    .system-group .table {
+      table-layout: auto;
+    }
+    .system-group th[scope="col"]:first-child {
+      width: auto;
+    }
+    .system-group td:last-child {
+      min-width: 9em;
+    }
   }
 }

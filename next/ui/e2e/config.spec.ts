@@ -884,3 +884,30 @@ test("the log size row says that 0 means no limit", async ({ page }) => {
   await signIn(page, core);
   await expect(row(page, "Largest log size (MB)")).toContainText("0 means no limit");
 });
+
+test("Config search narrows setting rows while keeping a newly created management key visible", async ({
+  page,
+}) => {
+  await openPanel(page, core, "/panel/#/config");
+  await signIn(page, core);
+  const keys = page.getByRole("region", { name: "Keys", exact: true });
+  await keys.getByRole("button", { name: "Replace key", exact: true }).click();
+  await keys.getByRole("button", { name: "Yes, replace key", exact: true }).click();
+  const notice = keys.locator('[data-part="key-notice"]');
+  await expect(notice).toBeVisible();
+  const newKey = (await notice.locator('[data-part="key-value"]').textContent()) ?? "";
+  expect(newKey.length).toBeGreaterThan(16);
+  core.key = newKey;
+
+  const search = page.getByRole("searchbox", { name: "Search settings", exact: true });
+  await search.fill("proxy");
+  await expect(row(page, "Outbound proxy")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Logging", exact: true })).toBeHidden();
+  await expect(keys).toBeVisible();
+  await expect(notice).toBeVisible();
+  await expect(notice.locator('[data-part="key-value"]')).toHaveText(newKey);
+
+  await notice.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(keys).toBeHidden();
+});
