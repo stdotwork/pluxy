@@ -287,8 +287,10 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 		if u := text(m, "base_url"); u != "" {
 			settings["base_url"] = u
 		}
-	case "", "gemini":
-		return f, nil, "today's core does not load it either"
+	case "":
+		return f, nil, "it has no type field (CLIProxyAPI does not load it either)"
+	case "gemini":
+		return f, nil, "type gemini is not supported (CLIProxyAPI does not load it either)"
 	default:
 		// The type is not quoted: a file may hold a token there.
 		return f, nil, "its type is not one the import takes"
@@ -553,7 +555,7 @@ func CheckImportFolders(authDir, credDir string) error {
 		return err
 	}
 	if rel, err := filepath.Rel(a, c); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("the credential store (%s) is today's auth folder or inside it; set credentials_dir to another folder", credDir)
+		return fmt.Errorf("the credential store (%s) is CLIProxyAPI's auth folder or inside it; set credentials_dir to another folder", credDir)
 	}
 	return nil
 }
@@ -698,7 +700,7 @@ func (a *AuthFolder) Ledger(imported []AuthFile, taken []Skipped) *Ledger {
 		l.Expect(item)
 		row := Row{What: "auth file", Name: name}
 		if !slices.Contains(a.read, name) {
-			row.Why = "today's core reads only the .json files at the top of its auth folder"
+			row.Why = "CLIProxyAPI reads only the .json files at the top of its auth folder"
 			l.Add(NotBrought, item, row)
 			continue
 		}

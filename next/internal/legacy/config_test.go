@@ -900,7 +900,7 @@ openai-compatibility:
 		"credential": {"kind": "api_key", "api_key": "k2"}
 	}]`)
 	n := notices(r)
-	for _, want := range []string{"oauth.model-alias.force-mapping", "oauth.model-alias.gemini-cli: no extension", "oauth.excluded-models.qwen: no extension"} {
+	for _, want := range []string{"oauth.model-alias.force-mapping", "oauth.model-alias.gemini-cli: no pluxy extension serves CLIProxyAPI's gemini-cli accounts", "oauth.excluded-models.qwen: no pluxy extension serves CLIProxyAPI's qwen accounts"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("notices lack %q:\n%s", want, n)
 		}
@@ -1356,22 +1356,22 @@ func TestPayload(t *testing.T) {
 func TestPayloadKeysExact(t *testing.T) {
 	const rule = "    - models: [{name: m}]\n      params: {p: 1}\n"
 	for _, c := range []struct{ name, payload, want, notice string }{
-		{"list", "  Override:\n" + rule, `{}`, "requests.payload.Override (today's core reads override)"},
-		{"raw list", "  OVERRIDE-RAW:\n" + rule, `{}`, "requests.payload.OVERRIDE-RAW (today's core reads override-raw)"},
-		{"filter list", "  Filter:\n    - models: [{name: m}]\n      params: [a]\n", `{}`, "requests.payload.Filter (today's core reads filter)"},
-		{"models", "  override:\n    - Models: [{name: m}]\n      params: {p: 1}\n", `{"override": [{"params": {"p": 1}}]}`, "requests.payload.override[0].Models (today's core reads models)"},
-		{"params", "  override:\n    - models: [{name: m}]\n      Params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}]}]}`, "requests.payload.override[0].Params (today's core reads params)"},
-		{"name", "  override:\n    - models: [{Name: m, protocol: codex}]\n      params: {p: 1}\n", `{"override": [{"models": [{"protocol": "codex"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Name (today's core reads name)"},
-		{"name as a number", "  override:\n    - models: [{Name: 0123, protocol: codex}]\n      params: {p: 1}\n", `{"override": [{"models": [{"protocol": "codex"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Name (today's core reads name)"},
-		{"protocol", "  override:\n    - models: [{name: m, Protocol: codex}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Protocol (today's core reads protocol)"},
-		{"from-protocol", "  override:\n    - models: [{name: m, From-Protocol: claude}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].From-Protocol (today's core reads from-protocol)"},
-		{"headers", "  override:\n    - models: [{name: m, Headers: {X-A: '*'}}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Headers (today's core reads headers)"},
-		{"match", "  override:\n    - models: [{name: m, Match: [{a: 1}]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Match (today's core reads match)"},
-		{"not-match", "  override:\n    - models: [{name: m, Not-Match: [{a: 1}]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Not-Match (today's core reads not-match)"},
-		{"exist", "  override:\n    - models: [{name: m, Exist: [a]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Exist (today's core reads exist)"},
-		{"not-exist", "  override:\n    - models: [{name: m, NOT-EXIST: [a]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].NOT-EXIST (today's core reads not-exist)"},
-		{"filter params", "  filter:\n    - models: [{name: m}]\n      Params: [a]\n", `{"filter": [{"models": [{"name": "m"}]}]}`, "requests.payload.filter[0].Params (today's core reads params)"},
-		{"filter models", "  filter:\n    - Models: [{name: m}]\n      params: [a]\n", `{"filter": [{"params": ["a"]}]}`, "requests.payload.filter[0].Models (today's core reads models)"},
+		{"list", "  Override:\n" + rule, `{}`, "requests.payload.Override (CLIProxyAPI reads override)"},
+		{"raw list", "  OVERRIDE-RAW:\n" + rule, `{}`, "requests.payload.OVERRIDE-RAW (CLIProxyAPI reads override-raw)"},
+		{"filter list", "  Filter:\n    - models: [{name: m}]\n      params: [a]\n", `{}`, "requests.payload.Filter (CLIProxyAPI reads filter)"},
+		{"models", "  override:\n    - Models: [{name: m}]\n      params: {p: 1}\n", `{"override": [{"params": {"p": 1}}]}`, "requests.payload.override[0].Models (CLIProxyAPI reads models)"},
+		{"params", "  override:\n    - models: [{name: m}]\n      Params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}]}]}`, "requests.payload.override[0].Params (CLIProxyAPI reads params)"},
+		{"name", "  override:\n    - models: [{Name: m, protocol: codex}]\n      params: {p: 1}\n", `{"override": [{"models": [{"protocol": "codex"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Name (CLIProxyAPI reads name)"},
+		{"name as a number", "  override:\n    - models: [{Name: 0123, protocol: codex}]\n      params: {p: 1}\n", `{"override": [{"models": [{"protocol": "codex"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Name (CLIProxyAPI reads name)"},
+		{"protocol", "  override:\n    - models: [{name: m, Protocol: codex}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Protocol (CLIProxyAPI reads protocol)"},
+		{"from-protocol", "  override:\n    - models: [{name: m, From-Protocol: claude}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].From-Protocol (CLIProxyAPI reads from-protocol)"},
+		{"headers", "  override:\n    - models: [{name: m, Headers: {X-A: '*'}}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Headers (CLIProxyAPI reads headers)"},
+		{"match", "  override:\n    - models: [{name: m, Match: [{a: 1}]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Match (CLIProxyAPI reads match)"},
+		{"not-match", "  override:\n    - models: [{name: m, Not-Match: [{a: 1}]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Not-Match (CLIProxyAPI reads not-match)"},
+		{"exist", "  override:\n    - models: [{name: m, Exist: [a]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].Exist (CLIProxyAPI reads exist)"},
+		{"not-exist", "  override:\n    - models: [{name: m, NOT-EXIST: [a]}]\n      params: {p: 1}\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`, "requests.payload.override[0].models[0].NOT-EXIST (CLIProxyAPI reads not-exist)"},
+		{"filter params", "  filter:\n    - models: [{name: m}]\n      Params: [a]\n", `{"filter": [{"models": [{"name": "m"}]}]}`, "requests.payload.filter[0].Params (CLIProxyAPI reads params)"},
+		{"filter models", "  filter:\n    - Models: [{name: m}]\n      params: [a]\n", `{"filter": [{"params": ["a"]}]}`, "requests.payload.filter[0].Models (CLIProxyAPI reads models)"},
 		{"unknown keys", "  override:\n    - models: [{name: m, bogus: 1}]\n      params: {p: 1}\n      extra: 2\n  other: []\n", `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`,
 			"requests.payload.other (not a payload key), requests.payload.override[0].extra (not a payload key), requests.payload.override[0].models[0].bogus (not a payload key)"},
 	} {
@@ -1380,7 +1380,7 @@ func TestPayloadKeysExact(t *testing.T) {
 			for _, doc := range []string{"requests:\n  payload:\n" + nested, "payload:\n" + c.payload} {
 				r := translate(t, doc)
 				equalJSON(t, r.Config["payload"], c.want)
-				if n := notices(r); !strings.Contains(n, "payload keys ignored, as today's core ignores them (it matches key names exactly): ") || !strings.Contains(n, c.notice) {
+				if n := notices(r); !strings.Contains(n, "payload keys ignored, as CLIProxyAPI ignores them (it matches key names exactly): ") || !strings.Contains(n, c.notice) {
 					t.Errorf("notices do not say %q:\n%s", c.notice, n)
 				}
 			}
@@ -1413,11 +1413,11 @@ func TestPayloadRawParams(t *testing.T) {
 		{"date and time with fractions", "{p: 2024-01-15T10:30:00.123456789Z}", `{"p": "\"2024-01-15T10:30:00.123456789Z\""}`, ""},
 		{"date in a list", "{p: [2024-01-15, 1]}", `{"p": ["2024-01-15T00:00:00Z", 1]}`, ""},
 		{"date in a mapping", "{p: {d: 2024-01-15}}", `{"p": {"d": "2024-01-15T00:00:00Z"}}`, ""},
-		{"+inf", "{p: .inf, q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: not JSON (json: unsupported value: +Inf), dropped: today's core skipped the param`},
-		{"-inf", "{p: -.inf, q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: not JSON (json: unsupported value: -Inf), dropped: today's core skipped the param`},
-		{"nan", "{p: .nan, q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: not JSON (json: unsupported value: NaN), dropped: today's core skipped the param`},
-		{"inf in a list", "{p: [.inf], q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: not JSON (json: unsupported value: +Inf), dropped: today's core skipped the param`},
-		{"null", "{p: ~, q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: null, dropped: today's core skipped the param`},
+		{"+inf", "{p: .inf, q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: not JSON (json: unsupported value: +Inf), dropped: CLIProxyAPI skipped the param`},
+		{"-inf", "{p: -.inf, q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: not JSON (json: unsupported value: -Inf), dropped: CLIProxyAPI skipped the param`},
+		{"nan", "{p: .nan, q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: not JSON (json: unsupported value: NaN), dropped: CLIProxyAPI skipped the param`},
+		{"inf in a list", "{p: [.inf], q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: not JSON (json: unsupported value: +Inf), dropped: CLIProxyAPI skipped the param`},
+		{"null", "{p: ~, q: 1}", `{"q": 1}`, `requests.payload.override-raw[0].params["p"]: null, dropped: CLIProxyAPI skipped the param`},
 		{"values and JSON text", `{p: 5, q: 0123, r: 1e5, s: true, t: 1.50, u: '{"a":1}'}`, `{"p": 5, "q": 83, "r": 100000, "s": true, "t": 1.5, "u": "{\"a\":1}"}`, ""},
 	} {
 		for _, list := range []string{"override-raw", "default-raw"} {
@@ -1451,7 +1451,7 @@ func TestPayloadRawStringNotJSON(t *testing.T) {
 	rule := func(list, params string) string {
 		return "payload:\n  " + list + ":\n    - models: [{name: m}]\n      params: " + params + "\n"
 	}
-	const dropped = `requests.payload.override-raw[0]: param "p" is a string that is not JSON, rule dropped: today's core dropped the whole rule and logged a warning`
+	const dropped = `requests.payload.override-raw[0]: param "p" is a string that is not JSON, rule dropped: CLIProxyAPI dropped the whole rule and logged a warning`
 	for _, c := range []struct{ name, doc, want, notice string }{
 		{"a date in quotes", rule("override-raw", "{p: '2024-01-15'}"), `{"override-raw": []}`, dropped},
 		{"a word", rule("override-raw", "{p: foo}"), `{"override-raw": []}`, dropped},
@@ -1487,7 +1487,7 @@ func TestPayloadRawStringNotJSON(t *testing.T) {
 //
 // Each of these used to fail the whole load with a bare "json: unsupported value".
 func TestPayloadNonJSONValues(t *testing.T) {
-	const wrote = "dropped: today's core skipped the param or wrote invalid JSON into the body"
+	const wrote = "dropped: CLIProxyAPI skipped the param or wrote invalid JSON into the body"
 	rule := func(list, params string) string {
 		return "payload:\n  " + list + ":\n    - models: [{name: m}]\n      params: " + params + "\n"
 	}
@@ -1501,8 +1501,8 @@ func TestPayloadNonJSONValues(t *testing.T) {
 	const (
 		noModels   = `{"override": [{"models": [], "params": {"p": 1}}]}`
 		oneModel   = `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`
-		infMatch   = `requests.payload.override[0].models[0]: match[0]["a"] is not JSON (json: unsupported value: +Inf), model dropped: today's core never matched it`
-		infNotMach = `requests.payload.override[0].models[0]: not-match[0]["a"] is not JSON (json: unsupported value: +Inf), condition dropped: it never equalled a value in today's core`
+		infMatch   = `requests.payload.override[0].models[0]: match[0]["a"] is not JSON (json: unsupported value: +Inf), model dropped: CLIProxyAPI never matched it`
+		infNotMach = `requests.payload.override[0].models[0]: not-match[0]["a"] is not JSON (json: unsupported value: +Inf), condition dropped: it never equalled a value in CLIProxyAPI`
 	)
 	for _, c := range []struct{ name, doc, want, notice string }{
 		{"override +inf", rule("override", "{p: .inf, q: 1}"), `{"override": [{"models": [{"name": "m"}], "params": {"q": 1}}]}`, `requests.payload.override[0].params["p"]: not JSON (json: unsupported value: +Inf), ` + wrote},
@@ -1538,7 +1538,7 @@ func TestPayloadNonJSONValues(t *testing.T) {
 	// A value JSON cannot hold where today's core reads another type fails the load by naming the
 	// rules (today's core refuses the file too), not with a bare "json: unsupported value".
 	_, err := Translate([]byte("payload:\n  override:\n    - models: [{name: m, match: .inf}]\n      params: {p: 1}\n"))
-	if err == nil || !strings.Contains(err.Error(), "requests.payload: a value is not JSON where today's core reads another type") {
+	if err == nil || !strings.Contains(err.Error(), "requests.payload: a value is not JSON where CLIProxyAPI reads another type") {
 		t.Errorf("a match that is .inf: err = %v", err)
 	}
 }

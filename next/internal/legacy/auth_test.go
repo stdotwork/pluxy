@@ -220,8 +220,8 @@ func TestReadAuthDir(t *testing.T) {
 	}
 	for file, want := range map[string]string{
 		"devin-empty.json": "it holds no token",
-		"gemini-old.json":  "today's core does not load it either",
-		"notype.json":      "today's core does not load it either",
+		"gemini-old.json":  "type gemini is not supported (CLIProxyAPI does not load it either)",
+		"notype.json":      "it has no type field (CLIProxyAPI does not load it either)",
 		"broken.json":      "not a JSON object",
 		"codex-empty.json": "it holds no token",
 	} {
@@ -404,8 +404,12 @@ func TestCheckImportFolders(t *testing.T) {
 		filepath.Join(root, "credentials"):     true,
 		filepath.Join(root, "auths-elsewhere"): true,
 	} {
-		if err := CheckImportFolders(auth, credDir); (err == nil) != ok {
+		err := CheckImportFolders(auth, credDir)
+		if (err == nil) != ok {
 			t.Errorf("CheckImportFolders(auths, %s) = %v", credDir, err)
+		}
+		if !ok && err != nil && !strings.Contains(err.Error(), "is CLIProxyAPI's auth folder or inside it") {
+			t.Errorf("CheckImportFolders(auths, %s) = %q, want CLIProxyAPI auth folder message", credDir, err)
 		}
 	}
 }
@@ -502,7 +506,7 @@ func TestAuthFileCopiedHeaders(t *testing.T) {
 		t.Errorf("headers = %v, want %v", got, want)
 	}
 	ignored := strings.Join(files[0].Ignored, "\n")
-	for _, w := range []string{"headers.X-Cpa (its value holds $CPA-SESSION-ID", "headers.X-Key (it copies the client's Authorization header"} {
+	for _, w := range []string{"headers.X-Cpa (its value holds $CPA-SESSION-ID, a CLIProxyAPI session ID that pluxy does not have)", "headers.X-Key (it copies the client's Authorization header"} {
 		if !strings.Contains(ignored, w) {
 			t.Errorf("ignored does not say %q:\n%s", w, ignored)
 		}
