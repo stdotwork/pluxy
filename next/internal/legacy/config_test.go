@@ -1502,7 +1502,7 @@ func TestPayloadNonJSONValues(t *testing.T) {
 		noModels   = `{"override": [{"models": [], "params": {"p": 1}}]}`
 		oneModel   = `{"override": [{"models": [{"name": "m"}], "params": {"p": 1}}]}`
 		infMatch   = `requests.payload.override[0].models[0]: match[0]["a"] is not JSON (json: unsupported value: +Inf), model dropped: CLIProxyAPI never matched it`
-		infNotMach = `requests.payload.override[0].models[0]: not-match[0]["a"] is not JSON (json: unsupported value: +Inf), condition dropped: it never equalled a value in CLIProxyAPI`
+		infNotMach = `requests.payload.override[0].models[0]: not-match[0]["a"] is not JSON (json: unsupported value: +Inf), condition dropped: in CLIProxyAPI it never equalled a value, so it never excluded a request`
 	)
 	for _, c := range []struct{ name, doc, want, notice string }{
 		{"override +inf", rule("override", "{p: .inf, q: 1}"), `{"override": [{"models": [{"name": "m"}], "params": {"q": 1}}]}`, `requests.payload.override[0].params["p"]: not JSON (json: unsupported value: +Inf), ` + wrote},

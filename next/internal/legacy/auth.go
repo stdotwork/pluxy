@@ -288,7 +288,7 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 			settings["base_url"] = u
 		}
 	case "":
-		return f, nil, "it has no type field (CLIProxyAPI does not load it either)"
+		return f, nil, "it names no type (CLIProxyAPI does not load it either)"
 	case "gemini":
 		return f, nil, "type gemini is not supported (CLIProxyAPI does not load it either)"
 	default:

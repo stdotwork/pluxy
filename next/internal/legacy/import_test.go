@@ -578,7 +578,7 @@ func TestAuthFolderRows(t *testing.T) {
 		"devin-a.json":       "0 pluxy/devin",
 		"antigravity-a.json": "0 pluxy/antigravity account antigravity-a",
 		"gemini-a.json":      "2  | type gemini is not supported (CLIProxyAPI does not load it either)",
-		"notype.json":        "2  | it has no type field (CLIProxyAPI does not load it either)",
+		"notype.json":        "2  | it names no type (CLIProxyAPI does not load it either)",
 		"qwen-a.json":        "2  | its type is not one the import takes",
 		"empty-claude.json":  "2  | it holds no token",
 		"broken.json":        "2  | not a JSON object",

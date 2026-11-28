@@ -598,7 +598,7 @@ func (x *translator) payloadRules(rules tree) (tree, error) {
 						nm := tree{}
 						for _, path := range slices.Sorted(maps.Keys(cond)) {
 							if why := notJSON(cond[path]); why != "" {
-								drop(at, fmt.Sprintf("not-match[%d][%q] is not JSON (%s), condition dropped: it never equalled a value in CLIProxyAPI", c, path, why))
+								drop(at, fmt.Sprintf("not-match[%d][%q] is not JSON (%s), condition dropped: in CLIProxyAPI it never equalled a value, so it never excluded a request", c, path, why))
 								continue
 							}
 							nm[path] = plain(cond[path])
