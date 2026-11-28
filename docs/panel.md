@@ -34,13 +34,13 @@ and a status block at the foot of the navigation.
 | Destination | Page, tab or topic | Address | `data-page` | What it holds |
 | --- | --- | --- | --- | --- |
 | **Home** | **Home** | `#/status` | `status` | Service verdict, accounts needing attention, provider pools, connection details, 7-day summary and latest requests |
-| **Accounts** | **All accounts** (tab) | `#/accounts` | `accounts` | Every account grouped by condition, search and batch actions |
+| **Accounts** | **All accounts** (tab) | `#/accounts`, `#/quota` | `accounts` | Every account grouped by condition, provider filter, list or card view, search and batch actions |
 | **Accounts** | An account's page (under **All accounts**) | `#/accounts/<id>` | `account` | One account's limits, facts, weekly usage, settings, models and test request |
 | **Accounts** | **Add an account** (under **All accounts**) | `#/add-account` | `add-account` | Provider picker, sign-in and API-key flows, and CLIProxyAPI auth-file import |
 | **Accounts** | **Order & fallback** (tab) | `#/routing` | `routing` | Per-provider account priority and weight, model fallback chains and routing rules |
 | **Activity** | **Requests** (tab) | `#/activity`, `#/usage` | `usage` | Recent requests kept in memory, filters, routing explanation and CSV export |
 | **Activity** | **Usage** (tab) | `#/activity/usage` | `activity/usage` | Request, success-rate, token and latency totals, chart and breakdowns over 24 hours, 7 days or 30 days |
-| **Tools** | **Tools** | `#/tools` | `tools` | Detected coding tools, setup snippets, address for tools and client keys |
+| **Tools** | **Tools** | `#/tools` | `tools` | Detected coding tools, connect and disconnect, setup snippets, address for tools and client keys |
 | **Settings** | **General** (topic, **This device**) | `#/settings` | `settings` | Appearance, **Hide names** and **Sign out** |
 | **Settings** | **Themes** (topic, **This device**) | `#/themes` | `themes` | Active theme, layout overrides, adding themes and custom CSS |
 | **Settings** | **Config** (topic, **pluxy**) | `#/config`, `#/config/source` | `config` | Live network, remote-access, logging and management-key settings, plus the raw settings file editor |
