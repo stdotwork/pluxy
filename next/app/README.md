@@ -6,7 +6,7 @@ versions, updates, add-ons installed on this computer, the coding-tool pages and
 
 - How to use it: [docs/app.md](../../docs/app.md).
 - How it works inside (connection modes, the app's own core, commands, extension pages, native
-  tools, updates, trust): [docs/app-design.md](../../docs/app-design.md).
+  tools, updates, trust): [docs/design/app-design.md](../../docs/design/app-design.md).
 - The contract app packages and native tools follow: [`app-host/README.md`](app-host/README.md).
 - The native tools themselves: [`../app-tools/README.md`](../app-tools/README.md).
 
@@ -88,7 +88,7 @@ bun run package:local <out-dir>         # the local build (Linux x86_64): see be
 bun run package:release [artifact...]   # the release gate: builds and checks; uploads nothing
 ```
 
-[docs/app-design.md](../../docs/app-design.md#packages-signatures-and-trust) says what each makes
+[docs/design/app-design.md](../../docs/design/app-design.md#packages-signatures-and-trust) says what each makes
 and what the release gate checks. Before packaging or publishing a release, run the release
 validator from `src-tauri/` on the final Tauri config, the build's snapshots and the staged trust
 folder:
@@ -167,8 +167,8 @@ carries a changed one at the same version: remove and install it again to run th
 | Topic | Page |
 | --- | --- |
 | Using the app, platforms, troubleshooting | [docs/app.md](../../docs/app.md) |
-| How the app works inside | [docs/app-design.md](../../docs/app-design.md) |
-| Putting a kept copy back by hand after a failed update | [docs/app-design.md](../../docs/app-design.md#application-update) |
+| How the app works inside | [docs/design/app-design.md](../../docs/design/app-design.md) |
+| Putting a kept copy back by hand after a failed update | [docs/design/app-design.md](../../docs/design/app-design.md#application-update) |
 | App packages, native tools, the vault, launches, WSL | [`app-host/README.md`](app-host/README.md), [`app-host/TUTORIAL.md`](app-host/TUTORIAL.md) |
 | The native tools | [`../app-tools/README.md`](../app-tools/README.md) |
 | The web panel and the kit | [`../ui/README.md`](../ui/README.md) |

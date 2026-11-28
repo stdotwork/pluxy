@@ -7,7 +7,7 @@ and keep a management key out of any web page. It shows the same pages as the pa
 
 The app either runs pluxy itself, on this computer, or connects to a pluxy that is already running,
 here or on another computer, with its address and management key (the key that unlocks pluxy's
-management API). How the app works inside is in [app-design.md](app-design.md).
+management API). How the app works inside is in [app-design.md](design/app-design.md).
 
 ## What works today
 

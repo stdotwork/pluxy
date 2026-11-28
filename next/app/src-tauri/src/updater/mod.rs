@@ -1,29 +1,3 @@
-//! The app's own update, through the stock Tauri updater plugin: only for a copy of the app this
-//! user keeps, only with updater trust, and only to a newer version the release feed
-//! (`release.rs`) offers with a signed artifact for this system. `docs/app-design.md`
-//! ("Application update") has the rules.
-//!
-//! Before any updater plugin call the updater gate (`trust::updater_gate`) passes; the plugin is
-//! registered at all only when it passed at startup (`lib.rs`). Before any download the
-//! installation's provenance is checked: a copy a package manager or an .msi keeps, or one in an
-//! unknown format, is refused, with how to update instead, even when the feed has a signed
-//! update. The artifact is downloaded here, read as the feed is, then the plugin checks its
-//! signature (bound to the announced version); the plugin never installs anything. This module
-//! checks the artifact's format and puts it in place itself, one installer per format:
-//!
-//! - Linux (`appimage.rs`): the AppImage, one file, replaced in one rename;
-//! - Windows (`exe.rs`): the program set of a folder bundle or of a copy the per-user setup
-//!   program installed (the app's program, the core beside it and its packages, `set.rs`), part by
-//!   part, each part renamed aside (a running program can be renamed, not replaced) and the new
-//!   one renamed into its place;
-//! - macOS (`app.rs`): the `.app` bundle, unpacked from its `.app.tar.gz` into a staging folder
-//!   (private to the app where the bundle's volume allows) and swapped with it in one step.
-//!
-//! Before that, the running version's copy is kept, pinned by its digest: rolling back restores
-//! only such a copy, after a native confirmation. Installing ends with the app stopping as Quit
-//! stops it (its tools, its managed runtimes and its own core), starting the new version as its
-//! successor (`owned::Successor`) and waiting for it to accept itself; without that, the app ends
-//! that successor, puts the kept copy back and starts it again.
 use crate::owned::Successor;
 use crate::release::{self, Product, Release, UpdateArtifact};
 use crate::{trusted, App, MAIN};

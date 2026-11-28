@@ -1,13 +1,3 @@
-//! The release feed: which app and core versions a feed offers on each channel, the last good
-//! copy of it, and the feed's address. The feed's format is in `docs/app-design.md` ("Release
-//! feed format").
-//!
-//! The window gets only what this module derives from a feed: versions, dates and whether a
-//! release has notes. Release notes are rendered for their own webview (`notes.rs`); a notes
-//! address is opened only by native code. There is no built-in feed address: until the person
-//! sets one (a change that needs a native confirmation), the app checks nothing.
-//! Nothing in this module needs Tauri.
-
 use crate::managed::write_private;
 use semver::Version;
 use serde::{Deserialize, Serialize};

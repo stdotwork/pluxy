@@ -12,7 +12,7 @@ is in [`../app/app-host/README.md`](../app/app-host/README.md) ("App program con
 folder implements it and does not change it. This page is the reference for what each tool and
 library does. How a person uses them from the app's pages is in
 [docs/app.md](../../docs/app.md#the-coding-tool-pages), and how the app hosts them in
-[docs/app-design.md](../../docs/app-design.md#packages-on-this-device).
+[docs/design/app-design.md](../../docs/design/app-design.md#packages-on-this-device).
 
 ## Tools and libraries
 

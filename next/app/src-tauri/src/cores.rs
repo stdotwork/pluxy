@@ -1,25 +1,3 @@
-//! The app's own core versions, in managed mode: each version the app installed from a signed
-//! release, or copied in from a core program the person chose ("adopted"), in a folder of its own
-//! that the app never changes after installing it, and a selection of which one runs.
-//!
-//! A release comes from the core source the person set: an index file listing releases and, for
-//! each, its signed artifacts (see `docs/app-design.md`, "The app's own core"). An artifact is a
-//! gzip tar file of the core's folder (`pluxy`, on Windows `pluxy.exe`, and anything beside it,
-//! such as `bundled/`), described by a descriptor signed with a trusted publisher key;
-//! `artifact.rs` checks the signature, size and SHA-256 before anything is unpacked. Each
-//! installed file's digest is kept and checked again before the core starts. Nothing in this
-//! module needs Tauri.
-//!
-//! Installing and starting a version open each folder and file without following a link
-//! (`Dir`). The folder unpacked into (a staging folder) and a version's folder are opened by
-//! their paths, refusing a link or other reparse point at the last part; below them every folder
-//! and file is opened from the folder held open before it, on Unix by descriptor (`openat`), on
-//! Windows by handle (`NtCreateFile` relative to the folder, `vault::at`), refusing a link or other
-//! reparse point at each part. Moving a version into place, removing it, and making its files
-//! read-only go by path. On Windows the store is in the local application data, on a fixed local
-//! drive, and its folders are private by their access lists (this user and SYSTEM,
-//! `private_windows.rs`).
-
 use crate::artifact::{self, PublisherKeys, Tier, VerifiedArchive};
 use crate::managed::{random_key, write_private};
 use serde::{Deserialize, Serialize};
