@@ -69,10 +69,4 @@ fakes exist.
 
 ## Docs
 
-- [docs/README.md](../docs/README.md): every page.
-- [Setup](../docs/setup.md), [Providers](../docs/providers.md), [Accounts and routing](../docs/routing.md),
-  [Extensions](../docs/extensions.md), [Usage and logs](../docs/usage-and-logs.md).
-- [Configuration](../docs/config.md), [Command line](../docs/cli.md),
-  [Management API](../docs/management-api.md), [Translation](../docs/translation.md).
-- [Extension tutorial](protocol/TUTORIAL.md) and [protocol](protocol/README.md).
-- [Design](../docs/design/design.md).
+[docs/README.md](../docs/README.md) lists the user guide, references, extension docs and design notes.
