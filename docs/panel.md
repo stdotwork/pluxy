@@ -170,14 +170,14 @@ Settings opens on **General** and groups its topics into **This device** (**Gene
 - **Address:** `#/add-account` (`data-page="add-account"`).
 - **Empty state:** when no installed provider offers sign-in methods, shows a notice and **Open
   Extensions** (`#/extensions`).
-- **Step 1 — Choose a provider** (skipped when only one provider runs): prompts **Which account do
+- **Pick a provider** (skipped when only one provider runs): the page asks **Which account do
   you want to add?** with up to 4 main tiles (**Claude**, **ChatGPT (Codex)**, **Gemini**, **Another
   service with an API key**, filled from other running providers up to 4). Any remaining running
   providers appear under **More providers** (`{count} more`).
-- **Step 2 — Choose how to add it:** shows **All providers** to go back, the provider heading, and
-  each login method the extension offers (browser sign-in, device code, or API key). When a provider
-  offers two or more methods, the first browser sign-in is marked **Recommended**. Press **Start**
-  on a method.
+- **Pick a way to add it:** the page says **Choose how to add it.** and shows **All providers** to
+  go back, the provider heading, and each login method the extension offers (browser sign-in, device
+  code, or API key). When a provider offers two or more methods, the first browser sign-in is marked
+  **Recommended**. Press **Start** on a method.
 - **Sign-in flow:**
   - Methods requiring upfront inputs show required fields first and optional fields under **More
     options**. Every secret field provides **Load from file** (reads UTF-8 text up to 1 MiB). Press
@@ -278,7 +278,7 @@ single notice linking to **Turn it on in Config** (`#/config/logging`).
     alias on {account}** links (opening `#/accounts/<id>?alias=<model>`) or **Open {account}** for
     config-file accounts, plus a link to **Tools**.
   - **Attempts** list when more than one attempt ran.
-  - **Facts:** **Time**, **Account**, **Provider**, **Model used** (when different from requested),
+  - The request's facts: **Time**, **Account**, **Provider**, **Model used** (when different from requested),
     **Key**, **Path**, **Tokens** (`in`, `out`, `cached`), and **Trace** (links to `#/logs/<trace>`
     for failed requests or when `logs.request_log` is on; otherwise copyable text).
   - Next-step button: **Open {account}** or **Open its log**.
@@ -321,7 +321,7 @@ single notice linking to **Turn it on in Config** (`#/config/logging`).
   other installed tools; uninstalled or unchecked tools sit under **Other tools ({count})**. Notes
   that Claude Desktop, Grok Build and Hermes Agent are set up from the desktop app. Warns with an
   **Add an account** link when pluxy has no accounts.
-  - **Set up** / **Hide** on a supported tool (Claude Code, Codex, OpenCode, Pi, Oh My Pi) opens
+  - **Set up** / **Hide** on a supported tool (Claude Code, Codex CLI, OpenCode, Pi, Oh My Pi) opens
     three inline steps:
     1. **Make key** (or **Make another key** if a key with that tool's name already exists): creates
        a client key named after the tool and substitutes it directly into step 2's snippet in page
@@ -353,7 +353,7 @@ Settings lists its pages as topics in three groups: **This device** (**General**
 ### General
 
 - **Address:** `#/settings` (`data-page="settings"`), group **This device**.
-- **Settings** (browser-local, each saves immediately):
+- What it sets (kept in this browser, each saved at once):
   - **Appearance:** **Light**, **Dark**, or **Follow the system**. When the active theme supports
     only one appearance, displays a notice linking to **Themes**.
   - **Hide names:** masks account e-mail addresses, names, IDs and key labels on screen across every
