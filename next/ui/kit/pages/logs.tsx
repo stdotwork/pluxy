@@ -186,6 +186,7 @@ function PluxyLog(props: { save: (name: string, content: string) => void }) {
           <input
             data-slot="input"
             type="search"
+            placeholder={t("find")}
             value={find}
             onInput={(e) => setFind(e.currentTarget.value)}
           />
