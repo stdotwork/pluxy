@@ -125,7 +125,7 @@ Settings opens on **General** and groups its topics into **This device** (**Gene
     request count (`{count} this week`, omitted if usage could not be read), and inline fix.
   - At most one filled primary button appears on the page: the first repair action in **Needs you**,
     or **Add an account** when no repair is needed.
-- **Refresh:** polls accounts, provider status, and 7-day usage every 10 seconds while visible
+- **Kept current:** polls accounts, provider status, and 7-day usage every 10 seconds while visible
   (paused while **Select** is active or a batch action runs). If a refresh fails over existing data,
   or provider status or 7-day usage could not be read, a warning notice keeps the last loaded rows
   and offers **Try again**.
@@ -150,7 +150,8 @@ Settings opens on **General** and groups its topics into **This device** (**Gene
   core's credential store. Accounts defined in the settings file are skipped by batch **Turn off**
   and **Remove…** (reported in a notice); batch **Turn on** and **Clear cooldown** still run on
   them. Nothing spends from an account.
-- **Settings read:** `usage.enabled` (for 7-day counts; [config.md](config.md#usage)); the active
+- **Settings read:** none directly. The 7-day counts come from core's usage record, which core keeps
+  while `usage.enabled` is on ([config.md](config.md#usage)). The view starts from the active
   theme's **Lists** layout (default view before `pluxy.accounts.view` is set in browser storage).
 
 ## An account's page
@@ -374,10 +375,11 @@ single notice linking to **Turn it on in Config** (`#/config/logging`).
   - **What Connect writes and where:** runs immediately without asking first. Core makes a client
     key named after the tool (reusing an existing core key if the file already holds one), uses the
     model picked in **Set up by hand** if any (otherwise the best-matching served chat model, or
-    leaves model settings alone when core serves no chat model yet), and merges only pluxy's
-    settings into the tool's file in the home folder of the user core runs as (preserving unrelated
-    settings and tightening permissions to owner-only: `0600` for new files, or removing group and
-    other bits on existing files):
+    leaves model settings alone when core serves no chat model yet), and merges pluxy's settings
+    into the tool's file in the home folder of the user core runs as. Other settings stay, except
+    that for Claude Code it removes `env.ANTHROPIC_API_KEY`, which **Disconnect** puts back. It
+    tightens the file to owner-only: `0600` for a new file, or group and other access removed from
+    an existing one:
     - What each tool's file gets is in [clients.md](clients.md#what-each-tool-gets).
     - Core refuses symlinks, non-regular files, files larger than 2 MiB, files or folders owned by
       another user, unexpected formats, or a file modified while being updated.
