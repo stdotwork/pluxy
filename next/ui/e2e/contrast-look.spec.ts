@@ -181,14 +181,16 @@ for (const theme of THEMES) {
     test(`the first-launch starting bar clears 3:1 with reduced motion: ${name}`, async ({ page }) => {
       await open(page, theme, appearance);
       await page.emulateMedia({ colorScheme: appearance, reducedMotion: "reduce" });
-      await page.addStyleTag({ content: appCss });
-      await page.evaluate(() => {
+      await page.evaluate((css) => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(css);
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
         const card = document.createElement("div");
         card.id = "first-progress-sample";
         card.className = "focus-card";
         card.innerHTML = '<div class="first-progress-bar"><span></span></div>';
         document.querySelector("main")?.prepend(card);
-      });
+      }, appCss);
       const result = await page.evaluate(`(() => {
         ${rgbScript()}
         const card = document.querySelector("#first-progress-sample");
