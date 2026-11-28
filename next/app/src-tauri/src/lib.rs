@@ -80,6 +80,7 @@ pub mod savefile;
 #[cfg_attr(not(native_stack), allow(dead_code))]
 pub mod spawn;
 mod startup;
+mod tailnet;
 pub mod trust;
 #[cfg(feature = "native-test")]
 mod update_native;
@@ -176,6 +177,8 @@ struct App {
     quitting: AtomicBool,
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
+    /// A key typed for an address whose pluxy has not refused it, for the next try there.
+    held_key: conn::Held,
     rotation_open: AtomicBool,
     /// The app's own update (`updater/`).
     updater: updater::State,
@@ -654,6 +657,8 @@ fn usable_tray(app: &AppHandle) -> Result<(), String> {
 
 /// Closes the window to the tray: the window and its webviews are destroyed, not hidden.
 fn close_to_tray(app: &AppHandle) {
+    // A key held for the next try is not kept while the app sits in the tray.
+    app.state::<App>().held_key.drop_key();
     remember_window(app);
     if let Some(w) = app.get_window(WINDOW) {
         let _ = w.destroy();
@@ -985,6 +990,7 @@ async fn connection_set(webview: Webview, change: Change) -> Result<View, String
     if app.state::<App>().key_entry_open.load(Ordering::SeqCst) {
         return Err("finish native key entry first".into());
     }
+    app.state::<App>().held_key.drop_key();
     with_conn(&webview, move |c| c.change(change)).await
 }
 
@@ -1038,55 +1044,36 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
         }
         let _pending = Pending(app.clone());
         let st = app.state::<App>();
-        let prepared = st.conn.lock().unwrap().prepare_key(change);
-        let target = match prepared {
-            Ok(target) => target,
-            Err(reason) => {
-                let mut connection = st.conn.lock().unwrap().view();
-                connection.error = Some(reason);
-                return KeyEntryResult {
-                    status: "error",
-                    connection,
-                };
+        // The address, its certificate and whether its pluxy takes a key from here are checked
+        // before the key window opens, at the one address its name resolved to; the window asks
+        // whether the person trusts the network where plain http needs it; a key typed for an
+        // address and not refused there is used again on the next try (`conn::enter_key`).
+        let route = conn::KeyTarget::route;
+        let (entry, mut connection) =
+            conn::enter_key(&st.conn, &st.held_key, change, route, |summary, trust| {
+                if let Some(after) = *st.key_entry_after.lock().unwrap() {
+                    std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
+                }
+                // Run off the main thread so the app keeps handling IPC and window close while the dialog is open.
+                let input = key_entry::request(&app, summary, trust).map_err(String::from)?;
+                if input.is_none() {
+                    *st.key_entry_after.lock().unwrap() =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
+                }
+                Ok(input.map(|i| (i.key.as_str().to_owned(), i.remember)))
+            });
+        let status = match entry {
+            conn::Entry::SignedIn => "signed_in",
+            conn::Entry::Cancelled => "cancelled",
+            conn::Entry::WrongKey(why) => {
+                connection.error = Some(why);
+                "wrong_key"
+            }
+            conn::Entry::Failed(why) => {
+                connection.error = Some(why);
+                "error"
             }
         };
-        if let Some(after) = *st.key_entry_after.lock().unwrap() {
-            std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
-        }
-        // Run off the main thread so the app keeps handling IPC and window close while the dialog is open.
-        let input = key_entry::request(&app, target.summary.clone());
-        let mut error = None;
-        // The key's check is a network call: `finish_key_unlocked` makes it without the lock.
-        let (status, mut connection) = match input {
-            Ok(None) => {
-                *st.key_entry_after.lock().unwrap() =
-                    Some(std::time::Instant::now() + std::time::Duration::from_secs(1));
-                ("cancelled", st.conn.lock().unwrap().view())
-            }
-            Ok(Some(input)) => {
-                let (result, connection) =
-                    conn::finish_key_unlocked(&st.conn, target, &input.key, input.remember);
-                let status = match result {
-                    Ok(()) => "signed_in",
-                    Err(e) if e == "This management key was not accepted." => {
-                        error = Some(e);
-                        "wrong_key"
-                    }
-                    Err(reason) => {
-                        error = Some(reason);
-                        "error"
-                    }
-                };
-                (status, connection)
-            }
-            Err(e) => {
-                error = Some(e.into());
-                ("error", st.conn.lock().unwrap().view())
-            }
-        };
-        if error.is_some() {
-            connection.error = error;
-        }
         show_status(&app, &connection);
         KeyEntryResult { status, connection }
     })
@@ -1094,8 +1081,42 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
     .map_err(|_| "native key entry failed".into())
 }
 
+/// The native file chooser's title when the person picks a certificate authority file.
+const CERTIFICATE_CHOOSER: &str =
+    "Choose the certificate authority file of the pluxy to connect to";
+
+/// Asks the person for the certificate authority file of a pluxy to connect to in the native
+/// file chooser, and answers its path (None: they cancelled). The window puts it in its
+/// certificate box; the file is read only when the person connects (`conn::Connection::prepare_key`).
+#[tauri::command]
+async fn certificate_choose(webview: Webview) -> Result<Option<String>, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        {
+            access_choose(&app, CERTIFICATE_CHOOSER.into(), false)?
+                .map(|p| {
+                    p.into_os_string()
+                        .into_string()
+                        .map_err(|_| "the app cannot use a file whose path is not text".to_string())
+                })
+                .transpose()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (app, CERTIFICATE_CHOOSER);
+            Err("choosing a file is supported on Linux only".to_string())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn sign_out(webview: Webview) -> Result<View, String> {
+    trusted(&webview)?;
+    webview.app_handle().state::<App>().held_key.drop_key();
     with_conn(&webview, |c| c.sign_out()).await
 }
 
@@ -1717,7 +1738,8 @@ fn native_swap(
             "Update native tool {id} from {from} to {to}; {from} serves until {to} is ready. {}",
             action.what
         );
-        if !ask_native(app, action, id)? {
+        let headline = swap.admitted().update_headline(&from);
+        if !ask_native(app, action, Some(headline), id)? {
             return Err("the update was cancelled".to_string());
         }
         swap.verify()?;
@@ -1732,7 +1754,7 @@ fn native_swap(
                 .map_err(|e| e.to_string())?
                 .join()
                 .map_err(|_| "the swap's thread failed".to_string())?
-                .map_err(|e| e.message)
+                .map_err(|e| e.user_message())
         })
     })();
     let prepared = match prepared {
@@ -1761,16 +1783,25 @@ fn native_swap(
 /// for them, and waits for the outcome: true once they confirmed (its single-use token spent),
 /// false if they cancelled.
 #[cfg(native_stack)]
-fn ask_native(app: &AppHandle, what: confirmation::Action, id: &str) -> Result<bool, String> {
+fn ask_native(
+    app: &AppHandle,
+    what: confirmation::Action,
+    headline: Option<String>,
+    id: &str,
+) -> Result<bool, String> {
     let st = app.state::<App>();
     let action = {
         let mut c = st.confirmations.lock().unwrap();
-        let prepared = c.prepare_main(what)?;
+        let mut prepared = c.prepare_main(what)?;
+        if let Some(h) = headline {
+            prepared.set_headline(h);
+        }
         c.queue(prepared)?
     };
     confirmation::request(app, action.clone())?;
-    // The dialog's own handler leaves the outcome for native code; it expires after a minute.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(75);
+    // The dialog's own handler leaves the outcome for native code; it closes by itself, as
+    // cancelled, once it has been open `SHOWN_LIFETIME`.
+    let deadline = std::time::Instant::now() + confirmation::WAIT;
     let outcome = loop {
         if let Some(r) = st.confirmations.lock().unwrap().take_result(&action) {
             break r;
@@ -1845,7 +1876,7 @@ fn install_wsl(app: &AppHandle, id: &str, platform: &str) -> Result<device::View
     // Fetched and checked without holding the catalog.
     let c = device::stage_linux(&st.device_dirs, &roots, &target)?;
     let nothing = format!("nothing of {id}'s Linux build for {platform} was installed");
-    match ask_native(app, c.confirmation(), id) {
+    match ask_native(app, c.confirmation(), None, id) {
         Ok(true) => {}
         Ok(false) => return Err(format!("the install was cancelled; {nothing}")),
         Err(e) => return Err(format!("{e}; {nothing}")),
@@ -2020,7 +2051,12 @@ fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
     // Its files are hashed without holding the catalog (`checked_unlocked`).
     let candidate =
         device::native_candidate_unlocked(&st.device, id, &trust::TrustStore::current())?;
-    match ask_native(app, candidate.confirmation(), id) {
+    match ask_native(
+        app,
+        candidate.confirmation(),
+        Some(candidate.enable_headline()),
+        id,
+    ) {
         Ok(true) => {}
         Ok(false) => return Err(format!("native enable cancelled; {id} stays disabled")),
         Err(e) => return Err(format!("{e}; {id} stays disabled")),
@@ -2145,8 +2181,9 @@ fn access_confirm(
         c.queue(p)?
     };
     confirmation::request(app, id.clone())?;
-    // The dialog expires after a minute; this waits a little longer for its answer.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(75);
+    // The dialog closes by itself once it has been open `SHOWN_LIFETIME`; this waits a little
+    // longer for its answer.
+    let deadline = std::time::Instant::now() + confirmation::WAIT;
     loop {
         let result = st.confirmations.lock().unwrap().take_result(&id);
         match result {
@@ -2576,7 +2613,7 @@ async fn program_call(
             .state::<App>()
             .programs
             .begin_call(ticket.as_deref())
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.user_message())?;
         tauri::async_runtime::spawn_blocking(move || {
             // On a thread of its own that ends with the call: a tool this call starts is held by
             // the host's supervisor thread, never by the thread that started it.
@@ -2585,7 +2622,7 @@ async fn program_call(
                 .spawn(move || {
                     route::call_main_in(&app, call, &instance, &op, input, None, None)
                         .map(|(v, _)| v)
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| e.user_message())
                 })
                 .map_err(|e| e.to_string())?
                 .join()
@@ -2688,7 +2725,7 @@ async fn environment_add(webview: Webview, distro: String, user: String) -> Resu
             .state::<App>()
             .programs
             .begin_call(None)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.user_message())?;
         tauri::async_runtime::spawn_blocking(move || {
             std::thread::Builder::new()
                 .name("pluxy-prog-call".into())
@@ -2702,7 +2739,7 @@ async fn environment_add(webview: Webview, distro: String, user: String) -> Resu
                         input,
                         None,
                     )
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| e.user_message())?;
                     let r = environments::Record::from_check(
                         &distro,
                         &user,
@@ -2902,6 +2939,7 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
                     "The secret to keep in this device's vault as \"{label}\". Native tools get it only after you confirm each use."
                 ),
                 false,
+                false,
             );
             drop(open);
             match input {
@@ -2952,9 +2990,10 @@ fn vault_secret_remove(webview: Webview, id: String) -> Result<(), String> {
     }
 }
 
-/// Asks core for a new client key for native tool client, after a native confirmation, and keeps
-/// it in the vault as label; gives its secret's ID, label and binding. The key itself never
-/// passes through the window.
+/// Asks core for a new client key for native tool client and keeps it in the vault as label, with
+/// no native confirmation: the window can already have core make a client key through its
+/// management calls, and the key reaches the tool only in a call the person confirms. Gives its
+/// secret's ID, label and binding. The key itself never passes through the window.
 #[tauri::command]
 async fn client_key_capture(
     webview: Webview,
@@ -3291,6 +3330,7 @@ pub fn run() {
             core_rollback,
             core_adopt,
             key_entry,
+            certificate_choose,
             management_key_rotate,
             sign_out,
             page_open,
@@ -3572,6 +3612,7 @@ pub fn run() {
                 quitting: AtomicBool::new(false),
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
+                held_key: conn::Held::default(),
                 rotation_open: AtomicBool::new(false),
                 updater: updater::State::new(updater_plugin.clone()),
             });

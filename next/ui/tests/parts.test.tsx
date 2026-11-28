@@ -172,6 +172,8 @@ for (const c of CASES) {
   test(`AccountRow, ${c.name}: group ${c.group}, mark "${c.word}", ${c.fix ? c.fix.label : "no button"}`, () => {
     const html = row(c.a, { running: c.running });
     expect(attr(html, "data-group")).toBe(c.group);
+    // The mark's colour group matches the condition's own group (a model cooldown stays serving).
+    expect(html).toContain(`class="group-mark" data-group="${c.group}"`);
     // The mark's accessible name is the condition word, the same as stateText's.
     expect(html).toContain(`role="img" aria-label="${c.word}"`);
     const found = buttons(html);
@@ -313,12 +315,26 @@ test("an account's name is its label, else its ID, never shown twice, and masked
   expect(old).not.toContain("alice@example.com");
 });
 
-test("an account that needs the person or is turned off shows no limits, even when some were read", () => {
+test("an account that needs the person or is turned off shows no limits, even when some were read, but keeps its plan pill", () => {
   const windows: Windows = {
     state: "read",
+    plan: "Max 20x",
     limits: [{ id: "five", window_seconds: 18000, used_percent: 10 }],
   };
-  expect(row(account({ health: { state: "banned" } }), { windows })).not.toContain('data-part="limits"');
+  const banned = row(account({ health: { state: "banned" } }), { windows });
+  expect(banned).not.toContain('data-part="limits"');
+  expect(banned).toContain('data-part="plan-pill"');
+  expect(banned).toContain("Max 20x");
+  // Also reads a stored plan carried on the account when no windows were passed.
+  const stored = row(
+    account({
+      health: { state: "needs_login" },
+      quota: { fetched_at: iso(NOW), quota: { plan: "Pro", limits: [] } },
+    }),
+  );
+  expect(stored).not.toContain('data-part="limits"');
+  expect(stored).toContain('data-plan-tier="mid"');
+  expect(stored).toContain("Pro");
   expect(row(account({ disabled: true }), { windows })).not.toContain('data-part="limits"');
   expect(row(account(), { windows })).toContain('data-part="limits"');
 });
@@ -420,7 +436,7 @@ test("the plan pill's tier follows the plan word, and there is no pill without a
 const limitsOf = (limits: QuotaLimit[], now = NOW) =>
   renderToString(<Limits windows={{ state: "read", limits }} account="alpha" now={now} />);
 
-test("the gauge shows what is left: ok from 60%, warn under 60%, danger under 20% and used up", () => {
+test("the gauge shows what is left: ok from 70%, warn under 70%, danger under 30% and used up", () => {
   const seven = limitsOf([
     { id: "five", window_seconds: 18000, used_percent: 93, resets_at: (NOW + 85 * 60_000) / 1000 },
   ]);
@@ -433,9 +449,10 @@ test("the gauge shows what is left: ok from 60%, warn under 60%, danger under 20
   expect(half).toContain('data-tone="warn"');
   expect(half).toContain("width:58%");
   expect(plain(half)).toBe("wk58% left");
-  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 40 }])).toContain('data-tone="ok"');
-  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 80 }])).toContain('data-tone="warn"');
-  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 81 }])).toContain(
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 30 }])).toContain('data-tone="ok"');
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 31 }])).toContain('data-tone="warn"');
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 70 }])).toContain('data-tone="warn"');
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 71 }])).toContain(
     'data-tone="danger"',
   );
   const out = limitsOf([{ id: "five", window_seconds: 18000, used_percent: 100 }]);
@@ -558,7 +575,7 @@ test("an account page's Refresh reads its limits from core again, though GET /ac
 
 test("failureWord names every code core sends, from a code alone and from a request", () => {
   const words: Record<string, string> = {
-    not_found: "No such model",
+    not_found: "Model not served",
     quota: "Limit used up",
     rate_limit: "Rate limited",
     auth: "Sign-in refused",

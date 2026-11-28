@@ -123,7 +123,7 @@ it, so the form and a page that writes settings get the same answer.
 Any other keyword is refused at install. Settings are kept by core, per extension, in `{packages.dir}/.settings/<publisher>/<name>.json`
 (readable only by core's user and, on Windows, SYSTEM), and survive upgrades: a field the new version no longer
 declares is dropped the next time the settings change. On Windows the `.settings` folder is checked
-and made private, as core's [credentials folder](../../README.md#accounts-added-by-login) is,
+and made private, as core's [credentials folder](../../../docs/providers.md#how-accounts-added-by-sign-in-are-kept-and-renewed) is,
 each time settings are loaded or saved; a settings file that another account owns is skipped, as
 if none were stored, and the next save replaces it. Settings reach the extension's pages, not its program.
 
@@ -297,6 +297,6 @@ attributes there, and does it again on every `theme` event.
 
 - The desktop app shows each page in a webview of its own, which can call no app command, with
   the page in the same sandboxed frame and the same channel, and enforces the channel's limits
-  natively ([the app's README](../../app/README.md#extension-pages)).
+  natively ([the desktop app design note](../../../docs/design/app-design.md#extension-pages)).
 - A package needs a program even when it only brings pages.
 - The page's frame has a fixed size within the panel's content area; a page cannot resize it.

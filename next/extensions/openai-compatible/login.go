@@ -17,10 +17,10 @@ import (
 
 var loginMethods = []protocol.LoginMethod{
 	{Method: "api_key", Kind: protocol.LoginAPIKey, Label: "OpenAI-compatible API key", Inputs: []protocol.LoginInput{
-		{Name: "base_url", Label: "Base URL (including /v1, or /v1beta for Gemini)"},
+		{Name: "base_url", Label: "Service address (the API URL, including /v1 for most services, or /v1beta for gemini)"},
 		{Name: "api_key", Label: "API key", Secret: true},
-		{Name: "wire_api", Label: "Wire API: chat, responses, messages or gemini (default chat)", Optional: true},
-		{Name: "quota", Label: "Quota: openrouter, deepseek or none (default by base_url host)", Optional: true},
+		{Name: "wire_api", Label: "How pluxy talks to it. Leave blank for most services (uses chat). Other values: responses, messages, gemini.", Optional: true},
+		{Name: "quota", Label: "How pluxy checks your remaining balance. Leave blank for most services (detected from the address). Values: openrouter, deepseek, none.", Optional: true},
 	}},
 }
 

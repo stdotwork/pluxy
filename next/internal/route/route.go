@@ -610,12 +610,14 @@ func (c *call) attempts() llm.Event {
 	}
 	capable := c.capable
 	if len(capable) == 0 {
-		msg := fmt.Sprintf("no account serves model %q", model)
-		if c.req.Pin != "" {
-			msg = fmt.Sprintf("account %q does not exist or does not serve model %q", c.req.Pin, model)
-		}
-		if len(c.held) != 0 {
+		var msg string
+		switch {
+		case len(c.held) != 0:
 			msg = heldMessage(c.held, model, c.req.Pin)
+		case c.req.Pin != "":
+			msg = fmt.Sprintf("account %q does not exist or does not serve model %q", c.req.Pin, model)
+		default:
+			msg = r.notServed(c.ctx, model)
 		}
 		return errorEvent(&llm.Error{Code: llm.CodeNotFound, Message: msg, ProviderCode: "model_not_found"})
 	}
@@ -1103,6 +1105,30 @@ func coolingError(model string, wait time.Duration, reason *llm.Error) *llm.Erro
 // heldMessage is the message of a request that no account in service can serve, when the held
 // accounts that serve its model are all turned off, all waiting for a new sign-in, or both. It
 // names no account but the one the client pinned (pin): the text reaches API clients.
+// maxServedNamed is how many served models a refusal names before it says how many more.
+const maxServedNamed = 8
+
+// notServed is the message for a request for a model no account serves. A coding tool shows it to
+// the person, who most often has set the tool up without a model: it names the models pluxy
+// does serve and the two ways to get the tool to one of them.
+func (r *Router) notServed(ctx context.Context, model string) string {
+	msg := fmt.Sprintf("no account serves model %q", model)
+	var names []string
+	for _, m := range r.ServedModels(ctx) {
+		names = append(names, m.ID)
+	}
+	if len(names) == 0 {
+		return msg + ". pluxy serves no models yet: add an account first."
+	}
+	more := ""
+	if len(names) > maxServedNamed {
+		more = fmt.Sprintf(" and %d more (pluxy model list shows them all)", len(names)-maxServedNamed)
+		names = names[:maxServedNamed]
+	}
+	return fmt.Sprintf("%s. pluxy serves: %s%s. Set the tool's model to one of them, or add a model alias to an account so that %q goes to one of them.",
+		msg, strings.Join(names, ", "), more, model)
+}
+
 func heldMessage(held []target, model, pin string) string {
 	state := held[0].a.Held
 	for _, t := range held[1:] {

@@ -1,4 +1,4 @@
-// Login methods and the login lifecycle (next/README.md, Accounts added by login).
+// Login methods and the login lifecycle (docs/management-api.md, "Sign-ins"; docs/providers.md).
 
 import type { Host } from "../host";
 import { one } from "./path";

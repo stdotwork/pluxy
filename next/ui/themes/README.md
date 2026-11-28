@@ -103,9 +103,9 @@ colour role take that role's name (`color.chrome`, `color.message-action`); the
 | `color.secondary-label` | The faintest text: column headings, reset times, the Free plan | `var(--px-color-text-muted)` |
 | `color.border` | Borders and dividers | `#e6e6e9` / `#242428` |
 | `color.accent` | Selection, links, the current tab's underline | `#2f5bea` / `#4f7bff` |
-| `color.accent-text` | Text on `color.accent` | `#ffffff` |
+| `color.accent-text` | Text on `color.accent`: selected text | `#ffffff` / `#0a0d1a` |
 | `color.message-action` | A view's one filled button, and a switch that is on | `var(--px-color-accent)` / `color-mix(in srgb, var(--px-color-accent) 85%, black)` |
-| `color.message-action-foreground` | Text on `color.message-action` | `var(--px-color-accent-text)` |
+| `color.message-action-foreground` | Text on `color.message-action` | `var(--px-color-accent-text)` / `#ffffff` |
 | `color.message-action-hover` | The filled button while hovered | `color-mix(in srgb, var(--px-color-message-action) 88%, black)` |
 | `color.ok` | Healthy states: text, and a badge's word | `#15803d` / `#4ade80` |
 | `color.warn` | Degraded states: text, and a badge's word | `#b45309` / `#fbbf24` |
@@ -128,11 +128,11 @@ colour role take that role's name (`color.chrome`, `color.message-action`); the
 | `color.meter-unknown` | The hatching of a gauge whose limit was not read | `color-mix(in srgb, var(--px-color-text) 22%, var(--px-color-surface))` |
 | `color.chart-success` | Requests that went through, in the charts of requests | `color-mix(in srgb, var(--px-color-text) 78%, var(--px-color-bg))` |
 | `color.chart-failure` | Failed requests, stacked on top | `var(--px-color-error)` |
-| `color.chart-1` | The first series of a chart split by provider or model (`data-series="1"`) | `#d97757` / `#e08a6d` |
+| `color.chart-1` | The first series of a chart split by provider or model (`data-series="1"`) | `#cf6a49` / `#e08a6d` |
 | `color.chart-2` | The second series | `#5b6bf5` / `#7684f7` |
-| `color.chart-3` | The third series | `#4f8bff` / `#6c9eff` |
+| `color.chart-3` | The third series | `#3b7bf5` / `#6c9eff` |
 | `color.chart-4` | The fourth series | `var(--px-color-text)` |
-| `color.chart-5` | The fifth series | `#14b8a6` / `#2dd4bf` |
+| `color.chart-5` | The fifth series | `#0f9a8b` / `#2dd4bf` |
 | `color.chart-6` | The sixth series | `#a855f7` / `#b875f8` |
 | `color.provider-claude` | Claude's mark beside an account, a pool and a request | `#d97757` / `#e08a6d` |
 | `color.provider-codex` | Codex's mark | `#5b5ff5` / `#8b93ff` |
@@ -159,7 +159,7 @@ colour role take that role's name (`color.chrome`, `color.message-action`); the
 | `color.overlay` | Background of dialogs and menus | `var(--px-color-surface)` |
 | `color.card` | Background of a card and of the detail pane. `transparent` draws a card as a section: its heading, a hairline and its content | `var(--px-color-surface)` |
 | `color.card-border` | Border of a card and of the detail pane (the detail pane always has a `color.border` line on the list's side) | `var(--px-color-border)` |
-| `color.input-border` | Border of text inputs, selects, text areas and outlined buttons | `#d4d4d8` / `#34343a` |
+| `color.input-border` | Border of text inputs, selects, text areas and outlined buttons, at 3:1 or more against `color.surface` by default | `color-mix(in srgb, var(--px-color-text-muted) 80%, var(--px-color-surface))` / `color-mix(in srgb, var(--px-color-text-muted) 65%, var(--px-color-surface))` |
 | `color.placeholder` | Placeholder text in an empty input | `var(--px-color-text-muted)` |
 | `color.selected` | Background of a selected table row and of the selected tab | `var(--px-color-surface-raised)` |
 | `color.selected-text` | Text of a selected list item | `var(--px-color-text)` |
@@ -255,7 +255,7 @@ are round. `0px` makes every corner square.
 | Token | Used for | Default |
 | --- | --- | --- |
 | `motion.duration` | Length of hover and press transitions | `120ms` |
-| `motion.duration-menu` | Length of a menu opening | `160ms` |
+| `motion.duration-menu` | Length of a menu opening. Reserved for the menus to come (the command menu): nothing reads it yet | `160ms` |
 | `motion.duration-slow` | Length of a pane or dialog opening | `240ms` |
 | `motion.easing` | The timing function of the first two | `cubic-bezier(0.2, 0, 0, 1)` |
 | `motion.easing-drawer` | The timing function of anything that slides in | `cubic-bezier(0.32, 0.72, 0, 1)` |
@@ -270,10 +270,11 @@ carries `data-theme-switching` and transitions are off.
 
 | Token | Used for | Default |
 | --- | --- | --- |
-| `meter.mid-below` | A limit's gauge turns `color.meter-mid` under this share left, in percent | `60` |
-| `meter.low-below` | It turns `color.meter-low` under this share left, in percent | `20` |
+| `meter.mid-below` | A limit's gauge turns `color.meter-mid` under this share left, in percent | `70` |
+| `meter.low-below` | It turns `color.meter-low` under this share left, in percent | `30` |
 
-Both are numbers from `0` to `100`.
+Both are numbers from `0` to `100`, and `meter.low-below` may not be above `meter.mid-below`: a
+`tokens` or `dark` field that puts it there gets a warning, and both keep their defaults.
 
 ## Layout options
 
@@ -388,7 +389,7 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="upload-results"` | The result of each CLIProxyAPI auth file imported on Add an account: the account it became, or why it was not added |
 | `data-part="key-notice"` | A notice revealing a newly generated key until closed or its tab is left |
 | `data-part="key-value"` | The selectable value of a newly generated key inside its notice |
-| `data-part="method"` | One way to sign in on Add an account: its name, how it signs in and Start; its sign-in shows under it once started. |
+| `data-part="method"` | One way to sign in on Add an account: its name, a sentence on how it signs in, "Recommended" when pluxy suggests it, and Start; its sign-in shows under it once started. |
 | `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
 | `data-part="device-code"` | The user code to enter on a device sign-in page. |
 | `data-part="tier"` | One group of a provider's accounts on Order & fallback (First, Backup 1…), with its name, its priority and its accounts; `data-priority` is its priority |
@@ -419,11 +420,13 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="auth-import"` | Add an account's "Have auth files from CLIProxyAPI?" line and its results |
 | `data-part="round-notice"` | The notice above a page's lists when a round of reads did not all work: what could not be read, and Try again |
 | `data-part="method-group"` | One provider on Add an account, under its name: its ways to sign in, each a row with Start |
+| `data-part="provider-tiles"` | The row of providers to pick from on Add an account: the main kinds as tiles, then More providers opens a second, smaller set (`data-more`) |
+| `data-part="provider-tile"` | One provider to pick on Add an account: its mark, its name and what accounts it takes; `data-compact` is set on the ones under More |
 | `data-part="more-options"` | A sign-in's optional inputs, folded under More options |
 | `data-part="login-details"` | The Details fold of a sign-in that ended with a message from pluxy, such as signing in to a different account |
 | `data-part="account-added"` | What Add an account shows once the sign-in is done: Added, the optional Name, Save name, Open account and Add another |
 | `data-part="account-row"` | One account, the same on every page: its provider's mark with a dot for its condition on the mark's corner, its name with its condition word under it (and why, when it is not simply serving; else its provider), its plan, its limits and its one fix. `data-group` is `needs`, `waiting`, `serving` or `off`; `data-condition` is `serving`, `cooling`, `exhausted`, `needs_login`, `banned`, `broken`, `no_provider` or `off`, or `unchecked` when the status that says whether its provider runs could not be read (its mark then has `data-group="unchecked"`); `data-tall` is set on a row that says why under the name; `data-wide` on the Accounts list's wider row |
-| `data-part="request-row"` | One request on one line: its time, model, account, key, tokens, time taken and result. `data-failed` is set on a failed one; `data-open` while it shows its details; `data-compact` on Home's shorter row, a link to the request, with its provider's mark and, for a request a backup answered, how many tries it took ("2nd") |
+| `data-part="request-row"` | One request: a row of the Requests table (its time, model, account, key, tokens, time taken and result) or, on Home, one shorter line. `data-failed` is set on a failed one; `data-open` while its pane is open; `data-compact` on Home's shorter row, a link to the request, with its provider's mark and, for a request a backup answered, how many tries it took ("2nd") |
 | `data-part="setting-row"` | One setting: its name and what it does beside its control. `data-disabled` is set while the control cannot be used |
 | `data-part="tool-row"` | One coding tool: its name, version, state and settings file. `data-state` is `configured`, `not-configured`, `needs-update`, `refused`, `not_installed` or `unchecked` |
 | `data-part="state-pane"` | What a whole pane shows while it loads, when it is empty, or when it could not be read; `data-kind` is `loading`, `empty` or `failed` |
@@ -434,11 +437,19 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="connection-card"` | Home's "Point a tool at pluxy": the API a tool speaks, the base URL for it with Copy, a client key's masked value, and the coding tools already set up |
 | `data-part="needs-band"` | Home's band of the accounts that need the person, above the pools, each with its one fix |
 | `data-part="activity"` | The body of the Requests and Usage tabs |
-| `data-part="activity-filters"` | The Requests tab's filter row: All or Failed, then the lists of providers, accounts, models and keys |
-| `data-part="usage-chart"` | The Usage tab's chart of requests, a bar per hour or per day; its bars carry `data-outcome` (`success` or `failure`) |
-| `data-part="usage-chip"` | The one filter a breakdown click set on the Usage tab, a button that removes it |
+| `data-part="activity-filters"` | The Requests tab's filter row: All or Failed, the Filter button and the filters it applied as chips |
+| `data-part="usage-chart"` | The Usage tab's chart, a bar per hour or per day; `data-metric` is `requests`, `through` or `tokens`, the tile chosen above it; its bars carry `data-outcome` (`success` or `failure`) |
+| `data-part="usage-chip"` | The one filter a breakdown click set on the Usage tab, a chip that removes it |
 | `data-part="usage-numbers"` | The table behind the Usage chart, shown on request |
 | `data-part="usage-breakdown"` | The Usage tab's breakdown table by provider, model, account or key |
+| `data-part="requests-table"` | The Requests tab's table: sticky column heads, the requests grouped under the day each came on |
+| `data-part="request-story"` | What a request's pane says of why it went where it did: the decision sentence, then the other sentences |
+| `data-part="filter-menu"` | The Filter button and the panel of lists it opens |
+| `data-part="filter-button"` | The Filter button; `aria-expanded` while its panel is open, `data-active` while a filter is applied |
+| `data-part="filter-chip"` | One applied filter on the Requests tab, a button that removes it |
+| `data-part="word-chip"` | A word as a chip in a list: a failure's word (`data-tone="danger"`) or a note such as 2nd or via backup |
+| `data-part="usage-panel"` | The Usage tab's tiles and chart in one panel |
+| `data-part="usage-tiles"` | The Usage tab's figures as tiles; three are the chart's tabs (radio buttons), and the last, the time a request took, is only read |
 | `data-part="tool-steps"` | The numbered steps under a coding tool's row on the Tools page: make a key, put the text in the settings file, start the tool again |
 | `data-part="tool-key"` | One key on the Tools page: its name, its use this week, Rename and Delete |
 

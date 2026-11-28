@@ -14,11 +14,11 @@ import (
 	"testing"
 )
 
-// The management API's error codes are documented in ../../management/README.md. Its handlers give
+// The management API's error codes are documented in ../../../docs/management-api.md. Its handlers give
 // them in a few shapes, collected here from the source of the two packages that serve the API
 // (this one and internal/server): the code argument of writeError and writeManagementError, the
 // code field of an editError literal, and the code of the {"error": {"code": ...}} body they
-// write. A handler that starts giving a new code, or the README naming one no handler gives, fails
+// write. A handler that starts giving a new code, or the docs naming one no handler gives, fails
 // this test instead of drifting.
 //
 // A code forwarded from an extension's or a provider's error is not in the source as a literal:
@@ -27,7 +27,7 @@ import (
 // Anything else it cannot read fails rather than being skipped.
 
 const (
-	managementReadme = "../../management/README.md"
+	managementReadme = "../../../docs/management-api.md"
 	llmPackageDir    = "../../llm"
 )
 
@@ -50,10 +50,10 @@ func TestManagementErrorTable(t *testing.T) {
 		}
 	}
 	for _, c := range missingCodes(given.codes, documented) {
-		t.Errorf("core answers %q, and the README's table does not list it", c)
+		t.Errorf("core answers %q, and the table in docs/management-api.md does not list it", c)
 	}
 	for _, c := range missingCodes(documented, given.codes) {
-		t.Errorf("the README's table lists %q, and no handler answers it", c)
+		t.Errorf("the table in docs/management-api.md lists %q, and no handler answers it", c)
 	}
 }
 
@@ -71,7 +71,7 @@ func missingCodes(want, have map[string]bool) []string {
 // codeToken is the table's spelling of a code: a word in backticks.
 var codeToken = regexp.MustCompile("`([^`]+)`")
 
-// documentedErrorCodes returns the codes of the README's "| Status | Codes |" table.
+// documentedErrorCodes returns the codes of the docs' "| Status | Codes |" table.
 func documentedErrorCodes(path string) (map[string]bool, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

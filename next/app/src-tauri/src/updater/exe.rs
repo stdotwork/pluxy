@@ -1,33 +1,3 @@
-//! Windows: the program set of a folder bundle this user keeps, or of a copy the per-user setup
-//! program installed (`set.rs`): the app's program (one self-contained `.exe`: its WebView2
-//! loader is linked in and its pages are embedded), the core beside it (`pluxy.exe`) and the
-//! core's packages (`bundled\`), pinned by the set's digest. The setup's `uninstall.exe` beside
-//! them is not part of the set. A copy an MSI keeps (an .msi patches its bundle type in) is
-//! refused, with how to update instead, and so is a copy of an unknown format, on a network drive
-//! or one anyone else could change. The setup program is never run: once a version accepts itself
-//! after an update or a rollback, it writes its version into the setup's uninstall entry
-//! (`uninstall_entry.rs`).
-//!
-//! The update is a `.tar.gz` of the set, unpacked into a new folder of this user's beside the
-//! program (`.pluxy-update-<hex>`, inheriting the program folder's access list) and checked. Then,
-//! by the move list `pending.json` records before anything moves, each part is renamed aside
-//! (`.pluxy-old-<hex>-<part>`; a running program can be renamed but not replaced or removed) and
-//! the new one renamed into its place, each rename written through to the disk: `bundled\`, then
-//! `pluxy.exe`, then the program. Nothing runs the core files beside the app (the app runs the
-//! copies in its core store), so a part may be moved while the app runs. A part another program
-//! holds open (a virus scanner, or a person's own `pluxy.exe` with a file open in `bundled\`) is
-//! waited out for `BUSY_FOR`; if it is still held, the parts already moved are put back. Between
-//! the program's two renames (two metadata operations of this process) the folder holds no
-//! program under its name: a power loss there leaves the aside copy and the kept set, and the
-//! README says how to put them back. A crash before that is undone at the next start of the
-//! earlier version (`set::recover`).
-//!
-//! What is left aside is removed once the version that replaced it holds the profile, when the
-//! earlier version has ended (`cleanup`): the staging folder and each aside part are recorded with
-//! their volume serial and file ID before they are left there (`leftovers.rs`), and only a
-//! recorded file or folder that is still that one is removed, through its handle, never following a
-//! link. While `pending.json` records an install that is not finished, its staging folder and
-//! asides stay.
 use super::leftovers::{self, Made, Outcome};
 use super::{read_json, set, Pending, Pinned};
 use std::ffi::OsStr;

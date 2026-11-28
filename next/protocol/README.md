@@ -386,7 +386,7 @@ Since 0.5. Core asks what an account's plan allows and how much of it is used, f
 API's quota view (`GET /v0/management/accounts/{id}/quota`). Core sends it only to an extension that
 reports `protocol_minor` 5 or more and lists `quota` in `operations`, and only when someone asks or
 to check an account that routing keeps out after a refusal (at most once every 15 minutes for each
-such account; see [core's README](../README.md#accounts-and-routing)): core does not poll accounts
+such account; see [Checks while an account is blocked](../../docs/routing.md#checks-while-an-account-is-blocked)): core does not poll accounts
 that serve.
 
 ```json
@@ -1128,7 +1128,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | `retry_after_ms` | When the upstream said to try again, in milliseconds from now. In Go, `sdk.RetryAfter` turns a `Retry-After` header (seconds or an HTTP date) into this value. |
 | `raw` | The upstream's error body, as the extension got it. Core removes the account's secrets from it before passing it on, as from `message`. |
 | `usage` | Usage the upstream reported before the failure, in the same form as `finish.usage`; absent when it reported none. A reply that fails partway may still have cost tokens. |
-| `quota_window_minutes` | Since 0.6. For code `quota`: the length, in minutes, of the usage window that is used up, when the upstream said (such as 300 for a five-hour window). Core passes it on in its [usage-limit reply](../README.md#accounts-and-routing). |
+| `quota_window_minutes` | Since 0.6. For code `quota`: the length, in minutes, of the usage window that is used up, when the upstream said (such as 300 for a five-hour window). Core passes it on in its [usage-limit reply](../../docs/routing.md#when-every-account-is-blocked). |
 | `dropped` | Since 0.16. Only on a refusal under the request's `drop_policy` `reject`: the paths of the request's parts the upstream's format cannot carry, as the translation's losses name them. Core tells such a refusal from an account that cannot serve the call by it (see [`count_tokens`](#count_tokens)). |
 | `headers` | Since 0.34. Documented upstream rate-limit response headers on an error reply (such as a 429), by lower-case name, subject to the same explicit allowlist and bounds as `response.start`'s `headers`. Core removes the account's secrets and their pieces from them, and forwards only headers documented for the client's format. |
 
@@ -1388,7 +1388,7 @@ through a conversation whose state lives upstream. A crash or stop of the progra
 
 Liveness: the extension checks its upstream connection itself (for example, a read deadline between
 upstream messages), one of the named liveness checks that [core's
-design](../../docs/design.md#inside-core) allows in place of time limits. The local session
+design](../../docs/design/design.md#inside-core) allows in place of time limits. The local session
 connection needs none: either end sees the other go when the connection closes.
 
 ### `openai.responses` sessions
@@ -1421,7 +1421,7 @@ removes `previous_response_id`.
 
 ## Payload rules
 
-Since 0.14. Core's config may hold payload rules (see [the README](../README.md#payload-rules)):
+Since 0.14. Core's config may hold payload rules (see [Payload rules](../../docs/routing.md#payload-rules)):
 fields to set, fill in or remove in the JSON body an extension sends upstream, for the requests
 they name. Core works out which rules apply to a `generate`, `count_tokens` or `endpoint` call, or
 (0.15) a session turn, and sends them, and only them, in the frame's `payload`:
@@ -1495,7 +1495,7 @@ does a call with a [proxy](#proxy).
 ## Upstream capture
 
 Since 0.13. The extension reports what it sent upstream and what came back, for core's request logs
-(see [the README](../README.md#request-logs)). Core asks for it with `"capture": true` on a
+(see [Request logs](../../docs/usage-and-logs.md#request-logs)). Core asks for it with `"capture": true` on a
 `generate`, `count_tokens` or `endpoint` call frame, or on a `session.turn` frame, only while its
 config writes every request to a request log (`logs.request_log`), and only to an extension whose
 describe reports `protocol_minor` 13 or more. A call without it records nothing and sends nothing

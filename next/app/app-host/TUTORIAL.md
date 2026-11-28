@@ -1,86 +1,112 @@
-# Write an app package manifest
+# Write an app package
 
-This walkthrough prepares two package folders for the [app package contract](README.md).
-The desktop app installs the page-only package on this device. It installs the native package
-only from a curated registry, signed by a curated first-party key, and runs its program on
-demand once it is enabled (on Linux, Windows and macOS, where the package has a program for the
-system).
+In this tutorial you make a page-only web package, install it in the desktop app and see its page,
+then write the manifest of a native tool. The rules behind each step are in the
+[app package contract](README.md).
+
+You need the desktop app on Linux: installing a package from a file works only there.
 
 ## Make a page-only web package
 
-Create `package/pluxy-extension.json`:
+1. Make a folder `package` and in it `pluxy-extension.json`:
 
-```json
-{
-  "manifest_version": 1,
-  "id": "example/notes",
-  "version": "0.1.0",
-  "app": {
-    "version": 0,
-    "tier": "web",
-    "host_versions": [0],
-    "ui": {
-      "version": 0,
-      "dir": "pages",
-      "pages": [{"id":"notes","title":"Notes","short":"Notes","path":"index.html"}]
-    }
-  }
-}
-```
+   ```json
+   {
+     "manifest_version": 1,
+     "id": "example/notes",
+     "version": "1.0.0",
+     "app": {
+       "version": 0,
+       "tier": "web",
+       "host_versions": [0],
+       "ui": {
+         "version": 0,
+         "dir": "pages",
+         "pages": [{"id":"notes","title":"Notes","short":"Notes","path":"index.html"}]
+       }
+     }
+   }
+   ```
 
-Create `package/pages/index.html` containing `<!doctype html><title>Notes</title><p>My notes page</p>`.
-It needs no provider `protocol` or `programs` and requests no resources. The page receives no
-Tauri commands. A non-curated source is Unverified. Core refuses this manifest with instructions
-to install it in the desktop app.
+   The package has no provider `protocol` or `programs`, so it is app-only: core refuses it with
+   `app-only package: install it in the desktop app`.
 
-To install it, pack the folder as a release archive (`tar -czf notes-0.1.0.tar.gz -C package .`),
-open **Add-ons** in the desktop app and choose **Install from file…**. The page
-appears in the navigation, labelled Unverified on the Add-ons page.
+2. Make `package/pages/index.html`:
 
-For settings, add versioned `config` inside `app`, using the existing
-[settings schema](../../ui/extension-pages/README.md#config). To request a file later, declare
-`"resources":[{"id":"notes","kind":"file","operations":["read"]}]` inside `app`. This grants
-no access. A grant needs a release signed by its publisher and listed in a registry (a package
-installed from a file cannot get one), the signer's approval and a native confirmation on Linux
-([Access for web packages](README.md#access-for-web-packages)).
+   ```html
+   <!doctype html><title>Notes</title><p>My notes page</p>
+   ```
 
-## Describe a native package
+3. Pack the folder as a release archive, with the manifest at the top:
 
-Create a second folder with this `pluxy-extension.json`:
+   ```bash
+   tar -czf notes-1.0.0.tar.gz -C package .
+   ```
 
-```json
-{
-  "manifest_version": 1,
-  "id": "pluxy/example-tool",
-  "version": "0.1.0",
-  "app": {
-    "version": 0,
-    "tier": "native",
-    "host_versions": [0],
-    "programs": {"linux/amd64":"bin/example-tool"},
-    "operations": [{
-      "id":"inspect",
-      "description":"Read the selected tool state",
-      "input_schema":{"type":"object"},
-      "output_schema":{"type":"object"}
-    }],
-    "state":{"version":0,"readable_versions":[0]}
-  }
-}
-```
+4. In the desktop app, open **Add-ons** and choose **Install from file…**, then pick
+   `notes-1.0.0.tar.gz`.
 
-This is a curated first-party example: a local source cannot claim reserved publisher `pluxy`.
-Only curated first-party native packages are admitted. Put the executable at `bin/example-tool`.
-It must be a native executable, not a script, and implement the README's
-hello/describe/call/cancel pipe contract; simply printing JSON is insufficient. Native tools have **full access to your user account** and declare no folder
-grants. Optional `app.ui` pages still have no native IPC permissions.
+The **Notes** page now shows in the navigation. On Add-ons the package is labelled **Unverified**,
+since it does not come from a curated registry. Its page gets no Tauri commands.
 
-Pack each platform folder using the [archive rules](../../protocol/README.md#release-archives).
-Compute exact archive size and SHA-256. Write a UTF-8 descriptor with ID, version, tier and
-platform, then sign those exact bytes with the publisher's Ed25519 key. Preserve the original
-bytes beside the detached signature. The app's verifier checks both before extraction; changing
-an archive byte requires a new digest and signature.
+A package installed on this device has no settings: the app serves none, and a page's settings
+calls answer `unavailable`. To ask for a file later, add
+`"resources":[{"id":"notes","kind":"file","operations":["read"]}]` inside `app`. Declaring it grants
+nothing: a grant needs a release signed by its publisher and listed in a registry (a package
+installed from a file never gets one), the person's approval of the signer and a native
+confirmation ([Access for web packages](README.md#access-for-web-packages)).
 
-For a mixed package, add provider `protocol` and `programs` at the top level, with optional
-top-level provider `ui` and `config`. Leave the app contribution inside `app`. Core runs only
-the provider executable and exposes only provider pages/settings. Device installation is separate.
+## Describe a native tool
+
+A native tool runs a program with full access to your user account, so the app installs one only
+from a curated registry, signed by a curated first-party key. You can write its manifest and
+program, but you can install it only through such a registry.
+
+1. Make a second folder with this `pluxy-extension.json`:
+
+   ```json
+   {
+     "manifest_version": 1,
+     "id": "pluxy/example-tool",
+     "version": "1.0.0",
+     "app": {
+       "version": 0,
+       "tier": "native",
+       "host_versions": [0],
+       "programs": {"linux/amd64":"bin/example-tool"},
+       "operations": [{
+         "id":"inspect",
+         "description":"Read the selected tool state",
+         "effect":"read",
+         "input_schema":{"type":"object"},
+         "output_schema":{"type":"object"}
+       }],
+       "state":{"version":0,"readable_versions":[0]}
+     }
+   }
+   ```
+
+   `pluxy` is a reserved publisher: only a curated registry may list it. `state` is required for a
+   native tool. A native tool cannot declare `resources`.
+
+2. Put the program at `bin/example-tool`. It must be a native executable, not a script, and speak
+   the [app program contract](README.md#app-program-contract-v0): send hello, answer describe with
+   exactly the manifest's operations and state version, then answer calls. The Rust library
+   [`lib/program`](../../app-tools/README.md#libprogram) implements the program side.
+
+3. Pack one archive per platform under the [archive rules](../../protocol/README.md#release-archives).
+   For each, write the descriptor with the archive's exact size and SHA-256
+   ([Signed descriptor bytes](README.md#signed-descriptor-bytes)) and sign those exact bytes with the
+   publisher's Ed25519 key. Keep the descriptor bytes as they are: the app verifies the signature over
+   them, then the archive's size and SHA-256, before it unpacks anything. Changing one byte of the
+   archive needs a new descriptor and signature.
+
+Once the registry lists it, the tool installs disabled. Enabling it asks a native confirmation that
+says it has full access to your user account; the app then starts its program when a call needs it.
+
+## Make a mixed package
+
+To ship a provider extension and an app part in one package, put the provider `protocol` and
+`programs` (and optional `ui` and `config`) at the top level of the manifest and keep the app part
+inside `app`. Core runs only the provider program and shows only the provider pages and settings;
+the desktop app installs the app part on its own.

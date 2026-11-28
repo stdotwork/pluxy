@@ -1,8 +1,3 @@
-// Package legacy reads what today's core (core/, the CLIProxyAPI fork) leaves behind: its
-// config.yaml, with its key names in either layout it reads (v8 and the older spellings), and
-// the credential files in its auth folder. It turns them into this core's config and
-// credential records. The mapping is documented in next/README.md, "config.yaml with today's
-// key names".
 package legacy
 
 import (
@@ -210,7 +205,6 @@ func SectionNames() []string {
 	return out
 }
 
-// Statuses of a setting, as next/README.md names them.
 const (
 	supported = iota
 	later

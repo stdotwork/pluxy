@@ -103,10 +103,12 @@ describe("rows and their add-ons", () => {
     expect(action(client("claude-code"), { catalog: off, offers: [] })).toEqual({
       kind: "turn-on",
       pkg: "pluxy/claude-code",
+      page: "claude-code",
     });
     expect(action(client("codex"), { catalog: on, offers })).toEqual({
       kind: "install",
       pkg: "pluxy/codex-setup",
+      page: "codex",
       registry: "curated",
       version: "1.0.0",
     });

@@ -121,7 +121,10 @@ export function ConnectionCard(props: { address?: string; keys?: ClientKey[]; cl
         <div class="connection-field">
           <div class="connection-label">
             <span>{key.label ? t("keyFor", { name: p.id(key.label) }) : t("key")}</span>
-            <a href="#/tools">{t("keys")}</a>
+            <a href="#/tools">
+              {t("keys")}
+              <Icon name="chevron" size={12} />
+            </a>
           </div>
           <div class="connection-value" title={t("keyHelp")}>
             <Icon name="key" size={14} />

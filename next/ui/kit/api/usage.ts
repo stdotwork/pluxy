@@ -1,4 +1,4 @@
-// What the recorded requests add up to (GET /usage; next/README.md, "Usage statistics";
+// What the recorded requests add up to (GET /usage; docs/usage-and-logs.md, "Usage statistics";
 // next/internal/usage/usage.go). The request list (GET /usage/events) has its own module.
 
 import type { Host } from "../host";

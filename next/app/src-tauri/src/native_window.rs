@@ -347,18 +347,20 @@ fn browser_log() -> Vec<String> {
 /// A pending login polls while the window shows, not while it is minimized, and its "Open sign-in
 /// page" goes to the person's browser, never to a window of the app's own.
 fn polling(c: &mut Checks, app: &AppHandle) {
-    // The page draws every method from one reply, so once one shows, test/alpha's shows too, if
-    // core runs test/alpha. A failure names the step that did not happen.
+    // The page draws every provider from one reply, so once its tiles show, test/alpha's shows too (under
+    // More when core lists more than four providers), if core runs test/alpha. A failure names the step
+    // that did not happen.
     // The address test/alpha's browser sign-in gives the person (next/e2e/testext/main.go).
     const SIGN_IN_URL: &str = "https://login.example.test/authorize";
+    // Picks test/alpha's tile, opening More first when the tile is not among the first four.
+    let pick = "(() => { const t = document.querySelector('[data-part=provider-tile][data-extension=\"test/alpha\"]'); if (t) { t.click(); return true; } const more = document.querySelector('.provider-more'); if (more && more.getAttribute('aria-expanded') === 'false') more.click(); return false; })()";
     let tile = "[...document.querySelectorAll('[data-part=method]')].find((t) => t.closest('[data-extension]')?.dataset.extension === 'test/alpha' && t.textContent.includes('Test browser'))";
-    let missing = if !goto(app, "add-account", "[data-part=method]") {
-        Some("Add an account shows no sign-in method within 10 s")
-    } else if main_eval(
-        app,
-        &format!("(() => {{ const b = [...({tile})?.querySelectorAll('button') ?? []].find((b) => b.textContent.trim() === 'Start'); if (!b || b.disabled) return false; b.click(); return true; }})()"),
-    ) != Some(json!(true))
-    {
+    let start = format!("(() => {{ const b = [...({tile})?.querySelectorAll('button') ?? []].find((b) => b.textContent.trim() === 'Start'); if (!b || b.disabled) return false; b.click(); return true; }})()");
+    let missing = if !goto(app, "add-account", "[data-part=provider-tile]") {
+        Some("Add an account shows no provider within 10 s")
+    } else if within(10, || (main_eval(app, pick) == Some(json!(true))).then_some(())).is_none() {
+        Some("Add an account has no test/alpha provider to pick")
+    } else if within(10, || (main_eval(app, &start) == Some(json!(true))).then_some(())).is_none() {
         Some("Add an account has no enabled Start button for test/alpha's Test browser")
     } else if within(10, || {
         (main_eval(
