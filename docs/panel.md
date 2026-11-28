@@ -217,19 +217,13 @@ Settings opens on **General** and groups its topics into **This device** (**Gene
     limits from core.
   - **Rename:** opens a dialog (`Rename {name}`) editing **Name** (up to 64 characters; blank clears
     it), with **Save** and **Cancel**.
-  - **Edit settings:** opens a dialog (`Edit {name}`) editing **Prefix (prefix)** (`prefix`),
-    **Proxy URL (proxy_url)** (`proxy_url`), **Priority (priority)** (`priority`), **Scheduling
-    weight (weight)** (`weight`), **Disable exponential cooldown (disable_cooling)**
-    (`disable_cooling`), **WebSockets (websockets)** (`settings.websockets`, Codex accounts only),
-    **Credential request retries** (`request_retry`: **Inherit** or **Custom** with **Retry
-    count**), **Max concurrency (max_concurrency)** (`max_concurrency`), **Models (models)**
-    (`models`: **Model name**, **Alias (optional)**, **Add model**, **Remove model**), **Excluded
-    models (excluded_models)** (`excluded_models`), **Custom headers (headers)** (`headers` JSON),
-    **Account model aliases** (`model_alias`: **Model name**, **Alias**, **Display name**, **Keep
-    the original model in listings**, **Add alias**, **Remove alias**), and **Settings (settings)**
-    (`settings` JSON). Redacted proxy credentials, headers and settings stay unchanged unless
-    edited. Saves with **Save** (**Close** or **Cancel** to leave); asks before discarding unsaved
-    edits (**Discard unsaved changes?**, **Discard changes** / **Keep editing**).
+  - **Edit settings:** opens a dialog (`Edit {name}`) with a field for each account setting, each
+    labelled with its key: `prefix`, `proxy_url`, `priority`, `weight`, `disable_cooling`,
+    `websockets` (Codex accounts only), `request_retry` (**Inherit** or **Custom**),
+    `max_concurrency`, `models`, `excluded_models`, `headers`, `model_alias` and `settings`.
+    Redacted proxy credentials, headers and settings stay unchanged unless edited. **Save** saves;
+    leaving with unsaved edits asks first (**Discard unsaved changes?**, **Discard changes** /
+    **Keep editing**).
   - **Remove…:** asks for confirmation (`Remove {name}?`, **Remove** / **Cancel**) before deleting
     the saved sign-in and returning to `#/accounts`.
   - **Send a test request:** runs immediately without asking first, sending one live request through
