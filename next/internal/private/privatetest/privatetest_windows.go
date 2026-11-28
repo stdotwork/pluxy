@@ -19,7 +19,6 @@ var (
 	procGetAce                       = advapi32.NewProc("GetAce")
 )
 
-// Accounts tests name, by SID.
 const (
 	Everyone       = "S-1-1-0"
 	System         = "S-1-5-18"
@@ -27,23 +26,20 @@ const (
 	Administrators = "S-1-5-32-544"
 )
 
-// Entry flags.
 const (
-	Inheritable = 0x1 | 0x2 // OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
-	Inherited   = 0x10      // INHERITED_ACE
+	Inheritable = 0x1 | 0x2
+	Inherited   = 0x10
 )
 
 const (
-	seFileObject    = 1 // SE_FILE_OBJECT
+	seFileObject    = 1
 	ownerInfo       = 0x1
 	daclInfo        = 0x4
 	seDaclProtected = 0x1000
-	aceAllowedType  = 0          // ACCESS_ALLOWED_ACE_TYPE
-	fullAccess      = 0x001F01FF // FILE_ALL_ACCESS
+	aceAllowedType  = 0
+	fullAccess      = 0x001F01FF
 )
 
-// aclHeader is the start of an ACL; aceHeader is an ACCESS_ALLOWED_ACE (other kinds share its
-// first eight bytes).
 type aclHeader struct {
 	Revision, _ byte
 	Size        uint16
@@ -58,8 +54,6 @@ type aceHeader struct {
 	SidStart    uint32
 }
 
-// AccessList reads path's owner, whether its access list is protected (inherits nothing from
-// its parent), and its entries as "SID type flags mask", sorted.
 func AccessList(t *testing.T, path string) (owner string, protected bool, entries []string) {
 	t.Helper()
 	p, err := syscall.UTF16PtrFromString(path)
@@ -104,8 +98,6 @@ func entry(sid string, typ, flags byte, mask uint32) string {
 	return fmt.Sprintf("%s type %d flags %#x mask %#x", sid, typ, flags, mask)
 }
 
-// ThisUser returns this process's user SID and its token's default owner, the owner Windows
-// gives what it makes.
 func ThisUser(t *testing.T) (me, defaultOwner string) {
 	t.Helper()
 	token, err := syscall.OpenCurrentProcessToken()
@@ -133,8 +125,6 @@ func ThisUser(t *testing.T) (me, defaultOwner string) {
 	return me, defaultOwner
 }
 
-// WantList is the private access list as AccessList shows it: this user's and SYSTEM's full
-// access, each entry with flags.
 func WantList(t *testing.T, flags byte) string {
 	t.Helper()
 	me, _ := ThisUser(t)
@@ -143,8 +133,6 @@ func WantList(t *testing.T, flags byte) string {
 	return strings.Join(w, "\n")
 }
 
-// CheckOwner checks that path has an owner a private folder accepts: this user, the default
-// owner or SYSTEM.
 func CheckOwner(t *testing.T, what, path string) {
 	t.Helper()
 	me, defaultOwner := ThisUser(t)
@@ -153,9 +141,6 @@ func CheckOwner(t *testing.T, what, path string) {
 	}
 }
 
-// CheckPrivate checks that path, a folder or a file, has an accepted owner (CheckOwner) and
-// exactly the private access list: protected, this user's and SYSTEM's full access, a folder's
-// entries inheritable.
 func CheckPrivate(t *testing.T, what, path string, folder bool) {
 	t.Helper()
 	CheckOwner(t, what, path)
@@ -172,8 +157,6 @@ func CheckPrivate(t *testing.T, what, path string, folder bool) {
 	}
 }
 
-// CheckInherited checks that path, a folder or a file in a private folder, has an accepted owner
-// and only the private entries, inherited from its folder: nothing else lets anyone in.
 func CheckInherited(t *testing.T, what, path string, folder bool) {
 	t.Helper()
 	CheckOwner(t, what, path)
@@ -186,7 +169,6 @@ func CheckInherited(t *testing.T, what, path string, folder bool) {
 	}
 }
 
-// Icacls runs icacls with args.
 func Icacls(t *testing.T, args ...string) {
 	t.Helper()
 	if out, err := exec.Command("icacls", args...).CombinedOutput(); err != nil {
@@ -194,8 +176,6 @@ func Icacls(t *testing.T, args ...string) {
 	}
 }
 
-// OpenFolder makes the folder dir, and any missing parents, with an entry that lets Everyone read
-// it and what is made in it, as a folder made before core kept it private might be.
 func OpenFolder(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -204,8 +184,6 @@ func OpenFolder(t *testing.T, dir string) {
 	Icacls(t, dir, "/grant", "*"+Everyone+":(OI)(CI)R")
 }
 
-// WriteOpenFile writes a file at path, in a folder made by OpenFolder, and checks that it took
-// Everyone's entry from the folder.
 func WriteOpenFile(t *testing.T, path string, data []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, data, 0o600); err != nil {
@@ -217,16 +195,12 @@ func WriteOpenFile(t *testing.T, path string, data []byte) {
 	}
 }
 
-// LetsEveryoneIn reports whether path's access list has an entry for Everyone.
 func LetsEveryoneIn(t *testing.T, path string) bool {
 	t.Helper()
 	_, _, entries := AccessList(t, path)
 	return slices.ContainsFunc(entries, func(e string) bool { return strings.HasPrefix(e, Everyone+" ") })
 }
 
-// SetOwner gives path to the account sid with icacls, which takes the restore privilege: an
-// elevated administrator holds it (CI's hosted runners run elevated) and icacls turns it on.
-// Without it the test is skipped, except on CI, where it fails.
 func SetOwner(t *testing.T, path, sid string) {
 	t.Helper()
 	if out, err := exec.Command("icacls", path, "/setowner", "*"+sid).CombinedOutput(); err != nil {
@@ -240,8 +214,6 @@ func SetOwner(t *testing.T, path, sid string) {
 	}
 }
 
-// Junction makes a junction at link to the folder target, removed when the test ends (the
-// junction only, before the folder is removed).
 func Junction(t *testing.T, link, target string) {
 	t.Helper()
 	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
@@ -250,7 +222,6 @@ func Junction(t *testing.T, link, target string) {
 	t.Cleanup(func() { os.Remove(link) })
 }
 
-// Names lists the names in the folder dir.
 func Names(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)

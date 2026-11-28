@@ -11,15 +11,7 @@ import (
 )
 
 // On Windows, Go applies only the read-only bit of a mode, so a new folder or file would take
-// its parent's access list, which may let other local users read it. A private folder and each
-// file made in it are instead given a protected access list (nothing inherited from their
-// parents) that lets in only this user and SYSTEM, with full access, the folder's entries
-// inherited by what is made in it. The owner is left as Windows sets it: this user, or the
-// token's default owner (the Administrators group when elevated). The folder is checked through
-// a handle to it, as the app checks its own private folders (app/src-tauri/src/private_windows.rs,
-// make_private_dir): a link, a file or a folder another account owns is refused, and a folder
-// whose list is not private gets the private list. Callers skip or refuse files in it that
-// another account owns (Owner), and rewrite one whose own list is not private (FilePrivate).
+// its parent's access list, which may let other local users read it.
 //
 // The security calls go through advapi32.dll, and new files are made with ntdll.dll's
 // NtCreateFile; the standard library registers both as system DLLs, so they are loaded from
@@ -43,27 +35,25 @@ var (
 const (
 	sddlRevision1     = 1
 	seFileObject      = 1
-	ownerInfo         = 0x1        // OWNER_SECURITY_INFORMATION
-	daclInfo          = 0x4        // DACL_SECURITY_INFORMATION
-	protectedDaclInfo = 0x80000000 // PROTECTED_DACL_SECURITY_INFORMATION
-	unprotectedDacl   = 0x20000000 // UNPROTECTED_DACL_SECURITY_INFORMATION
-	daclProtected     = 0x1000     // SE_DACL_PROTECTED
+	ownerInfo         = 0x1
+	daclInfo          = 0x4
+	protectedDaclInfo = 0x80000000
+	unprotectedDacl   = 0x20000000
+	daclProtected     = 0x1000
 	readControl       = 0x00020000
 	writeDAC          = 0x00040000
-	readAttributes    = 0x80 // FILE_READ_ATTRIBUTES
-	aceAllowed        = 0    // ACCESS_ALLOWED_ACE_TYPE
-	aceDenied         = 1    // ACCESS_DENIED_ACE_TYPE
+	readAttributes    = 0x80
+	aceAllowed        = 0
+	aceDenied         = 1
 	systemSID         = "S-1-5-18"
 	synchronize       = 0x00100000
-	objCaseInsensitve = 0x40       // OBJ_CASE_INSENSITIVE
-	fileCreate        = 2          // FILE_CREATE
-	fileSyncIO        = 0x20       // FILE_SYNCHRONOUS_IO_NONALERT
-	fileNonDirectory  = 0x40       // FILE_NON_DIRECTORY_FILE
-	nameCollision     = 0xC0000035 // STATUS_OBJECT_NAME_COLLISION
+	objCaseInsensitve = 0x40
+	fileCreate        = 2
+	fileSyncIO        = 0x20
+	fileNonDirectory  = 0x40
+	nameCollision     = 0xC0000035
 )
 
-// winACL is the start of an ACL; winACE is an ACCESS_ALLOWED_ACE or ACCESS_DENIED_ACE (other
-// kinds share its first eight bytes).
 type winACL struct {
 	Revision, _ byte
 	Size        uint16
@@ -78,8 +68,6 @@ type winACE struct {
 	SidStart    uint32
 }
 
-// tokenSIDs returns this process's user and its token's default owner, the owner Windows gives
-// what this process makes.
 func tokenSIDs() (user, owner string, err error) {
 	token, err := syscall.OpenCurrentProcessToken()
 	if err != nil {
@@ -108,9 +96,6 @@ func tokenSIDs() (user, owner string, err error) {
 	return user, owner, nil
 }
 
-// privateDescriptor returns a security descriptor whose access list is the one described
-// above, for a folder (its entries are inherited by what is made in it) or a file. Free it
-// with syscall.LocalFree.
 func privateDescriptor(folder bool) (uintptr, error) {
 	me, _, err := tokenSIDs()
 	if err != nil {
@@ -118,9 +103,8 @@ func privateDescriptor(folder bool) (uintptr, error) {
 	}
 	inherit := ""
 	if folder {
-		inherit = "OICI" // object inherit, container inherit
+		inherit = "OICI"
 	}
-	// D:P is a protected access list; FA is full access; SY is SYSTEM.
 	sddl := "D:P"
 	for _, who := range []string{me, "SY"} {
 		sddl += "(A;" + inherit + ";FA;;;" + who + ")"
@@ -136,8 +120,6 @@ func privateDescriptor(folder bool) (uintptr, error) {
 	return sd, nil
 }
 
-// makeDir makes dir, and any missing parents, with the private access list given to dir as it
-// is made. A dir that exists already is left to openChecked.
 func makeDir(dir string) error {
 	if err := os.MkdirAll(filepath.Dir(dir), DirMode); err != nil {
 		return err
@@ -159,8 +141,6 @@ func makeDir(dir string) error {
 	return nil
 }
 
-// accountName names the account sid is, with its SID text in brackets, or gives the text alone
-// when the name cannot be found.
 func accountName(sid *syscall.SID, text string) string {
 	account, domain, _, err := sid.LookupAccount("")
 	switch {
@@ -173,8 +153,6 @@ func accountName(sid *syscall.SID, text string) string {
 	}
 }
 
-// owner returns the owner of what h is open to, named by accountName, and whether a private file
-// or folder may have it: this user, the token's default owner, or SYSTEM.
 func owner(h syscall.Handle) (name string, ok bool, err error) {
 	me, defaultOwner, err := tokenSIDs()
 	if err != nil {
@@ -197,14 +175,6 @@ func owner(h syscall.Handle) (name string, ok bool, err error) {
 	return accountName(sid, text), text == me || text == defaultOwner || text == systemSID, nil
 }
 
-// openChecked opens the folder d.Path itself, never what a link there points to, after making it
-// (makeDir) when create is set, and checks it through that handle, as the chmod 0700 of unix: a
-// link (a symbolic link or a junction), a file, or a folder owned by another account than this
-// user, the token's default owner or SYSTEM is refused, since that owner could open the folder's
-// list again and plant files. A folder whose list is already private (protected, its allow
-// entries only this user's and SYSTEM's) is left as it is; any other gets the private list.
-// Setting the list also passes its entries on to what is already in the folder and inherits its
-// entries (files written before this rule), so it loses what it inherited before.
 func openChecked(d Dir, create bool) (*os.File, error) {
 	dir := filepath.Clean(d.Path)
 	if create {
@@ -288,7 +258,6 @@ func checkDir(h syscall.Handle, dir string, d Dir) error {
 	return nil
 }
 
-// sameDir reports whether a and b are open to the same folder: the same volume and file index.
 func sameDir(a, b *os.File) (bool, error) {
 	var ia, ib syscall.ByHandleFileInformation
 	if err := syscall.GetFileInformationByHandle(syscall.Handle(a.Fd()), &ia); err != nil {
@@ -301,14 +270,11 @@ func sameDir(a, b *os.File) (bool, error) {
 		ia.FileIndexLow == ib.FileIndexLow, nil
 }
 
-// fileOwner reports whether the owner of the file f is one the folder check accepts, and names
-// it.
 func fileOwner(f *os.File) (bool, string, error) {
 	who, ok, err := owner(syscall.Handle(f.Fd()))
 	return ok, who, err
 }
 
-// filePrivate reports whether the access list of the file f is private (isPrivate).
 func filePrivate(f *os.File) (bool, error) {
 	me, _, err := tokenSIDs()
 	if err != nil {
@@ -324,9 +290,8 @@ func filePrivate(f *os.File) (bool, error) {
 	return isPrivate(sd, dacl, me)
 }
 
-// copyAccess sets dst's access list to src's, protected when src's is; when src's is not, dst
-// inherits from its own folder as src does, and only src's own entries are copied (Windows
-// leaves out those src inherited and adds those dst's folder passes on).
+// only src's own entries are copied (Windows leaves out those src inherited and adds those dst's
+// folder passes on).
 func copyAccess(src, dst string) error {
 	from, err := syscall.UTF16PtrFromString(src)
 	if err != nil {
@@ -375,11 +340,6 @@ type ioStatusBlock struct {
 	Status, Information uintptr
 }
 
-// Create creates the new file name in root, open for reading and writing, with the private
-// access list from the moment it exists: no one else can open it while it is written. It is made
-// relative to root's own handle, so it lands in the folder root holds. A rename or a link in the
-// same folder keeps the file's access list. A name that exists is an error that os.IsExist
-// accepts. name is a name in root itself, never a path. dir is root's path, for messages.
 func Create(root *os.Root, dir, name string) (*os.File, error) {
 	if err := checkName(dir, name); err != nil {
 		return nil, err
@@ -404,7 +364,6 @@ func Create(root *os.Root, dir, name string) (*os.File, error) {
 	oa.Length = uint32(unsafe.Sizeof(oa))
 	var h syscall.Handle
 	var iosb ioStatusBlock
-	// The access and sharing os.OpenFile uses for a new file opened for reading and writing.
 	r, _, _ := procNtCreateFile.Call(uintptr(unsafe.Pointer(&h)), syscall.GENERIC_READ|syscall.GENERIC_WRITE|synchronize,
 		uintptr(unsafe.Pointer(&oa)), uintptr(unsafe.Pointer(&iosb)), 0, syscall.FILE_ATTRIBUTE_NORMAL,
 		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, fileCreate, fileNonDirectory|fileSyncIO, 0, 0)
@@ -422,9 +381,6 @@ func Create(root *os.Root, dir, name string) (*os.File, error) {
 	return os.NewFile(uintptr(h), path), nil
 }
 
-// isPrivate reports whether the descriptor sd, with its access list dacl, is private: the list
-// exists and is protected, and every allow entry is this user's (me) or SYSTEM's. Deny entries
-// take nothing away; any other kind of entry is not one this checks, so the list is not private.
 func isPrivate(sd uintptr, dacl *winACL, me string) (bool, error) {
 	var control uint16
 	var revision uint32

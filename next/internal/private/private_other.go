@@ -7,10 +7,6 @@ import (
 	"os"
 )
 
-// openChecked opens the folder d.Path for Dir.Open. When create is set it first makes the
-// folder, and any missing parents, readable only by its owner (0700); an existing folder keeps
-// its mode. Files made in it are 0600 from the moment they exist (Create), so the folder's mode
-// never lets another user read one.
 func openChecked(d Dir, create bool) (*os.File, error) {
 	dir := d.Path
 	if st, err := os.Stat(dir); err == nil && !st.IsDir() {
@@ -36,7 +32,6 @@ func openChecked(d Dir, create bool) (*os.File, error) {
 	return f, nil
 }
 
-// sameDir reports whether a and b are the same folder.
 func sameDir(a, b *os.File) (bool, error) {
 	sa, err := a.Stat()
 	if err != nil {
@@ -49,9 +44,6 @@ func sameDir(a, b *os.File) (bool, error) {
 	return os.SameFile(sa, sb), nil
 }
 
-// Create creates the new file name in root readable only by its owner (0600), open for reading
-// and writing. A name that exists is an error that os.IsExist accepts. name is a name in root
-// itself, never a path. dir is root's path, for messages.
 func Create(root *os.Root, dir, name string) (*os.File, error) {
 	if err := checkName(dir, name); err != nil {
 		return nil, err
@@ -69,12 +61,8 @@ func Create(root *os.Root, dir, name string) (*os.File, error) {
 	return f, nil
 }
 
-// fileOwner accepts every file on unix: each was made 0600 by its owner, and the folder check
-// does not look at owners.
 func fileOwner(f *os.File) (bool, string, error) { return true, "", nil }
 
-// filePrivate reports true on unix: the folder's mode keeps everyone else out.
 func filePrivate(f *os.File) (bool, error) { return true, nil }
 
-// copyAccess does nothing on unix, where a caller sets the mode.
 func copyAccess(src, dst string) error { return nil }
