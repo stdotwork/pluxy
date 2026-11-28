@@ -375,8 +375,8 @@ A few things are outside what the app does today, or work only in part:
   over 24 hours, 7 days or 30 days by provider, model, account or key. Neither **Activity** nor
   **Agent usage** estimates prices or costs, caps the usage record by disk size (retention is by
   days via `usage.keep_days`), or runs deeper usage analysis.
-- **Model health sweep.** There is no one-click check across every model and account. Use **Test**
-  on an account's page to test one model at a time (each test spends one request).
+- **Model health sweep.** There is no one-click check across every model and account. Use **Send a
+  test request** on an account's page to test one model at a time (each test spends one request).
 - **Thinking and Fast alias form.** There is no form for thinking or fast aliases. Use a thinking
   suffix such as `gpt-5(high)`, a payload rule, or an account's model alias in **Config**
   (**Settings file** tab; see [routing.md](routing.md)).
