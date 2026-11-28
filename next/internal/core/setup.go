@@ -36,8 +36,6 @@ const (
 	maxClientConfig    = 2 << 20
 )
 
-// setupPickOrder is the order setup shows its picks in: providers, most asked for first, then
-// the client tools.
 var setupPickOrder = []string{
 	"pluxy/codex",
 	"pluxy/claude",
@@ -53,36 +51,28 @@ var setupPickOrder = []string{
 }
 
 type setupStateFile struct {
-	Format    int                   `json:"format"`
-	FirstRun  bool                  `json:"first_run"`
-	ScannedAt *time.Time            `json:"scanned_at,omitempty"`
-	Found     management.SetupFound `json:"found"`
-	// Imported is what core kept of each import, by importKey of the config. It is kept apart from
-	// Found, which every scan replaces.
-	Imported map[string]management.SetupLastImport `json:"imported,omitempty"`
+	Format    int                                   `json:"format"`
+	FirstRun  bool                                  `json:"first_run"`
+	ScannedAt *time.Time                            `json:"scanned_at,omitempty"`
+	Found     management.SetupFound                 `json:"found"`
+	Imported  map[string]management.SetupLastImport `json:"imported,omitempty"`
 }
 
-// setupManager keeps the kept scan and the first-run flag in memory and in state/setup.json,
-// and runs the scan in the background.
 type setupManager struct {
 	statePath  string
 	coreTarget func() (listen string, tlsEnable bool)
 	timeout    time.Duration
 
-	// toolsMu orders connects and disconnects of client tools (setup_connect.go).
 	toolsMu sync.Mutex
 
 	mu        sync.Mutex
-	stopped   bool // stop has run: no scan starts any more
+	stopped   bool
 	firstRun  bool
 	scanning  bool
 	rescan    bool
-	scannedAt *time.Time // nil until the first scan ends: there is no kept scan
+	scannedAt *time.Time
 	found     management.SetupFound
 	imported  map[string]management.SetupLastImport
-	// statesFor is the address the kept client states were read against (coreAddress of the
-	// listen address and tlsEnable); empty when it is not known, as when the kept scan came
-	// from another run.
 	statesFor string
 
 	ctx    context.Context
@@ -90,8 +80,6 @@ type setupManager struct {
 	wg     sync.WaitGroup
 }
 
-// newSetupManager reads the kept scan at statePath. With no state/setup.json, setup is on its
-// first run unless core already has packages or accounts (an install from before setup existed).
 func newSetupManager(statePath string, coreTarget func() (string, bool), inUse bool) *setupManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &setupManager{
@@ -144,7 +132,6 @@ func (m *setupManager) load() {
 	m.imported = f.Imported
 }
 
-// saveLocked writes state/setup.json, made with mode 0600 the first time.
 func (m *setupManager) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(m.statePath), 0o700); err != nil {
 		return err
@@ -184,10 +171,6 @@ func (m *setupManager) markDone() error {
 	return m.saveLocked()
 }
 
-// listening is told the address core listens on once it does. A first run with no kept scan
-// starts its first scan; otherwise the kept scan's client states are read again against the
-// address core answers at, which a restart may have changed (a config listening on port 0, or
-// tls.enable, which changes the scheme every config naming core's address holds).
 func (m *setupManager) listening(listen string, tlsEnable bool) {
 	m.mu.Lock()
 	if m.scannedAt == nil {
@@ -271,7 +254,6 @@ func (m *setupManager) snapshot() (firstRun, scanning bool, scannedAt *time.Time
 	f.Imports = slices.Clone(f.Imports)
 	imported := maps.Clone(m.imported)
 	m.mu.Unlock()
-	// importKey reads the file system, so it runs outside the lock, as the scan does.
 	for i, r := range f.Imports {
 		if rec, ok := imported[importKey(r.Config)]; ok {
 			f.Imports[i].LastImport = &rec
@@ -280,9 +262,6 @@ func (m *setupManager) snapshot() (firstRun, scanning bool, scannedAt *time.Time
 	return firstRun, scanning, at, f
 }
 
-// importKey names a config file for the record of its import: the home folder expanded and
-// symbolic links resolved, or, when the file cannot be resolved, the cleaned path. The scan's row
-// spells the file with ~, an import by an absolute path, so both sides go through it.
 func importKey(config string) string {
 	p, err := server.ExpandHome(config)
 	if err != nil {
@@ -294,7 +273,6 @@ func importKey(config string) string {
 	return filepath.Clean(p)
 }
 
-// recordImport keeps that an import ran from config, and saves it with the rest of the state.
 func (m *setupManager) recordImport(config string, rec management.SetupLastImport) error {
 	key := importKey(config)
 	m.mu.Lock()
@@ -314,8 +292,6 @@ func (m *setupManager) stop() {
 	m.wg.Wait()
 }
 
-// SetListenAddr records the address the listener is bound to (the port core picked when the
-// config listens on port 0), and tells setup core is listening.
 func (c *Core) SetListenAddr(addr string) {
 	if addr == "" {
 		return
@@ -341,7 +317,6 @@ func (c *Core) setupCoreTarget() (string, bool) {
 	return listen, cfg.TLS.Enable
 }
 
-// Setup returns the kept scan, first-run flag, and ordered picks.
 func (c *Core) Setup(ctx context.Context) management.Setup {
 	firstRun, scanning, scannedAt, found := c.setup.snapshot()
 	listen, _ := c.setupCoreTarget()
@@ -361,7 +336,6 @@ func (c *Core) Setup(ctx context.Context) management.Setup {
 	}
 }
 
-// StartSetupScan triggers a background scan and returns the current Setup with scanning: true.
 func (c *Core) StartSetupScan(ctx context.Context) management.Setup {
 	c.setup.triggerScan()
 	s := c.Setup(ctx)
@@ -369,7 +343,6 @@ func (c *Core) StartSetupScan(ctx context.Context) management.Setup {
 	return s
 }
 
-// ApplySetup installs and enables each requested pick without undoing prior picks on failure.
 func (c *Core) ApplySetup(ctx context.Context, picks []string) management.SetupApplyReply {
 	results := make([]management.SetupApplyResult, 0, len(picks))
 	for _, id := range picks {
@@ -395,7 +368,6 @@ func (c *Core) ApplySetup(ctx context.Context, picks []string) management.SetupA
 	return management.SetupApplyReply{Results: results}
 }
 
-// DoneSetup ends first run and persists it to state/setup.json.
 func (c *Core) DoneSetup() (management.SetupDoneReply, error) {
 	if err := c.setup.markDone(); err != nil {
 		return management.SetupDoneReply{}, err
@@ -459,8 +431,6 @@ func (c *Core) handleSetup(m *server.Management) {
 			writeError(w, http.StatusInternalServerError, "internal", "core's own address is not known: "+err.Error())
 			return
 		}
-		// A caller on another machine uses the address it reached core by, which is the one its
-		// own programs reach core at; core's listen address names this machine instead.
 		if !server.FromThisMachine(r) {
 			baseURL, err = server.ReachedURL(r)
 			if err != nil {
@@ -468,8 +438,6 @@ func (c *Core) handleSetup(m *server.Management) {
 				return
 			}
 		}
-		// The models pluxy serves, for the person to pick from; the tool starts with the one they
-		// picked, else the best match among them.
 		model, names := c.clientModel(r.Context(), id, model)
 		snip, _ := ClientSnippetFor(id, baseURL, key, model)
 		reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: baseURL, Key: key, Note: snip.Note,
@@ -481,7 +449,6 @@ func (c *Core) handleSetup(m *server.Management) {
 	})
 }
 
-// buildSetupPicks lists the registries' packages of tier "pick" in setupPickOrder, others after.
 func buildSetupPicks(regs []management.Registry, installed packages.State, found management.SetupFound) []management.SetupPick {
 	byID := map[string]management.RegistryPackage{}
 	var order []string
@@ -511,7 +478,6 @@ func buildSetupPicks(regs []management.Registry, installed packages.State, found
 		case okb:
 			return 1
 		}
-		// Providers before clients, then by ID.
 		ka, kb := byID[a].Kind, byID[b].Kind
 		if ka != kb {
 			if ka == packages.KindProvider {
@@ -553,14 +519,9 @@ func buildSetupPicks(regs []management.Registry, installed packages.State, found
 	return picks
 }
 
-// setupSuggestions says which pick each find points to, and why: a client tool installed on
-// the machine (by its SetupClient ID) or a sign-in found there (by its provider). A pick is
-// suggested by its first row that holds.
 var setupSuggestions = []struct {
 	pick, client, signIn, because string
-	// setsUp marks a pick that writes the client tool's config: not suggested while that
-	// config is one its writer refuses.
-	setsUp bool
+	setsUp                        bool
 }{
 	{pick: "pluxy/claude", client: "claude-code", signIn: "pluxy/claude", because: "Claude Code is installed and signed in on this computer"},
 	{pick: "pluxy/claude", client: "claude-code", because: "Claude Code is installed on this computer"},
@@ -575,8 +536,6 @@ var setupSuggestions = []struct {
 	{pick: "pluxy/omp-setup", client: "omp", because: "Oh My Pi is installed on this computer", setsUp: true},
 }
 
-// suggestPick says whether pick id is suggested and why. clients holds the client tools found
-// installed, with their config state; signIns the providers with a sign-in.
 func suggestPick(id string, clients map[string]string, signIns map[string]bool) (bool, string) {
 	for _, r := range setupSuggestions {
 		state, installed := clients[r.client]
@@ -591,9 +550,6 @@ func suggestPick(id string, clients map[string]string, signIns map[string]bool) 
 	return false, ""
 }
 
-// userHomeDir is the folder the scan looks in, the one server.ExpandHome expands a row's ~ with, so
-// the import reads the file the row names. On Windows that is USERPROFILE, even where a shell such
-// as Git Bash sets HOME to another folder.
 func userHomeDir() string {
 	h, _ := os.UserHomeDir()
 	return h
@@ -606,8 +562,6 @@ func setupCoreInfo(listen string) management.SetupCore {
 	}
 }
 
-// isReachableFromNetwork reports whether a core listening on listen takes connections from
-// other machines: any host but localhost or a loopback address, every interface included.
 func isReachableFromNetwork(listen string) bool {
 	if listen == "" {
 		return false
@@ -619,10 +573,6 @@ func isReachableFromNetwork(listen string) bool {
 	return !server.IsLoopbackHost(strings.TrimSpace(host))
 }
 
-// coreAddress is core's address as the client tools' checks take it (atCore): its scheme and its
-// listen address, an unspecified host (every interface: 0.0.0.0, :: or none) kept as one, so an
-// address of this machine in the listener's family matches it (both families when the listener
-// takes both, as atCore's probe finds); empty when core's address is not known.
 func coreAddress(listen string, tlsEnable bool) string {
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
@@ -638,7 +588,6 @@ func coreAddress(listen string, tlsEnable bool) string {
 	return scheme + "://" + net.JoinHostPort(host, port)
 }
 
-// refreshCoreState reads each client tool's config again against the core listening on listen.
 func refreshCoreState(found management.SetupFound, listen string, tlsEnable bool) management.SetupFound {
 	found.Core = setupCoreInfo(listen)
 	home := userHomeDir()
@@ -662,15 +611,11 @@ func clientSpecByID(id string) (clientProbeSpec, bool) {
 }
 
 type clientProbeSpec struct {
-	id      string
-	name    string
-	program string
-	paths   func(home string) []string
-	// apps are application folders (a macOS bundle) that count as the tool being installed when
-	// none of paths is found; nil for a tool with none.
-	apps func(home string) []string
-	// noVersion marks a tool core never runs: a desktop app starts its window, so the scan only
-	// looks for it.
+	id        string
+	name      string
+	program   string
+	paths     func(home string) []string
+	apps      func(home string) []string
 	noVersion bool
 	inspect   func(home, coreURL string) (cfg string, state string)
 }
@@ -763,12 +708,6 @@ var clientSpecs = []clientProbeSpec{
 	},
 }
 
-// The three tools below are found where the desktop app finds them (the recipe of each tool's
-// native program in next/app-tools: claude-desktop, grok-setup and hermes-setup).
-
-// claudeDesktopApps are where Claude Desktop's application bundle is on macOS: the system's
-// applications folder, then the home folder's. On Linux it is the program `claude-desktop` on
-// the PATH. On Windows no program or app ID is known for its installer, so nothing is looked for.
 func claudeDesktopApps(goos, home string) []string {
 	if goos != "darwin" || home == "" {
 		return nil
@@ -779,7 +718,6 @@ func claudeDesktopApps(goos, home string) []string {
 	}
 }
 
-// claudeDesktopConfigDisplay is where Claude Desktop keeps its third-party configuration file.
 func claudeDesktopConfigDisplay(goos string) string {
 	switch goos {
 	case "darwin":
@@ -790,7 +728,6 @@ func claudeDesktopConfigDisplay(goos string) string {
 	return "~/.config/Claude-3p/claude_desktop_config.json"
 }
 
-// grokPaths is the copy Grok Build's install script puts in ~/.grok/bin.
 func grokPaths(goos, home string) []string {
 	if home == "" {
 		return nil
@@ -802,9 +739,6 @@ func grokPaths(goos, home string) []string {
 	return []string{filepath.Join(home, ".grok", "bin", name)}
 }
 
-// hermesPaths is the copy Hermes Agent's installer puts in ~/.local/bin, or in the bin folder of
-// its home on Windows: `hermes` in %LOCALAPPDATA% (stripped of blanks, and only a full path), or
-// in AppData\Local in the home folder when that is not set or not a full path.
 func hermesPaths(goos, home, localAppData string) []string {
 	if goos != "windows" {
 		if home == "" {
@@ -822,7 +756,6 @@ func hermesPaths(goos, home, localAppData string) []string {
 	return []string{filepath.Join(local, "hermes", "bin", "hermes.exe")}
 }
 
-// hermesConfigDisplay is where Hermes Agent keeps its settings with no profile chosen.
 func hermesConfigDisplay(goos string) string {
 	if goos == "windows" {
 		return `%LOCALAPPDATA%\hermes\config.yaml`
@@ -830,9 +763,6 @@ func hermesConfigDisplay(goos string) string {
 	return "~/.hermes/config.yaml"
 }
 
-// unreadConfig is the inspect of a tool whose settings core does not read: it names the file and
-// says unchecked, which claims nothing about the file. The desktop app's page for the tool
-// reads the file with the tool's own writer.
 func unreadConfig(display string) func(home, coreURL string) (string, string) {
 	return func(string, string) (string, string) { return display, stateUnchecked }
 }
@@ -844,8 +774,6 @@ func exeName(name string) string {
 	return name
 }
 
-// scanMachine looks for each client tool, sign-in and earlier setup on the machine. Version
-// probes run in a fresh folder below scratch (core's state folder), removed after each.
 func scanMachine(ctx context.Context, scratch, listen string, tlsEnable bool, timeout time.Duration) management.SetupFound {
 	home := userHomeDir()
 	coreURL := coreAddress(listen, tlsEnable)
@@ -918,11 +846,6 @@ func isExecutableFile(path string) bool {
 
 var versionPattern = regexp.MustCompile(`\bv?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b`)
 
-// probeVersion runs program --version and reads a version from what it prints. The program
-// runs in a fresh folder below scratch that is its home, config, data, state, cache and temporary
-// folder, removed afterwards, so a tool that writes there on start leaves nothing in the
-// person's own folders. A tool that cannot run there (a version manager's shim looking for its
-// own folders) reports no version.
 func probeVersion(ctx context.Context, program, scratch string, timeout time.Duration) string {
 	if err := os.MkdirAll(scratch, 0o700); err != nil {
 		log.Printf("setup: %v", err)
@@ -953,9 +876,6 @@ func probeVersion(ctx context.Context, program, scratch string, timeout time.Dur
 	return parseVersionOutput(out.String())
 }
 
-// probeEnv is env with every folder a tool keeps its files in pointed at dir: the home folder
-// (HOME, and USERPROFILE, APPDATA and LOCALAPPDATA on Windows), each XDG_*_HOME, CODEX_HOME and
-// the temporary folder.
 func probeEnv(env []string, dir string) []string {
 	set := []string{"HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
 		"XDG_STATE_HOME", "XDG_CACHE_HOME", "CODEX_HOME", "TMPDIR", "TMP", "TEMP"}

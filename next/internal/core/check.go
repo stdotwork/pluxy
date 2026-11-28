@@ -18,16 +18,11 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Account checks: when core starts, and when a reload or the credential store adds or changes an
-// account, core asks the account's extension whether it works (the protocol's check call, which
-// never generates). The result is shown in the management API's account listing and logged.
-// Checks run in the background: serving never waits for them.
 const (
-	checkTimeout  = 30 * time.Second // one check call
-	checkParallel = 4                // check calls running at once
+	checkTimeout  = 30 * time.Second
+	checkParallel = 4
 )
 
-// checks holds the result of each account's last check, by account ID.
 type checks struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -39,8 +34,6 @@ type checks struct {
 	entries map[string]*checkEntry
 }
 
-// checkEntry is one account's check: key says what was checked (the extension generation, the
-// account's settings and credential), so a change checks again.
 type checkEntry struct {
 	key    [32]byte
 	result server.AccountCheck
@@ -51,7 +44,6 @@ func newChecks() *checks {
 	return &checks{ctx: ctx, cancel: cancel, sem: make(chan struct{}, checkParallel), entries: map[string]*checkEntry{}}
 }
 
-// result returns account id's check, or nil when core has none.
 func (k *checks) result(id string) *server.AccountCheck {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -62,7 +54,6 @@ func (k *checks) result(id string) *server.AccountCheck {
 	return nil
 }
 
-// stop cancels running checks and waits for them; no check starts after it.
 func (k *checks) stop() {
 	k.mu.Lock()
 	k.stopped = true
@@ -71,9 +62,6 @@ func (k *checks) stop() {
 	k.wg.Wait()
 }
 
-// checkAccounts starts a check of each of accounts, the accounts s routes over, that is new or
-// changed since its last check, and forgets the checks of accounts no longer among them. It
-// returns at once.
 func (c *Core) checkAccounts(s *snapshot, accounts []route.Account) {
 	k := c.checks
 	records := map[string]protocol.Credential{}
@@ -97,12 +85,9 @@ func (c *Core) checkAccounts(s *snapshot, accounts []route.Account) {
 		}
 		g := s.exts[a.Extension]
 		if g == nil {
-			continue // safe mode
+			continue
 		}
 		call := protocol.Account{ID: a.ID, Settings: a.Settings, Credential: a.Credential, ProxyURL: a.ProxyURL, Headers: a.Headers}
-		// What identifies the check: the generation (a new one may check differently), the
-		// settings, and the credential. A stored account's credential is renewed on its own, so
-		// it counts by its registration, except for a static key, which only a new login changes.
 		h := sha256.New()
 		fmt.Fprintf(h, "%p\x00%s\x00", g, a.Extension)
 		h.Write(a.Settings)
@@ -134,7 +119,6 @@ func (c *Core) checkAccounts(s *snapshot, accounts []route.Account) {
 			continue
 		}
 		if exp := call.Credential; exp != nil && exp.ExpiresAt != 0 && exp.ExpiresAt <= time.Now().Unix() {
-			// Renewing it here would be a call beyond the check; the next request renews it.
 			c.finishCheck(e, a.ID, nil, &llm.Error{Code: llm.CodeUnsupported, Message: "the credential has expired; core renews it for the next request"}, false)
 			continue
 		}
@@ -148,7 +132,7 @@ func (c *Core) checkAccounts(s *snapshot, accounts []route.Account) {
 			}
 			defer func() { <-k.sem }()
 			if !g.Acquire() {
-				return // replaced or stopping: a later publish checks the account again
+				return
 			}
 			ctx, cancel := context.WithTimeout(k.ctx, checkTimeout)
 			res, err := g.Check(ctx, call)
@@ -166,7 +150,6 @@ func (c *Core) checkAccounts(s *snapshot, accounts []route.Account) {
 	}
 }
 
-// finishCheck records and logs the outcome of account id's check in e, with c.checks.mu held.
 func (c *Core) finishCheck(e *checkEntry, id string, res *protocol.CheckResult, err *llm.Error, called bool) {
 	now := time.Now()
 	r := server.AccountCheck{At: &now}
@@ -184,7 +167,7 @@ func (c *Core) finishCheck(e *checkEntry, id string, res *protocol.CheckResult, 
 		}
 	default:
 		shown := *err
-		shown.Raw = nil // the upstream's reply body; the message says what failed
+		shown.Raw = nil
 		r.State, r.Error = server.CheckFailed, &shown
 		log.Printf("account %q: check failed: %s: %s", id, err.Code, err.Message)
 	}

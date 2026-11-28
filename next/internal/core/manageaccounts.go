@@ -18,33 +18,21 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// LoginMethods lists one extension's ways of signing in to an account.
 type LoginMethods struct {
 	Extension string                 `json:"extension"`
 	Methods   []protocol.LoginMethod `json:"methods"`
 }
 
-// AccountModel is one model an account serves, as GET /accounts/{id}/models lists it.
 type AccountModel = management.AccountModel
 
-// TestResult is the outcome of POST /accounts/{id}/test.
 type TestResult = management.TestResult
 
-// testPrompt is what an account test sends, and testMaxTokens the longest reply it asks for:
-// a request as small as the old panels' connection test.
 const (
 	testPrompt    = "Hi"
 	testMaxTokens = 16
-	testReplyMax  = 200 // runes of the reply kept
+	testReplyMax  = 200
 )
 
-// handleAccounts adds the account calls that need the running extensions or routing state:
-//
-//	GET  /v0/management/login-methods          each extension's login methods and their inputs
-//	POST /v0/management/accounts/{id}/cooldown/reset  clear the account's cooldowns
-//	GET  /v0/management/accounts/{id}/models   the models the account serves
-//	POST /v0/management/accounts/{id}/test     send the account one small request
-//	GET  /v0/management/accounts/{id}/quota    the account's plan and usage, from its provider
 func (c *Core) handleAccounts(m *server.Management) {
 	m.Handle("GET /login-methods", func(w http.ResponseWriter, r *http.Request) {
 		s, release := c.acquire()
@@ -106,7 +94,6 @@ func (c *Core) handleAccounts(m *server.Management) {
 	})
 }
 
-// errNoAccount and errNoModel are the account calls' own refusals.
 var (
 	errNoAccount = errors.New("no such account")
 	errNoModel   = errors.New("no model to test with")
@@ -133,9 +120,6 @@ func writeAccountError(w http.ResponseWriter, err error) {
 	}
 }
 
-// account returns the account with ID id in snapshot s: the config's account of that ID, else
-// the one added by login (Managed) with its extension's defaults for logins, whether or not it
-// receives requests now.
 func (c *Core) account(s *snapshot, id string) (route.Account, bool) {
 	for _, a := range s.Config.Accounts() {
 		if a.ID == id {
@@ -152,8 +136,6 @@ func (c *Core) account(s *snapshot, id string) (route.Account, bool) {
 	return route.Account{}, false
 }
 
-// credential returns the credential an attempt on a presents now, and its version for a
-// managed account. A managed account's is renewed first when it is due.
 func (c *Core) credential(ctx context.Context, a route.Account) (*protocol.Credential, uint64, error) {
 	if !a.Managed {
 		return a.Credential, 0, nil
@@ -165,8 +147,6 @@ func (c *Core) credential(ctx context.Context, a route.Account) (*protocol.Crede
 	return cr, v, nil
 }
 
-// accountModels returns the models account id serves: its config's models when it lists them,
-// else the ones its extension lists for it.
 func (c *Core) accountModels(ctx context.Context, s *snapshot, id string) (management.AccountModelsReply, error) {
 	a, ok := c.account(s, id)
 	if !ok {
@@ -221,8 +201,6 @@ func (c *Core) accountModels(ctx context.Context, s *snapshot, id string) (manag
 	return management.AccountModelsReply{Models: out, From: from}, nil
 }
 
-// listModels returns account a's model list from the list routing keeps when a is routed
-// and has one, else asks its extension directly.
 func (c *Core) listModels(ctx context.Context, s *snapshot, a route.Account) (*protocol.ModelList, error) {
 	if s.Router != nil {
 		if list := s.Router.AccountList(ctx, a.ID); list != nil {
@@ -240,9 +218,6 @@ func (c *Core) listModels(ctx context.Context, s *snapshot, a route.Account) (*p
 	return list, nil
 }
 
-// accountQuota reads account id's quota through its extension and keeps the reply as the
-// account's last (route.State.NoteQuota), whoever asked: a management call, routing or ignition.
-// A credential the upstream refuses is renewed and tried once more, as for a request.
 func (c *Core) accountQuota(ctx context.Context, s *snapshot, id string) (*management.QuotaReply, error) {
 	a, ok := c.account(s, id)
 	if !ok {
@@ -270,9 +245,6 @@ func (c *Core) accountQuota(ctx context.Context, s *snapshot, id string) (*manag
 	}
 }
 
-// testAccount sends account id one small request for model, straight to its extension: routing,
-// its cooldowns and its state are left as they are. With no model it uses the first the account
-// serves. A credential the upstream refuses is renewed and tried once more, as for a request.
 func (c *Core) testAccount(ctx context.Context, s *snapshot, id, model string) (TestResult, error) {
 	a, ok := c.account(s, id)
 	if !ok {
@@ -319,7 +291,6 @@ func (c *Core) testAccount(ctx context.Context, s *snapshot, id, model string) (
 	return res, nil
 }
 
-// runTest sends req to account a with credential cr and reads the reply.
 func runTest(ctx context.Context, s *snapshot, a route.Account, cr *protocol.Credential, req llm.Request) TestResult {
 	var res TestResult
 	st := s.Attempt(ctx, a.Extension, protocol.Account{ID: a.ID, Settings: a.Settings, Credential: cr, ProxyURL: a.ProxyURL, Headers: a.Headers}, req)

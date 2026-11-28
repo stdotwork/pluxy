@@ -14,20 +14,12 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// Limits of the usage calls' parameters.
 const (
 	maxUsageBuckets  = 1440
 	defaultUsagePage = 100
 	maxUsagePage     = 1000
 )
 
-// handleUsage adds the usage calls. Reading the usage record never removes or changes a recorded
-// request; a read of a closed day may write that day's summary file.
-//
-//	GET /v0/management/usage         totals, breakdowns by model, provider, account and client
-//	                                 key, and a time series
-//	GET /v0/management/usage/events  the recorded requests, oldest first (after) or newest first
-//	                                 (before), a page at a time
 func (c *Core) handleUsage(m *server.Management) {
 	m.Handle("GET /usage", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -113,9 +105,6 @@ func (c *Core) handleUsage(m *server.Management) {
 	})
 }
 
-// usageFilter reads the filter parameters both usage calls take: since and until (RFC 3339
-// times, or since as a duration back from now, such as 24h or 7d), model, provider, account,
-// key / key_id and failed (true or false).
 func usageFilter(q url.Values) (usage.Filter, error) {
 	keyID := q.Get("key_id")
 	if k := q.Get("key"); k != "" {

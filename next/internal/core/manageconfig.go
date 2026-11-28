@@ -28,15 +28,8 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// The management calls that read and change core's config file: the document itself, the
-// client keys, the management key, and the basic and routing settings. Every change goes
-// through a reload transaction (WriteConfig): the new contents are checked and prepared like
-// any reload, and the file is written, atomically, only when they are ready to serve.
-
-// errWriteConfig marks a change that was ready but could not be written to the file.
 var errWriteConfig = errors.New("writing the config file")
 
-// editError is a change that does not apply to the config file: the reply's status and code.
 type editError struct {
 	status int
 	code   string
@@ -45,23 +38,14 @@ type editError struct {
 
 func (e *editError) Error() string { return e.msg }
 
-// WriteConfig changes the config file in a reload transaction: edit gets the file's contents
-// and returns the new contents. They are checked and prepared as a reload prepares them, and
-// only then written to the file (replacing it in one step) and published. When edit fails or
-// the new contents are refused, the file and the active config stay as they were.
 func (c *Core) WriteConfig(why string, edit func(cur []byte) ([]byte, error)) error {
 	c.reloading.Lock()
 	defer c.reloading.Unlock()
 	return c.transact(true, why, nil, nil, edit)
 }
 
-// writeFileAtomic replaces the file at path (the file a symbolic link there points to) with b
-// in one step, keeping its permissions: other readers see the old contents or the new, never
-// part of them. The new file is made private (private.CreateTemp), so no one else can open it
-// while the secrets are written, and then given the old file's permissions: its mode, and on
-// Windows, where a mode sets only the read-only attribute, its access list (private.CopyAccess).
-// A temporary file made the usual way would take its folder's list, which may let in users the
-// config's own list keeps out.
+// On Windows, a mode sets only the read-only attribute. A temporary file made the usual way would
+// take its folder's list, which may let in users the config's own list keeps out.
 func writeFileAtomic(path string, b []byte) (err error) {
 	target, err := filepath.EvalSymlinks(path)
 	if err != nil {
@@ -117,7 +101,6 @@ func fileHash(b []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// configView is the config document as the management API shows it.
 type configView = management.Config
 
 func (c *Core) configView() (configView, error) {
@@ -136,8 +119,6 @@ func (c *Core) configView() (configView, error) {
 	return v, nil
 }
 
-// scrub returns msg with the secrets of the config file, of the active config and of the
-// given config contents replaced by placeholders.
 func (c *Core) scrub(msg string, docs ...[]byte) string {
 	var secrets []string
 	if b, err := os.ReadFile(c.opts.ConfigPath); err == nil {
@@ -148,21 +129,17 @@ func (c *Core) scrub(msg string, docs ...[]byte) string {
 			secrets = append(secrets, d.TextSecrets()...)
 		}
 	}
-	if cur := c.cur.Load(); cur != nil { // nil while core starts
+	if cur := c.cur.Load(); cur != nil {
 		secrets = append(append(secrets, cur.Config.ManagementKey), cur.Config.ClientKeys...)
 	}
 	return c.redactor.Scrub(msg, secrets)
 }
 
-// ScrubConfigError returns err with the secrets of the config file at path taken out of its
-// message, for a command that reads the config without starting core.
 func ScrubConfigError(path string, err error) error {
 	c := &Core{opts: Options{ConfigPath: path}, redactor: configdoc.NewRedactor()}
 	return c.scrubbed(err)
 }
 
-// scrubbed returns err with the secrets scrub finds taken out of its message; errors.Is and
-// errors.As still see err.
 func (c *Core) scrubbed(err error, docs ...[]byte) error {
 	msg := c.scrub(err.Error(), docs...)
 	if msg == err.Error() {
@@ -179,8 +156,6 @@ type scrubbedError struct {
 func (e *scrubbedError) Error() string { return e.msg }
 func (e *scrubbedError) Unwrap() error { return e.err }
 
-// writeChangeError writes why a change to the config file failed; docs are the config
-// contents involved, whose secrets the message must not show.
 func (c *Core) writeChangeError(w http.ResponseWriter, err error, docs ...[]byte) {
 	var ee *editError
 	switch {
@@ -193,7 +168,6 @@ func (c *Core) writeChangeError(w http.ResponseWriter, err error, docs ...[]byte
 	}
 }
 
-// edit returns an edit of the config file that parses it, applies change and writes it out.
 func (c *Core) edit(change func(d *configdoc.Doc) error) func([]byte) ([]byte, error) {
 	return func(cur []byte) ([]byte, error) {
 		d, err := configdoc.Parse(cur, c.isYAML())
@@ -207,8 +181,6 @@ func (c *Core) edit(change func(d *configdoc.Doc) error) func([]byte) ([]byte, e
 	}
 }
 
-// readStrictJSON reads a request body into v, refusing fields v does not have and anything after
-// the one JSON object.
 func readStrictJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	b, ok := readManagementBody(w, r)
 	if !ok {
@@ -227,25 +199,16 @@ func readStrictJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// stagedKeyFor is how long a staged management key can be put into use.
 const stagedKeyFor = 10 * time.Minute
 
-// stagedKey is the management key POST /management-key/rotate/stage made, kept in memory only:
-// one at a time, until it is put into use, another stage replaces it, it is stagedKeyFor old, or
-// core stops. mu is held by a stage while it sets the key, and by a commit from its check of the
-// key through the config write to forgetting the key, so a stage cannot replace the key between a
-// commit's check and its write. set, holds and drop need mu held.
 type stagedKey struct {
 	mu      sync.Mutex
 	value   string
 	expires time.Time
 
-	// Tests only: waiting is called when lock finds mu held, before it waits for it; checked is
-	// called with mu held when a commit's check has passed, before its write.
 	waiting, checked func()
 }
 
-// lock takes mu.
 func (s *stagedKey) lock() {
 	if s.waiting == nil {
 		s.mu.Lock()
@@ -261,31 +224,25 @@ func (s *stagedKey) set(value string, expires time.Time) {
 	s.value, s.expires = value, expires
 }
 
-// holds reports whether value is the staged key and has not expired at now.
 func (s *stagedKey) holds(value string, now time.Time) bool {
 	return s.value != "" && now.Before(s.expires) && sameSecret(value, s.value)
 }
 
-// drop forgets the staged key when it is value: it is in use now.
 func (s *stagedKey) drop(value string) {
 	if sameSecret(value, s.value) {
 		s.value, s.expires = "", time.Time{}
 	}
 }
 
-// sameSecret compares two secrets in constant time, length included.
 func sameSecret(a, b string) bool {
 	x, y := sha256.Sum256([]byte(a)), sha256.Sum256([]byte(b))
 	return subtle.ConstantTimeCompare(x[:], y[:]) == 1
 }
 
-// errKeyInUse ends a commit's edit of the config file when the key sent is already in use.
 var errKeyInUse = errors.New("the management key is already in use")
 
-// newKey returns a new random key: 26 characters, 130 random bits.
 func newKey() string { return rand.Text() }
 
-// clientKeyView is a client key as the management API lists it.
 type clientKeyView = management.ClientKey
 
 func (c *Core) keyView(k string) clientKeyView {
@@ -293,9 +250,6 @@ func (c *Core) keyView(k string) clientKeyView {
 	return clientKeyView{ID: id, Masked: maskKey(k), Label: c.Config().ClientKeyLabels[id]}
 }
 
-// checkKeyLabel returns a label sent for a client key as CheckLabel does, and refuses a label that
-// is one of the client keys or the management key: a label is listed and recorded in usage
-// events, so it must not be a secret. It writes the 400 reply and returns false when it refuses.
 func (c *Core) checkKeyLabel(w http.ResponseWriter, sent string) (string, bool) {
 	label, err := server.CheckLabel(sent)
 	if err == nil && c.Config().LabelIsKey(label) {
@@ -330,7 +284,6 @@ type retryView = management.RetrySettings
 
 type cooldownView = management.CooldownSettings
 
-// settings returns the active config's settings by today's core's names.
 func settings(cfg *server.Config) settingsView {
 	r := cfg.Routing
 	v := routingView{Strategy: r.Strategy, ForceModelPrefix: r.ForceModelPrefix,
@@ -352,7 +305,6 @@ func settings(cfg *server.Config) settingsView {
 		Usage: usageView{UsageStatisticsEnabled: cfg.Usage.On()}}}
 }
 
-// shortDuration writes d as today's config does, such as 1h or 1h30m rather than 1h0m0s.
 func shortDuration(d time.Duration) string {
 	s := d.String()
 	if strings.HasSuffix(s, "m0s") {
@@ -364,12 +316,9 @@ func shortDuration(d time.Duration) string {
 	return s
 }
 
-// settingsFor is GET /settings's reply to the caller r: the active settings, the listen address
-// the config file holds when core has not taken it yet, and whether the call came from this computer.
 func (c *Core) settingsFor(r *http.Request) settingsView {
 	v := settings(c.Config())
 	v.FromThisComputer = server.FromThisMachine(r)
-	// The address pluxy is bound to: a config that listens on port 0 gets a free port at start.
 	v.Listen, _ = c.setupCoreTarget()
 	if b, err := os.ReadFile(c.opts.ConfigPath); err == nil {
 		if file, err := server.ParseConfig(b, c.opts.ConfigPath); err == nil && file.Listen != c.Config().Listen && file.Listen != v.Listen {
@@ -379,9 +328,6 @@ func (c *Core) settingsFor(r *http.Request) settingsView {
 	return v
 }
 
-// checkListenAddress refuses a listen address that pluxy could not start on: one that is not
-// host:port, or whose host this computer does not have. It tries the host with a free port, which
-// is as far as it can tell without taking the port itself.
 func checkListenAddress(listen string) error {
 	host, _, err := configdoc.CheckListen(listen)
 	if err != nil {
@@ -394,7 +340,6 @@ func checkListenAddress(listen string) error {
 	return ln.Close()
 }
 
-// handleConfig adds the config calls to the management API.
 func (c *Core) handleConfig(m *server.Management) {
 	m.Handle("GET /config", func(w http.ResponseWriter, r *http.Request) {
 		v, err := c.configView()
@@ -419,7 +364,7 @@ func (c *Core) handleConfig(m *server.Management) {
 			writeError(w, http.StatusBadRequest, "invalid_request", "send the document as content")
 			return
 		}
-		cur, _ := os.ReadFile(c.opts.ConfigPath) // unreadable: placeholders match nothing
+		cur, _ := os.ReadFile(c.opts.ConfigPath)
 		b, err := c.redactor.Restore([]byte(*req.Content), cur, c.isYAML())
 		if errors.Is(err, configdoc.ErrStale) {
 			writeError(w, http.StatusConflict, "conflict", err.Error())
@@ -439,7 +384,6 @@ func (c *Core) handleConfig(m *server.Management) {
 		for _, n := range cfg.Notices {
 			notices = append(notices, c.scrub(n, cur, b))
 		}
-		// A new listen address is no mistake: core serves on it from its next start.
 		if now, _ := c.setupCoreTarget(); cfg.Listen != c.Config().Listen && cfg.Listen != now {
 			notices = append(notices, fmt.Sprintf("listen %q is used the next time pluxy starts; until then it keeps serving on %q", cfg.Listen, now))
 		}
@@ -556,7 +500,6 @@ func (c *Core) handleConfig(m *server.Management) {
 			c.writeChangeError(w, err)
 			return
 		}
-		// What is stored now, which is the label sent: the edit refuses what it cannot set.
 		writeJSON(w, http.StatusOK, clientKeyView{ID: id, Masked: masked, Label: c.Config().ClientKeyLabels[id]})
 	})
 
@@ -577,8 +520,6 @@ func (c *Core) handleConfig(m *server.Management) {
 			case left == 0:
 				return &editError{http.StatusConflict, "conflict", "this is the last client key, and without one anyone who reaches core can use it; add another key first"}
 			}
-			// A label set through an alias or merge stays: no key has this ID any more, so
-			// nothing reads it.
 			d.RemoveClientKeyLabel(id)
 			return nil
 		}))
@@ -599,9 +540,6 @@ func (c *Core) handleConfig(m *server.Management) {
 		writeJSON(w, http.StatusOK, map[string]any{"value": key})
 	})
 
-	// The two-step change: stage makes a new key and keeps it in memory only, so the old key
-	// works until commit puts the new one into use, and a reply lost in between changes nothing.
-	// Its reply names the config file core runs on, where commit writes the key.
 	m.Handle("POST /management-key/rotate/stage", func(w http.ResponseWriter, r *http.Request) {
 		key := newKey()
 		c.staged.lock()
@@ -614,10 +552,6 @@ func (c *Core) handleConfig(m *server.Management) {
 		writeJSON(w, http.StatusOK, map[string]any{"value": key, "config": config})
 	})
 
-	// Commit decides under the config-write lock, as the write itself: a commit sent again after
-	// a lost reply waits for the first, then finds its key in use and answers 204 too, so one
-	// retry tells whether the key changed. It holds the staged key's lock from the check to
-	// forgetting the key, so a stage waits for it and cannot replace the key in between.
 	m.Handle("POST /management-key/rotate/commit", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Value string `json:"value"`
@@ -662,12 +596,9 @@ func (c *Core) handleConfig(m *server.Management) {
 		if !readStrictJSON(w, r, &p) {
 			return
 		}
-		// The proxy as GET shows it, sent back unchanged with the rest, keeps the password it hides.
 		if cur := c.Config().ProxyURL; p.ProxyURL != nil && len(proxyurl.Password(cur)) > 0 && strings.TrimSpace(*p.ProxyURL) == proxyurl.Redact(cur) {
 			p.ProxyURL = nil
 		}
-		// A new listen address is saved to the file and served on after a restart, so it must be one
-		// this computer has: an address it has not would stop pluxy from starting.
 		if p.Listen != nil && strings.TrimSpace(*p.Listen) != c.Config().Listen {
 			if err := checkListenAddress(*p.Listen); err != nil {
 				writeError(w, http.StatusBadRequest, "invalid_request", strings.TrimPrefix(err.Error(), configdoc.ErrInvalid.Error()+": "))

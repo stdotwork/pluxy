@@ -14,16 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// handleChains adds the fallback chain calls (routing.chains):
-//
-//	GET    /v0/management/chains         the chains, by name
-//	PUT    /v0/management/chains/{name}  set name's chain: {"steps": [...]}
-//	DELETE /v0/management/chains/{name}  remove it: name goes back to one provider's accounts
-//
-// A chain is written to the config file as any management change is, and refused (422) when it
-// has more than route.MaxChainSteps steps, a step names another chain or a provider that is not
-// an extension's ID, no account serves a step, or a step names an account core does not know or
-// one that does not serve it. A config.yaml cannot hold chains (409).
 func (c *Core) handleChains(m *server.Management) {
 	m.Handle("GET /chains", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, chainsReply(c.Config().Routing.Chains))
@@ -44,8 +34,6 @@ func (c *Core) handleChains(m *server.Management) {
 			chains = map[string][]route.Step{}
 		}
 		chains[name] = req.Steps
-		// A provider is an extension's ID, so pluxy chain list writes every step as chain set
-		// reads it back.
 		for i, st := range req.Steps {
 			if st.Provider != "" && !host.ValidID(st.Provider) {
 				writeError(w, http.StatusUnprocessableEntity, "refused", fmt.Sprintf("chain %s: step %d names the provider %q; a provider is an extension's ID, publisher/name", name, i+1, st.Provider))
@@ -92,7 +80,6 @@ func (c *Core) handleChains(m *server.Management) {
 	})
 }
 
-// chainsReply lists chains by name.
 func chainsReply(chains map[string][]route.Step) management.ChainsReply {
 	out := management.ChainsReply{Chains: []management.Chain{}}
 	for _, name := range slices.Sorted(maps.Keys(chains)) {

@@ -85,7 +85,6 @@ func TestThemeStoreLimitsAndSymlinks(t *testing.T) {
 		}
 	}
 
-	// Symlink pointing outside themes/ is refused by get and ignored by list.
 	secret := filepath.Join(t.TempDir(), "secret.json")
 	if err := os.WriteFile(secret, []byte(`{"name":"Leaked"}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -96,7 +95,6 @@ func TestThemeStoreLimitsAndSymlinks(t *testing.T) {
 	if _, err := st.get("t3", "link"); !errors.Is(err, errNotRegular) {
 		t.Errorf("get symlink err = %v, want errNotRegular", err)
 	}
-	// Symlinked publisher directory is also refused.
 	outsidePub := filepath.Join(t.TempDir(), "outside")
 	if err := os.MkdirAll(outsidePub, 0o700); err != nil {
 		t.Fatal(err)
@@ -118,7 +116,6 @@ func TestThemeStoreLimitsAndSymlinks(t *testing.T) {
 		t.Fatalf("list with symlinks = %+v, want only t3/blue", reply.Themes)
 	}
 
-	// Select, verify current persists, delete selected clears current.
 	if err := st.setCurrent("t3/blue"); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +131,6 @@ func TestThemeStoreLimitsAndSymlinks(t *testing.T) {
 		t.Fatalf("list after remove current = (%+v, %v)", reply, err)
 	}
 
-	// 64 stored themes max; 65th refused, replacing an existing allowed.
 	for i := range maxStoredThemes {
 		name := fmt.Sprintf("theme-%02d", i)
 		if _, err := st.put("t3", name, "", []byte(`{}`)); err != nil {
@@ -150,8 +146,6 @@ func TestThemeStoreLimitsAndSymlinks(t *testing.T) {
 	_ = fs.ErrExist
 }
 
-// A file that is not one JSON object is not a stored theme: list leaves it out, get says it is
-// not there, and it does not count towards the 64-theme cap.
 func TestFilesThatAreNotThemes(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state", "themes")
 	st := newThemeStore(dir)
@@ -175,8 +169,6 @@ func TestFilesThatAreNotThemes(t *testing.T) {
 		t.Fatalf("put with 64 files that are not themes: %v, want it stored", err)
 	}
 
-	// At the cap a file that is not a theme does not stand in for the one being stored, and a
-	// stored theme is still replaced.
 	for i := range maxStoredThemes - 1 {
 		if _, err := st.put("cap", fmt.Sprintf("t-%02d", i), "", []byte(`{}`)); err != nil {
 			t.Fatalf("put #%d: %v", i, err)
@@ -214,7 +206,6 @@ func TestHandleThemesHTTP(t *testing.T) {
 		return rec
 	}
 
-	// Unauthenticated request fails 401.
 	req := httptest.NewRequest(http.MethodGet, management.Prefix+"/themes", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	rec := httptest.NewRecorder()
@@ -223,7 +214,6 @@ func TestHandleThemesHTTP(t *testing.T) {
 		t.Fatalf("unauth GET /themes = %d, want 401", rec.Code)
 	}
 
-	// Bad IDs return 400 invalid_request.
 	for _, path := range []string{
 		"/themes/%2e%2e/bad",
 		"/themes/t3/%2e%2e",
@@ -245,14 +235,12 @@ func TestHandleThemesHTTP(t *testing.T) {
 		}
 	}
 
-	// Non-object bodies return 400 invalid_request.
 	for _, body := range []string{"", "null", "[]", `"hello"`, "123", "true", "{}{}", "{bad"} {
 		if r := do(http.MethodPut, "/themes/t3/ok", body); r.Code != http.StatusBadRequest {
 			t.Errorf("PUT non-object %q = %d (%s), want 400", body, r.Code, r.Body.String())
 		}
 	}
 
-	// Over 256 KiB returns 413; exactly 256 KiB succeeds.
 	tooBig := `{"pad":"` + strings.Repeat("a", maxThemeBytes) + `"}`
 	if r := do(http.MethodPut, "/themes/t3/big", tooBig); r.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("PUT over limit = %d (%s), want 413", r.Code, r.Body.String())
@@ -269,7 +257,6 @@ func TestHandleThemesHTTP(t *testing.T) {
 		t.Fatalf("DELETE exact = %d, want 204", r.Code)
 	}
 
-	// PUT /theme strict body checks (unknown field, missing id, invalid id), built-in ID allowed.
 	for _, bad := range []string{`{}`, `{"id":null}`, `{"id":"pluxy/paper","extra":1}`, `{"id":"../x"}`, `{"id":"Upper/case"}`} {
 		if r := do(http.MethodPut, "/theme", bad); r.Code != http.StatusBadRequest {
 			t.Errorf("PUT /theme %s = %d (%s), want 400", bad, r.Code, r.Body.String())
@@ -287,8 +274,6 @@ func TestHandleThemesHTTP(t *testing.T) {
 		t.Fatalf("PUT /theme clear = %d, want 200", r.Code)
 	}
 
-	// A file in a publisher's folder that is not one JSON object is not a stored theme: GET
-	// answers 404 as it does for an absent one, and list leaves it out.
 	themesDir := filepath.Join(StateDir(cfgPath), "themes")
 	if err := os.MkdirAll(filepath.Join(themesDir, "junk"), 0o700); err != nil {
 		t.Fatal(err)
@@ -303,8 +288,6 @@ func TestHandleThemesHTTP(t *testing.T) {
 		t.Errorf("GET /themes = %d (%s), want the file left out", r.Code, r.Body.String())
 	}
 
-	// A file at the publisher's path refuses PUT with the change refusal wrong input gets, not
-	// with an internal error, and GET and DELETE say there is no such theme.
 	if err := os.WriteFile(filepath.Join(themesDir, "blocked"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +301,6 @@ func TestHandleThemesHTTP(t *testing.T) {
 	}
 }
 
-// The built-in themes live in the UI: a built-in added there without core's list fails here.
 func TestBuiltInThemeIDsMatchTheUI(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("..", "..", "ui", "themes", "*.json"))
 	if err != nil || len(files) == 0 {
@@ -388,8 +370,6 @@ func currentTheme(t *testing.T, do func(method, target, body string) *httptest.R
 	return got.Current
 }
 
-// A built-in theme's ID cannot be stored under: the page would never list that file. One stored
-// before this rule stays readable and removable.
 func TestThemeStoreRefusesBuiltInIDs(t *testing.T) {
 	do, themesDir := themeAPI(t)
 	for _, id := range builtInThemeIDs {
@@ -404,7 +384,6 @@ func TestThemeStoreRefusesBuiltInIDs(t *testing.T) {
 			t.Errorf("GET /themes/%s after the refusal = %d, want nothing stored", id, r.Code)
 		}
 	}
-	// Another name under the built-ins' publisher is not a built-in's ID.
 	if r := do(http.MethodPut, "/themes/pluxy/mine", `{"name":"Mine"}`); r.Code != http.StatusOK {
 		t.Errorf("PUT /themes/pluxy/mine = %d (%s), want 200", r.Code, r.Body.String())
 	}
@@ -427,12 +406,9 @@ func TestThemeStoreRefusesBuiltInIDs(t *testing.T) {
 	}
 }
 
-// PUT /theme takes the empty ID, a stored theme, a built-in, and any other ID of the built-ins'
-// publisher, which a newer UI may hold. Anything else is 404 and leaves the selection alone.
 func TestThemeSelectionRules(t *testing.T) {
 	do, themesDir := themeAPI(t)
 
-	// On a core that has stored nothing, a refused ID makes no themes folder.
 	if r := do(http.MethodPut, "/theme", `{"id":"nope/nothing"}`); r.Code != http.StatusNotFound {
 		t.Errorf("PUT /theme unknown on a new core = %d (%s), want 404", r.Code, r.Body.String())
 	}
@@ -452,7 +428,6 @@ func TestThemeSelectionRules(t *testing.T) {
 		}
 	}
 
-	// What list does not count as a stored theme cannot be selected either.
 	if err := os.MkdirAll(filepath.Join(themesDir, "junk"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -493,8 +468,6 @@ func TestThemeSelectionRules(t *testing.T) {
 	}
 }
 
-// A theme removed while it is being selected cannot end up selected: the removal waits until the
-// selection has been checked and written.
 func TestSelectingARemovedTheme(t *testing.T) {
 	st := newThemeStore(filepath.Join(t.TempDir(), "state", "themes"))
 	if _, err := st.put("t3", "race", "Race", []byte(`{"name":"Race"}`)); err != nil {

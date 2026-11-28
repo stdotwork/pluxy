@@ -13,21 +13,10 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Window ignition (routing.ignition, package ignite): right after an account's five-hour usage
-// window resets, core sends the account one small request, so the next window starts at once.
-// It reads the accounts' usage through their extensions' quota call, as routing's checks do, and
-// sends the request as `pluxy account test` does, straight to the account's extension.
-
-// IgnitionEndpoint is the endpoint of an ignition request's usage event, in place of a client
-// API path, so the usage record tells ignitions from client requests.
 const IgnitionEndpoint = "ignition"
 
-// ignitionTimeout bounds one ignition request.
 const ignitionTimeout = 2 * time.Minute
 
-// runIgnition runs window ignition until ctx ends: on each tick it gives the planner the active
-// config's settings and accounts, then reads each account it says is due and sends the requests
-// it asks for, one account at a time. In safe mode, where no extension runs, it does nothing.
 func (c *Core) runIgnition(ctx context.Context, r *routing) {
 	defer close(r.ignited)
 	if c.opts.SafeMode {
@@ -45,7 +34,6 @@ func (c *Core) runIgnition(ctx context.Context, r *routing) {
 	}
 }
 
-// ignitionRound brings the planner up to date with the active config and acts on what is due.
 func (c *Core) ignitionRound(ctx context.Context) {
 	s := c.cur.Load()
 	if s == nil || s.Router == nil {
@@ -73,7 +61,6 @@ func (c *Core) ignitionRound(ctx context.Context) {
 	}
 }
 
-// igniteAccount reads account a's usage and starts the windows the planner asks for.
 func (c *Core) igniteAccount(ctx context.Context, a route.Account) {
 	p := c.ignition
 	q, e := readings{c}.Reading(ctx, a)
@@ -100,8 +87,6 @@ func (c *Core) igniteAccount(ctx context.Context, a route.Account) {
 	}
 }
 
-// ignite sends the request that starts window f of account a, records it in the usage record,
-// and returns the model it named and, when it failed, why.
 func (c *Core) ignite(ctx context.Context, a route.Account, f ignite.Fire) (string, *ignite.Failure) {
 	ctx, cancel := context.WithTimeout(ctx, ignitionTimeout)
 	defer cancel()
@@ -152,8 +137,6 @@ func (c *Core) ignite(ctx context.Context, a route.Account, f ignite.Fire) (stri
 	return model, &ignite.Failure{Message: res.Error.Message, Hard: hardFailure(res.Error)}
 }
 
-// hardFailure reports whether an ignition that failed with e would fail the same way a retry's
-// wait later: the key or the account refused, the model missing, the request refused.
 func hardFailure(e *llm.Error) bool {
 	switch e.Code {
 	case llm.CodeAuth, llm.CodePermission, llm.CodeAccountClosed, llm.CodeNotFound, llm.CodeInvalidRequest, llm.CodeUnsupported:

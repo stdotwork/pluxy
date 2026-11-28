@@ -16,8 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// A client's config at a FIFO is refused, not opened for reading: reading one waits for a
-// writer, which would hold the scan, and core's stop, until one comes.
 func TestClientConfigAtAFIFOIsRefusedNotRead(t *testing.T) {
 	home := setTestHome(t)
 	t.Setenv("PATH", t.TempDir())
@@ -55,7 +53,6 @@ func TestClientConfigAtAFIFOIsRefusedNotRead(t *testing.T) {
 	}
 }
 
-// A probe that does not answer is cut at the 4 s limit, and a child it started goes with it.
 func TestProbeTimeoutEndsTheProbesChildren(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()

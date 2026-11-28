@@ -22,13 +22,6 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// The client tools' config files, read the way the desktop app's writers for them read them
-// (next/app-tools/<tool>/src): a file a writer would refuse to change is refused, and a file
-// it takes is configured when it points the tool at this core, not configured when it holds
-// none of what the writer adds, and needs an update otherwise. coreURL is core's address
-// (coreAddress), which a tool's address matches as atCore says; empty when core's address is not
-// known, which no address matches.
-
 const (
 	stateNotConfigured = management.ClientStateNotConfigured
 	stateConfigured    = management.ClientStateConfigured
@@ -39,9 +32,6 @@ const (
 
 var errNoFile = errors.New("no file")
 
-// readClientFile reads a client tool's config file: errNoFile when there is none, and anything
-// but a regular file refused without reading it, since reading a FIFO waits for a writer and
-// would hold the scan and core's stop.
 func readClientFile(path string) ([]byte, error) {
 	f, err := openClientFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -65,13 +55,10 @@ func readClientFile(path string) ([]byte, error) {
 	return b, err
 }
 
-// blank reports whether b is empty or only white space, which the writers read as no settings.
 func blank(b []byte) bool { return len(bytes.TrimLeft(b, " \t\r\n")) == 0 }
 
 const utf8BOM = "\xEF\xBB\xBF"
 
-// jsonObject reads b as one strict JSON object, as serde_json and JSON.parse read it: a
-// byte-order mark, anything but an object, or text after it is refused.
 func jsonObject(b []byte) (map[string]any, bool) {
 	var m map[string]any
 	if bytes.HasPrefix(b, []byte(utf8BOM)) || json.Unmarshal(b, &m) != nil || m == nil {
@@ -80,8 +67,6 @@ func jsonObject(b []byte) (map[string]any, bool) {
 	return m, true
 }
 
-// objectOrAbsent is m[k] as an object: absent is (nil, true); anything else but an object is
-// (nil, false).
 func objectOrAbsent(m map[string]any, k string) (map[string]any, bool) {
 	v, ok := m[k]
 	if !ok {
@@ -91,7 +76,6 @@ func objectOrAbsent(m map[string]any, k string) (map[string]any, bool) {
 	return o, ok
 }
 
-// stringOrAbsent reports whether m[k] is a string or absent.
 func stringOrAbsent(m map[string]any, k string) bool {
 	v, ok := m[k]
 	if !ok {
@@ -101,10 +85,8 @@ func stringOrAbsent(m map[string]any, k string) bool {
 	return ok
 }
 
-// claudeCodeSchema is the schema Claude Code's settings may name in $schema.
 const claudeCodeSchema = "https://json.schemastore.org/claude-code-settings.json"
 
-// inspectClaudeCode reads ~/.claude/settings.json as settings.rs (parse and read_back) does.
 func inspectClaudeCode(home, coreURL string) (string, string) {
 	const display = "~/.claude/settings.json"
 	b, err := readClientFile(filepath.Join(home, ".claude", "settings.json"))
@@ -146,14 +128,6 @@ func inspectClaudeCode(home, coreURL string) (string, string) {
 	return display, stateNeedsUpdate
 }
 
-// atCore reports whether address, the address of core a tool's settings name, reaches the core
-// at coreURL (coreAddress): the same scheme, port and path (none: a final / is another address),
-// and the same host. For a core listening on every interface (0.0.0.0, :: or no host), a loopback
-// address or another address of this machine counts too, such as the one a browser on another
-// machine reached the panel by, when it is of the listener's family (IPv4 for 0.0.0.0, IPv6 for
-// ::), or of either family when the listener takes both (wildcardDualStack); the name localhost,
-// which may resolve to either family, only then. An empty coreURL (core's address is not known)
-// matches no address.
 func atCore(address, coreURL string) bool {
 	if coreURL == "" {
 		return false
@@ -190,18 +164,15 @@ func atCore(address, coreURL string) bool {
 	return ip.IsLoopback() || machineHasAddr(ip)
 }
 
-// atCoreV1 is atCore for an address with /v1 after core's.
 func atCoreV1(address, coreURL string) bool {
 	base, ok := strings.CutSuffix(address, "/v1")
 	return ok && atCore(base, coreURL)
 }
 
-// wildcardDualStack reports whether core's listener on every interface takes IPv4 and IPv6
-// connections alike. Go opens a "tcp" listener on 0.0.0.0, :: or no host as one IPv6 socket that
-// takes IPv4 as well when the system allows it (it turns IPV6_V6ONLY off, whatever the system's
-// default), and otherwise as a socket of the address's own family. A listener on 0.0.0.0 opened
-// the same way shows which: the system names it by an IPv6 address only in the first case.
-// Probed once.
+// Go opens a "tcp" listener on 0.0.0.0, :: or no host as one IPv6 socket that takes IPv4 as well
+// when the system allows it (it turns IPV6_V6ONLY off, whatever the system's default), and
+// otherwise as a socket of the address's own family. A listener on 0.0.0.0 opened the same way
+// shows which: the system names it by an IPv6 address only in the first case.
 var wildcardDualStack = sync.OnceValue(func() bool {
 	ln, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
@@ -212,7 +183,6 @@ var wildcardDualStack = sync.OnceValue(func() bool {
 	return ok && a.IP.To4() == nil
 })
 
-// machineHasAddr reports whether ip is an address of one of this machine's interfaces.
 var machineHasAddr = func(ip netip.Addr) bool {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -228,8 +198,6 @@ var machineHasAddr = func(ip netip.Addr) bool {
 	return false
 }
 
-// codexBaseURL is the Codex provider's base URL for the core at address: the address with /v1
-// once (base_url_of in codex/src/config.rs).
 func codexBaseURL(address string) string {
 	a := strings.TrimRight(address, "/")
 	if strings.HasSuffix(a, "/v1") {
@@ -238,10 +206,6 @@ func codexBaseURL(address string) string {
 	return a + "/v1"
 }
 
-// inspectCodex reads ~/.codex/config.toml as config.rs (parse and read_back) does, with one
-// difference: config.rs also wants model_catalog_json, the model catalog file the desktop app
-// writes beside the config. What pluxy client show prints carries no catalog, so a config
-// pasted from it counts as configured without one.
 func inspectCodex(home, coreURL string) (string, string) {
 	const display = "~/.codex/config.toml"
 	b, err := readClientFile(filepath.Join(home, ".codex", "config.toml"))
@@ -271,13 +235,8 @@ type codexTOMLFields struct {
 	bearerToken   string
 }
 
-// codexTables are the tables config.rs refuses a file for holding anything else at.
 var codexTables = []string{"model_providers", "model_providers.pluxy", "model_providers.pluxy.capabilities", "agents"}
 
-// parseCodexConfigTOML reads, line by line, only the keys inspectCodex needs and the refusals
-// config.rs makes that a line shows: text that is not UTF-8, one of codexTables written as an
-// array of tables or a value, and model_providers.pluxy.wire_api other than "responses". It is
-// not a TOML parser: a file TOML itself would refuse can still read as not refused here.
 func parseCodexConfigTOML(b []byte) codexTOMLFields {
 	var out codexTOMLFields
 	if !utf8.Valid(b) {
@@ -447,13 +406,8 @@ func parseTOMLString(val string) (string, bool) {
 	return "", false
 }
 
-// openCodeSchema is the schema OpenCode's config may name in $schema.
 const openCodeSchema = "https://opencode.ai/config.json"
 
-// inspectOpenCode reads ~/.config/opencode/opencode.jsonc, or opencode.json when only that one
-// exists, as opencode's config.rs (parse and read_back) and main.rs (config_in) do. A file
-// with providers.pluxy, OpenCode 2's own form of the provider, which config.rs's apply refuses
-// to write over, is refused.
 func inspectOpenCode(home, coreURL string) (string, string) {
 	dir := filepath.Join(home, ".config", "opencode")
 	name := "opencode.jsonc"
@@ -544,11 +498,9 @@ func inspectOpenCode(home, coreURL string) (string, string) {
 	return display, stateNeedsUpdate
 }
 
-// hasDuplicateKey reports whether the JSON in b names a key twice in one object, at any depth,
-// which opencode's config.rs refuses.
 func hasDuplicateKey(b []byte) bool {
 	dec := json.NewDecoder(bytes.NewReader(b))
-	var walk func() bool // reads one value; true when it holds a repeated key
+	var walk func() bool
 	walk = func() bool {
 		t, err := dec.Token()
 		if err != nil {
@@ -582,9 +534,6 @@ func hasDuplicateKey(b []byte) bool {
 	return walk()
 }
 
-// cleanJSONC strips // and /* */ comments and trailing commas from JSONC input. An unclosed
-// block comment is false, not a comment running to the end of the file: a reader that parses
-// the whole file refuses one, so the file is not one to call configured.
 func cleanJSONC(in []byte) ([]byte, bool) {
 	var noComments bytes.Buffer
 	noComments.Grow(len(in))
@@ -668,23 +617,17 @@ func cleanJSONC(in []byte) ([]byte, bool) {
 	return out.Bytes(), true
 }
 
-// The Pi adapter: its folder in Pi's agent folder, the marker file that makes the folder
-// pluxy's, and the package the marker names (pi-setup/src/pi.rs and adapter.rs).
 const (
 	piAdapterFolder  = "pluxy-cliproxyapi-provider"
 	piAdapterMarker  = ".pluxy-adapter.json"
 	piAdapterPackage = "pluxy/pi-setup"
 )
 
-// piBaseURL is the core's address as the Pi adapter takes it: without a final / or /v1
-// (base_url_of in pi.rs).
 func piBaseURL(address string) string {
 	a := strings.TrimRight(address, "/")
 	return strings.TrimSuffix(a, "/v1")
 }
 
-// piObject reads one of Pi's files as pi.rs's object does: no file is an empty object; a
-// byte-order mark, anything but one JSON object (an empty file too) is refused.
 func piObject(path string) (map[string]any, bool) {
 	b, err := readClientFile(path)
 	if errors.Is(err, errNoFile) {
@@ -696,7 +639,6 @@ func piObject(path string) (map[string]any, bool) {
 	return jsonObject(b)
 }
 
-// piSource is a packages entry's source: the string, or an object's source.
 func piSource(entry any) (string, bool) {
 	switch e := entry.(type) {
 	case string:
@@ -708,8 +650,6 @@ func piSource(entry any) (string, bool) {
 	return "", false
 }
 
-// inspectPi reads ~/.pi/agent/settings.json and cliproxyapi.json, and the adapter's marker,
-// as pi.rs (read_back) and adapter.rs (state) do.
 func inspectPi(home, coreURL string) (string, string) {
 	const display = "~/.pi/agent/settings.json"
 	agent := filepath.Join(home, ".pi", "agent")
@@ -754,8 +694,6 @@ func inspectPi(home, coreURL string) (string, string) {
 	return display, stateNeedsUpdate
 }
 
-// piAdapterReady reports whether the adapter's folder in agent is pluxy's: a folder (not a
-// link) whose marker names pluxy's package.
 func piAdapterReady(agent string) bool {
 	dir := filepath.Join(agent, piAdapterFolder)
 	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
@@ -771,12 +709,8 @@ func piAdapterReady(agent string) bool {
 	return json.Unmarshal(b, &marker) == nil && marker.Package == piAdapterPackage
 }
 
-// ompBaseURL is the pluxy provider's baseUrl for the core at address: with /v1 once
-// (base_url_of in omp.rs).
 func ompBaseURL(address string) string { return codexBaseURL(address) }
 
-// ompFile picks the first of names that exists in dir, else the first, as omp-setup's main.rs
-// (pick) does; legacy is the JSON file Oh My Pi moves to YAML when neither exists.
 func ompFile(dir string, legacy string, names ...string) (name string, unmigrated bool) {
 	for _, n := range names {
 		if _, err := os.Stat(filepath.Join(dir, n)); err == nil {
@@ -787,10 +721,6 @@ func ompFile(dir string, legacy string, names ...string) (name string, unmigrate
 	return names[0], err == nil
 }
 
-// ompYAML reads one of Oh My Pi's YAML files as the app's YAML reader does: no file, no
-// document or a null one is an empty mapping; more than one document, a top level that is not
-// a mapping, or what yaml.v3 refuses (a repeated key among it) is refused. YAML tags, which
-// the app's reader also refuses, are not looked for.
 func ompYAML(path string) (map[string]any, bool) {
 	b, err := readClientFile(path)
 	if errors.Is(err, errNoFile) {
@@ -819,8 +749,6 @@ func ompYAML(path string) (map[string]any, bool) {
 	return nil, false
 }
 
-// ompMapping is m[k] as a mapping: absent or null is (nil, true); anything else but a mapping
-// is (nil, false).
 func ompMapping(m map[string]any, k string) (map[string]any, bool) {
 	if m[k] == nil {
 		return nil, true
@@ -829,8 +757,6 @@ func ompMapping(m map[string]any, k string) (map[string]any, bool) {
 	return o, ok
 }
 
-// inspectOMP reads ~/.omp/agent/models.yml (or models.yaml) and config.yml (or config.yaml) as
-// omp-setup's omp.rs (read_back) and main.rs (config_of) do.
 func inspectOMP(home, coreURL string) (string, string) {
 	agent := filepath.Join(home, ".omp", "agent")
 	modelsName, modelsOld := ompFile(agent, "models.json", "models.yml", "models.yaml")
@@ -894,27 +820,20 @@ func inspectOMP(home, coreURL string) (string, string) {
 	return display, stateNeedsUpdate
 }
 
-// ClientSnippet is what to paste into a client tool's config files to point it at a core.
 type ClientSnippet struct {
 	Tool  string              `json:"tool"`
 	Name  string              `json:"name"`
 	Files []ClientSnippetFile `json:"files"`
-	// Note says what the files need besides themselves; empty when nothing.
-	Note string `json:"note,omitempty"`
+	Note  string              `json:"note,omitempty"`
 }
 
-// ClientSnippetFile is one file of a ClientSnippet: where it goes (from the home folder, ~) and
-// the settings to put in it.
 type ClientSnippetFile struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
 }
 
-// ClientSnippetTools are the tools ClientSnippetFor knows, by their SetupClient ID.
 var ClientSnippetTools = []string{"claude-code", "codex", "opencode", "pi", "omp"}
 
-// clientSnippetNames maps what a person may call a tool (its ID, its setup package's ID, a
-// longer name) to its SetupClient ID.
 var clientSnippetNames = map[string]string{
 	"claude-code": "claude-code", "claude": "claude-code", "pluxy/claude-code": "claude-code",
 	"codex": "codex", "codex-cli": "codex", "pluxy/codex-setup": "codex",
@@ -923,7 +842,6 @@ var clientSnippetNames = map[string]string{
 	"omp": "omp", "oh-my-pi": "omp", "pluxy/omp-setup": "omp",
 }
 
-// prettyJSON is v as indented JSON, with <, > and & as they are (a key placeholder has them).
 func prettyJSON(v any) string {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
@@ -933,13 +851,8 @@ func prettyJSON(v any) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-// ModelPlaceholder stands in a snippet where the model's name goes, when none is chosen.
 const ModelPlaceholder = "<model-id>"
 
-// ClientSnippetFor is the snippet that points tool at the core at baseURL (its address, with
-// no /v1) with the client key key, false for a tool it does not know. model is the model the
-// tool starts with (a name pluxy serves), ModelPlaceholder when empty. Each file holds what the
-// tool's writer in the desktop app writes for inspect to read it as configured.
 func ClientSnippetFor(tool, baseURL, key, model string) (ClientSnippet, bool) {
 	if model == "" {
 		model = ModelPlaceholder
@@ -981,8 +894,6 @@ func clientSnippet(tool, baseURL, key, model string) (ClientSnippet, bool) {
 		}
 		s.Files = []ClientSnippetFile{{"~/.claude/settings.json", prettyJSON(doc)}}
 	case "codex":
-		// The keys at the top come before the table: in TOML a key written below a [table]
-		// line belongs to that table.
 		head := "model_provider = \"pluxy\"\n"
 		if model != "" {
 			head += fmt.Sprintf("model = %q\n", model)

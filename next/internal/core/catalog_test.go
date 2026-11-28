@@ -24,10 +24,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// The refresh after a credential is renewed, the account's kept list as accountModels reads it,
-// and the management calls that read and refresh model lists. The refresh loop itself is not
-// started here: safe mode leaves it out (startModelRefresh), and its due refreshes are covered by
-// TestModelListRefreshTimerAndJitter in the route package.
 func TestCredentialChangeRefreshesModelListAndManagementAPI(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	cfg := `{"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-1"], "management_key": "fake-management-key"}`
@@ -74,13 +70,11 @@ func TestCredentialChangeRefreshesModelListAndManagementAPI(t *testing.T) {
 	if err := r.SetAccounts([]route.Account{{ID: "acct", Extension: "x"}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	// Prime the kept list.
 	if got := r.Models(context.Background()); len(got) != 1 || got[0].ID != "m1" {
 		t.Fatalf("initial models = %+v", got)
 	}
 	<-calls
 
-	// Simulate credentialChanged (renewal / re-login) triggering a refresh in Core.
 	mu.Lock()
 	models = []string{"m1", "m2"}
 	mu.Unlock()
@@ -109,14 +103,12 @@ func TestCredentialChangeRefreshesModelListAndManagementAPI(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// accountModels reads the router's kept list for a routed account rather than bypassing it.
 	s := c.cur.Load()
 	acctModels, err := c.accountModels(context.Background(), s, "acct")
 	if err != nil || len(acctModels.Models) != 2 || acctModels.Models[0].ID != "m1" || acctModels.Models[1].ID != "m2" || acctModels.From != protocol.ModelListFromAccount {
 		t.Fatalf("accountModels = %+v, %v; want m1, m2 (from=account) from router's kept list", acctModels, err)
 	}
 
-	// Verify GET /accounts/{id}/models includes "from".
 	h := c.Management()
 	acctReq := httptest.NewRequest(http.MethodGet, server.ManagementPrefix+"/accounts/acct/models", nil)
 	acctReq.Header.Set("Authorization", "Bearer fake-management-key")
@@ -131,7 +123,6 @@ func TestCredentialChangeRefreshesModelListAndManagementAPI(t *testing.T) {
 		t.Fatalf("GET /accounts/acct/models reply = %+v, err=%v", acctReply, err)
 	}
 
-	// Verify POST /models/refresh management handler validation and error codes.
 	do := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, server.ManagementPrefix+"/models/refresh", bytes.NewBufferString(body))
 		req.Header.Set("Authorization", "Bearer fake-management-key")

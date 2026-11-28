@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-// An import's config at a FIFO is refused, not opened for reading: opening one waits for a
-// writer, which would hold the import until one comes.
 func TestImportConfigAtAFIFOIsRefusedNotRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := syscall.Mkfifo(path, 0o600); err != nil {

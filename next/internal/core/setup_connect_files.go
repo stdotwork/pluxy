@@ -10,52 +10,30 @@ import (
 	"unicode/utf8"
 )
 
-// What Connect writes into a client tool's settings file and what Disconnect takes out again, as
-// the desktop app's writers for the tool do (next/app-tools/claude-code and codex, with the
-// transactions library's merges): Connect sets the settings the tool's setup text holds
-// (ClientSnippetFor) and keeps everything else in the file; Disconnect gives back the file as it
-// was when it still holds what Connect wrote, and otherwise puts back, one setting at a time, each
-// setting Connect changed that nobody changed since (the writers' Clear).
-
-// toolFormat is how one kind of settings file is changed.
 type toolFormat struct {
-	// apply is before (nil for no file) with the settings of snippet, the setup text's file for
-	// it, set. It refuses a file the tool's writer would refuse.
 	apply func(before []byte, snippet string) ([]byte, error)
-	// clear is current with what apply changed from original to applied put back where current
-	// still holds what apply wrote; nil for no file.
 	clear func(original, applied, current []byte) ([]byte, error)
-	// token is the client key the file holds, empty for none.
 	token func(b []byte) string
 }
 
-// toolFormats are the files Connect can write, by the path the setup text names them by.
 var toolFormats = map[string]toolFormat{
 	"~/.claude/settings.json": {apply: applyClaudeSettings, clear: clearClaudeSettings, token: claudeToken},
 	"~/.codex/config.toml":    {apply: applyCodexConfig, clear: clearCodexConfig, token: codexToken},
 }
 
-// errNotOurs refuses a file Connect will not change, with why.
 type errNotOurs struct{ why string }
 
 func (e *errNotOurs) Error() string { return e.why }
 
 func refuseFile(format string, a ...any) error { return &errNotOurs{fmt.Sprintf(format, a...)} }
 
-// ---- JSON (Claude Code's settings.json) ---------------------------------------------------------
-
-// jsonField is one member of a JSON object, its value as written.
 type jsonField struct {
 	key string
 	val json.RawMessage
 }
 
-// jsonObj is a JSON object with its members in the order of the file, so a change keeps the
-// person's order and every value they wrote as they wrote it.
 type jsonObj []jsonField
 
-// parseJSONObj reads b as one strict JSON object: a byte-order mark, anything but an object, a
-// key named twice or text after it is refused.
 func parseJSONObj(b []byte) (jsonObj, error) {
 	if bytes.HasPrefix(b, []byte(utf8BOM)) {
 		return nil, errors.New("it starts with a byte-order mark")
@@ -117,7 +95,6 @@ func (o *jsonObj) del(k string) {
 	*o = slices.DeleteFunc(*o, func(f jsonField) bool { return f.key == k })
 }
 
-// sub is the object at k: absent is an empty object, true; anything else but an object is false.
 func (o jsonObj) sub(k string) (jsonObj, bool, error) {
 	v, ok := o.get(k)
 	if !ok {
@@ -137,7 +114,6 @@ func isJSONObject(v json.RawMessage) bool {
 	return len(t) > 0 && t[0] == '{'
 }
 
-// render writes o as JSON indented by two spaces, with a final newline, the values as written.
 func (o jsonObj) render() []byte {
 	var b bytes.Buffer
 	o.write(&b, "")
@@ -172,9 +148,6 @@ func (o jsonObj) write(b *bytes.Buffer, indent string) {
 	b.WriteByte('}')
 }
 
-// claudeSettings reads Claude Code's settings as its writer's parse does: no file or only white
-// space is no settings; otherwise one JSON object whose $schema, if any, is Claude Code's and whose
-// env, if any, is an object of strings.
 func claudeSettings(b []byte) (jsonObj, error) {
 	if blank(b) {
 		return jsonObj{}, nil
@@ -202,12 +175,9 @@ func claudeSettings(b []byte) (jsonObj, error) {
 	return root, nil
 }
 
-// claudeDropped are the variables Connect takes out of env: an API key there would be sent in
-// place of the client key.
+// env: an API key there would be sent in place of the client key.
 var claudeDropped = []string{"ANTHROPIC_API_KEY"}
 
-// applyClaudeSettings sets what snippet (the setup text's settings.json) holds in before: each of
-// its objects merged member by member into the file's, every other member set.
 func applyClaudeSettings(before []byte, snippet string) ([]byte, error) {
 	root, err := claudeSettings(before)
 	if err != nil {
@@ -243,9 +213,6 @@ func applyClaudeSettings(before []byte, snippet string) ([]byte, error) {
 	return root.render(), nil
 }
 
-// clearClaudeSettings is the writers' Clear for settings.json: original when current is what
-// Connect wrote; otherwise current with each member Connect changed (at the top and one object
-// down) given back its original value, or taken out, where current still holds Connect's value.
 func clearClaudeSettings(original, applied, current []byte) ([]byte, error) {
 	if bytes.Equal(current, applied) {
 		return original, nil
@@ -270,7 +237,7 @@ func clearClaudeSettings(original, applied, current []byte) ([]byte, error) {
 			asub, _, _ := app.sub(k)
 			cs, cHas, err := cur.sub(k)
 			if err != nil {
-				continue // the person made it something else: theirs now
+				continue
 			}
 			changed := false
 			for _, m := range unionKeys(osub, asub) {
@@ -295,17 +262,15 @@ func clearClaudeSettings(original, applied, current []byte) ([]byte, error) {
 	return cur.render(), nil
 }
 
-// putBack gives cur's member k its value in orig (or takes it out) when apply changed it and cur
-// still holds what apply wrote. It reports whether it changed cur.
 func putBack(cur *jsonObj, orig, app jsonObj, k string) bool {
 	ov, oHas := orig.get(k)
 	av, aHas := app.get(k)
 	cv, cHas := cur.get(k)
 	if oHas == aHas && (!oHas || sameJSON(ov, av)) {
-		return false // apply did not change it
+		return false
 	}
 	if cHas != aHas || cHas && !sameJSON(cv, av) {
-		return false // changed since: the person's now
+		return false
 	}
 	if oHas {
 		cur.set(k, ov)
@@ -349,33 +314,25 @@ func claudeToken(b []byte) string {
 	return s
 }
 
-// ---- TOML (Codex's config.toml) -----------------------------------------------------------------
-
-// tomlLine kinds.
 const (
-	tomlOther  = iota // blank, comment
-	tomlHeader        // [table]
-	tomlArray         // [[array of tables]]
-	tomlKV            // key = value, maybe over several lines
+	tomlOther = iota
+	tomlHeader
+	tomlArray
+	tomlKV
 )
 
-// tomlStmt is one statement of a TOML file: a table header, or a key and its value, which may run
-// over several lines (a multi-line string, array or inline table).
 type tomlStmt struct {
 	kind       int
-	start, end int    // the lines it takes, [start, end)
-	table      string // the table it is in (a header's own name), dotted, unquoted
-	key        string // a key's name in its table, dotted, unquoted
-	value      string // a one-line key's value as written, without its comment
-	comment    string // a one-line key's comment, with its #, or empty
+	start, end int
+	table      string
+	key        string
+	value      string
+	comment    string
 }
 
-// tomlDoc is a TOML file as lines and the statements they hold. It is not a TOML parser: it
-// finds where each statement starts and ends (strings, arrays and inline tables over several
-// lines included) so a change can replace or add whole statements and leave the rest as it is.
 type tomlDoc struct {
-	lines []string // without their line ends
-	crlf  bool     // the file ends its lines with \r\n
+	lines []string
+	crlf  bool
 	stmts []tomlStmt
 }
 
@@ -438,12 +395,9 @@ func parseTOMLDoc(b []byte) (*tomlDoc, error) {
 	return d, nil
 }
 
-// tomlValueEnd finds where the value that starts at lines[i][at:] ends: the line after its last
-// one, and whether it took one line. It follows strings (basic, literal and both multi-line
-// kinds), arrays and inline tables, and stops at a comment outside them.
 func tomlValueEnd(lines []string, i, at int) (int, bool, error) {
 	depth := 0
-	inMulti := "" // `"""` or `'''` while inside one
+	inMulti := ""
 	for l := i; l < len(lines); l++ {
 		s := lines[l]
 		j := 0
@@ -506,18 +460,14 @@ func tomlValueEnd(lines []string, i, at int) (int, bool, error) {
 	return 0, false, fmt.Errorf("the value on line %d does not end", i+1)
 }
 
-// find is the key statement for table.key, or -1.
 func (d *tomlDoc) find(table, key string) int {
 	return slices.IndexFunc(d.stmts, func(s tomlStmt) bool { return s.kind == tomlKV && s.table == table && s.key == key })
 }
 
-// header is the header statement of table, or -1.
 func (d *tomlDoc) header(table string) int {
 	return slices.IndexFunc(d.stmts, func(s tomlStmt) bool { return s.kind == tomlHeader && s.table == table })
 }
 
-// lastKV is the line after the last key statement in table (from its header to the next), or
-// the line after its header when it has none; -1 when the root table has no keys.
 func (d *tomlDoc) lastKV(table string) int {
 	end := -1
 	if table != "" {
@@ -546,7 +496,6 @@ func (d *tomlDoc) bytes() []byte {
 	return []byte(strings.Join(d.lines, nl) + nl)
 }
 
-// reparse reads the document again after its lines changed.
 func (d *tomlDoc) reparse() error {
 	n, err := parseTOMLDoc(d.bytes())
 	if err != nil {
@@ -561,8 +510,6 @@ func (d *tomlDoc) splice(start, end int, with ...string) {
 	d.lines = slices.Concat(d.lines[:start], with, d.lines[end:])
 }
 
-// setKV makes table.key = value: the statement replaced where it is (keeping a one-line
-// comment), else added after the table's last key, or for a new table at the end of the file.
 func (d *tomlDoc) setKV(table, key, value string) error {
 	line := key + " = " + value
 	if i := d.find(table, key); i >= 0 {
@@ -591,7 +538,6 @@ func (d *tomlDoc) setKV(table, key, value string) error {
 	return d.reparse()
 }
 
-// delKV takes out table.key's statement, if any.
 func (d *tomlDoc) delKV(table, key string) error {
 	if i := d.find(table, key); i >= 0 {
 		d.splice(d.stmts[i].start, d.stmts[i].end)
@@ -600,7 +546,6 @@ func (d *tomlDoc) delKV(table, key string) error {
 	return nil
 }
 
-// value is table.key's value as written (a one-line statement's), and whether it is there.
 func (d *tomlDoc) value(table, key string) (string, bool) {
 	i := d.find(table, key)
 	if i < 0 {
@@ -613,17 +558,11 @@ func (d *tomlDoc) value(table, key string) (string, bool) {
 	return st.value, true
 }
 
-// codexProvider is the table of pluxy's provider in Codex's config.
 const codexProvider = "model_providers.pluxy"
 
-// codexDropped are the provider's keys Connect takes out: either would have Codex send another
-// credential than the bearer token.
+// Either would have Codex send another credential than the bearer token.
 var codexDropped = []string{"env_key", "requires_openai_auth"}
 
-// codexDoc reads Codex's config for a change: refused when config.rs would refuse it
-// (parseCodexConfigTOML) or when it holds pluxy's provider in a form this editor does not change
-// (dotted keys or an inline table in place of the [model_providers.pluxy] table, or that table
-// twice).
 func codexDoc(b []byte) (*tomlDoc, error) {
 	if parseCodexConfigTOML(b).refused {
 		return nil, refuseFile("pluxy does not change ~/.codex/config.toml: Codex's writer would refuse it (a model_providers or agents entry of another kind, or a wire_api other than \"responses\")")
@@ -638,7 +577,6 @@ func codexDoc(b []byte) (*tomlDoc, error) {
 		if s.table != "" {
 			full = s.table + "." + s.key
 		}
-		// Keys of the provider's own sub-tables ([model_providers.pluxy.capabilities]) are fine.
 		inProvider := s.table == codexProvider || strings.HasPrefix(s.table, codexProvider+".")
 		switch {
 		case s.kind == tomlHeader && s.table == codexProvider:
@@ -654,7 +592,6 @@ func codexDoc(b []byte) (*tomlDoc, error) {
 	return d, nil
 }
 
-// tomlEntry is one setting of the setup text: its table, key and value as written.
 type tomlEntry struct{ table, key, value string }
 
 func snippetEntries(snippet string) ([]tomlEntry, error) {
@@ -674,9 +611,6 @@ func snippetEntries(snippet string) ([]tomlEntry, error) {
 	return out, nil
 }
 
-// applyCodexConfig sets each setting of snippet (the setup text's config.toml) in before: a root
-// key after the file's last root key, so before its first table, and the provider's keys in its
-// table. The provider's other credentials are taken out.
 func applyCodexConfig(before []byte, snippet string) ([]byte, error) {
 	d, err := codexDoc(before)
 	if err != nil {
@@ -703,7 +637,6 @@ func applyCodexConfig(before []byte, snippet string) ([]byte, error) {
 	return out, nil
 }
 
-// codexKeys are the settings Connect sets or takes out, by table.
 var codexKeys = []tomlEntry{
 	{table: "", key: "model_provider"},
 	{table: "", key: "model"},
@@ -715,10 +648,6 @@ var codexKeys = []tomlEntry{
 	{table: codexProvider, key: "requires_openai_auth"},
 }
 
-// clearCodexConfig is the writers' Clear for config.toml: original when current is what Connect
-// wrote; otherwise current with each key Connect set or took out given back its original value,
-// or taken out, where current still holds what Connect left there. A provider table Connect
-// added is taken out once it has no keys left.
 func clearCodexConfig(original, applied, current []byte) ([]byte, error) {
 	if bytes.Equal(current, applied) {
 		return original, nil
@@ -757,7 +686,6 @@ func clearCodexConfig(original, applied, current []byte) ([]byte, error) {
 	if h := cur.header(codexProvider); h >= 0 && orig.header(codexProvider) < 0 && cur.lastKV(codexProvider) == cur.stmts[h].end {
 		start := cur.stmts[h].start
 		cur.splice(start, cur.stmts[h].end)
-		// The blank line Connect put before the table it added, when the table ended the file.
 		if start == len(cur.lines) && start > 0 && strings.TrimSpace(cur.lines[start-1]) == "" {
 			cur.splice(start-1, start)
 		}

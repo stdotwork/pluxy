@@ -14,11 +14,8 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
 
-// SetPagesPort records the port the pages listener got, for the addresses of extension pages.
 func (c *Core) SetPagesPort(port int) { c.pagesPort.Store(int64(port)) }
 
-// PagesFolder returns the ui folder of extension id when it runs now with fingerprint key fp;
-// the pages site serves only those.
 func (c *Core) PagesFolder(id, fp string) (pages.Folder, bool) {
 	cur := c.cur.Load()
 	if cur == nil {
@@ -31,17 +28,12 @@ func (c *Core) PagesFolder(id, fp string) (pages.Folder, bool) {
 	return pages.Folder{Dir: g.Manifest().UIDir(), Files: g.UIFiles()}, true
 }
 
-// UIView is what the panel can show of the extensions that run: their pages and whether they
-// have settings.
 type UIView struct {
-	// PagesOrigin is the pages site's origin for a panel reached as the request was; empty, with
-	// PagesError saying why, when there is none.
 	PagesOrigin string        `json:"pages_origin,omitempty"`
 	PagesError  string        `json:"pages_error,omitempty"`
 	Extensions  []UIExtension `json:"extensions"`
 }
 
-// UIExtension is one running extension with pages or settings.
 type UIExtension struct {
 	ID          string   `json:"id"`
 	Version     string   `json:"version"`
@@ -50,7 +42,6 @@ type UIExtension struct {
 	Config      bool     `json:"config"`
 }
 
-// UIPage is one extension page. URL is empty when there is no pages origin.
 type UIPage struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -58,13 +49,10 @@ type UIPage struct {
 	URL   string `json:"url"`
 }
 
-// PagesOrigin returns the pages site's origin for a panel reached at panelHost (the request's
-// Host), or why there is none.
 func (c *Core) PagesOrigin(panelHost string) (string, error) {
 	return pages.Origin(c.Config().ExtensionPages.URL, panelHost, int(c.pagesPort.Load()))
 }
 
-// UI returns the UIView for a panel reached at panelHost (the request's Host).
 func (c *Core) UI(panelHost string) UIView {
 	v := UIView{Extensions: []UIExtension{}}
 	origin, err := c.PagesOrigin(panelHost)
@@ -99,10 +87,8 @@ func (c *Core) UI(panelHost string) UIView {
 	return v
 }
 
-// ErrNoSettings is asking for the settings of an extension that does not run or has none.
 var ErrNoSettings = errors.New("the extension does not run or has no settings")
 
-// SettingsView is an extension's schema and what may be shown of its settings.
 type SettingsView struct {
 	Schema json.RawMessage `json:"schema"`
 	extconfig.View
@@ -120,7 +106,6 @@ func (c *Core) schema(id string) (*extconfig.Schema, error) {
 	return g.Manifest().Settings(), nil
 }
 
-// Settings returns extension id's settings, as core shows them.
 func (c *Core) Settings(id string) (SettingsView, error) {
 	s, err := c.schema(id)
 	if err != nil {
@@ -133,8 +118,6 @@ func (c *Core) Settings(id string) (SettingsView, error) {
 	return SettingsView{Schema: s.Raw(), View: s.View(stored)}, nil
 }
 
-// ChangeSettings applies change to extension id's settings (extconfig.Schema.Merge) and returns
-// them. A change the schema refuses is an *extconfig.Invalid and changes nothing.
 func (c *Core) ChangeSettings(id string, change extconfig.Values) (SettingsView, error) {
 	s, err := c.schema(id)
 	if err != nil {
@@ -147,7 +130,6 @@ func (c *Core) ChangeSettings(id string, change extconfig.Values) (SettingsView,
 	return SettingsView{Schema: s.Raw(), View: s.View(next)}, nil
 }
 
-// handleUI adds the extension pages calls to management m.
 func (c *Core) handleUI(m *server.Management) {
 	m.Handle("GET /ui", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, c.UI(r.Host))

@@ -20,8 +20,6 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// homeEnv is the environment that gives a program home as its home, config, data, state and
-// cache folder.
 func homeEnv(home string) map[string]string {
 	xdg := filepath.Join(home, ".xdg")
 	return map[string]string{
@@ -44,7 +42,6 @@ func setTestHome(t *testing.T) string {
 	return home
 }
 
-// writeTestFile writes content to path, making its folders.
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -55,7 +52,6 @@ func writeTestFile(t *testing.T, path, content string) {
 	}
 }
 
-// treeOf lists every file and folder below root, with each file's contents.
 func treeOf(t *testing.T, root string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
@@ -77,12 +73,11 @@ func treeOf(t *testing.T, root string) map[string]string {
 	return out
 }
 
-// Each client tool's file reads with the state the desktop app's writer for it gives it.
 func TestInspectClientStates(t *testing.T) {
 	const coreURL = "http://127.0.0.1:8317"
 	type step struct {
 		name  string
-		files map[string]string // path below home: contents ("" removes it)
+		files map[string]string
 		want  string
 	}
 	run := func(t *testing.T, inspect func(home, coreURL string) (string, string), steps []step) {
@@ -228,7 +223,6 @@ experimental_bearer_token = "sk-client"
 	})
 }
 
-// What pluxy client show prints for each tool reads as configured by that tool's own reader.
 func TestClientSnippetsReadAsConfigured(t *testing.T) {
 	const coreURL = "http://127.0.0.1:8317"
 	for _, tool := range ClientSnippetTools {
@@ -246,7 +240,6 @@ func TestClientSnippetsReadAsConfigured(t *testing.T) {
 				writeTestFile(t, filepath.Join(home, rest), f.Content)
 			}
 			if tool == "pi" {
-				// What the snippet's note says Pi needs besides: the adapter the app installs.
 				writeTestFile(t, filepath.Join(home, ".pi", "agent", piAdapterFolder, piAdapterMarker), `{"package": "pluxy/pi-setup"}`)
 			}
 			spec, ok := clientSpecByID(tool)
@@ -269,8 +262,6 @@ func TestClientSnippetsReadAsConfigured(t *testing.T) {
 	}
 }
 
-// The text for a tool names the model the tool starts with, in every place the tool reads one, and
-// still reads as configured. Without a model it holds the placeholder.
 func TestClientSnippetsNameTheModel(t *testing.T) {
 	const coreURL = "http://127.0.0.1:8317"
 	const model = "fake-gpt-1"
@@ -292,7 +283,6 @@ func TestClientSnippetsNameTheModel(t *testing.T) {
 			}
 		})
 	}
-	// Claude Code starts with `model`, and what its opus, sonnet and haiku resolve to is the same.
 	snip, _ := ClientSnippetFor("claude-code", coreURL, "k", model)
 	var got struct {
 		Model string
@@ -309,10 +299,6 @@ func TestClientSnippetsNameTheModel(t *testing.T) {
 	}
 }
 
-// In TOML a key written below a [table] line belongs to that table. The Codex text puts its two
-// top-level keys above its table and says, for a config.toml that already has tables, where they
-// go; its reader sees a config that follows the text as configured, and one that only appends the
-// text to the end of a file with a table as not.
 func TestCodexSnippetPutsTopLevelKeysBeforeTables(t *testing.T) {
 	const coreURL = "http://127.0.0.1:8317"
 	snip, _ := ClientSnippetFor("codex", coreURL, "k", "fake-gpt-1")
@@ -428,7 +414,6 @@ func TestScanSignInsAndImports(t *testing.T) {
 	home := setTestHome(t)
 	os.MkdirAll(filepath.Join(home, ".codex"), 0o700)
 	os.MkdirAll(filepath.Join(home, ".claude"), 0o700)
-	// Empty file must not count as signed in.
 	os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte(""), 0o600)
 	os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"), []byte("not-even-read"), 0o600)
 
@@ -452,8 +437,6 @@ func TestScanSignInsAndImports(t *testing.T) {
 	}
 }
 
-// The words of a suggestion and of a sign-in found on the computer are the ones every page uses:
-// "on this computer", never "machine".
 func TestSetupSuggestionAndSignInWordsSayComputer(t *testing.T) {
 	for _, s := range setupSuggestions {
 		if !strings.HasSuffix(s.because, " on this computer") || strings.Contains(s.because, "machine") {
@@ -508,7 +491,6 @@ func TestBuildSetupPicksOrderAndNothingFound(t *testing.T) {
 	}}
 	installed := packages.State{"pluxy/claude": {ID: "pluxy/claude", Version: "0.1.0"}}
 
-	// Nothing found -> ordered list, nothing suggested.
 	picks := buildSetupPicks(regs, installed, management.SetupFound{})
 	wantIDs := []string{"pluxy/codex", "pluxy/claude", "pluxy/kimi", "pluxy/claude-code", "pluxy/omp-setup"}
 	if len(picks) != len(wantIDs) {
@@ -526,7 +508,6 @@ func TestBuildSetupPicksOrderAndNothingFound(t *testing.T) {
 		}
 	}
 
-	// Claude Code installed -> pluxy/claude and pluxy/claude-code suggested.
 	picks = buildSetupPicks(regs, installed, management.SetupFound{
 		Clients: []management.SetupClient{{ID: "claude-code", Installed: true}},
 	})
@@ -534,8 +515,6 @@ func TestBuildSetupPicksOrderAndNothingFound(t *testing.T) {
 		t.Errorf("picks suggestions = %+v", picks)
 	}
 
-	// A Claude Code settings file its writer refuses: the provider is still suggested, the
-	// pick that would write that file is not.
 	picks = buildSetupPicks(regs, installed, management.SetupFound{
 		Clients: []management.SetupClient{{ID: "claude-code", Installed: true, State: management.ClientStateRefused}},
 	})
@@ -552,7 +531,6 @@ func TestProbeVersionKnownPathsAndFailures(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin:/bin")
 	scratch := t.TempDir()
 
-	// Known install path for claude (~/.local/bin/claude) without being on PATH.
 	localBin := filepath.Join(home, ".local", "bin")
 	claudePath := filepath.Join(localBin, "claude")
 	writeTestFile(t, claudePath, "#!/bin/sh\necho \"v2.5.0\"\n")
@@ -564,7 +542,6 @@ func TestProbeVersionKnownPathsAndFailures(t *testing.T) {
 		t.Errorf("probeVersion = %q, want 2.5.0", ver)
 	}
 
-	// Non-zero exit code returns no version (e.g. a mise shim error).
 	badPath := filepath.Join(localBin, "bad")
 	writeTestFile(t, badPath, "#!/bin/sh\necho \"1.2.3\"\nexit 1\n")
 	os.Chmod(badPath, 0o755)
@@ -573,8 +550,6 @@ func TestProbeVersionKnownPathsAndFailures(t *testing.T) {
 	}
 }
 
-// A probe that writes into its home, config, data, state, cache and temporary folders leaves the
-// person's own folders as they were, and the scan leaves nothing in core's state folder.
 func TestScanWritesNothingOutsideItsOwnFolder(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell scripts")
@@ -636,13 +611,11 @@ func TestSetupPersistenceAndApplyValidation(t *testing.T) {
 		t.Fatalf("FirstRun after DoneSetup = true")
 	}
 
-	// Reload setupManager from state/setup.json and verify first_run: false persists.
 	m2 := newSetupManager(filepath.Join(StateDir(cfgPath), setupFileName), c.setupCoreTarget, false)
 	if m2.isFirstRun() {
 		t.Errorf("reloaded firstRun = true, want false")
 	}
 
-	// POST /setup/apply rejects unknown fields and empty picks with 400.
 	mgmt := c.Management()
 	for _, body := range []string{`{"picks":[]}`, `{"picks":["pluxy/claude"],"extra":1}`, `{bad`} {
 		req := httptest.NewRequest(http.MethodPost, "/v0/management/setup/apply", bytes.NewBufferString(body))
@@ -656,9 +629,6 @@ func TestSetupPersistenceAndApplyValidation(t *testing.T) {
 	}
 }
 
-// Core scans on its own only at the first start of a first run: once it listens, and never
-// again once a scan is kept. A later start reads the kept scan's client states again against
-// the address it listens on.
 func TestSetupScansOnlyAtFirstStart(t *testing.T) {
 	home := setTestHome(t)
 	t.Setenv("PATH", t.TempDir())
@@ -716,8 +686,6 @@ func TestSetupScansOnlyAtFirstStart(t *testing.T) {
 	}
 }
 
-// A kept scan's client states name core's address, scheme included: a start whose scheme is
-// not the one they were read with reads them again, even though the address is the same.
 func TestSetupRefreshesClientStatesForTLS(t *testing.T) {
 	home := setTestHome(t)
 	writeTestFile(t, filepath.Join(home, ".claude", "settings.json"),
@@ -740,8 +708,6 @@ func TestSetupRefreshesClientStatesForTLS(t *testing.T) {
 	}
 }
 
-// With no state/setup.json, a core that already has packages or accounts is not on its first
-// run; once setup.json exists, it says.
 func TestFirstRunOfAnUpgrade(t *testing.T) {
 	setTestHome(t)
 	start := func(dir string) *Core {
@@ -788,7 +754,6 @@ func TestFirstRunOfAnUpgrade(t *testing.T) {
 	}
 }
 
-// No scan starts once stop has begun, so stop's wait never races a new scan's start.
 func TestSetupScanAfterStop(t *testing.T) {
 	setTestHome(t)
 	t.Setenv("PATH", t.TempDir())
@@ -838,7 +803,6 @@ func TestSetupReportsRegistryCount(t *testing.T) {
 		return body
 	}
 
-	// No bundled registry and none in config: registries is 0.
 	dir0 := t.TempDir()
 	cfg0 := filepath.Join(dir0, "config.json")
 	writeTestFile(t, cfg0, cfg)
@@ -851,7 +815,6 @@ func TestSetupReportsRegistryCount(t *testing.T) {
 		t.Errorf("registries with none = %v, want 0", raw0)
 	}
 
-	// With a bundled registry: registries is 1.
 	dir1 := t.TempDir()
 	cfg1 := filepath.Join(dir1, "config.json")
 	writeTestFile(t, cfg1, cfg)
@@ -863,8 +826,6 @@ func TestSetupReportsRegistryCount(t *testing.T) {
 	}
 }
 
-// A registry that accepts the connection and never answers is reported as that registry's
-// error, and GET /setup and the registry list return while the others still answer.
 func TestSetupStalledRegistry(t *testing.T) {
 	setTestHome(t)
 	t.Setenv("PATH", t.TempDir())
@@ -924,8 +885,6 @@ func TestSetupStalledRegistry(t *testing.T) {
 	}
 }
 
-// Claude Desktop, Grok Build and Hermes Agent are looked for where the desktop app's tools for
-// them look, on each system.
 func TestDesktopToolLocations(t *testing.T) {
 	const home = "/home/p"
 	local := t.TempDir()
@@ -958,8 +917,6 @@ func TestDesktopToolLocations(t *testing.T) {
 	}
 }
 
-// A macOS application bundle in the home folder counts as Claude Desktop being installed, and the
-// scan does not run it for a version.
 func TestScanFindsClaudeDesktopBundle(t *testing.T) {
 	home := setTestHome(t)
 	t.Setenv("PATH", t.TempDir())
@@ -981,8 +938,6 @@ func TestScanFindsClaudeDesktopBundle(t *testing.T) {
 	}
 }
 
-// Core reads no settings of Claude Desktop, Grok Build or Hermes Agent, so each reports unchecked,
-// with or without a settings file, and a scan kept with another state is corrected on refresh.
 func TestUnreadToolsAreUnchecked(t *testing.T) {
 	home := setTestHome(t)
 	writeTestFile(t, filepath.Join(home, ".grok", "config.toml"), "[models]\ndefault = \"x\"\n")

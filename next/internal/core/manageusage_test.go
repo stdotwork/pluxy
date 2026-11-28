@@ -99,7 +99,6 @@ func TestManageUsageRangesByKeyAndBefore(t *testing.T) {
 		})
 	})
 
-	// Add 3 events today so we can test before paging too.
 	for i := range 3 {
 		c.usage.Add(usage.Event{
 			Timestamp: now.Add(time.Duration(i) * time.Minute),
@@ -110,7 +109,6 @@ func TestManageUsageRangesByKeyAndBefore(t *testing.T) {
 		})
 	}
 
-	// since=30d, by=account, daily buckets (>48h).
 	var reply map[string]any
 	code, raw := callUsageMgmt(t, c, "/usage?since=30d&by=account", &reply)
 	if code != http.StatusOK {
@@ -130,21 +128,18 @@ func TestManageUsageRangesByKeyAndBefore(t *testing.T) {
 		t.Fatalf("bucket_seconds = %v, want 86400 for 30d range", reply["bucket_seconds"])
 	}
 
-	// key alias filter
 	var keyFiltered management.UsageReply
 	code, raw = callUsageMgmt(t, c, "/usage?since=30d&key=key-2", &keyFiltered)
 	if code != http.StatusOK || keyFiltered.Requests != 1 || len(keyFiltered.Keys) != 1 || keyFiltered.Keys[0].Name != "key-2" {
 		t.Fatalf("GET /usage?since=30d&key=key-2: code=%d body=%s", code, raw)
 	}
 
-	// <= 48h defaults to hourly buckets.
 	var twoDay management.UsageReply
 	code, raw = callUsageMgmt(t, c, "/usage?since=2d", &twoDay)
 	if code != http.StatusOK || twoDay.BucketSeconds != 3600 {
 		t.Fatalf("GET /usage?since=2d: code=%d bucket_seconds=%d body=%s", code, twoDay.BucketSeconds, raw)
 	}
 
-	// Invalid by and invalid since=0d.
 	for _, bad := range []string{"/usage?by=bogus", "/usage?since=0d", "/usage?key=a&key_id=b", "/usage/events?after=1&before=5", "/usage/events?before=bad"} {
 		code, _ := callUsageMgmt(t, c, bad, nil)
 		if code != http.StatusBadRequest {
@@ -152,7 +147,6 @@ func TestManageUsageRangesByKeyAndBefore(t *testing.T) {
 		}
 	}
 
-	// GET /usage/events?before=<seq>&limit=2 newest first.
 	var page1 management.UsageEventsReply
 	code, raw = callUsageMgmt(t, c, "/usage/events?before=0&limit=2", &page1)
 	if code != http.StatusOK || len(page1.Events) != 2 || !page1.More ||
@@ -219,14 +213,12 @@ func seedMonthUsage5kPerDay(t testing.TB) (*Core, string) {
 func TestManageUsage30Days5kPerDayTiming(t *testing.T) {
 	c, _ := seedMonthUsage5kPerDay(t)
 
-	// Build summaries on disk first (simulating warmed summaries before user query).
 	var warm management.UsageReply
 	code, raw := callUsageMgmt(t, c, "/usage?since=30d&by=account", &warm)
 	if code != http.StatusOK || warm.Requests != 150000 || len(warm.Breakdown) != 8 {
 		t.Fatalf("warmup GET /usage?since=30d&by=account: code=%d reqs=%d body=%s", code, warm.Requests, raw)
 	}
 
-	// Measure with summaries already built on disk and cached in memory.
 	start := time.Now()
 	var reply management.UsageReply
 	code, raw = callUsageMgmt(t, c, "/usage?since=30d&by=account", &reply)
@@ -239,9 +231,6 @@ func TestManageUsage30Days5kPerDayTiming(t *testing.T) {
 	}
 }
 
-// The first ?since=30d query in a usage folder that holds raw day files and no summaries, which
-// builds the 29 closed days' summaries from the raw files. Each run seeds a new folder, off the
-// clock; it only reports the time, there is no limit on it.
 func BenchmarkManageUsage30DaysFirstQueryFromRawFiles(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
@@ -270,7 +259,6 @@ func BenchmarkManageUsage30DaysFirstQueryFromRawFiles(b *testing.B) {
 func BenchmarkManageUsage30Days5kPerDay(b *testing.B) {
 	c, cfgPath := seedMonthUsage5kPerDay(b)
 
-	// Build summaries on disk once.
 	var warm management.UsageReply
 	code, _ := callUsageMgmt(b, c, "/usage?since=30d&by=account", &warm)
 	if code != http.StatusOK || warm.Requests != 150000 {
@@ -295,7 +283,6 @@ func BenchmarkManageUsage30Days5kPerDay(b *testing.B) {
 	b.StopTimer()
 	c.Stop()
 
-	// Also measure a cold Core restart reading the 29 closed summary/*.json files + 5,000 today events from disk.
 	b.Run("ColdDiskSummariesAfterRestart", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			b.StopTimer()

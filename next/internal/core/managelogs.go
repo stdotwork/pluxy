@@ -15,21 +15,12 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
 
-// Limits of GET /logs.
 const (
 	defaultLogLines = 1000
 	maxLogLines     = 10000
-	// JSON can expand each content byte to six escaped bytes; stay below the app's 16 MiB reply cap.
 	maxJSONLogBytes = 2 << 20
 )
 
-// handleLogs adds the log file calls, which answer 400 while logging to file is off.
-//
-//	GET    /v0/management/logs  lines of core's log files
-//	DELETE /v0/management/logs  empty main.log and delete its rotated files
-//	GET    /v0/management/request-error-logs  the error logs, newest first
-//	GET    /v0/management/request-error-logs/{name}  one error log's file
-//	GET    /v0/management/request-log-by-id/{id}  the request log of the request with a trace ID
 func (c *Core) handleLogs(m *server.Management) {
 	m.Handle("GET /request-error-logs", func(w http.ResponseWriter, r *http.Request) {
 		files, err := server.ErrorLogs(c.logs.Dir())
@@ -99,11 +90,8 @@ func (c *Core) handleLogs(m *server.Management) {
 	})
 }
 
-// serveLogFile sends a download, or bounded JSON for hosts that only carry JSON replies.
 func (c *Core) serveLogFile(w http.ResponseWriter, r *http.Request, name string) {
 	path := filepath.Join(c.logs.Dir(), name)
-	// Only a regular file in the folder: a link there could point anywhere. The file opened must
-	// be the one checked, so one swapped in between is refused too.
 	linfo, err := os.Lstat(path)
 	if err != nil || !linfo.Mode().IsRegular() {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "not_found", "message": "no log file of that name"}})
@@ -121,7 +109,6 @@ func (c *Core) serveLogFile(w http.ResponseWriter, r *http.Request, name string)
 		return
 	}
 	if r.URL.Query().Get("format") == "json" {
-		// Check the size before allocating, and bound the read in case the file grows.
 		if info.Size() > maxJSONLogBytes {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": map[string]string{"code": "log_too_large", "message": "JSON log content exceeds 2 MiB; use the plain download"}})
 			return

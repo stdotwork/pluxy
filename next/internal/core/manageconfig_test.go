@@ -38,7 +38,6 @@ func TestWriteFileAtomicKeepsPermissions(t *testing.T) {
 			if err := os.WriteFile(path, []byte("old"), mode); err != nil {
 				t.Fatal(err)
 			}
-			// WriteFile is subject to the umask; set the mode the test means to check.
 			if err := os.Chmod(path, mode); err != nil {
 				t.Fatal(err)
 			}
@@ -101,7 +100,6 @@ func TestWriteFileAtomicWritesThroughSymlink(t *testing.T) {
 	if fi, err := os.Stat(target); err != nil || fi.Mode().Perm() != 0o640 {
 		t.Errorf("target mode = %v, %v; want 0640", fi.Mode().Perm(), err)
 	}
-	// No temp file beside the target or beside the link.
 	if names := dirNames(t, realDir); len(names) != 1 {
 		t.Errorf("target folder holds %v", names)
 	}
@@ -120,8 +118,6 @@ func TestWriteFileAtomicFailureLeavesNothing(t *testing.T) {
 	}
 }
 
-// A write that fails after the temp file exists (here the final rename, because the target is
-// a folder) removes the temp file.
 func TestWriteFileAtomicRemovesTempFileOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "config.json")
@@ -136,7 +132,6 @@ func TestWriteFileAtomicRemovesTempFileOnFailure(t *testing.T) {
 	}
 }
 
-// safeCore starts core in safe mode (no extensions) on a JSON config holding cfg.
 func safeCore(t *testing.T, cfg string) (*Core, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
@@ -158,7 +153,6 @@ func TestWriteConfigKeepsAnotherProgramsWrite(t *testing.T) {
 	other := strings.Replace(safeConfig, "fake-client-key-1", "written-by-an-editor", 1)
 	before := c.Status()
 	err := c.WriteConfig("test", func(cur []byte) ([]byte, error) {
-		// Another program writes the file after core read it, while the change is prepared.
 		if err := os.WriteFile(path, []byte(other), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -181,7 +175,6 @@ func TestRefusedChangeLogsNoSecret(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
-	// A strategy core refuses, whose value is the client key: the refusal names the value.
 	err := c.WriteConfig("test", func(cur []byte) ([]byte, error) {
 		return []byte(strings.Replace(string(cur), `"management_key"`, `"routing": {"strategy": "fake-client-key-1"}, "management_key"`, 1)), nil
 	})
@@ -194,12 +187,11 @@ func TestRefusedChangeLogsNoSecret(t *testing.T) {
 }
 
 func TestRefusedSettingsReplyShowsNoFileSecret(t *testing.T) {
-	// Safe mode does not read the manifest, so the account's credential stays only in the file.
 	c, _ := safeCore(t, `{"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-1"], "management_key": "fake-management-key",
 		"extension": {"manifest": "missing.json", "accounts": [{"id": "a", "credential": {"kind": "api_key", "api_key": "fake-provider-secret"}}]}}`+"\n")
 	req := httptest.NewRequest(http.MethodPatch, ManagementPrefix+"settings", strings.NewReader(`{"routing": {"strategy": "fake-provider-secret"}}`))
 	req.Header.Set("Authorization", "Bearer fake-management-key")
-	req.RemoteAddr = "127.0.0.1:1234" // management answers only this machine
+	req.RemoteAddr = "127.0.0.1:1234"
 	rec := httptest.NewRecorder()
 	c.Management().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "pluxy-redacted-") || strings.Contains(rec.Body.String(), "fake-provider-secret") {
@@ -207,8 +199,6 @@ func TestRefusedSettingsReplyShowsNoFileSecret(t *testing.T) {
 	}
 }
 
-// leakyConfig refuses to load with a message that quotes the strategy, whose value is the
-// account's API key.
 const leakyConfig = `{"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-1"], "management_key": "fake-management-key",
 	"routing": {"strategy": "fake-provider-secret"},
 	"extension": {"manifest": "missing.json", "accounts": [{"id": "a", "credential": {"kind": "api_key", "api_key": "fake-provider-secret"}}]}}` + "\n"
@@ -258,8 +248,6 @@ func TestScrubConfigError(t *testing.T) {
 	}
 }
 
-// A copy of a settings secret's placeholder whose secret the sent settings no longer hold as it
-// was is refused with the copy's line, which PATCH /accounts/{id} shows (server.ErrSecretCopy).
 func TestAccountRedactorRefusesACopyWithItsLine(t *testing.T) {
 	const key = "sk-real-secret-value-1234"
 	r := accountRedactor{configdoc.NewRedactor()}
@@ -271,9 +259,6 @@ func TestAccountRedactorRefusesACopyWithItsLine(t *testing.T) {
 	}
 }
 
-// The Config page saves the listen address and the remote-management switch as settings. A new
-// listen address is written to the file and served on after a restart; until then core keeps its
-// address and every other change still applies, and the settings say what waits.
 func TestSettingsSaveListenForARestartAndKeepApplyingTheRest(t *testing.T) {
 	h, path := startManagementCore(t, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
 	get := func() management.Settings {
@@ -299,7 +284,6 @@ func TestSettingsSaveListenForARestartAndKeepApplyingTheRest(t *testing.T) {
 		t.Errorf("the file does not hold the address:\n%s", b)
 	}
 
-	// The rest still applies while the address waits: the file is not refused as a whole.
 	if rec := manageCall(t, h, http.MethodPatch, "/settings", `{"management_allow_remote": true}`); rec.Code != http.StatusOK {
 		t.Fatalf("PATCH management_allow_remote with an address waiting = %d %s", rec.Code, rec.Body)
 	}
@@ -312,7 +296,6 @@ func TestSettingsSaveListenForARestartAndKeepApplyingTheRest(t *testing.T) {
 		t.Errorf("status = %+v, want the newest file in use", status)
 	}
 
-	// Setting the address core serves on again leaves nothing waiting.
 	if rec := manageCall(t, h, http.MethodPatch, "/settings", `{"listen": "127.0.0.1:0"}`); rec.Code != http.StatusOK {
 		t.Fatalf("PATCH the active address = %d %s", rec.Code, rec.Body)
 	}
@@ -320,8 +303,6 @@ func TestSettingsSaveListenForARestartAndKeepApplyingTheRest(t *testing.T) {
 		t.Errorf("after restart = %q, want none", s.ListenAfterRestart)
 	}
 
-	// An address that is no address, or that this computer does not have, is refused: core would
-	// not start on it, and nothing is written.
 	before, _ := os.ReadFile(path)
 	for name, body := range map[string]string{
 		"no port":                                `{"listen": "127.0.0.1"}`,
@@ -337,8 +318,6 @@ func TestSettingsSaveListenForARestartAndKeepApplyingTheRest(t *testing.T) {
 	}
 }
 
-// A call from another computer is told so, which is how a page knows that turning remote
-// management off would shut it out.
 func TestSettingsSayWhenTheCallIsFromAnotherComputer(t *testing.T) {
 	h, _ := startManagementCore(t, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"mgmt-key","management_allow_remote":true}`)
 	req := httptest.NewRequest(http.MethodGet, management.Prefix+"/settings", nil)
@@ -352,8 +331,6 @@ func TestSettingsSayWhenTheCallIsFromAnotherComputer(t *testing.T) {
 	}
 }
 
-// The Settings file tab: a new listen address in the text is no mistake. The check passes, the
-// save goes through with the rest of the edit applied, and the address waits for the restart.
 func TestConfigDocumentWithANewListenAddressSavesAndWaits(t *testing.T) {
 	h, path := startManagementCore(t, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
 	content := `{"listen":"127.0.0.1:18417","client_keys":["fake-client-key-1"],"management_key":"mgmt-key","management_allow_remote":true}`

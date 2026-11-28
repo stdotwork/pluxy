@@ -18,13 +18,8 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// ErrNotStarted wraps the failure of a package change whose reload did not go through (the
-// package did not start, or the config file does not load); nothing changed.
 var ErrNotStarted = errors.New("not applied")
 
-// loadPackages reads the record of installed packages at start, after clearing what an
-// interrupted install left behind. A first start installs nothing: the bundled registry is a
-// source to install from, like any other.
 func (c *Core) loadPackages() (packages.State, error) {
 	if err := packages.ClearStaging(c.pkgDir); err != nil {
 		return nil, err
@@ -33,8 +28,6 @@ func (c *Core) loadPackages() (packages.State, error) {
 	return st, err
 }
 
-// installer returns an installer for the packages folder with cfg's registries, then the
-// bundled one.
 func (c *Core) installer(cfg *server.Config) *packages.Installer {
 	in := &packages.Installer{Dir: c.pkgDir, Protocols: c.opts.Host.Versions, Client: c.registryClient}
 	if len(in.Protocols) == 0 {
@@ -49,13 +42,10 @@ func (c *Core) installer(cfg *server.Config) *packages.Installer {
 	return in
 }
 
-// InstallRequest is what POST /packages asks for.
 type InstallRequest = management.InstallRequest
 
-// PackageView is an installed package as management shows it.
 type PackageView = management.Package
 
-// Packages returns the installed packages.
 func (c *Core) Packages() []PackageView {
 	s := c.cur.Load()
 	out := []PackageView{}
@@ -89,10 +79,6 @@ func (c *Core) packageView(id string) (PackageView, bool) {
 	return c.view(s, p), true
 }
 
-// Install installs a package from a registry: it fetches and checks the release outside any
-// lock on core's live state, moves it into place, then publishes the new record in a reload.
-// A new version of an installed package replaces the old one, which drains when it runs; when
-// the new version does not start, the old one stays.
 func (c *Core) Install(ctx context.Context, req InstallRequest) (PackageView, error) {
 	c.pkgOps.Lock()
 	defer c.pkgOps.Unlock()
@@ -108,7 +94,6 @@ func (c *Core) Install(ctx context.Context, req InstallRequest) (PackageView, er
 				packages.ErrRefused, req.ID, old.Version, old.SHA256, staged.Registry, staged.SHA256)
 		}
 		if fp, err := host.Fingerprint(old.Manifest(c.pkgDir)); err == nil && fp == old.Fingerprint {
-			// Installed and intact: nothing to replace.
 			staged.Discard()
 			if req.Enable && !old.Enabled {
 				return c.setEnabled(req.ID, true)
@@ -116,7 +101,6 @@ func (c *Core) Install(ctx context.Context, req InstallRequest) (PackageView, er
 			v, _ := c.packageView(req.ID)
 			return v, nil
 		}
-		// Its files changed since it was installed: the checked release replaces them.
 	}
 	p, err := staged.Commit(c.inUse)
 	if err != nil {
@@ -128,14 +112,12 @@ func (c *Core) Install(ctx context.Context, req InstallRequest) (PackageView, er
 	err = c.transact(true, "installing "+req.ID+" "+p.Version, func(st packages.State) { st[req.ID] = p }, strict, nil)
 	recorded, disabled := err == nil, false
 	if err != nil && !had && p.Enabled {
-		// It did not start: keep it installed, disabled.
 		p.Enabled = false
 		recorded = c.transact(true, "installing "+req.ID+" "+p.Version+" disabled", func(st packages.State) { st[req.ID] = p }, nil, nil) == nil
 		disabled = recorded
 	}
 	c.reloading.Unlock()
 	if !recorded {
-		// Nothing changed: the old version (if any) stays, the new files go.
 		c.retire(p)
 		return PackageView{}, fmt.Errorf("%w: %v", ErrNotStarted, err)
 	}
@@ -151,7 +133,6 @@ func (c *Core) Install(ctx context.Context, req InstallRequest) (PackageView, er
 	return v, nil
 }
 
-// SetEnabled enables or disables an installed package.
 func (c *Core) SetEnabled(id string, enabled bool) (PackageView, error) {
 	c.pkgOps.Lock()
 	defer c.pkgOps.Unlock()
@@ -177,8 +158,6 @@ func (c *Core) setEnabled(id string, enabled bool) (PackageView, error) {
 	return v, nil
 }
 
-// RemovePackage disables a package and removes its files once no generation runs them. Its
-// accounts stay.
 func (c *Core) RemovePackage(id string) error {
 	c.pkgOps.Lock()
 	defer c.pkgOps.Unlock()
@@ -197,7 +176,6 @@ func (c *Core) RemovePackage(id string) error {
 	return nil
 }
 
-// retire marks p's files for removal once nothing uses them.
 func (c *Core) retire(p packages.Installed) {
 	c.mu.Lock()
 	c.retired = append(c.retired, p)
@@ -205,8 +183,6 @@ func (c *Core) retire(p packages.Installed) {
 	c.sweep()
 }
 
-// sweep removes the files of retired package versions that neither the record nor a running
-// or draining generation uses.
 func (c *Core) sweep() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -214,7 +190,7 @@ func (c *Core) sweep() {
 	keep := c.retired[:0]
 	for _, p := range c.retired {
 		if cur, ok := s.pkgs[p.ID]; ok && cur.Version == p.Version {
-			continue // installed again: no longer retired
+			continue
 		}
 		if c.inUseLocked(p.Dir(c.pkgDir)) {
 			keep = append(keep, p)
@@ -227,7 +203,6 @@ func (c *Core) sweep() {
 	c.retired = keep
 }
 
-// inUse reports whether a running or draining generation runs from the package folder dir.
 func (c *Core) inUse(dir string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -249,19 +224,14 @@ func (c *Core) inUseLocked(dir string) bool {
 	return false
 }
 
-// RegistryView is what one registry offers, as management shows it.
 type RegistryView = management.Registry
 
-// RegistryPackage is one package a registry offers.
 type RegistryPackage = management.RegistryPackage
 
-// RegistryRelease is one release a registry offers.
 type RegistryRelease = management.RegistryRelease
 
-// Registries reads every registry core installs from.
 func (c *Core) Registries(ctx context.Context) []RegistryView {
 	in := c.installer(c.Config())
-	// Registries are read side by side, so a stalled one costs one timeout, not one each.
 	type read struct {
 		ix  *packages.Index
 		err error

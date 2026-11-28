@@ -16,20 +16,18 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
 
-// keyCall sends one management call to c from this machine with key, and returns the reply.
 func keyCall(c *Core, key, method, path string, body io.Reader) (int, []byte) {
 	if body == nil {
 		body = http.NoBody
 	}
 	req := httptest.NewRequest(method, ManagementPrefix+strings.TrimPrefix(path, "/"), body)
 	req.Header.Set("Authorization", "Bearer "+key)
-	req.RemoteAddr = "127.0.0.1:1234" // management answers only this machine
+	req.RemoteAddr = "127.0.0.1:1234"
 	rec := httptest.NewRecorder()
 	c.Management().ServeHTTP(rec, req)
 	return rec.Code, rec.Body.Bytes()
 }
 
-// stageKey stages a new management key on c with key and returns the reply.
 func stageKey(t *testing.T, c *Core, key string) (value, config string) {
 	t.Helper()
 	code, b := keyCall(c, key, http.MethodPost, "/management-key/rotate/stage", nil)
@@ -43,22 +41,16 @@ func stageKey(t *testing.T, c *Core, key string) (value, config string) {
 	return r.Value, r.Config
 }
 
-// commitKey asks c, with key, to put value into use, and returns the reply's status.
 func commitKey(c *Core, key, value string) (int, []byte) {
 	body, _ := json.Marshal(map[string]string{"value": value})
 	return keyCall(c, key, http.MethodPost, "/management-key/rotate/commit", bytes.NewReader(body))
 }
 
-// keyWorks reports whether c answers GET /status with key.
 func keyWorks(c *Core, key string) bool {
 	code, _ := keyCall(c, key, http.MethodGet, "/status", nil)
 	return code == http.StatusOK
 }
 
-// The management key changes in two steps. Stage makes a key and keeps it in memory only: the
-// old key keeps working and the config file is not touched. Commit puts the staged key into use
-// under the config-write lock; committing the key already in use changes nothing and answers
-// 204, so a commit sent again after a lost reply is safe; any other value answers 409.
 func TestManagementKeyTwoSteps(t *testing.T) {
 	const oldKey = "fake-management-key"
 	fileKey := func(t *testing.T, path string) string {
@@ -69,7 +61,6 @@ func TestManagementKeyTwoSteps(t *testing.T) {
 		}
 		return cfg.ManagementKey
 	}
-	// unchanged checks that the config file is as it was and the old key still works.
 	unchanged := func(t *testing.T, c *Core, path string, before []byte) {
 		t.Helper()
 		if now, err := os.ReadFile(path); err != nil || !bytes.Equal(now, before) {
@@ -176,8 +167,6 @@ func TestManagementKeyTwoSteps(t *testing.T) {
 		}
 	})
 
-	// A commit sent again while the first waits for the config-write lock: both passed the
-	// check of the old key, and the second, run after the first, finds its key in use.
 	t.Run("a commit sent again while the first waits answers 204", func(t *testing.T) {
 		c, path := safeCore(t, safeConfig)
 		value, _ := stageKey(t, c, oldKey)
@@ -200,7 +189,7 @@ func TestManagementKeyTwoSteps(t *testing.T) {
 				defer wg.Done()
 				codes[i], _ = keyCall(c, oldKey, http.MethodPost, "/management-key/rotate/commit", &readSignal{r: bytes.NewReader(body), done: read})
 			}()
-			<-read // the call passed the key check and read its body: it waits for the lock
+			<-read
 		}
 		close(release)
 		wg.Wait()
@@ -213,8 +202,6 @@ func TestManagementKeyTwoSteps(t *testing.T) {
 		}
 	})
 
-	// A stage sent while a commit is between its check of the staged key and its write waits
-	// for the commit: it cannot replace the key the commit is putting into use.
 	t.Run("a stage waits for a commit between its check and its write", func(t *testing.T) {
 		c, path := safeCore(t, safeConfig)
 		first, _ := stageKey(t, c, oldKey)
@@ -222,7 +209,7 @@ func TestManagementKeyTwoSteps(t *testing.T) {
 		c.staged.waiting = func() { close(waits) }
 		second := make(chan string, 1)
 		c.staged.checked = func() {
-			c.staged.checked = nil // the hook runs under the lock, once
+			c.staged.checked = nil
 			go func() {
 				code, b := keyCall(c, oldKey, http.MethodPost, "/management-key/rotate/stage", nil)
 				var r struct {
@@ -246,7 +233,6 @@ func TestManagementKeyTwoSteps(t *testing.T) {
 		if got := fileKey(t, path); got != first || !keyWorks(c, first) {
 			t.Errorf("the config file holds %q, want the committed key", got)
 		}
-		// The second stage ran after the commit, so its key is the one staged now.
 		next := <-second
 		if code, b := commitKey(c, first, next); code != http.StatusNoContent || fileKey(t, path) != next {
 			t.Errorf("commit of the second stage's key: %d %s", code, b)
@@ -254,7 +240,6 @@ func TestManagementKeyTwoSteps(t *testing.T) {
 	})
 }
 
-// readSignal reads r and closes done once r is read to its end.
 type readSignal struct {
 	r    io.Reader
 	done chan struct{}

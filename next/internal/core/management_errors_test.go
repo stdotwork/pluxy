@@ -14,18 +14,6 @@ import (
 	"testing"
 )
 
-// The management API's error codes are documented in ../../../docs/management-api.md. Its handlers give
-// them in a few shapes, collected here from the source of the two packages that serve the API
-// (this one and internal/server): the code argument of writeError and writeManagementError, the
-// code field of an editError literal, and the code of the {"error": {"code": ...}} body they
-// write. A handler that starts giving a new code, or the docs naming one no handler gives, fails
-// this test instead of drifting.
-//
-// A code forwarded from an extension's or a provider's error is not in the source as a literal:
-// writeCredError passes on an llm.Error's code, and writeAccountError writes route.Brief's. Such a
-// code can be any of the ones llm declares, so the test then requires the table to list them all.
-// Anything else it cannot read fails rather than being skipped.
-
 const (
 	managementReadme = "../../../docs/management-api.md"
 	llmPackageDir    = "../../llm"
@@ -68,10 +56,8 @@ func missingCodes(want, have map[string]bool) []string {
 	return out
 }
 
-// codeToken is the table's spelling of a code: a word in backticks.
 var codeToken = regexp.MustCompile("`([^`]+)`")
 
-// documentedErrorCodes returns the codes of the docs' "| Status | Codes |" table.
 func documentedErrorCodes(path string) (map[string]bool, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -105,8 +91,6 @@ func documentedErrorCodes(path string) (map[string]bool, error) {
 	return codes, nil
 }
 
-// parseNonTestFiles parses the non-test Go files of dir, grouped by package name. It reads the
-// files as written, whatever their build constraints, as parser.ParseDir did.
 func parseNonTestFiles(fset *token.FileSet, dir string) (map[string][]*ast.File, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -127,7 +111,6 @@ func parseNonTestFiles(fset *token.FileSet, dir string) (map[string][]*ast.File,
 	return pkgs, nil
 }
 
-// stringConsts returns the package's constants whose value is a string.
 func stringConsts(files []*ast.File) map[string]string {
 	out := map[string]string{}
 	for _, f := range files {
@@ -154,16 +137,12 @@ func stringConsts(files []*ast.File) map[string]string {
 	return out
 }
 
-// handlerCodes is what the handlers were found to answer.
 type handlerCodes struct {
-	fset  *token.FileSet
-	codes map[string]bool
-	// forwarded is true when a handler passes on an extension's or provider's error code.
+	fset      *token.FileSet
+	codes     map[string]bool
 	forwarded bool
 }
 
-// handlerErrorCodes walks the non-test Go files of dirs, which must be packages serving the
-// management API. llmConsts is llm's error codes, by constant name.
 func handlerErrorCodes(t *testing.T, llmConsts map[string]string, dirs ...string) (*handlerCodes, error) {
 	t.Helper()
 	c := &handlerCodes{fset: token.NewFileSet(), codes: map[string]bool{}}
@@ -182,7 +161,7 @@ func handlerErrorCodes(t *testing.T, llmConsts map[string]string, dirs ...string
 					}
 					switch fd.Name.Name {
 					case "writeError", "writeManagementError":
-						continue // the helpers that write every error body
+						continue
 					}
 					vars, maps := assignedLiterals(fd.Body)
 					c.walk(t, fd.Body, consts, llmConsts, vars, maps)
@@ -193,7 +172,6 @@ func handlerErrorCodes(t *testing.T, llmConsts map[string]string, dirs ...string
 	return c, nil
 }
 
-// llmCodeConsts returns llm's constants that are error codes, by name.
 func llmCodeConsts(dir string) (map[string]string, error) {
 	pkgs, err := parseNonTestFiles(token.NewFileSet(), dir)
 	if err != nil {
@@ -213,8 +191,6 @@ func llmCodeConsts(dir string) (map[string]string, error) {
 	return out, nil
 }
 
-// assignedLiterals returns, for one function body, the string literals assigned to each variable
-// and the composite literals assigned to each.
 func assignedLiterals(body *ast.BlockStmt) (map[string][]string, map[string]*ast.CompositeLit) {
 	vars := map[string][]string{}
 	maps := map[string]*ast.CompositeLit{}
@@ -278,8 +254,6 @@ func (c *handlerCodes) walk(t *testing.T, body *ast.BlockStmt, consts, llmConsts
 	})
 }
 
-// errorValue returns the expression an error body literal gives its code in: the value of the
-// "code" key of {"error": {"code": ...}}, or the call that builds the error.
 func errorValue(lit *ast.CompositeLit) (ast.Expr, bool) {
 	for _, e := range lit.Elts {
 		kv, ok := e.(*ast.KeyValueExpr)
@@ -291,7 +265,7 @@ func errorValue(lit *ast.CompositeLit) (ast.Expr, bool) {
 		}
 		inner, ok := kv.Value.(*ast.CompositeLit)
 		if !ok {
-			return kv.Value, true // a call building the error, as route.Brief does
+			return kv.Value, true
 		}
 		for _, e2 := range inner.Elts {
 			kv2, ok := e2.(*ast.KeyValueExpr)
@@ -306,7 +280,6 @@ func errorValue(lit *ast.CompositeLit) (ast.Expr, bool) {
 	return nil, false
 }
 
-// add records the code the expression e gives.
 func (c *handlerCodes) add(t *testing.T, e ast.Expr, consts, llmConsts map[string]string, vars map[string][]string) {
 	t.Helper()
 	switch v := e.(type) {
@@ -329,13 +302,9 @@ func (c *handlerCodes) add(t *testing.T, e ast.Expr, consts, llmConsts map[strin
 			return
 		}
 	case *ast.SelectorExpr:
-		// editError's code field: the literals given to editError are collected where they are
-		// given.
 		if v.Sel.Name == "code" {
 			return
 		}
-		// llm.CodeAuth and the like name a code; any other field (le.Code, e.Code) carries one
-		// from an extension or a provider.
 		if base, ok := v.X.(*ast.Ident); ok && base.Name == "llm" {
 			if s, ok := llmConsts[v.Sel.Name]; ok {
 				c.codes[s] = true

@@ -19,49 +19,31 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// routingFile is the file in the state folder that holds routing's blocks and bans.
 const routingFile = "routing.json"
 
-// routingDoc is routing.json: the blocks of route.State.Saved and the bans of
-// route.State.SavedBans, under the version of the document's form (routingVersion).
 type routingDoc struct {
 	V      int                `json:"v"`
 	Blocks []route.SavedBlock `json:"blocks"`
 	Bans   []route.SavedBan   `json:"bans,omitempty"`
 }
 
-// routingVersion is the version of routing.json's form that this core reads and writes. Blocks
-// gained their kind and error within version 1: a block without them, as an older core wrote it,
-// is a quota block (route.SavedBlock).
 const routingVersion = 1
 
-// checkIntervalEnv, for tests only, sets how often routing checks long blocks, in milliseconds,
-// in place of 15 minutes.
 const checkIntervalEnv = "PLUXY_TEST_CHECK_INTERVAL_MS"
 
-// defaultCheckEvery is how often routing checks long blocks (route.State.SetCheckInterval).
 const defaultCheckEvery = 15 * time.Minute
 
-// routing runs routing's checks and keeps routing.json, from start until Stop.
 type routing struct {
-	every time.Duration // the check interval
-	stop  context.CancelFunc
-	done  chan struct{}
-	// refreshed is closed when the usage readings' loop (runQuotaRefresh) has ended, ignited
-	// when window ignition's (runIgnition) has.
+	every     time.Duration
+	stop      context.CancelFunc
+	done      chan struct{}
 	refreshed chan struct{}
 	ignited   chan struct{}
-	path      string // routing.json
-	// saved is what routing.json holds now, when core read or wrote it; nil when there is no
-	// file or core could not read it.
-	saved []byte
-	// bad is true while path holds a file core could not read or that another version wrote:
-	// it is kept until a block must be saved.
-	bad bool
+	path      string
+	saved     []byte
+	bad       bool
 }
 
-// startRouting reads routing.json back into the routing state, then checks blocks on a timer
-// (the blocks read back at once) and writes the file again whenever its blocks change.
 func (c *Core) initRouting() {
 	r := &routing{every: defaultCheckEvery, done: make(chan struct{}), refreshed: make(chan struct{}), ignited: make(chan struct{}), path: filepath.Join(StateDir(c.opts.ConfigPath), routingFile)}
 	if v := os.Getenv(checkIntervalEnv); v != "" {
@@ -85,10 +67,6 @@ func (c *Core) startRouting() {
 	go c.runIgnition(ctx, c.routing)
 }
 
-// runQuotaRefresh reads the accounts' usage for soonest-reset (route.Router.Refresh), on a timer
-// of its own so a slow reading never holds up the checks or a request. The router decides on each
-// tick whether a refresh is due (routing.quota_refresh_ms); the first tick comes a tick after
-// start, once core is serving. In safe mode, where no extension runs, it reads nothing.
 func (c *Core) runQuotaRefresh(ctx context.Context, r *routing) {
 	defer close(r.refreshed)
 	if c.opts.SafeMode {
@@ -108,9 +86,6 @@ func (c *Core) runQuotaRefresh(ctx context.Context, r *routing) {
 	}
 }
 
-// loadRouting puts back the blocks and bans routing.json holds, for the accounts core has. A
-// file that cannot be read, or that another version of core wrote, is logged and left in place:
-// core starts without them, and saveRouting moves it aside only when state must be saved.
 func (c *Core) loadRouting(r *routing) {
 	b, err := os.ReadFile(r.path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -157,7 +132,6 @@ func (c *Core) runRouting(ctx context.Context, r *routing) {
 	}
 }
 
-// stopRouting ends the checks and writes routing.json a last time.
 func (c *Core) stopRouting() {
 	if c.routing == nil {
 		return
@@ -174,11 +148,6 @@ func (c *Core) checkRouting(ctx context.Context) {
 	}
 }
 
-// saveRouting writes routing's state, its blocks and bans, to routing.json when they
-// changed: whole, to a temporary file renamed into place, readable by its owner only. With
-// neither to save it writes nothing unless the file holds state core saved or read before. A
-// file loadRouting could not read is left in place until state must be saved, and then moved
-// aside to routing.json.bad.
 func (c *Core) saveRouting(r *routing) {
 	blocks := c.state.Saved(time.Now())
 	bans := c.state.SavedBans()
@@ -202,8 +171,6 @@ func (c *Core) saveRouting(r *routing) {
 	r.saved = b
 }
 
-// writePrivate writes b to path whole, through a temporary file in its folder renamed into place,
-// with mode 0600; the folder is made, 0700, when missing.
 func writePrivate(path string, b []byte) (err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -235,11 +202,8 @@ func writePrivate(path string, b []byte) (err error) {
 	return os.Rename(tmp, path)
 }
 
-// readingTimeout bounds one usage reading a check makes.
 const readingTimeout = 30 * time.Second
 
-// readings is routing's source of usage readings (route.Readings): the quota call of the
-// account's extension.
 type readings struct{ c *Core }
 
 func (rd readings) Reading(ctx context.Context, a route.Account) (*protocol.Quota, *llm.Error) {

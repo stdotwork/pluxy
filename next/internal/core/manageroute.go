@@ -13,13 +13,8 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// publicKeyFile is the file in the state folder that holds the key public account IDs are made
-// with (route.State.PublicID), in hex. It stays across restarts, so an account keeps its public
-// ID.
 const publicKeyFile = "account-key"
 
-// loadPublicKey reads the public ID key from the state folder, or makes and saves one. When it
-// cannot be saved the key lives until core stops, and public IDs change at the next start.
 func (c *Core) loadPublicKey() {
 	path := filepath.Join(StateDir(c.opts.ConfigPath), publicKeyFile)
 	if b, err := os.ReadFile(path); err == nil {
@@ -36,8 +31,6 @@ func (c *Core) loadPublicKey() {
 	c.state.SetPublicKey(key)
 }
 
-// handleRoute adds GET /v0/management/route?model=<name>: the accounts a request for the model
-// would try now, in order, and those it would leave out and why. It sends nothing.
 func (c *Core) handleRoute(m *server.Management) {
 	m.Handle("GET /route", func(w http.ResponseWriter, r *http.Request) {
 		model := strings.TrimSpace(r.URL.Query().Get("model"))

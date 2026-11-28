@@ -33,9 +33,6 @@ func codexSnippet(t *testing.T) string {
 	return s.Files[0].Content
 }
 
-// Claude Code's settings: Connect sets the four settings of the setup text, takes out an API key
-// that would be sent instead, and keeps the rest of the file in its order; Disconnect gives the
-// file back as it was, or, when the person changed it since, takes out only what Connect wrote.
 func TestClaudeSettingsApplyAndClear(t *testing.T) {
 	original := []byte(`{
   "permissions": {"allow": ["Bash(ls:*)"]},
@@ -81,13 +78,11 @@ func TestClaudeSettingsApplyAndClear(t *testing.T) {
 		t.Errorf("claudeToken = %q", claudeToken(applied))
 	}
 
-	// Unchanged since: the original, byte for byte.
 	back, err := clearClaudeSettings(original, applied, applied)
 	if err != nil || string(back) != string(original) {
 		t.Errorf("clear of an unchanged file = %q, %v; want the original", back, err)
 	}
 
-	// Changed since: the person's changes stay, Connect's settings go, the API key comes back.
 	edited := strings.Replace(string(applied), `"model": "opus"`, `"model": "sonnet", "theme": "dark"`, 1)
 	edited = strings.Replace(edited, `"FOO": "bar"`, `"FOO": "baz"`, 1)
 	back, err = clearClaudeSettings(original, applied, []byte(edited))
@@ -116,8 +111,6 @@ func TestClaudeSettingsApplyAndClear(t *testing.T) {
 		t.Errorf("after clear theme = %s, want the person's dark", v)
 	}
 
-	// No file before: apply makes one, clear of it unchanged removes it, and clear of it changed
-	// keeps only what the person added.
 	fresh, err := applyClaudeSettings(nil, claudeSnippet(t))
 	if err != nil {
 		t.Fatal(err)
@@ -175,9 +168,6 @@ key = "not a key"
 """
 `
 
-// Codex's config: Connect puts model_provider with the root keys, before the first table, and
-// pluxy's provider in its table; every other line stays as written, values over several lines
-// included. Disconnect gives the file back, or takes out only what Connect wrote.
 func TestCodexConfigApplyAndClear(t *testing.T) {
 	applied, err := applyCodexConfig([]byte(codexOriginal), codexSnippet(t))
 	if err != nil {
@@ -198,7 +188,6 @@ func TestCodexConfigApplyAndClear(t *testing.T) {
 	if back, err := clearCodexConfig([]byte(codexOriginal), applied, applied); err != nil || string(back) != codexOriginal {
 		t.Errorf("clear of an unchanged file = %q, %v; want the original", back, err)
 	}
-	// The person changes another table after: theirs stays, Connect's lines go.
 	edited := strings.Replace(string(applied), `trust_level = "trusted"`, `trust_level = "untrusted"`, 1)
 	back, err := clearCodexConfig([]byte(codexOriginal), applied, []byte(edited))
 	if err != nil {
@@ -208,7 +197,6 @@ func TestCodexConfigApplyAndClear(t *testing.T) {
 		t.Errorf("clear of an edited file =\n%s\nwant\n%s", back, want)
 	}
 
-	// No file: made, and taken away again.
 	fresh, err := applyCodexConfig(nil, codexSnippet(t))
 	if err != nil {
 		t.Fatal(err)
@@ -221,8 +209,6 @@ func TestCodexConfigApplyAndClear(t *testing.T) {
 	}
 }
 
-// A provider table already there: its keys change in place (a key's comment kept), the
-// credentials that would win over the bearer token go, and Disconnect puts each back.
 func TestCodexConfigExistingProvider(t *testing.T) {
 	original := "model_provider = \"openai\" # mine\r\n\r\n[model_providers.pluxy]\r\nname = \"old\"\r\nbase_url = \"http://old.test/v1\"\r\nenv_key = \"PLUXY_KEY\"\r\nextra = 1\r\n\r\n[model_providers.pluxy.capabilities]\r\nremote_compaction = \"v2\"\r\n"
 	applied, err := applyCodexConfig([]byte(original), codexSnippet(t))
@@ -272,7 +258,6 @@ func TestCodexConfigRefused(t *testing.T) {
 	}
 }
 
-// inspectFile writes b as rel in a new home and reads it back with inspect.
 func inspectFile(t *testing.T, rel string, b []byte, inspect func(home, coreURL string) (string, string)) (string, string) {
 	t.Helper()
 	home := t.TempDir()
@@ -286,7 +271,6 @@ func inspectFile(t *testing.T, rel string, b []byte, inspect func(home, coreURL 
 	return inspect(home, connectURL)
 }
 
-// connectHome is a new home folder for core's user, for a test of connect and disconnect.
 func connectHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -317,10 +301,6 @@ func clientKeys(t *testing.T, h http.Handler) []management.ClientKey {
 	return r.Keys
 }
 
-// Connect and Disconnect through the management API on real files: the file changed with a key
-// made for the tool, a private record of the file as it was, the file given back as it was by
-// Disconnect (its mode too) and the key made for it removed; a second connect keeps the key and
-// makes the file its owner's alone again.
 func TestConnectDisconnectClaudeCode(t *testing.T) {
 	home := connectHome(t)
 	h, cfgPath := startManagementCore(t, `{"listen":"127.0.0.1:8317","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
@@ -376,8 +356,6 @@ func TestConnectDisconnectClaudeCode(t *testing.T) {
 		t.Errorf("record mode = %v, want 0600", fi.Mode().Perm())
 	}
 
-	// Again, on the file made readable by others since: the key the file holds is kept, the bytes
-	// do not change, and the file is its owner's alone again.
 	if err := os.Chmod(settings, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -417,12 +395,9 @@ func TestConnectDisconnectClaudeCode(t *testing.T) {
 	}
 }
 
-// Codex with no folder yet: Connect makes ~/.codex (0700) and the file (0600), a connect again
-// makes the file 0600 again when it was opened up since; Disconnect takes both away again.
 func TestConnectDisconnectCodexNoFolder(t *testing.T) {
 	home := connectHome(t)
 	h, _ := startManagementCore(t, `{"listen":"127.0.0.1:8317","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
-	// A label that is a key is refused, as POST /client-keys refuses it, before anything is written.
 	if rec := manageCall(t, h, http.MethodPost, "/setup/clients/codex/connect", `{"label":"fake-client-key-1"}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("connect with a key as the label = %d %s, want 400", rec.Code, rec.Body)
 	}
@@ -447,7 +422,6 @@ func TestConnectDisconnectCodexNoFolder(t *testing.T) {
 	if _, state := inspectCodex(home, connectURL); state != stateConfigured {
 		t.Errorf("config after connect reads %q", state)
 	}
-	// Connect again on the file made readable by others: unchanged, and its owner's alone again.
 	toml := filepath.Join(dir, "config.toml")
 	if err := os.Chmod(toml, 0o644); err != nil {
 		t.Fatal(err)
@@ -469,8 +443,6 @@ func TestConnectDisconnectCodexNoFolder(t *testing.T) {
 	}
 }
 
-// A link where the settings file is, or in place of its folder, is refused, and nothing changes:
-// no key is made and the link's target stays as it was.
 func TestConnectRefusesLinks(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("making links needs a privilege on Windows")
@@ -511,9 +483,6 @@ func TestConnectRefusesLinks(t *testing.T) {
 	}
 }
 
-// A settings file Connect cannot change (one it would have to guess at) is refused after the key
-// for the tool is made: the key goes again, and the file, the config's keys and the records stay as
-// they were.
 func TestConnectRefusedFileLeavesNoKey(t *testing.T) {
 	home := connectHome(t)
 	h, cfgPath := startManagementCore(t, `{"listen":"127.0.0.1:8317","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
@@ -547,8 +516,6 @@ func TestConnectRefusedFileLeavesNoKey(t *testing.T) {
 	}
 }
 
-// ownAddr is an address of one of this machine's interfaces other than loopback, for the address
-// a browser on another machine reaches core by; the test skips without one.
 func ownAddr(t *testing.T) string {
 	t.Helper()
 	addrs, _ := net.InterfaceAddrs()
@@ -561,10 +528,6 @@ func ownAddr(t *testing.T) string {
 	return ""
 }
 
-// A tool's address matches core's when it reaches that core: for a core on every interface, a
-// loopback address or another address of this machine of the listener's family, or of either
-// family when the listener takes both, and localhost only then; for a core on one address, that
-// address alone; for a core whose address is not known, no address.
 func TestAtCore(t *testing.T) {
 	own := ownAddr(t)
 	own4 := netip.MustParseAddr(own).Unmap().Is4()
@@ -588,7 +551,6 @@ func TestAtCore(t *testing.T) {
 		t.Cleanup(func() { wildcardDualStack = was })
 	}
 
-	// Whether the listener takes both families or not.
 	for _, both := range []bool{false, true} {
 		dualStack(t, both)
 		check(t, []match{
@@ -598,30 +560,28 @@ func TestAtCore(t *testing.T) {
 			{ownURL, every4, own4 || both},
 			{ownURL, every6, !own4 || both},
 			{ownURL, coreAddress(":8317", false), own4 || both},
-			{"http://198.51.100.9:8317", every4, false}, // not this machine
+			{"http://198.51.100.9:8317", every4, false},
 			{"http://[2001:db8::9]:8317", every6, false},
 			{"http://127.0.0.1:8318", every4, false},
 			{"https://127.0.0.1:8317", every4, false},
 			{"http://127.0.0.1:8317/", every4, false},
 			{"http://127.0.0.1", every4, false},
 			{"http://10.0.0.2:8317", one, true},
-			{"http://127.0.0.1:8317", one, false}, // core is not on loopback
+			{"http://127.0.0.1:8317", one, false},
 			{"http://localhost:8317", coreAddress("127.0.0.1:8317", false), false},
 			{"https://127.0.0.1:8317", coreAddress("127.0.0.1:8317", true), true},
 			{"http://anything", "", false},
 			{"http://127.0.0.1:8317", "", false},
 		})
 	}
-	// A listener of one family: another server can hold the same port in the other family.
 	dualStack(t, false)
 	check(t, []match{
 		{"http://[::1]:8317", every4, false},
 		{"http://[::1]:8317", coreAddress(":8317", false), false},
 		{"http://127.0.0.1:8317", every6, false},
-		{"http://localhost:8317", every4, false}, // may resolve to ::1
+		{"http://localhost:8317", every4, false},
 		{"http://localhost:8317", every6, false},
 	})
-	// A listener that takes both.
 	dualStack(t, true)
 	check(t, []match{
 		{"http://[::1]:8317", every4, true},
@@ -638,8 +598,6 @@ func TestAtCore(t *testing.T) {
 	}
 }
 
-// wildcardDualStack says what a listener on every interface opened as core opens its own does:
-// a connection to ::1 reaches one on 0.0.0.0 exactly when it says the listener takes both.
 func TestWildcardDualStack(t *testing.T) {
 	ln, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
@@ -665,8 +623,6 @@ func TestWildcardDualStack(t *testing.T) {
 	}
 }
 
-// With listen 0.0.0.0, every tool's settings that name the address the panel was reached by read
-// as connected, as do the ones Connect writes (core's loopback address).
 func TestConnectedAtEveryInterface(t *testing.T) {
 	own := ownAddr(t)
 	if !netip.MustParseAddr(own).Unmap().Is4() && !wildcardDualStack() {
@@ -700,9 +656,6 @@ func TestConnectedAtEveryInterface(t *testing.T) {
 	}
 }
 
-// Claude Code with a model: apply sets model and the three ANTHROPIC_DEFAULT_*_MODEL variables;
-// clear restores the person's own model (and any default model variable they had) or takes them
-// out when they had none, while keeping changes the person made since.
 func TestClaudeSettingsApplyAndClearWithModel(t *testing.T) {
 	snip, _ := ClientSnippetFor("claude-code", connectURL, connectKey, "claude-sonnet-5-5")
 	original := []byte(`{
@@ -730,8 +683,6 @@ func TestClaudeSettingsApplyAndClearWithModel(t *testing.T) {
 			t.Errorf("applied env %s = %s, want claude-sonnet-5-5:\n%s", k, v, applied)
 		}
 	}
-	// Edited elsewhere: Disconnect gives back the person's own model and opus default, and takes out
-	// sonnet and haiku defaults that Connect added.
 	edited := strings.Replace(string(applied), `"FOO": "bar"`, `"FOO": "baz"`, 1)
 	back, err := clearClaudeSettings(original, applied, []byte(edited))
 	if err != nil {
@@ -753,7 +704,6 @@ func TestClaudeSettingsApplyAndClearWithModel(t *testing.T) {
 			t.Errorf("after clear env still has %s:\n%s", k, back)
 		}
 	}
-	// No model before (and no file before): Connect adds them, edited Disconnect takes them out.
 	fresh, err := applyClaudeSettings(nil, snip.Files[0].Content)
 	if err != nil {
 		t.Fatal(err)
@@ -763,7 +713,6 @@ func TestClaudeSettingsApplyAndClearWithModel(t *testing.T) {
 	if err != nil || string(back) != "{\n  \"theme\": \"dark\"\n}\n" {
 		t.Errorf("clear of a made file with a model = %q, %v; want only theme", back, err)
 	}
-	// Person changed model after Connect: Disconnect keeps the person's new model.
 	changedModel := strings.Replace(string(applied), `"model": "claude-sonnet-5-5"`, `"model": "my-custom"`, 1)
 	back, err = clearClaudeSettings(original, applied, []byte(changedModel))
 	if err != nil {
@@ -778,9 +727,6 @@ func TestClaudeSettingsApplyAndClearWithModel(t *testing.T) {
 	}
 }
 
-// Codex with a model: apply puts root model above tables (keeping an existing model's comment),
-// passes the post-write check, and clear gives back the person's own model or takes it out when
-// they had none.
 func TestCodexConfigApplyAndClearWithModel(t *testing.T) {
 	snip, _ := ClientSnippetFor("codex", connectURL, connectKey, "gpt-6.1-codex")
 	applied, err := applyCodexConfig([]byte(codexOriginal), snip.Files[0].Content)
@@ -793,7 +739,6 @@ func TestCodexConfigApplyAndClearWithModel(t *testing.T) {
 	if _, state := inspectFile(t, ".codex/config.toml", applied, inspectCodex); state != stateConfigured {
 		t.Errorf("after apply with model state = %q, want configured", state)
 	}
-	// Edited elsewhere: Disconnect gives back the person's own model (with comment).
 	edited := strings.Replace(string(applied), `trust_level = "trusted"`, `trust_level = "untrusted"`, 1)
 	back, err := clearCodexConfig([]byte(codexOriginal), applied, []byte(edited))
 	if err != nil {
@@ -802,7 +747,6 @@ func TestCodexConfigApplyAndClearWithModel(t *testing.T) {
 	if want := strings.Replace(codexOriginal, `"trusted"`, `"untrusted"`, 1); string(back) != want {
 		t.Errorf("clear of an edited file with model =\n%s\nwant\n%s", back, want)
 	}
-	// No root model before: Connect puts model above the first table, edited Disconnect takes it out.
 	noModel := "[projects.\"/home/me/x\"]\ntrust_level = \"trusted\"\n"
 	appliedNoModel, err := applyCodexConfig([]byte(noModel), snip.Files[0].Content)
 	if err != nil {
@@ -820,7 +764,6 @@ func TestCodexConfigApplyAndClearWithModel(t *testing.T) {
 	if want := strings.Replace(noModel, `"trusted"`, `"untrusted"`, 1); string(back) != want {
 		t.Errorf("clear when person had no model =\n%s\nwant\n%s", back, want)
 	}
-	// Person changed model after Connect: Disconnect keeps the person's new model.
 	changedModel := strings.Replace(string(applied), `model = "gpt-6.1-codex"`, `model = "my-custom"`, 1)
 	back, err = clearCodexConfig([]byte(codexOriginal), applied, []byte(changedModel))
 	if err != nil {
@@ -831,14 +774,10 @@ func TestCodexConfigApplyAndClearWithModel(t *testing.T) {
 	}
 }
 
-// Connect writes the best-matching served model for Claude Code and Codex (and an explicit model
-// when asked, refusing an invalid one with 400); Disconnect puts back the person's own model (or
-// takes it out when they had none).
 func TestConnectWritesServedModelAndExplicitModel(t *testing.T) {
 	home := connectHome(t)
 	h, _ := startManagementCore(t, `{"listen":"127.0.0.1:8317","client_keys":["fake-client-key-1"],"management_key":"mgmt-key","extensions":{"pluxy/fake":{"accounts":[{"id":"acc-1","models":["fake-gpt-1","claude-sonnet-5-5","gpt-6.1-codex"],"credential":{"kind":"api_key","api_key":"fake-0"}}]}}}`)
 
-	// Invalid model in connect body is refused with 400 invalid_request before writing anything.
 	rec := manageCall(t, h, http.MethodPost, "/setup/clients/claude-code/connect", `{"model":"bad\nname"}`)
 	if rec.Code != http.StatusBadRequest || errorCodeOf(t, rec) != "invalid_request" {
 		t.Fatalf("connect with bad model = %d %s, want 400 invalid_request", rec.Code, rec.Body)
@@ -847,7 +786,6 @@ func TestConnectWritesServedModelAndExplicitModel(t *testing.T) {
 		t.Fatalf("bad model left a client key behind")
 	}
 
-	// Claude Code with an existing model: Connect writes claude-sonnet-5-5; edited Disconnect restores opus.
 	claudePath := filepath.Join(home, ".claude", "settings.json")
 	writeTestFile(t, claudePath, "{\n  \"model\": \"opus\"\n}\n")
 	code, reply, body := connectCall(t, h, "connect", "claude-code")
@@ -863,7 +801,6 @@ func TestConnectWritesServedModelAndExplicitModel(t *testing.T) {
 	if strings.Contains(string(b), ModelPlaceholder) {
 		t.Errorf("claude settings contain placeholder:\n%s", b)
 	}
-	// Edit another key, then Disconnect: opus comes back and ANTHROPIC_DEFAULT_* go.
 	edited := strings.Replace(string(b), "{\n", "{\n  \"theme\": \"dark\",\n", 1)
 	if err := os.WriteFile(claudePath, []byte(edited), 0o600); err != nil {
 		t.Fatal(err)
@@ -876,7 +813,6 @@ func TestConnectWritesServedModelAndExplicitModel(t *testing.T) {
 		t.Errorf("claude settings after edited disconnect did not restore opus:\n%s", after)
 	}
 
-	// Codex with an existing model: Connect writes gpt-6.1-codex; edited Disconnect restores gpt-6.1-sol.
 	codexPath := filepath.Join(home, ".codex", "config.toml")
 	writeTestFile(t, codexPath, codexOriginal)
 	code, reply, body = connectCall(t, h, "connect", "codex")
@@ -902,7 +838,6 @@ func TestConnectWritesServedModelAndExplicitModel(t *testing.T) {
 		t.Errorf("codex config after edited disconnect did not restore model:\n%s", after)
 	}
 
-	// Explicit model in POST body overrides the best match.
 	rec = manageCall(t, h, http.MethodPost, "/setup/clients/codex/connect", `{"model":"fake-gpt-1"}`)
 	var explicitReply management.ClientConnection
 	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &explicitReply) != nil || explicitReply.Model != "fake-gpt-1" {
@@ -914,13 +849,10 @@ func TestConnectWritesServedModelAndExplicitModel(t *testing.T) {
 	}
 }
 
-// When pluxy serves no model, Connect succeeds, writes no placeholder, keeps whatever model the
-// file already had, and adds no model setting when the file had none.
 func TestConnectWithNoServedModelsWritesNoPlaceholder(t *testing.T) {
 	home := connectHome(t)
 	h, _ := startManagementCore(t, `{"listen":"127.0.0.1:8317","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
 
-	// Existing files with their own models: kept untouched, no placeholder.
 	claudePath := filepath.Join(home, ".claude", "settings.json")
 	writeTestFile(t, claudePath, "{\n  \"model\": \"opus\"\n}\n")
 	if code, reply, body := connectCall(t, h, "connect", "claude-code"); code != http.StatusOK || reply.Model != "" {
@@ -941,7 +873,6 @@ func TestConnectWithNoServedModelsWritesNoPlaceholder(t *testing.T) {
 		t.Errorf("codex config with no served models:\n%s", tb)
 	}
 
-	// Disconnect both, remove the files, and Connect with no file: no placeholder, no model key.
 	_, _, _ = connectCall(t, h, "disconnect", "claude-code")
 	_, _, _ = connectCall(t, h, "disconnect", "codex")
 	_ = os.Remove(claudePath)

@@ -24,45 +24,28 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// Connect and Disconnect: core writes a client tool's settings on its own machine, as the desktop
-// app's add-on for the tool does on the app's (next/app-tools/claude-code and codex). Connect sets
-// in the tool's settings file what the tool's setup text holds (ClientSnippetFor), with core's
-// address as programs on this machine reach it and a client key made for the tool, and keeps the
-// file as it was in a record in core's state folder; Disconnect puts it back (clearClaudeSettings,
-// clearCodexConfig) and removes the key Connect made. Only the tool's own settings file is
-// written, in the home folder of the user core runs as; a link there, or a folder or file another
-// user owns, is refused. No key goes to the log.
-
 const (
 	toolRecordFormat = 0
 	toolRecordsDir   = "tools"
 )
 
-// toolRecord is what core keeps of a connect: the key it made and each file as it was before.
-// It holds keys (the client key, and whatever the file held before), so it is private.
 type toolRecord struct {
-	Format int       `json:"format"`
-	Tool   string    `json:"tool"`
-	At     time.Time `json:"at"`
-	// KeyID is the client key the connect made for the tool; empty when the tool kept a key core
-	// already held.
-	KeyID string           `json:"key_id,omitempty"`
-	Files []toolRecordFile `json:"files"`
+	Format int              `json:"format"`
+	Tool   string           `json:"tool"`
+	At     time.Time        `json:"at"`
+	KeyID  string           `json:"key_id,omitempty"`
+	Files  []toolRecordFile `json:"files"`
 }
 
 type toolRecordFile struct {
-	Path    string      `json:"path"`
-	Existed bool        `json:"existed"`
-	Mode    fs.FileMode `json:"mode,omitempty"`
-	// MadeFolder: the file's folder did not exist and the connect made it.
-	MadeFolder bool `json:"made_folder,omitempty"`
-	// Original is the file before the first connect; Applied is what the last connect wrote.
-	Original []byte `json:"original,omitempty"`
-	Applied  []byte `json:"applied"`
+	Path       string      `json:"path"`
+	Existed    bool        `json:"existed"`
+	Mode       fs.FileMode `json:"mode,omitempty"`
+	MadeFolder bool        `json:"made_folder,omitempty"`
+	Original   []byte      `json:"original,omitempty"`
+	Applied    []byte      `json:"applied"`
 }
 
-// connectable reports whether core writes tool's settings itself: every file of its setup text
-// is one it can change.
 func connectable(tool string) bool {
 	s, ok := ClientSnippetFor(tool, "", "", "")
 	if !ok || len(s.Files) == 0 {
@@ -80,7 +63,6 @@ func (m *setupManager) toolsDir() private.Dir {
 	return private.Dir{Path: filepath.Join(filepath.Dir(m.statePath), toolRecordsDir)}
 }
 
-// record reads the record of tool's connect; nil when there is none.
 func (m *setupManager) record(tool string) (*toolRecord, error) {
 	b, err := os.ReadFile(filepath.Join(m.toolsDir().Path, tool+".json"))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -104,7 +86,6 @@ func (m *setupManager) hasRecord(tool string) bool {
 	return err == nil
 }
 
-// saveRecord writes r, or with nil removes tool's record.
 func (m *setupManager) saveRecord(tool string, r *toolRecord) error {
 	d := m.toolsDir()
 	root, err := d.OpenRoot(r != nil)
@@ -129,8 +110,6 @@ func (m *setupManager) saveRecord(tool string, r *toolRecord) error {
 	return private.WriteFile(root, d.Path, ".tmp-", name, append(b, '\n'))
 }
 
-// refreshClient reads tool's settings again for the kept scan, so the next GET /setup shows what
-// a connect or disconnect left.
 func (m *setupManager) refreshClient(tool, home, coreURL string) {
 	spec, ok := clientSpecByID(tool)
 	if !ok {
@@ -149,7 +128,6 @@ func (m *setupManager) refreshClient(tool, home, coreURL string) {
 	}
 }
 
-// markConnect sets what the setup reply says of Connect on each client.
 func (m *setupManager) markConnect(clients []management.SetupClient) {
 	for i := range clients {
 		c := &clients[i]
@@ -158,22 +136,16 @@ func (m *setupManager) markConnect(clients []management.SetupClient) {
 	}
 }
 
-// ---- the tool's settings file ---------------------------------------------------------------
-
-// toolFile is a tool's settings file opened for a change: its folder as a root checked to be a
-// folder (not a link) of the user core runs as, and the file as read.
 type toolFile struct {
-	display string // ~/.claude/settings.json
+	display string
 	dir     string
 	name    string
 	root    *os.Root
-	made    bool        // the folder did not exist: opening made it
-	info    fs.FileInfo // nil when there is no file
+	made    bool
+	info    fs.FileInfo
 	data    []byte
 }
 
-// openToolFile opens display (a path from the home folder, ~/...) in home. With create a missing
-// folder is made, readable only by its owner (0700); without it, a missing folder is no file.
 func openToolFile(home, display string, create bool) (*toolFile, error) {
 	if home == "" || !filepath.IsAbs(home) {
 		return nil, errors.New("pluxy does not know the home folder of the user it runs as")
@@ -244,8 +216,6 @@ func cmpErr(err, otherwise error) error {
 	return otherwise
 }
 
-// read reads the file: none is no data; a link, anything but a file, a file another user owns or
-// one larger than maxClientConfig is refused.
 func (t *toolFile) read() error {
 	t.info, t.data = nil, nil
 	fi, err := t.root.Lstat(t.name)
@@ -287,8 +257,6 @@ func (t *toolFile) read() error {
 	return nil
 }
 
-// write replaces the file with data, mode mode, through a private temporary file renamed over it;
-// nil data removes it. It refuses when the file is no longer the one read, or holds other bytes.
 func (t *toolFile) write(data []byte, mode fs.FileMode) error {
 	if t.root == nil {
 		return fmt.Errorf("the folder of %s is gone", t.display)
@@ -343,8 +311,6 @@ func (t *toolFile) write(data []byte, mode fs.FileMode) error {
 	return t.read()
 }
 
-// narrow sets the mode of the file read, unchanged, to mode: the file holds a key, which only its
-// owner may read. It refuses when the file is no longer the one read.
 func (t *toolFile) narrow(mode fs.FileMode) error {
 	if t.root == nil || t.info == nil {
 		return fmt.Errorf("%s is gone", t.display)
@@ -370,7 +336,6 @@ func (t *toolFile) close() {
 	}
 }
 
-// undoFolder removes the folder opening made, when it is still empty.
 func (t *toolFile) undoFolder() {
 	if t.made {
 		t.close()
@@ -378,8 +343,6 @@ func (t *toolFile) undoFolder() {
 		_ = os.Remove(t.dir)
 	}
 }
-
-// ---- connect and disconnect --------------------------------------------------------------------
 
 func canonicalTool(tool string) (string, management.SetupClient, error) {
 	id, ok := clientSnippetID(tool)
@@ -401,8 +364,6 @@ func connectableTools() []string {
 	return out
 }
 
-// fileError is err as the API says it: a file pluxy will not change is a 422 with why; anything
-// else is as writeChangeError says it.
 func fileError(err error) error {
 	var no *errNotOurs
 	if errors.As(err, &no) {
@@ -411,7 +372,6 @@ func fileError(err error) error {
 	return err
 }
 
-// clientNow is the tool as core reads its settings now.
 func (c *Core) clientNow(tool, home, coreURL string) management.SetupClient {
 	spec, _ := clientSpecByID(tool)
 	client := management.SetupClient{ID: tool, Name: spec.name}
@@ -425,10 +385,6 @@ func (c *Core) clientNow(tool, home, coreURL string) management.SetupClient {
 	return list[0]
 }
 
-// ConnectClient points tool, on core's machine, at core: see the comment at the top of the file.
-// label names a key made for the tool (checked by the caller); empty is the tool's name. model is
-// the model the tool starts with (checked by the caller); empty picks the best match among the
-// models core serves, and when core serves none leaves the tool's model settings alone.
 func (c *Core) ConnectClient(ctx context.Context, tool, label, model string) (management.ClientConnection, error) {
 	id, _, err := canonicalTool(tool)
 	if err != nil {
@@ -468,7 +424,6 @@ func (c *Core) ConnectClient(ctx context.Context, tool, label, model string) (ma
 		files = append(files, f)
 	}
 
-	// The key: the one the tool's settings hold when core holds it too, else a new one for the tool.
 	key, keyID, made := "", "", false
 	if t := toolFormats[paths.Files[0].Path].token(files[0].data); t != "" {
 		if i := slices.IndexFunc(c.Config().ClientKeys, func(k string) bool { return sameSecret(k, t) }); i >= 0 {
@@ -513,7 +468,6 @@ func (c *Core) ConnectClient(ctx context.Context, tool, label, model string) (ma
 		if f.info != nil {
 			rf.Mode = f.info.Mode().Perm()
 		}
-		// A connect again keeps the file as it was before the first one.
 		if rec != nil {
 			if j := slices.IndexFunc(rec.Files, func(o toolRecordFile) bool { return o.Path == f.display }); j >= 0 {
 				o := rec.Files[j]
@@ -522,7 +476,6 @@ func (c *Core) ConnectClient(ctx context.Context, tool, label, model string) (ma
 		}
 		next.Files = append(next.Files, rf)
 	}
-	// The record first: a write that ends half way still has what to put back.
 	if err := c.setup.saveRecord(id, next); err != nil {
 		dropKey()
 		return fail(err)
@@ -538,18 +491,16 @@ func (c *Core) ConnectClient(ctx context.Context, tool, label, model string) (ma
 		}
 		mode := fs.FileMode(0o600)
 		if f.info != nil {
-			mode = f.info.Mode().Perm() &^ 0o077 // the file holds a key now: its owner's alone
+			mode = f.info.Mode().Perm() &^ 0o077
 		}
 		var err error
 		switch {
 		case change != management.ClientFileUnchanged:
 			err = f.write(outs[i], mode)
 		case f.info.Mode().Perm()&0o077 != 0:
-			// The bytes are already what connect writes, but others may read the key in them.
 			err = f.narrow(mode)
 		}
 		if err != nil {
-			// Put back the files already written, then what was kept before.
 			for j := range i {
 				back := next.Files[j]
 				if !back.Existed {
@@ -564,7 +515,6 @@ func (c *Core) ConnectClient(ctx context.Context, tool, label, model string) (ma
 		}
 		reply.Files = append(reply.Files, management.ClientConnectionFile{Path: f.display, Change: change})
 	}
-	// A key an earlier connect made that the tool no longer sends goes.
 	if rec != nil && rec.KeyID != "" && rec.KeyID != keyID && !c.keyInRecords(rec.KeyID) {
 		c.removeClientKey(rec.KeyID, false)
 	}
@@ -577,8 +527,6 @@ func (c *Core) ConnectClient(ctx context.Context, tool, label, model string) (ma
 	return reply, nil
 }
 
-// DisconnectClient puts back what ConnectClient changed in tool's settings, and removes the key
-// it made for the tool when no other connected tool sends it and it is not the last client key.
 func (c *Core) DisconnectClient(tool string) (management.ClientConnection, error) {
 	id, client, err := canonicalTool(tool)
 	if err != nil {
@@ -627,7 +575,6 @@ func (c *Core) DisconnectClient(tool string) (management.ClientConnection, error
 			}
 		}
 		if f.info == nil {
-			// The file is gone: nothing of pluxy's is left in it.
 			steps[i] = step{change: management.ClientFileUnchanged}
 			continue
 		}
@@ -658,7 +605,6 @@ func (c *Core) DisconnectClient(tool string) (management.ClientConnection, error
 	if err := c.setup.saveRecord(id, nil); err != nil {
 		return management.ClientConnection{}, fileError(err)
 	}
-	// A folder the connect made goes too, when nothing else is in it.
 	for i, f := range files {
 		if rec.Files[i].MadeFolder && f.root != nil {
 			f.close()
@@ -677,7 +623,6 @@ func (c *Core) DisconnectClient(tool string) (management.ClientConnection, error
 	return reply, nil
 }
 
-// keyInRecords reports whether another connected tool's record names key id.
 func (c *Core) keyInRecords(id string) bool {
 	for _, tool := range connectableTools() {
 		if r, err := c.setup.record(tool); err == nil && r != nil && r.KeyID == id {
@@ -687,9 +632,6 @@ func (c *Core) keyInRecords(id string) bool {
 	return false
 }
 
-// removeClientKey removes client key id and its label; it keeps the last key unless last is set
-// (taking back a key a failed connect made, which leaves the keys as they were). It reports
-// whether it removed the key.
 func (c *Core) removeClientKey(id string, last bool) bool {
 	errLast := errors.New("the last client key")
 	removed := false
@@ -735,9 +677,6 @@ func (c *Core) handleConnect(m *server.Management) {
 		writeJSON(w, http.StatusOK, v)
 	}
 	m.Handle("POST /setup/clients/{id}/connect", func(w http.ResponseWriter, r *http.Request) {
-		// label names a key made for the tool, as POST /client-keys's does; empty is the tool's name.
-		// model names the model the tool starts with, as GET /setup/clients/{id}/paste's does;
-		// empty picks the best match among those core serves (and writes no model when none is served).
 		var req struct {
 			Label string `json:"label"`
 			Model string `json:"model"`

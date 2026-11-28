@@ -16,11 +16,8 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// managementKeyWhy is what an import says about the file's management key: core keeps its own,
-// and the owner changes it with pluxy's own command.
 const managementKeyWhy = "pluxy keeps its own management key: it guards every client of core, and an import does not change it; change it with POST /v0/management/management-key/rotate"
 
-// importCall sends POST /setup/import with body to c and returns the status and the reply.
 func importCall(t *testing.T, c *Core, key string, body any) (int, management.ImportReport, string) {
 	t.Helper()
 	b, _ := json.Marshal(body)
@@ -34,7 +31,6 @@ func importCall(t *testing.T, c *Core, key string, body any) (int, management.Im
 	return rec.Code, rep, rec.Body.String()
 }
 
-// folderState is every file name and content under dir.
 func folderState(t *testing.T, dir string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
@@ -48,9 +44,6 @@ func folderState(t *testing.T, dir string) map[string]string {
 	return out
 }
 
-// A dry run reports the import and writes nothing; the import then writes the config's
-// settings and accounts into core's config and the auth folder's accounts into its store, and
-// reports the same items.
 func TestSetupImport(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()
@@ -61,7 +54,6 @@ func TestSetupImport(t *testing.T) {
 	auths := filepath.Join(cpa, "auths")
 	writeTestFile(t, filepath.Join(auths, "claude-a.json"), `{"type": "claude", "access_token": "fake-claude"}`)
 	writeTestFile(t, filepath.Join(auths, "antigravity-a.json"), `{"type": "antigravity", "access_token": "fake-ag", "refresh_token": "fake-ag-refresh", "project_id": "fake-project"}`)
-	// The name makes the ID of the config's own claude-api-key account: a collision.
 	writeTestFile(t, filepath.Join(auths, "claude-api-key-1.json"), `{"type": "claude", "access_token": "fake-collide"}`)
 	writeTestFile(t, filepath.Join(cpa, "config.yaml"), `
 port: 8317
@@ -98,8 +90,6 @@ claude-api-key:
 		}
 		return out
 	}
-	// wantRows is the report of the dry run and of the import: every field of every row. The
-	// file's management key is named as not brought either way: core keeps its own.
 	wantRows := func() map[string][]management.ImportRow {
 		keepWith := `"listen": "0.0.0.0:8317" in pluxy's config file, then restart core`
 		listen := func(what, from string) management.ImportRow {
@@ -133,7 +123,6 @@ claude-api-key:
 				t.Errorf("%s:\ngot  %+v\nwant %+v", list, got, want[list])
 			}
 		}
-		// The archived Antigravity extension is not in any registry: its row says to build it.
 		wantNeeds := []management.ImportNeed{
 			{Pick: "pluxy/antigravity", Why: "1 account needs it, and pluxy does not ship it: build and install it by hand from next/archive/antigravity (its README says how)"},
 			{Pick: "pluxy/claude", Why: "2 accounts need it"},
@@ -173,7 +162,6 @@ claude-api-key:
 		t.Errorf("accounts %v", ids)
 	}
 
-	// Importing again brings no account twice: each is named as one core already has.
 	req.DryRun = false
 	code, rep, body = importCall(t, c, got.ManagementKey, req)
 	if code != http.StatusOK {
@@ -186,9 +174,6 @@ claude-api-key:
 	}
 }
 
-// The import never brings CLIProxyAPI's management key, plain or bcrypt: core keeps the key it
-// has, which guards every client of core (the desktop app among them), and the import names the
-// file's key as not brought with the way to change core's own.
 func TestSetupImportKeepsManagementKey(t *testing.T) {
 	for _, tc := range []struct{ name, doc string }{
 		{"plain", "remote-management: {secret-key: fake-cpa-key}\n"},
@@ -234,7 +219,6 @@ func TestSetupImportKeepsManagementKey(t *testing.T) {
 				}
 			}
 
-			// The key core had still authorizes management requests after the import.
 			greq := httptest.NewRequest(http.MethodGet, "/v0/management/config", nil)
 			greq.Header.Set("Authorization", "Bearer fake-mgmt-key")
 			greq.RemoteAddr = "127.0.0.1:12345"
@@ -247,9 +231,6 @@ func TestSetupImportKeepsManagementKey(t *testing.T) {
 	}
 }
 
-// In a real or dry import into a running core, every listen row says core keeps listening on its
-// own address, with the file's reach in from and core's in to: the row of a file with no
-// server.host too, which today's core listened on every interface without.
 func TestSetupImportKeepsCoreListen(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()
@@ -277,7 +258,6 @@ func TestSetupImportKeepsCoreListen(t *testing.T) {
 			if !ok {
 				t.Fatalf("dry %v: %s is not under changed: %s", dry, what, body)
 			}
-			// The file's reach: every interface (no host) on 8317.
 			if !strings.Contains(r.From, "every interface") && r.From != "0.0.0.0:8317" {
 				t.Errorf("dry %v: %s from %q", dry, what, r.From)
 			}
@@ -294,8 +274,6 @@ func TestSetupImportKeepsCoreListen(t *testing.T) {
 	}
 }
 
-// An import changes only what the file sets: a setting the file leaves out keeps core's value,
-// and within a section only the fields the file sets are written.
 func TestSetupImportChangesOnlyWhatTheFileSets(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()
@@ -332,8 +310,6 @@ func TestSetupImportChangesOnlyWhatTheFileSets(t *testing.T) {
 	}
 	after := read()
 
-	// Only usage.enabled and logs.to_file changed: every other setting of core's file is as it
-	// was.
 	usage, _ := after["usage"].(map[string]any)
 	logs, _ := after["logs"].(map[string]any)
 	if usage["enabled"] != true || logs["to_file"] != true {
@@ -362,8 +338,6 @@ func TestSetupImportChangesOnlyWhatTheFileSets(t *testing.T) {
 	}
 }
 
-// A file that turns session affinity on without a TTL sets no TTL: core's own one stays, and the
-// import's row for the setting is brought.
 func TestSetupImportKeepsCoreAffinityTTL(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()
@@ -409,9 +383,6 @@ func TestSetupImportKeepsCoreAffinityTTL(t *testing.T) {
 	}
 }
 
-// The Lamplighter plugin's window ignition reaches core's config file: every provider it starts
-// windows for is an entry core reads as on, and core's own ignition settings the file does not
-// set stay.
 func TestSetupImportLamplighterIgnition(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()
@@ -457,8 +428,6 @@ func TestSetupImportLamplighterIgnition(t *testing.T) {
 	}
 }
 
-// Two auth files whose names make one account ID: the dry run refuses the second as the import
-// does, so both reports name it as not brought.
 func TestSetupImportDryRunOneAccountID(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()
@@ -495,8 +464,6 @@ func TestSetupImportDryRunOneAccountID(t *testing.T) {
 	}
 }
 
-// A change the write path refuses, such as TLS while core runs, is refused by the dry run too:
-// the dry run runs the same checks.
 func TestSetupImportDryRunRefusesWhatTheImportRefuses(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()
@@ -529,9 +496,6 @@ func TestSetupImportDryRunRefusesWhatTheImportRefuses(t *testing.T) {
 	}
 }
 
-// The file names its auth folder twice (the older auth-dir and the v8 oauth.auth-dir): the row
-// of the key the translator read is the one that says its folder is not there, and the older one
-// keeps its own reason.
 func TestSetupImportAuthDirRow(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()
@@ -564,8 +528,6 @@ func TestSetupImportAuthDirRow(t *testing.T) {
 	}
 }
 
-// A pool whose models cannot become valid chains refuses the import, naming the pool, and writes
-// nothing: the models are not written cut, with a row naming a chain that is not there.
 func TestSetupImportRefusedPool(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()
@@ -640,8 +602,6 @@ func TestSetupImportAuthDirNotKept(t *testing.T) {
 	}
 }
 
-// An account of the file's own extensions block that core already has is named as kept, like an
-// account of a provider section.
 func TestSetupImportKeepsExtensionAccounts(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()
@@ -678,8 +638,6 @@ func TestSetupImportKeepsExtensionAccounts(t *testing.T) {
 	}
 }
 
-// The extensions row tallies the file's own block only: a new account of a provider section does
-// not make the row changed while the block's own account is one core keeps.
 func TestSetupImportExtensionRowCountsOwnBlock(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()
@@ -719,8 +677,6 @@ claude-api-key:
 	}
 }
 
-// A path that is not absolute, a missing file and a file that is not a config are refused, and
-// the refusal holds none of the file's secrets.
 func TestSetupImportRefusals(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()
@@ -746,8 +702,6 @@ func TestSetupImportRefusals(t *testing.T) {
 			t.Errorf("%+v: %d %s, want %d without the secret", cs.req, code, body, cs.code)
 		}
 	}
-	// A file that is not there is named in plain words, which the panel shows inside its own
-	// sentence and the command prints as they are.
 	missing := filepath.Join(dir, "missing.yaml")
 	code, _, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: missing})
 	var reply management.ErrorBody
@@ -801,7 +755,6 @@ func mapsEqual(a, b map[string]string) bool {
 	return true
 }
 
-// getSetup sends GET /setup to c and returns the reply with its raw body.
 func getSetup(t *testing.T, c *Core, key string) (management.Setup, string) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/v0/management/setup", nil)
@@ -816,7 +769,6 @@ func getSetup(t *testing.T, c *Core, key string) (management.Setup, string) {
 	return s, rec.Body.String()
 }
 
-// scanSetup runs a scan through POST /setup/scan and waits until it has ended.
 func scanSetup(t *testing.T, c *Core, key string) management.Setup {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/v0/management/setup/scan", nil)
@@ -837,8 +789,6 @@ func scanSetup(t *testing.T, c *Core, key string) management.Setup {
 	return management.Setup{}
 }
 
-// The import is recorded on the row the scan found, whatever way the request spells the file;
-// a dry run and a refused import record nothing; the record survives a scan and a restart.
 func TestSetupImportRecordsLastImport(t *testing.T) {
 	const key = "fake-mgmt-key"
 	home := setTestHome(t)
@@ -870,7 +820,6 @@ func TestSetupImportRecordsLastImport(t *testing.T) {
 		t.Fatalf("row before any import = %+v", r)
 	}
 
-	// A dry run and a refused import (a relative auth folder) record nothing.
 	if code, _, body := importCall(t, c, key, management.SetupImportRequest{Config: abs, DryRun: true}); code != http.StatusOK {
 		t.Fatalf("dry run: %d %s", code, body)
 	}
@@ -881,7 +830,6 @@ func TestSetupImportRecordsLastImport(t *testing.T) {
 		t.Fatalf("a dry run or a refused import left a record: %s", body)
 	}
 
-	// The real import, naming the file by its absolute path, matches the row's ~ spelling.
 	before := time.Now().UTC().Add(-time.Second)
 	code, rep, body := importCall(t, c, key, management.SetupImportRequest{Config: abs})
 	if code != http.StatusOK || rep.DryRun {
@@ -913,7 +861,6 @@ func TestSetupImportRecordsLastImport(t *testing.T) {
 			t.Errorf("GET /setup holds %q", leak)
 		}
 	}
-	// The kept scan on disk has no record in its rows: the record is kept apart.
 	disk, err := os.ReadFile(filepath.Join(StateDir(cfgPath), setupFileName))
 	if err != nil {
 		t.Fatal(err)
@@ -932,7 +879,6 @@ func TestSetupImportRecordsLastImport(t *testing.T) {
 		t.Errorf("setup.json keeps last_import in the scan's row: %s", disk)
 	}
 
-	// What the reply holds is a copy: changing it changes no record.
 	s.Found.Imports[0].LastImport.Brought = 999
 	c.setup.mu.Lock()
 	for _, r := range c.setup.imported {
@@ -942,10 +888,8 @@ func TestSetupImportRecordsLastImport(t *testing.T) {
 	}
 	c.setup.mu.Unlock()
 
-	// A later scan replaces the rows and the record stays.
 	check("after a scan", scanSetup(t, c, key))
 
-	// A restart keeps it.
 	c.Stop()
 	c = start()
 	defer c.Stop()
@@ -953,8 +897,6 @@ func TestSetupImportRecordsLastImport(t *testing.T) {
 	check("after a restart", s)
 }
 
-// A dry run and an import name the file by any spelling of it: ~, the absolute path, and a
-// symlink to it match the same row.
 func TestSetupImportRecordMatchesSpellings(t *testing.T) {
 	const key = "fake-mgmt-key"
 	home := setTestHome(t)
@@ -986,7 +928,6 @@ func TestSetupImportRecordMatchesSpellings(t *testing.T) {
 	}
 }
 
-// A setup.json from before the record existed loads as it did.
 func TestSetupStateWithoutImportedLoads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", setupFileName)
 	writeTestFile(t, path, `{"format":0,"first_run":false,"found":{"clients":[],"sign_ins":[],"imports":[{"kind":"cliproxyapi","config":"~/.cli-proxy-api/config.yaml","auth_dir":"~","accounts":1}],"core":{"listen":"","reachable_from_network":false}}}`)

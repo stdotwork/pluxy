@@ -24,33 +24,22 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// maxImportConfig bounds the config.yaml an import reads: today's example config is about 60 KiB.
 const maxImportConfig = 4 << 20
 
-// importPlan is a CLIProxyAPI setup read for an import, and what it changes in core.
 type importPlan struct {
-	res    *legacy.Result
-	folder *legacy.AuthFolder // nil without an auth folder
-	// skipped are the config's accounts core already has an account by the ID of, by ID.
-	skipped map[string]bool
-	// chainsKept are the chains of the file core already has one by the name of.
+	res        *legacy.Result
+	folder     *legacy.AuthFolder
+	skipped    map[string]bool
 	chainsKept []string
-	// block is what the import did with the file's own extensions block.
-	block extBlock
+	block      extBlock
 }
 
-// extBlock tallies the file's own extensions block, whose accounts core may already have: those
-// an import added, those it kept, and whether it wrote a setting of the block.
 type extBlock struct {
 	added int
 	kept  []string
 	wrote bool
 }
 
-// ImportCPA brings a CLIProxyAPI setup across (POST /setup/import): the config.yaml's settings
-// and API-key accounts into core's config file, and the auth folder's accounts into its
-// credential store. It returns the report, which names every key of the file and every entry of
-// the folder; with req.DryRun nothing is written. The error is an *editError for the reply.
 func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportReport, error) {
 	path, err := importPath(req.Config, "config")
 	if err != nil {
@@ -58,7 +47,6 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 	}
 	b, err := readImportConfig(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		// In words that also read well inside the panel's own sentence about a setup it could not read.
 		return management.ImportReport{}, &editError{http.StatusBadRequest, "invalid_request", "there is no file at " + path}
 	}
 	if err != nil {
@@ -77,7 +65,6 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 	}
 	p := &importPlan{res: res, skipped: map[string]bool{}}
 
-	// The auth folder: the one asked for, else the config's oauth.auth-dir, relative to its folder.
 	dir, fromConfig := req.AuthDir, false
 	if dir == "" && res.AuthDir != "" {
 		dir, fromConfig = res.AuthDir, true
@@ -99,7 +86,6 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 		p.folder, err = legacy.ReadAuthFolder(dir, res.Import, time.Now())
 		switch {
 		case errors.Is(err, fs.ErrNotExist) && fromConfig:
-			// The config names a folder that is not there: its row says so.
 			p.folder = nil
 			res.Ledger.Update(legacy.ConfigItem(authDirKey(res)), func(list *int, row *legacy.Row) {
 				*list, row.Why = legacy.NotBrought, "the folder "+dir+" is not there"
@@ -121,7 +107,6 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 			"pluxy runs on a config.yaml, which it already reads with CLIProxyAPI's key names; an import writes pluxy's JSON config (pluxy init writes one)"}
 	}
 
-	// The config's part, applied to the file (or, in a dry run, to a copy that is only checked).
 	cur, err := os.ReadFile(c.opts.ConfigPath)
 	if err != nil {
 		return management.ImportReport{}, &editError{http.StatusInternalServerError, "internal", err.Error()}
@@ -147,14 +132,11 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 			if err != nil {
 				return management.ImportReport{}, &editError{http.StatusUnprocessableEntity, "refused", scrub(err.Error())}
 			}
-			// The checks the write path makes, which a setting that cannot change while core
-			// runs (TLS, a credentials folder) fails: a dry run reports them too.
 			if err := c.fixed(cfg, c.cur.Load()); err != nil {
 				return management.ImportReport{}, &editError{http.StatusUnprocessableEntity, "refused", scrub(err.Error())}
 			}
 		}
 	} else {
-		// Every item is accounted for before anything is written.
 		if p.folder != nil {
 			if err := p.folder.Ledger(p.folder.Files, nil).Check(); err != nil {
 				return management.ImportReport{}, &editError{http.StatusInternalServerError, "internal", err.Error()}
@@ -169,7 +151,6 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 		}
 	}
 
-	// The auth folder's accounts: into the credential store, or in a dry run checked against it.
 	led := &legacy.Ledger{}
 	led.Merge(res.Ledger)
 	var imported []legacy.AuthFile
@@ -190,7 +171,6 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 		var taken []legacy.Skipped
 		imported, taken, err = legacy.Import(store, p.folder.Files, func(id string) bool { return reserved[strings.ToLower(id)] })
 		if err != nil {
-			// The accounts added so far stay; the rest are named with the reason.
 			done := map[string]bool{}
 			for _, f := range imported {
 				done[f.Record.ID] = true
@@ -219,7 +199,6 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 	rep := management.ImportReport{DryRun: req.DryRun, Brought: conv(lists.Brought), Changed: conv(lists.Changed),
 		NotBrought: conv(lists.NotBrought), Needs: c.importNeeds(p, imported)}
 	if !req.DryRun && c.setup != nil {
-		// The import is done: a record that cannot be saved is logged, not an error of the import.
 		rec := management.SetupLastImport{At: time.Now().UTC(), Brought: len(rep.Brought), Changed: len(rep.Changed), NotBrought: len(rep.NotBrought)}
 		if err := c.setup.recordImport(path, rec); err != nil {
 			log.Printf("error: setup: saving %s: %v", c.setup.statePath, err)
@@ -228,11 +207,7 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 	return rep, nil
 }
 
-// authDirKey is the path in the file of the auth folder's key: the one the translator read.
 func authDirKey(res *legacy.Result) string {
-	// The ledger names a key by its spelling in the file: the v8 one, or the older auth-dir. When
-	// the file sets both, the v8 one is the key translator read (oauth.auth-dir); the older one
-	// keeps the reason it is not brought.
 	for _, k := range []string{"oauth.auth-dir", "auth-dir"} {
 		if res.Ledger.Has(legacy.ConfigItem(k)) {
 			return k
@@ -241,11 +216,7 @@ func authDirKey(res *legacy.Result) string {
 	return "oauth.auth-dir"
 }
 
-// importRows adds what core decided to the report: listen, which cannot change while core runs,
-// the accounts core already has, and the chains it already has.
 func (c *Core) importRows(led *legacy.Ledger, p *importPlan) {
-	// mergeImport never writes listen (it cannot change while core runs): every listen row says
-	// core keeps its own, with the file's reach in from and core's address in to.
 	have := c.Config().Listen
 	for _, it := range p.res.ListenKeys {
 		led.Update(it, func(list *int, row *legacy.Row) {
@@ -308,13 +279,10 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// notShipped are the provider packages the import brings accounts for that pluxy does not ship:
-// what a Needs row adds so that the owner is not sent to install one from a registry that has none.
 var notShipped = map[string]string{
 	legacy.Antigravity: "pluxy does not ship it: build and install it by hand from next/archive/antigravity (its README says how)",
 }
 
-// importNeeds lists the provider packages the imported accounts need that core has not installed.
 func (c *Core) importNeeds(p *importPlan, imported []legacy.AuthFile) []management.ImportNeed {
 	count := map[string]int{}
 	exts, _ := p.res.Config["extensions"].(map[string]any)
@@ -345,11 +313,6 @@ func (c *Core) importNeeds(p *importPlan, imported []legacy.AuthFile) []manageme
 	return out
 }
 
-// mergeImport writes the import's config into d, core's config: its settings are written field by
-// field, a field the file does not set keeping core's value, its client keys, accounts, aliases,
-// excluded models and chains are added to core's, and listen stays (it cannot change while core
-// runs). An account or chain core already has one by the ID or name of stays as it is, and p
-// records it.
 func (c *Core) mergeImport(d *configdoc.Doc, p *importPlan) error {
 	have := map[string]bool{}
 	for _, a := range c.Config().Accounts() {
@@ -358,8 +321,6 @@ func (c *Core) mergeImport(d *configdoc.Doc, p *importPlan) error {
 	for _, r := range c.creds.Records() {
 		have[strings.ToLower(r.ID)] = true
 	}
-	// own are the accounts core had before the import: a file's account that repeats one of its
-	// own is not one the import kept.
 	own := maps.Clone(have)
 	cfg := p.res.Config
 	for _, k := range slices.Sorted(maps.Keys(cfg)) {
@@ -411,8 +372,6 @@ func (c *Core) mergeImport(d *configdoc.Doc, p *importPlan) error {
 							id, _ := a.(map[string]any)["id"].(string)
 							if have[strings.ToLower(id)] {
 								p.skipped[id] = true
-								// An account of a provider section has its group's row; one of
-								// the file's own block is named by the block's row.
 								if own[strings.ToLower(id)] {
 									if _, provider := p.res.Accounts[id]; !provider {
 										p.block.kept = append(p.block.kept, id)
@@ -421,8 +380,6 @@ func (c *Core) mergeImport(d *configdoc.Doc, p *importPlan) error {
 								continue
 							}
 							have[strings.ToLower(id)] = true
-							// The block's row tallies the accounts of the file's own block: one of
-							// a provider section has its group's row.
 							if _, provider := p.res.Accounts[id]; !provider {
 								p.block.added++
 							}
@@ -452,8 +409,6 @@ func (c *Core) mergeImport(d *configdoc.Doc, p *importPlan) error {
 	return nil
 }
 
-// node is v as a node of a config document. JSON is YAML: its nodes carry each value's type,
-// which the JSON writer needs.
 func node(v any) (*yaml.Node, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -474,9 +429,6 @@ func setValue(d *configdoc.Doc, v any, path ...string) error {
 	return d.Set(n, path...)
 }
 
-// setFields writes v into d at path field by field: a mapping is each of its fields set on its
-// own, so a field the file does not set keeps core's value, and anything else replaces the value
-// at path.
 func setFields(d *configdoc.Doc, v any, path ...string) error {
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -490,7 +442,6 @@ func setFields(d *configdoc.Doc, v any, path ...string) error {
 	return nil
 }
 
-// appendValue adds v to the list at path, making the list when there is none.
 func appendValue(d *configdoc.Doc, v any, path ...string) error {
 	n, err := node(v)
 	if err != nil {
@@ -507,8 +458,6 @@ func appendValue(d *configdoc.Doc, v any, path ...string) error {
 	return d.Set(list, path...)
 }
 
-// addMissing adds the entries of the list v that the list at path does not hold yet: a model
-// alias by its alias, whatever its case, an excluded-models pattern as it is.
 func addMissing(d *configdoc.Doc, v any, path ...string) error {
 	var have []any
 	if n := d.Get(path...); n != nil {
@@ -539,8 +488,6 @@ func addMissing(d *configdoc.Doc, v any, path ...string) error {
 	return nil
 }
 
-// dryStore answers as the credential store would, without saving anything: an ID it already has,
-// or one an earlier create in the same dry run took, is taken.
 type dryStore struct{ have []cred.Record }
 
 func (s *dryStore) Create(r cred.Record) (cred.Record, error) {
@@ -548,7 +495,6 @@ func (s *dryStore) Create(r cred.Record) (cred.Record, error) {
 		return cred.Record{}, fmt.Errorf("account ID %q is not valid: use letters, digits, '.', '_' and '-'", r.ID)
 	}
 	for _, h := range s.have {
-		// IDs name files, so IDs that differ only in case name the same file (see cred.Store).
 		if strings.EqualFold(h.ID, r.ID) {
 			return cred.Record{}, cred.ErrExists
 		}
@@ -557,8 +503,6 @@ func (s *dryStore) Create(r cred.Record) (cred.Record, error) {
 	return r, nil
 }
 
-// importPath reads a path a management call names on core's machine: absolute, or starting
-// with ~ for the home folder.
 func importPath(p, name string) (string, error) {
 	if strings.TrimSpace(p) == "" {
 		return "", &editError{http.StatusBadRequest, "invalid_request", name + " must name a file on core's machine"}
@@ -573,15 +517,11 @@ func importPath(p, name string) (string, error) {
 	return filepath.Clean(p), nil
 }
 
-// missing reports whether nothing is at path. A folder that is there can still fail to be read
-// for a file in it that went away meanwhile.
 func missing(path string) bool {
 	_, err := os.Stat(path)
 	return errors.Is(err, fs.ErrNotExist)
 }
 
-// readImportConfig reads the config a management call names, opened without waiting for a
-// writer, as a client's config is: a FIFO at its path would hold the import until one came.
 func readImportConfig(path string) ([]byte, error) {
 	f, err := openClientFile(path)
 	if err != nil {

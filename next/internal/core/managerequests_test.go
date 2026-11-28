@@ -9,9 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// The two calls on the requests being served sit behind the gates every management call has:
-// another machine is refused while remote management is off, and an address that kept sending a
-// wrong key is blocked even with the right one.
 func TestManagementRequestsBehindRemoteGateAndLockout(t *testing.T) {
 	calls := [][2]string{{http.MethodGet, "/requests"}, {http.MethodPost, "/requests/20260101000000-0000000000000000/cancel"}}
 	from := func(h http.Handler, peer, key, method, target string) *httptest.ResponseRecorder {

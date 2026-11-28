@@ -13,9 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
 
-// A first config listens on this machine, holds a client key and a different management key,
-// loads, can be read only by its user, and is never written over. Port -1 (8317 when free) is
-// not tried here: a core of the person running the tests may hold 8317.
 func TestWriteFirstConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "new", "config.json")
 	fc, err := WriteFirstConfig(path, 0)
@@ -50,7 +47,6 @@ func TestWriteFirstConfig(t *testing.T) {
 		t.Errorf("the folder holds %d entries, want the config only", len(entries))
 	}
 
-	// A chosen port is used as it is; a config.yaml is not written.
 	fc, err = WriteFirstConfig(filepath.Join(t.TempDir(), "config.json"), 18555)
 	if err != nil || fc.Listen != "127.0.0.1:18555" {
 		t.Errorf("port 18555: %+v, %v", fc, err)
@@ -60,9 +56,6 @@ func TestWriteFirstConfig(t *testing.T) {
 	}
 }
 
-// With no port asked for, a first config takes the preferred port when it is free, and another
-// free port when something listens there. The preferred port here is one the test holds or has
-// just freed, never 8317.
 func TestPickPortFallsBackWhenTaken(t *testing.T) {
 	held, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -8,7 +8,7 @@ func TestSameJSON(t *testing.T) {
 		want bool
 	}{
 		{`{"a":1,"b":[true,null]}`, `{ "b": [true, null], "a": 1 }`, true},
-		{`{"n":9007199254740992}`, `{"n":9007199254740993}`, false}, // equal as float64
+		{`{"n":9007199254740992}`, `{"n":9007199254740993}`, false},
 		{`{"a":1}`, `{"a":2}`, false},
 		{``, ``, true},
 		{``, `{}`, false},

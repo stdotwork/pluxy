@@ -15,28 +15,13 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
 
-// DefaultPort is the port a first config listens on when it is free: the port clients of
-// today's core already know.
 const DefaultPort = 8317
 
-// FirstConfig is what WriteFirstConfig wrote.
 type FirstConfig struct {
-	// Path is the config file's absolute path.
-	Path string
-	// Listen is the address it listens on.
+	Path   string
 	Listen string
 }
 
-// WriteFirstConfig writes a new config file at path for a core that has none: it listens on
-// 127.0.0.1, with one new client key and a new management key, and only this user can read
-// it. Its folder is made when it is missing, and refused when it is a link, belongs to another
-// user, or on unix its mode lets group or others write in it (home.OpenDir: on Windows such a
-// folder is made private instead; the error is then a *home.Refusal). Only that folder is
-// checked, not those above it, and on macOS by its mode bits, not its access list. Only this
-// first write checks it: a config already there is used without a check. port is the port to
-// listen on; with port -1 it is DefaultPort when that is free and a free one when it is taken,
-// and with port 0 a free one. It never replaces a file at path (the error is then fs.ErrExist), and writes JSON
-// only: a config.yaml is today's core's, written by a person.
 func WriteFirstConfig(path string, port int) (FirstConfig, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -75,8 +60,6 @@ func WriteFirstConfig(path string, port int) (FirstConfig, error) {
 	return FirstConfig{Path: abs, Listen: listen}, nil
 }
 
-// pickPort returns the port a first config listens on: port when it is above 0; with port -1,
-// preferred when it is free now and a free port when it is taken; with port 0, a free port.
 func pickPort(port, preferred int) (int, error) {
 	if port == -1 {
 		if portFree(preferred) {
@@ -90,7 +73,6 @@ func pickPort(port, preferred int) (int, error) {
 	return port, nil
 }
 
-// portFree reports whether port can be listened on at 127.0.0.1 now.
 func portFree(port int) bool {
 	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
@@ -100,7 +82,6 @@ func portFree(port int) bool {
 	return true
 }
 
-// freePort returns a port at 127.0.0.1 that no program listens on now.
 func freePort() (int, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -110,8 +91,6 @@ func freePort() (int, error) {
 	return ln.Addr().(*net.TCPAddr).Port, nil
 }
 
-// ConfigError is Start's error when the config file could not be read or was refused: safe
-// mode does not get past it.
 type ConfigError struct{ Err error }
 
 func (e *ConfigError) Error() string { return e.Err.Error() }

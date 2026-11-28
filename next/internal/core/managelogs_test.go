@@ -24,8 +24,6 @@ func TestDeleteLogsReportsPartialFailure(t *testing.T) {
 	}
 	t.Cleanup(c.Stop)
 
-	// Seed main.log so l.size > 0, then replace logsDir with a regular file and write past
-	// MaxFileSize so rotate() closes l.f and fails OpenRoot/open, leaving l.f nil while l.on is true.
 	_, _ = c.logs.Write([]byte("seed\n"))
 
 	logsDir := c.logs.Dir()
@@ -45,7 +43,6 @@ func TestDeleteLogsReportsPartialFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// One regular rotated file (will be deleted) and a directory at main.log (cannot be emptied even as root).
 	rot := filepath.Join(logsDir, "main-2026-11-09T12-00-00.000.log")
 	if err := os.WriteFile(rot, []byte("old\n"), 0o600); err != nil {
 		t.Fatal(err)

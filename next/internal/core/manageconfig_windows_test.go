@@ -10,8 +10,6 @@ import (
 	pt "github.com/stdotwork/pluxy/next/internal/private/privatetest"
 )
 
-// replaceKeepsList writes path again with writeFileAtomic and checks that its access list, and
-// whether it is protected, are as they were, and that nothing else is left in its folder.
 func replaceKeepsList(t *testing.T, path string) {
 	t.Helper()
 	_, protected, before := pt.AccessList(t, path)
@@ -30,8 +28,6 @@ func replaceKeepsList(t *testing.T, path string) {
 	}
 }
 
-// A config whose list is tighter than its folder's (here private, in a folder open to Everyone)
-// keeps its list when a change writes it again: the new file does not take the folder's.
 func TestWriteFileAtomicWindowsKeepsATighterList(t *testing.T) {
 	me, _ := pt.ThisUser(t)
 	dir := filepath.Join(t.TempDir(), "open")
@@ -48,8 +44,6 @@ func TestWriteFileAtomicWindowsKeepsATighterList(t *testing.T) {
 	}
 }
 
-// A config whose list inherits from its folder and has an entry of its own keeps both: the entry
-// is copied and the rest is inherited again, not copied twice.
 func TestWriteFileAtomicWindowsKeepsAnInheritingList(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

@@ -10,9 +10,6 @@ import (
 	pt "github.com/stdotwork/pluxy/next/internal/private/privatetest"
 )
 
-// On Windows a first config's folder is a private folder: a new one is made with the private
-// access list, an existing one open to others is given it, and a link is refused with nothing
-// written; the config itself has the private list from the moment it exists.
 func TestWriteFirstConfigWindows(t *testing.T) {
 	made := filepath.Join(t.TempDir(), "new")
 	path := filepath.Join(made, "config.json")

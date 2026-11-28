@@ -8,9 +8,6 @@ import (
 	"time"
 )
 
-// On Windows, a shell such as Git Bash can set HOME to a different folder than USERPROFILE. The
-// scan looks in USERPROFILE, and the CLIProxyAPI file it reports must be the same file importPath
-// resolves when the row's ~-prefixed Config path is passed to the import.
 func TestSetupScanImportPathWindows(t *testing.T) {
 	homeDir := t.TempDir()
 	userProfileDir := t.TempDir()

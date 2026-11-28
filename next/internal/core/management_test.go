@@ -13,8 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// startManagementCore starts core in safe mode on the config body and returns its management API
-// and the config file's path.
 func startManagementCore(t *testing.T, config string) (http.Handler, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
@@ -29,7 +27,6 @@ func startManagementCore(t *testing.T, config string) (http.Handler, string) {
 	return c.Management(), path
 }
 
-// manageCall calls the management API from this machine, as pluxy does.
 func manageCall(t *testing.T, h http.Handler, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, management.Prefix+target, strings.NewReader(body))
@@ -41,7 +38,6 @@ func manageCall(t *testing.T, h http.Handler, method, target, body string) *http
 	return rec
 }
 
-// errorCodeOf returns the error code in a failed call's body.
 func errorCodeOf(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	var body management.ErrorBody
@@ -53,9 +49,6 @@ func errorCodeOf(t *testing.T, rec *httptest.ResponseRecorder) string {
 
 const managementTestConfig = `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`
 
-// GET /status says which version of the management API core serves, as docs/management-api.md
-// ("Rules every call follows") promises: a number that goes up when a call changes in a way an
-// older client would misread.
 func TestStatusCarriesTheManagementAPIVersion(t *testing.T) {
 	h, _ := startManagementCore(t, managementTestConfig)
 	rec := manageCall(t, h, http.MethodGet, "/status", "")
@@ -79,8 +72,6 @@ func TestStatusCarriesTheManagementAPIVersion(t *testing.T) {
 	}
 }
 
-// A body larger than core reads is a 413 invalid_request from every call that reads one, not a
-// 400 from some of them.
 func TestManagementOversizedBodyIs413(t *testing.T) {
 	h, _ := startManagementCore(t, managementTestConfig)
 	tooBig := strings.Repeat("x", maxManagementBody+1)
@@ -112,9 +103,6 @@ func TestManagementOversizedBodyIs413(t *testing.T) {
 	}
 }
 
-// GET /setup/clients/{id}/paste names the address core is reached at: a caller on this machine
-// gets core's own, as the command shows it, and a caller on another machine the address it
-// reached core by, from its Host and whether the connection is TLS.
 func TestClientPasteBaseURLIsTheAddressThatReachedCore(t *testing.T) {
 	h, _ := startManagementCore(t, `{"listen":"127.0.0.1:8317","management_allow_remote":true,`+
 		`"client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
@@ -142,11 +130,9 @@ func TestClientPasteBaseURLIsTheAddressThatReachedCore(t *testing.T) {
 		return p
 	}
 
-	// This machine, as before.
 	if p := get("http://127.0.0.1:8317"+paste, "127.0.0.1:1234", false, nil); p.BaseURL != "http://127.0.0.1:8317" {
 		t.Errorf("a caller on this machine: base_url = %q, want core's own address", p.BaseURL)
 	}
-	// Another machine reaches core at the address it used, and its files point there.
 	for _, c := range []struct {
 		target, remote string
 		holdTLS        bool
@@ -165,12 +151,10 @@ func TestClientPasteBaseURLIsTheAddressThatReachedCore(t *testing.T) {
 			}
 		}
 	}
-	// A proxy on this machine passing another machine's request on is that machine's caller.
 	p := get("http://core.example.test:8443"+paste, "127.0.0.1:1234", false, map[string]string{"X-Forwarded-For": "203.0.113.5"})
 	if p.BaseURL != "http://core.example.test:8443" {
 		t.Errorf("a caller passed on from another machine: base_url = %q, want the address it reached", p.BaseURL)
 	}
-	// A Host that is not an address core can name is refused rather than guessed at.
 	req := httptest.NewRequest(http.MethodGet, paste, nil)
 	req.Host = "not an address"
 	req.RemoteAddr = "203.0.113.5:4321"
@@ -182,12 +166,9 @@ func TestClientPasteBaseURLIsTheAddressThatReachedCore(t *testing.T) {
 	}
 }
 
-// The routing timeouts are part of GET and PATCH /settings, checked as the config checks them:
-// each field set on its own, null removing them all, and a bad one changing nothing.
 func TestSettingsRoutingTimeouts(t *testing.T) {
 	h, path := startManagementCore(t, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],`+
 		`"management_key":"mgmt-key","routing":{"timeouts":{"header_ms":15000}}}`)
-	// timeouts reads GET /settings's routing.timeouts as a client sees it, fields named.
 	timeouts := func() map[string]int64 {
 		t.Helper()
 		rec := manageCall(t, h, http.MethodGet, "/settings", "")
@@ -219,12 +200,10 @@ func TestSettingsRoutingTimeouts(t *testing.T) {
 		return true
 	}
 
-	// GET shows what the config sets.
 	if got, want := timeouts(), map[string]int64{"header_ms": 15000}; !same(got, want) {
 		t.Errorf("GET /settings routing.timeouts = %v, want the config's %v", got, want)
 	}
 
-	// PATCH changes the fields it names and leaves the rest.
 	rec := manageCall(t, h, http.MethodPatch, "/settings", `{"routing":{"timeouts":{"idle_ms":90000,"total_ms":0}}}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PATCH /settings routing.timeouts = %d (%s)", rec.Code, rec.Body)
@@ -248,7 +227,6 @@ func TestSettingsRoutingTimeouts(t *testing.T) {
 		t.Errorf("the config file holds routing.timeouts = %v, want %v:\n%s", got, want, b)
 	}
 
-	// The checks the config applies, and unknown fields, refuse the change and write nothing.
 	for _, body := range []string{
 		`{"routing":{"timeouts":{"header_ms":-1}}}`,
 		`{"routing":{"timeouts":{"idle_ms":2592000001}}}`,
@@ -271,7 +249,6 @@ func TestSettingsRoutingTimeouts(t *testing.T) {
 		}
 	}
 
-	// null removes them, back to core's own defaults.
 	if rec := manageCall(t, h, http.MethodPatch, "/settings", `{"routing":{"timeouts":null}}`); rec.Code != http.StatusOK {
 		t.Fatalf("PATCH routing.timeouts null = %d (%s)", rec.Code, rec.Body)
 	}

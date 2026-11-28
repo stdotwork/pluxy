@@ -7,12 +7,9 @@ import (
 	"net/http/pprof"
 )
 
-// pprofBuilt is true in a build with the pprof tag: it has the profiling pages.
 const pprofBuilt = true
 
-// pprofHandler returns the profiling pages on a mux of their own. Importing net/http/pprof also
-// registers them on http.DefaultServeMux; core serves no request through that mux, so they are
-// not reachable there.
+// Importing net/http/pprof also registers them on http.DefaultServeMux.
 func pprofHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)

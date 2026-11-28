@@ -10,17 +10,13 @@ import (
 	"testing"
 )
 
-// A first config is written only into a folder no other user can change: one that group or
-// others can write in, or that is a link, is refused, left as it is and holds nothing after; a
-// folder only its user can write in is used, and a missing one is made 0700. Parent folders are
-// not checked.
 func TestWriteFirstConfigRefusesAFolderOthersCanChange(t *testing.T) {
 	folder := func(t *testing.T, mode fs.FileMode) string {
 		dir := filepath.Join(t.TempDir(), "home")
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chmod(dir, mode); err != nil { // past the umask
+		if err := os.Chmod(dir, mode); err != nil {
 			t.Fatal(err)
 		}
 		return dir
@@ -40,7 +36,7 @@ func TestWriteFirstConfigRefusesAFolderOthersCanChange(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		dir  func(t *testing.T) string
-		want func(dir string) string // the refusal; nil: written
+		want func(dir string) string
 	}{
 		{"0777", func(t *testing.T) string { return folder(t, 0o777) }, func(d string) string { return writable(d, "0777") }},
 		{"0770", func(t *testing.T) string { return folder(t, 0o770) }, func(d string) string { return writable(d, "0770") }},
@@ -66,7 +62,7 @@ func TestWriteFirstConfigRefusesAFolderOthersCanChange(t *testing.T) {
 				if _, err := os.Stat(path); err != nil {
 					t.Fatalf("no config written: %v", err)
 				}
-				if before == nil { // made here
+				if before == nil {
 					if st, err := os.Stat(dir); err != nil || st.Mode().Perm() != 0o700 {
 						t.Errorf("the folder made: %v %v, want 0700", st, err)
 					}
@@ -89,13 +85,10 @@ func TestWriteFirstConfigRefusesAFolderOthersCanChange(t *testing.T) {
 	}
 }
 
-// A config path that is already a link, to a file or to nothing, or a hard link to a file, is
-// never written through: the write fails as a config already there, and the file the link names
-// is left as it was, or still missing.
 func TestWriteFirstConfigNeverWritesThroughALink(t *testing.T) {
 	for _, c := range []struct {
 		name   string
-		target bool // the link names a file that exists
+		target bool
 		make   func(target, path string) error
 	}{
 		{"a link to a file", true, os.Symlink},

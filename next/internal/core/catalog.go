@@ -11,16 +11,10 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// modelRefreshPoll is how often the background refresh loop checks for kept model lists whose
-// 30-minute refresh interval (with jitter) has elapsed.
 var modelRefreshPoll = time.Minute
 
-// catalogueRefreshPoll is how often core checks whether state/catalogue.json is old enough to
-// refresh. The first check runs immediately in the refresh goroutine.
 var catalogueRefreshPoll = time.Hour
 
-// catalog returns the route.CatalogFunc that asks the extensions exts for an account's model
-// list (the router keeps the lists).
 func catalog(exts map[string]*host.Managed) route.CatalogFunc {
 	return func(ctx context.Context, a route.Account, credential *protocol.Credential) (*protocol.ModelList, *llm.Error) {
 		g := exts[a.Extension]
@@ -94,10 +88,6 @@ func (c *Core) modelRefreshLoop(interval time.Duration) {
 	}
 }
 
-// credentialChanged refreshes account id's kept model list after its credential is renewed or
-// it signs in again. Runs in the background so a renewal inside a request never waits on or
-// deadlocks with the model list read. A renewal can finish while Stop is waiting for background
-// work, so the work is added under bgMu, which Stop closes first.
 func (c *Core) credentialChanged(id string) {
 	c.bgMu.Lock()
 	defer c.bgMu.Unlock()

@@ -22,15 +22,10 @@ import (
 )
 
 const (
-	// maxThemeBytes is the maximum size of one stored theme file (256 KiB).
-	maxThemeBytes = 256 << 10
-	// maxStoredThemes is the maximum number of themes core will keep on disk.
-	maxStoredThemes = 64
-	// maxThemePartLen limits each publisher and name segment of a theme ID.
-	maxThemePartLen = 64
-	// themeCurrentFile is the file in themes/ holding the selected theme ID.
-	themeCurrentFile = "current"
-	// maxCurrentFileBytes bounds reading themes/current (longest ID is 64+1+64 bytes plus newline).
+	maxThemeBytes       = 256 << 10
+	maxStoredThemes     = 64
+	maxThemePartLen     = 64
+	themeCurrentFile    = "current"
 	maxCurrentFileBytes = 256
 )
 
@@ -42,19 +37,13 @@ var (
 	errNoSuchTheme   = errors.New("no theme has this ID")
 )
 
-// builtInThemePublisher is the publisher of the themes the UI ships.
 const builtInThemePublisher = "pluxy"
 
-// builtInThemeIDs are the themes the UI ships (next/ui/themes/*.json). Core holds no file for
-// them; TestBuiltInThemeIDsMatchTheUI keeps this list equal to the UI's.
 var builtInThemeIDs = []string{"pluxy/default", "pluxy/paper", "pluxy/terminal"}
 
-// themeStore keeps user-added theme JSON files under <state>/themes/<publisher>/<name>.json
-// and the selected theme ID in <state>/themes/current.
 type themeStore struct {
-	dir string
-	mu  sync.Mutex
-	// onSelectChecked is a test hook; it runs between a selection's check and its write.
+	dir             string
+	mu              sync.Mutex
 	onSelectChecked func()
 }
 
@@ -98,7 +87,6 @@ func (c *Core) handleThemes(m *server.Management) {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		// The UI lists its own theme under this ID, so a stored file would never show.
 		if slices.Contains(builtInThemeIDs, id) {
 			writeError(w, http.StatusUnprocessableEntity, "refused",
 				fmt.Sprintf("%s is a built-in theme's ID. Use an ID of your own, such as my/%s, and add it again", id, name))
@@ -177,16 +165,12 @@ func (c *Core) handleThemes(m *server.Management) {
 	})
 }
 
-// noSuchThemeMessage names the built-in themes, which `pluxy theme list` does not show.
 func noSuchThemeMessage(id string) string {
 	last := len(builtInThemeIDs) - 1
 	builtIns := strings.Join(builtInThemeIDs[:last], ", ") + " and " + builtInThemeIDs[last]
 	return fmt.Sprintf("no theme has the ID %s. The built-in themes are %s; run \"pluxy theme list\" to see the stored ones", id, builtIns)
 }
 
-// uiMayHoldTheme reports whether id can be a theme the UI holds rather than core: a listed
-// built-in, or another ID of their publisher, since a newer panel or app may ship a built-in this
-// core does not list.
 func uiMayHoldTheme(id string) bool {
 	return slices.Contains(builtInThemeIDs, id) || strings.HasPrefix(id, builtInThemePublisher+"/")
 }
@@ -270,8 +254,6 @@ func (s *themeStore) openTop(create bool) (*os.Root, error) {
 	return private.Dir{Path: s.dir, Redo: "add the themes again"}.OpenRoot(create)
 }
 
-// readRegularInRoot reads name from root without following symlinks or opening non-regular files,
-// confirming the opened descriptor is the file Lstat checked and owned by this user.
 func readRegularInRoot(root *os.Root, name string, limit int64) ([]byte, error) {
 	linfo, err := root.Lstat(name)
 	if err != nil {
@@ -423,9 +405,6 @@ func (s *themeStore) get(pub, name string) ([]byte, error) {
 	return raw, err
 }
 
-// readThemeInRoot reads one stored theme: a regular file in root of at most 256 KiB whose bytes
-// are one JSON object, which is all put stores. A file that is not one is not a theme, as list
-// and the 64-theme cap agree.
 func readThemeInRoot(root *os.Root, fname string) (raw []byte, themeName string, err error) {
 	raw, err = readRegularInRoot(root, fname, maxThemeBytes)
 	if err != nil {
@@ -447,15 +426,11 @@ func (s *themeStore) put(pub, name, themeName string, raw []byte) (management.Th
 	}
 	defer top.Close()
 
-	// A file at a publisher's path leaves nowhere to store a theme: GET and DELETE say there is
-	// no such theme, and putting one is refused the same way as any change core will not apply.
 	if pubInfo, err := top.Lstat(pub); err == nil {
 		if pubInfo.Mode()&fs.ModeSymlink != 0 || !pubInfo.IsDir() {
 			return management.ThemeSummary{}, errNotRegular
 		}
 	}
-	// Replacing a stored theme stays allowed even at the 64-theme cap. A file that is not one is
-	// not a theme, here as in list and get, so putting one where it sits counts.
 	themes, err := s.listEntriesLocked(top)
 	if err != nil {
 		return management.ThemeSummary{}, err
@@ -467,8 +442,6 @@ func (s *themeStore) put(pub, name, themeName string, raw []byte) (management.Th
 	}
 
 	if err := top.Mkdir(pub, private.DirMode); err == nil {
-		// The new folder's entry in themes/ must be on disk before the theme's file is: a crash
-		// between the two would otherwise lose the folder and the file in it.
 		if err := private.SyncDir(top); err != nil {
 			return management.ThemeSummary{}, err
 		}
@@ -528,7 +501,6 @@ func (s *themeStore) remove(pub, name string) error {
 		return err
 	}
 	pubRoot.Close()
-	// Best-effort removal of now-empty publisher directory.
 	if top.Remove(pub) == nil {
 		_ = private.SyncDir(top)
 	}
@@ -541,7 +513,6 @@ func (s *themeStore) remove(pub, name string) error {
 	return nil
 }
 
-// storedLocked reports whether list counts id as a stored theme.
 func (s *themeStore) storedLocked(id string) (bool, error) {
 	top, err := s.openTop(false)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -558,9 +529,6 @@ func (s *themeStore) storedLocked(id string) (bool, error) {
 	return slices.ContainsFunc(themes, func(t management.ThemeSummary) bool { return t.ID == id }), nil
 }
 
-// setCurrent selects id, or clears the selection when id is empty. An ID that is neither a stored
-// theme nor one the UI may hold is errNoSuchTheme, and the selection stays. The check and the
-// write share one hold of the lock, so a theme removed meanwhile cannot end up selected.
 func (s *themeStore) setCurrent(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
