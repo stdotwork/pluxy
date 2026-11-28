@@ -145,7 +145,7 @@ does with the setting:
 | `access.api-keys` (`api-keys` as a list) | `client_keys`. At least one key is required; CLIProxyAPI serves anyone when the list is empty. | Supported |
 | `management.secret-key` (`remote-management.secret-key`) | `management_key`, exactly as written. Required: a config without one, or with a key already hashed with bcrypt (CLIProxyAPI can write one), is refused, saying what to set. | Supported; hashed keys refused |
 | `management.allow-remote` (`remote-management.allow-remote`) | `management_allow_remote`: without it the management API answers only this machine, as in CLIProxyAPI. | Supported |
-| `management.disable-control-panel` | The panel is always on, with the management API. | Ignored: the panel needs the management key |
+| `management.disable-control-panel` | The panel is always served; signing in takes the management key. | Ignored: the panel is always served, and signing in takes the management key |
 | `management.disable-auto-update-panel`, `management.panel-github-repository`, `server.github-token` (`github-token`) | The panel is built into core; nothing is downloaded. | Ignored: no panel download |
 | `management.base-url` | | Ignored: no terminal UI |
 | `server.max-request-body-bytes` | Request bodies are capped at 24 MiB. | Ignored: core needs a fixed cap for its request frame |

@@ -69,6 +69,9 @@ type setupManager struct {
 	coreTarget func() (listen string, tlsEnable bool)
 	timeout    time.Duration
 
+	// toolsMu orders connects and disconnects of client tools (setup_connect.go).
+	toolsMu sync.Mutex
+
 	mu        sync.Mutex
 	stopped   bool // stop has run: no scan starts any more
 	firstRun  bool
@@ -345,6 +348,7 @@ func (c *Core) Setup(ctx context.Context) management.Setup {
 	if listen != "" {
 		found.Core = setupCoreInfo(listen)
 	}
+	c.setup.markConnect(found.Clients)
 	regs := c.Registries(ctx)
 	installed := c.cur.Load().pkgs
 	return management.Setup{
@@ -465,16 +469,7 @@ func (c *Core) handleSetup(m *server.Management) {
 		}
 		// The models pluxy serves, for the person to pick from; the tool starts with the one they
 		// picked, else the best match among them.
-		s, release := c.acquire()
-		served := s.Router.ServedModels(r.Context())
-		release()
-		names := make([]string, len(served))
-		for i, m := range served {
-			names[i] = m.ID
-		}
-		if model == "" {
-			model = SuggestClientModel(id, names)
-		}
+		model, names := c.clientModel(r.Context(), id, model)
 		snip, _ := ClientSnippetFor(id, baseURL, key, model)
 		reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: baseURL, Key: key, Note: snip.Note,
 			Model: model, Models: names}
@@ -623,14 +618,23 @@ func isReachableFromNetwork(listen string) bool {
 	return !server.IsLoopbackHost(strings.TrimSpace(host))
 }
 
-// coreAddress is the address a program on this machine reaches core at, as the client tools'
-// config files name it (server.LocalURL); empty when core's address is not known.
+// coreAddress is core's address as the client tools' checks take it (atCore): its scheme and its
+// listen address, an unspecified host (every interface: 0.0.0.0, :: or none) kept as one, so an
+// address of this machine in the listener's family matches it (both families when the listener
+// takes both, as atCore's probe finds); empty when core's address is not known.
 func coreAddress(listen string, tlsEnable bool) string {
-	u, err := server.LocalURL(listen, tlsEnable)
+	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
 		return ""
 	}
-	return u
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	scheme := "http"
+	if tlsEnable {
+		scheme = "https"
+	}
+	return scheme + "://" + net.JoinHostPort(host, port)
 }
 
 // refreshCoreState reads each client tool's config again against the core listening on listen.

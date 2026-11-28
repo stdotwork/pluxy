@@ -29,7 +29,8 @@ type listedAccount struct {
 
 // panelcore -demo fills a real core with accounts in every state, usage over a week, three client
 // keys, a chain and request logs, as its package comment says; the test reads it all back through
-// the management API. Without -demo the one line it prints has the same four members.
+// the management API. Without -demo the one line it prints has the same four members. Core runs
+// in a home folder of panelcore's own: a Connect writes there, not in the caller's home.
 func TestPanelcoreDemo(t *testing.T) {
 	t.Parallel()
 	bin := filepath.Join(t.TempDir(), "panelcore")
@@ -288,6 +289,19 @@ func TestPanelcoreDemo(t *testing.T) {
 		if withActive < 2 || total == 0 {
 			t.Errorf("sample %d: %d accounts have active requests (total %d, counts %v); want at least 2 accounts and total > 0", i+1, withActive, total, counts)
 		}
+	}
+
+	// Core's home folder is panelcore's own, beside its config, not the home of whoever runs it:
+	// Connect writes Claude Code's settings there, and the caller's home stays untouched.
+	if code, raw := managedJSON(t, base, key, http.MethodPost, "/setup/clients/claude-code/connect", nil); code != http.StatusOK {
+		t.Errorf("connect claude-code: %d: %s", code, raw)
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
+		t.Errorf("connect wrote in the home of panelcore's caller: ~/.claude: %v", err)
+	}
+	ownSettings := filepath.Join(filepath.Dir(ready["config"]), "home", ".claude", "settings.json")
+	if b, err := os.ReadFile(ownSettings); err != nil || !strings.Contains(string(b), base) {
+		t.Errorf("Claude Code's settings in panelcore's home folder: %v: %s", err, b)
 	}
 
 	// Stopping panelcore ends promptly even with held requests in flight.

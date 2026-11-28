@@ -7,10 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -21,9 +25,9 @@ import (
 // The client tools' config files, read the way the desktop app's writers for them read them
 // (next/app-tools/<tool>/src): a file a writer would refuse to change is refused, and a file
 // it takes is configured when it points the tool at this core, not configured when it holds
-// none of what the writer adds, and needs an update otherwise. coreURL is core's address as a
-// program on this machine reaches it (server.LocalURL), compared as text as the writers do;
-// empty when core's address is not known, which, as in the writers, any address matches.
+// none of what the writer adds, and needs an update otherwise. coreURL is core's address
+// (coreAddress), which a tool's address matches as atCore says; empty when core's address is not
+// known, which no address matches.
 
 const (
 	stateNotConfigured = management.ClientStateNotConfigured
@@ -136,10 +140,92 @@ func inspectClaudeCode(home, coreURL string) (string, string) {
 	case str("ANTHROPIC_AUTH_TOKEN") != "" &&
 		str("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY") == "1" &&
 		str("CLAUDE_CODE_AUTO_MODE_SERVER") == "0" &&
-		(coreURL == "" || base == coreURL):
+		atCore(base, coreURL):
 		return display, stateConfigured
 	}
 	return display, stateNeedsUpdate
+}
+
+// atCore reports whether address, the address of core a tool's settings name, reaches the core
+// at coreURL (coreAddress): the same scheme, port and path (none: a final / is another address),
+// and the same host. For a core listening on every interface (0.0.0.0, :: or no host), a loopback
+// address or another address of this machine counts too, such as the one a browser on another
+// machine reached the panel by, when it is of the listener's family (IPv4 for 0.0.0.0, IPv6 for
+// ::), or of either family when the listener takes both (wildcardDualStack); the name localhost,
+// which may resolve to either family, only then. An empty coreURL (core's address is not known)
+// matches no address.
+func atCore(address, coreURL string) bool {
+	if coreURL == "" {
+		return false
+	}
+	if address == coreURL {
+		return true
+	}
+	a, errA := url.Parse(address)
+	c, errC := url.Parse(coreURL)
+	if errA != nil || errC != nil || a.Scheme != c.Scheme || a.Port() == "" || a.Port() != c.Port() ||
+		a.Path != c.Path || a.Opaque != "" || a.User != nil || a.RawQuery != "" || a.Fragment != "" {
+		return false
+	}
+	host := a.Hostname()
+	if strings.EqualFold(host, c.Hostname()) {
+		return true
+	}
+	listener, err := netip.ParseAddr(c.Hostname())
+	if err != nil || !listener.IsUnspecified() {
+		return false
+	}
+	both := wildcardDualStack()
+	if strings.EqualFold(host, "localhost") {
+		return both
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	ip = ip.Unmap()
+	if ip.Is4() != listener.Is4() && !both {
+		return false
+	}
+	return ip.IsLoopback() || machineHasAddr(ip)
+}
+
+// atCoreV1 is atCore for an address with /v1 after core's.
+func atCoreV1(address, coreURL string) bool {
+	base, ok := strings.CutSuffix(address, "/v1")
+	return ok && atCore(base, coreURL)
+}
+
+// wildcardDualStack reports whether core's listener on every interface takes IPv4 and IPv6
+// connections alike. Go opens a "tcp" listener on 0.0.0.0, :: or no host as one IPv6 socket that
+// takes IPv4 as well when the system allows it (it turns IPV6_V6ONLY off, whatever the system's
+// default), and otherwise as a socket of the address's own family. A listener on 0.0.0.0 opened
+// the same way shows which: the system names it by an IPv6 address only in the first case.
+// Probed once.
+var wildcardDualStack = sync.OnceValue(func() bool {
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		return false
+	}
+	defer ln.Close()
+	a, ok := ln.Addr().(*net.TCPAddr)
+	return ok && a.IP.To4() == nil
+})
+
+// machineHasAddr reports whether ip is an address of one of this machine's interfaces.
+var machineHasAddr = func(ip netip.Addr) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok {
+			if own, ok := netip.AddrFromSlice(n.IP); ok && own.Unmap() == ip {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // codexBaseURL is the Codex provider's base URL for the core at address: the address with /v1
@@ -171,8 +257,7 @@ func inspectCodex(home, coreURL string) (string, string) {
 		return display, stateRefused
 	case !parsed.hasBaseURL:
 		return display, stateNotConfigured
-	case parsed.bearerToken != "" && parsed.modelProvider == "pluxy" &&
-		(coreURL == "" || parsed.baseURL == codexBaseURL(coreURL)):
+	case parsed.bearerToken != "" && parsed.modelProvider == "pluxy" && atCoreV1(parsed.baseURL, coreURL):
 		return display, stateConfigured
 	}
 	return display, stateNeedsUpdate
@@ -453,7 +538,7 @@ func inspectOpenCode(home, coreURL string) (string, string) {
 	baseURL, hasURL := options["baseURL"].(string)
 	_, listed := models[ours]
 	if apiKey != "" && p["npm"] == "@ai-sdk/openai-compatible" && ours != "" && listed && hasURL &&
-		(coreURL == "" || baseURL == strings.TrimRight(coreURL, "/")+"/v1") {
+		atCoreV1(baseURL, coreURL) {
 		return display, stateConfigured
 	}
 	return display, stateNeedsUpdate
@@ -662,7 +747,7 @@ func inspectPi(home, coreURL string) (string, string) {
 	providerID = cmp.Or(strings.TrimSpace(providerID), "cliproxyapi")
 	defProvider, _ := st["defaultProvider"].(string)
 	defModel, _ := st["defaultModel"].(string)
-	if piAdapterReady(agent) && hasURL && (coreURL == "" || piBaseURL(fileURL) == piBaseURL(coreURL)) &&
+	if piAdapterReady(agent) && hasURL && atCore(piBaseURL(fileURL), coreURL) &&
 		apiKey != "" && defProvider == providerID && defModel != "" {
 		return display, stateConfigured
 	}
@@ -801,7 +886,7 @@ func inspectOMP(home, coreURL string) (string, string) {
 	apiKey, _ := p["apiKey"].(string)
 	api, _ := p["api"].(string)
 	discType, _ := discovery["type"].(string)
-	baseOK := hasBase && (coreURL == "" && base != "" || coreURL != "" && base == ompBaseURL(coreURL))
+	baseOK := hasBase && atCoreV1(base, coreURL)
 	if baseOK && apiKey != "" && (api == "openai-responses" || api == "openai-completions") &&
 		discType == "openai-models-list" && model != "" {
 		return display, stateConfigured
@@ -856,6 +941,16 @@ const ModelPlaceholder = "<model-id>"
 // tool starts with (a name pluxy serves), ModelPlaceholder when empty. Each file holds what the
 // tool's writer in the desktop app writes for inspect to read it as configured.
 func ClientSnippetFor(tool, baseURL, key, model string) (ClientSnippet, bool) {
+	if model == "" {
+		model = ModelPlaceholder
+	}
+	return clientSnippet(tool, baseURL, key, model)
+}
+
+// clientSnippet builds the setup files for tool. Unlike ClientSnippetFor, an empty model leaves
+// the tool's model settings out (for Connect, which must never write ModelPlaceholder into a real
+// settings file when pluxy serves no model yet).
+func clientSnippet(tool, baseURL, key, model string) (ClientSnippet, bool) {
 	id, ok := clientSnippetNames[strings.ToLower(strings.TrimSpace(tool))]
 	if !ok {
 		return ClientSnippet{}, false
@@ -863,40 +958,42 @@ func ClientSnippetFor(tool, baseURL, key, model string) (ClientSnippet, bool) {
 	base := strings.TrimRight(baseURL, "/")
 	spec, _ := clientSpecByID(id)
 	s := ClientSnippet{Tool: id, Name: spec.name}
-	if model == "" {
-		model = ModelPlaceholder
-	}
 	switch id {
 	case "claude-code":
 		// Claude Code asks for its own model names (claude-opus-5-5 and the like) unless told
 		// otherwise, and an account of another service serves none of them: `model` is the one it
 		// starts with, and the three ANTHROPIC_DEFAULT_*_MODEL are what its opus, sonnet and
 		// haiku choices, and the small model it uses in the background, resolve to.
-		s.Files = []ClientSnippetFile{{"~/.claude/settings.json", prettyJSON(map[string]any{
-			"model": model,
-			"env": map[string]string{
-				"ANTHROPIC_BASE_URL":                         base,
-				"ANTHROPIC_AUTH_TOKEN":                       key,
-				"ANTHROPIC_DEFAULT_OPUS_MODEL":               model,
-				"ANTHROPIC_DEFAULT_SONNET_MODEL":             model,
-				"ANTHROPIC_DEFAULT_HAIKU_MODEL":              model,
-				"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-				"CLAUDE_CODE_AUTO_MODE_SERVER":               "0",
-			},
-		})}}
+		env := map[string]string{
+			"ANTHROPIC_BASE_URL":                         base,
+			"ANTHROPIC_AUTH_TOKEN":                       key,
+			"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+			"CLAUDE_CODE_AUTO_MODE_SERVER":               "0",
+		}
+		doc := map[string]any{"env": env}
+		if model != "" {
+			doc["model"] = model
+			env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model
+			env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = model
+			env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = model
+		}
+		s.Files = []ClientSnippetFile{{"~/.claude/settings.json", prettyJSON(doc)}}
 	case "codex":
-		// The two keys at the top come before the table: in TOML a key written below a [table]
+		// The keys at the top come before the table: in TOML a key written below a [table]
 		// line belongs to that table.
-		s.Files = []ClientSnippetFile{{"~/.codex/config.toml", fmt.Sprintf(`model_provider = "pluxy"
-model = %q
-
+		head := "model_provider = \"pluxy\"\n"
+		if model != "" {
+			head += fmt.Sprintf("model = %q\n", model)
+		}
+		s.Files = []ClientSnippetFile{{"~/.codex/config.toml", fmt.Sprintf(`%s
 [model_providers.pluxy]
 name = "pluxy"
 base_url = %q
 wire_api = "responses"
-experimental_bearer_token = %q`, model, codexBaseURL(base), key)}}
+experimental_bearer_token = %q`, head, codexBaseURL(base), key)}}
 		s.Note = codexTOMLNote
 	case "opencode":
+		m := cmp.Or(model, ModelPlaceholder)
 		s.Files = []ClientSnippetFile{{"~/.config/opencode/opencode.jsonc", prettyJSON(map[string]any{
 			"$schema": openCodeSchema,
 			"provider": map[string]any{
@@ -904,22 +1001,24 @@ experimental_bearer_token = %q`, model, codexBaseURL(base), key)}}
 					"npm":     "@ai-sdk/openai-compatible",
 					"name":    "pluxy",
 					"options": map[string]string{"baseURL": base + "/v1", "apiKey": key},
-					"models":  map[string]any{model: map[string]string{"name": model}},
+					"models":  map[string]any{m: map[string]string{"name": m}},
 				},
 			},
-			"model": "pluxy/" + model,
+			"model": "pluxy/" + m,
 		})}}
 	case "pi":
+		m := cmp.Or(model, ModelPlaceholder)
 		s.Files = []ClientSnippetFile{
 			{"~/.pi/agent/cliproxyapi.json", prettyJSON(map[string]string{"baseUrl": piBaseURL(base), "apiKey": key})},
 			{"~/.pi/agent/settings.json", prettyJSON(map[string]any{
 				"packages":        []string{"./" + piAdapterFolder},
 				"defaultProvider": "cliproxyapi",
-				"defaultModel":    model,
+				"defaultModel":    m,
 			})},
 		}
 		s.Note = "Pi also needs pluxy's adapter in ~/.pi/agent/" + piAdapterFolder + ", which the desktop app installs."
 	case "omp":
+		m := cmp.Or(model, ModelPlaceholder)
 		s.Files = []ClientSnippetFile{
 			{"~/.omp/agent/models.yml", fmt.Sprintf(`providers:
   pluxy:
@@ -929,7 +1028,7 @@ experimental_bearer_token = %q`, model, codexBaseURL(base), key)}}
     discovery:
       type: openai-models-list`, ompBaseURL(base), key)},
 			{"~/.omp/agent/config.yml", fmt.Sprintf(`modelRoles:
-  default: %q`, "pluxy/"+model)},
+  default: %q`, "pluxy/"+m)},
 		}
 	}
 	return s, true

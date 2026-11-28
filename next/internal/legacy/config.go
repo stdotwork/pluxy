@@ -226,7 +226,7 @@ var rules = map[string]rule{
 	"access.api-keys":                       {supported, ""},
 	"management.secret-key":                 {supported, ""},
 	"management.allow-remote":               {supported, ""},
-	"management.disable-control-panel":      {dropped, "the management key turns the panel on and off"},
+	"management.disable-control-panel":      {dropped, "the panel is always served, and signing in takes the management key"},
 	"management.disable-auto-update-panel":  {dropped, "the panel is built into core"},
 	"management.panel-github-repository":    {dropped, "the panel is built into core"},
 	"server.github-token":                   {dropped, "the panel is built into core"},
