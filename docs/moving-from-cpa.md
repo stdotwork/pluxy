@@ -228,7 +228,7 @@ for every auth-file field [Auth files](config.md#auth-files), both in the config
 | `plugins`, other than Lamplighter's window ignition | pluxy's providers are separate programs, installed as packages, not libraries loaded into the core |
 | Lamplighter's notifications and reminders (Bark, webhooks, the usage thresholds, reset reminders) and its own page | pluxy sends no usage notifications. The panel shows each account's usage, and `pluxy account list` its health |
 | Lamplighter's `timezone` | pluxy reads the ignition hours in the machine's local time zone. Move `start_hour` and `end_hour`, or set the machine's time zone |
-| The panel download settings (`panel-github-repository`, `disable-auto-update-panel`, `disable-control-panel`, `github-token`) | The panel is built into pluxy; nothing is downloaded, and it is always on with the management API |
+| The panel settings (`panel-github-repository`, `disable-auto-update-panel`, `disable-control-panel`, `github-token`) | The panel is built into pluxy and always served (signing in takes the management key); nothing is downloaded |
 | The remote model catalogs (`models.catalog` and the others) | Each provider carries its own model list |
 | Response compression, `commercial-mode`, discovery, `max-request-body-bytes` | Left to a reverse proxy, or switches for features pluxy does not have. Request bodies are capped at 24 MiB |
 | Settings pluxy does not support (the Codex `enable-apply-patch`, `optimize-multi-agent-v2` and stream bootstrap settings) | Named in the **Not brought** list as "not supported yet". A model's `force-mapping` and `openapi` are named the same way in the **Changed** row of the account |
