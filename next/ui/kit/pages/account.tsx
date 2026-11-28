@@ -1,8 +1,3 @@
-// One account on its own page (#/accounts/<id>; the header strip says "Accounts / <name>"): its
-// header (mark, name, plan, state, the one fix), full-width limits with absolute reset times and
-// pace, this week by model, latest requests, facts, and settings, models and a test folded below.
-// #/accounts/<id>/sign-in opens its sign-in under the header. The list of all accounts is accounts.tsx.
-
 import { useEffect, useMemo, useState } from "preact/hooks";
 import {
   type Account,
@@ -171,7 +166,6 @@ type Round = {
   latest: UsageEventsReply;
 };
 
-/** Final-shape placeholder shown after BUSY_SHOWS_AFTER_MS while the initial read is under way. */
 function AccountSkeleton() {
   const shown = useShownAfter(BUSY_SHOWS_AFTER_MS);
   if (!shown) return null;
@@ -451,7 +445,6 @@ function SectionFailed(props: {
   );
 }
 
-/** The opening header: provider mark with state dot, account name, plan pill, state and why, and the one fix. */
 function Opening(props: {
   account: Account;
   name: string;
@@ -477,7 +470,6 @@ function Opening(props: {
   const resting = c.kind === "serving" && c.resting.length > 0;
   const configKeyFix = c.kind === "needs_login" && a.source === "config";
   const showFix = fix && !sayWhat && !(props.signingIn && fix.href);
-  // Show the provider beside the state when the reason sentence does not already begin with it.
   const showProvider = !!provider && !reason.startsWith(provider);
   return (
     <header
@@ -558,7 +550,6 @@ function Opening(props: {
   );
 }
 
-/** One full-width limit row: name, % left, absolute + relative reset time, bar with pace tick, and pace line. */
 function AccountLimit(props: { limit: QuotaLimit; account: string; now: number }) {
   const l = props.limit;
   const thresholds = useThresholds();
@@ -822,7 +813,6 @@ function ChangeIt(props: {
           </p>
         ) : (
           <div class="account-change-actions">
-            {/* Core refuses every change to an account it cannot read but its removal. */}
             {!broken && (
               <>
                 <Button disabled={act.busy} onClick={() => setDialog("rename")}>

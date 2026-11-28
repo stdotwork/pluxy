@@ -387,10 +387,8 @@ test("saving the Edit settings dialog closes it and says Saved., as Rename does"
   expect(page.text()).toContain("Saved.");
 });
 
-// ---- limits: absolute resets, pace and money balances -------------------------------------------
-
 test("resetLabel formats weekday and clock with relative countdown, date beyond a week, and passed resets", () => {
-  const now = new Date(2026, 10, 27, 12, 0, 0).getTime(); // Fri 27 Nov 2026 12:00 local
+  const now = new Date(2026, 10, 27, 12, 0, 0).getTime();
   const soon = resetLabel(
     { id: "5h", resets_at: Math.floor((now + (1 * 3600 + 52 * 60) * 1000) / 1000) },
     now,
@@ -410,7 +408,6 @@ test("resetLabel formats weekday and clock with relative countdown, date beyond 
 test("paceOf places the even-burn tick and shows a sentence only when pace runs out before reset", () => {
   const now = new Date(2026, 10, 27, 15, 0, 0).getTime();
   const fiveH = 5 * 3600;
-  // 2h remaining of 5h -> evenLeft = 40%; actual 15% left -> 85% used in 3h -> runs out at 15:31, 1h 29m before reset.
   const fast = paceOf(
     { id: "5h", window_seconds: fiveH, resets_at: Math.floor((now + 2 * 3600_000) / 1000), used_percent: 85 },
     now,
@@ -420,7 +417,6 @@ test("paceOf places the even-burn tick and shows a sentence only when pace runs 
   expect(fast?.evenLeft).toBeCloseTo(40, 1);
   expect(fast?.text).toBe("At this pace it runs out at 15:31, 1h 29m before it resets.");
 
-  // 2h remaining of 5h -> evenLeft = 40%; actual 75% left -> lasts until reset: tick stays, no sentence.
   const ok = paceOf(
     { id: "5h", window_seconds: fiveH, resets_at: Math.floor((now + 2 * 3600_000) / 1000), used_percent: 25 },
     now,
@@ -429,7 +425,6 @@ test("paceOf places the even-burn tick and shows a sentence only when pace runs 
   expect(ok?.showTick).toBe(true);
   expect(ok?.text).toBeUndefined();
 
-  // 100% left or just started: no pace sentence.
   const unused = paceOf(
     { id: "5h", window_seconds: fiveH, resets_at: Math.floor((now + 2 * 3600_000) / 1000), used_percent: 0 },
     now,
@@ -449,7 +444,6 @@ test("paceOf places the even-burn tick and shows a sentence only when pace runs 
   expect(justStarted?.kind).toBe("even");
   expect(justStarted?.text).toBeUndefined();
 
-  // Short-gap projection (< 1 minute before reset) still reports fast pace instead of falling through.
   const underMinute = paceOf(
     { id: "1h", window_seconds: 3600, resets_at: Math.floor((now + 15 * 60_000) / 1000), used_percent: 76 },
     now,
@@ -457,7 +451,6 @@ test("paceOf places the even-burn tick and shows a sentence only when pace runs 
   expect(underMinute?.kind).toBe("fast");
   expect(underMinute?.text).toBe("At this pace it runs out within a minute of the reset.");
 
-  // Short windows (<= 5m) use a fractional elapsed floor so they can still project a fast pace.
   const shortWindow = paceOf(
     { id: "5m", window_seconds: 300, resets_at: Math.floor((now + 2 * 60_000) / 1000), used_percent: 80 },
     now,
@@ -472,7 +465,6 @@ test("paceOf places the even-burn tick and shows a sentence only when pace runs 
   expect(shortWindowJustStarted?.kind).toBe("even");
   expect(shortWindowJustStarted?.text).toBeUndefined();
 
-  // Used up or unlimited: no pace.
   expect(
     paceOf(
       {
@@ -537,7 +529,6 @@ test("the page renders the header mark, plan pill, full-width limits with pace a
     },
   };
   const page = await open(account({ label: "studio-max", quota }));
-  // Hero mark and top-tier plan pill.
   expect(
     all(page.root, "span").some((n) =>
       n.attributes.some((a) => a.name === "data-part" && a.value === "provider-mark"),
@@ -552,7 +543,6 @@ test("the page renders the header mark, plan pill, full-width limits with pace a
     n.attributes.some((a) => a.name === "class" && a.value === "account-state-text"),
   );
   expect(stateText?.textContent).toBe("Serving");
-  // Limits with reset times, pace ticks, pace lines, and USD balance without a bar.
   expect(page.text()).toContain("18% left");
   expect(page.text()).toContain("80% left");
   expect(page.text()).toContain("Resets ");

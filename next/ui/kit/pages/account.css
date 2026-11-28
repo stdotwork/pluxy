@@ -1,5 +1,3 @@
-/* One account's page (account.tsx): hero header, full-width limits with pace ticks, this week and
-   latest requests, facts, actions and folded settings/tools. `--px-*` tokens only. */
 @layer kit {
   .account-page {
     container-type: inline-size;
@@ -14,14 +12,11 @@
     min-width: 0;
   }
 
-  /* Under a stale notice, words keep their normal colours; only bars and marks fade. */
   .account-page[data-stale] .account-hero-mark,
   .account-page[data-stale] .account-limit-bar,
   .account-page[data-stale] .account-bar-track {
     opacity: 0.6;
   }
-
-  /* ---- Opening header ----------------------------------------------------------------------- */
 
   .account-opening {
     --row-ground: var(--px-color-bg);
@@ -202,8 +197,6 @@
     min-height: var(--px-size-control-main);
   }
 
-  /* ---- Section cards ------------------------------------------------------------------------ */
-
   .account-section {
     display: grid;
     gap: calc(var(--s) * 3);
@@ -254,8 +247,6 @@
   .account-onward:hover {
     color: var(--px-color-text);
   }
-
-  /* ---- Full-width limits -------------------------------------------------------------------- */
 
   .account-limits {
     display: grid;
@@ -320,8 +311,6 @@
     height: calc(var(--s) * 2);
   }
 
-  /* Even-burn pace marker across the bar: a crisp 2px notch ringed in the page's background so it
-     reads clearly over both the filled bar and the empty track even when color.card is transparent. */
   .account-pace-tick {
     position: absolute;
     top: -2px;
@@ -370,8 +359,6 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* ---- Two-column cards (This week + Latest requests / About) ------------------------------- */
-
   .account-columns {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
@@ -390,8 +377,6 @@
       grid-template-columns: minmax(0, 1fr);
     }
   }
-
-  /* ---- This week ---------------------------------------------------------------------------- */
 
   .account-week-summary {
     color: var(--px-color-text-muted);
@@ -445,8 +430,6 @@
     background: var(--px-color-chart-success);
   }
 
-  /* ---- Latest requests ---------------------------------------------------------------------- */
-
   .account-requests {
     margin-inline: calc(var(--px-size-card-padding) * -1);
     margin-bottom: calc(var(--px-size-card-padding) * -1);
@@ -464,8 +447,6 @@
   .account-requests .request-detail {
     padding-inline: var(--px-size-card-padding);
   }
-
-  /* ---- About card --------------------------------------------------------------------------- */
 
   .account-about .facts {
     display: grid;
@@ -496,8 +477,6 @@
     text-decoration: underline;
   }
 
-  /* ---- Failed section inline ---------------------------------------------------------------- */
-
   .account-failed {
     display: flex;
     flex-wrap: wrap;
@@ -506,8 +485,6 @@
     color: var(--px-color-text-muted);
     font-size: var(--px-font-size-small);
   }
-
-  /* ---- Change it & folded settings/tools ---------------------------------------------------- */
 
   .account-change-actions {
     display: flex;
@@ -581,8 +558,6 @@
     font-size: var(--px-font-size);
     font-weight: var(--px-font-weight-strong);
   }
-
-  /* ---- Loading skeleton --------------------------------------------------------------------- */
 
   .account-skeleton {
     display: grid;

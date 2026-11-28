@@ -1,13 +1,10 @@
-// One account's page stays readable (WCAG AA, 4.5:1 for text; 3:1 for non-text marks) in every
-// built-in theme, light and dark: text kept on screen after a failed refresh, the waiting
-// header's reason sentence on its warning band, and the pace tick over every meter fill.
 import { expect, type Page, test } from "@playwright/test";
 import { measureContrast } from "./contrast";
 import { openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
-const THEMES = ["", "pluxy/terminal", "pluxy/paper"] as const; // "" is the default theme
+const THEMES = ["", "pluxy/terminal", "pluxy/paper"] as const;
 const APPEARANCES = ["light", "dark"] as const;
 const AA = 4.5;
 const GRAPHIC = 3;
@@ -73,7 +70,6 @@ async function openStaleAccount(page: Page, theme: string, appearance: (typeof A
   await signIn(page, core);
   await expect(page.locator('[data-part="account-opening"]')).toBeVisible();
   await expect(page.locator(".account-limit-pace").first()).toBeVisible();
-  // Advance past the 10-second poll interval so the second usage read fails and sets data-stale.
   await page.clock.runFor(10_500);
   await expect(page.locator('[data-part="account-page"][data-stale]')).toBeVisible();
 }
@@ -107,7 +103,6 @@ for (const theme of THEMES) {
         .filter((m) => m.ratio < AA)
         .map((m) => `"${m.text}": ${m.ratio.toFixed(2)}:1 (${m.fg} on ${m.bg})`);
       expect(low).toEqual([]);
-      // Words stay at full opacity; only bars and marks fade to 0.6.
       const opacities = await page.evaluate(() => ({
         fade: getComputedStyle(document.querySelector(".account-fade") as Element).opacity,
         mark: getComputedStyle(document.querySelector(".account-hero-mark") as Element).opacity,
