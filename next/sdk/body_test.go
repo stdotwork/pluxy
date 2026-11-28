@@ -10,8 +10,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// A BodyWriter sends each write as a body piece, holding back a UTF-8 character a write cuts in
-// two until the next write, so no piece carries half a character.
 func TestBodyWriterKeepsCharactersWhole(t *testing.T) {
 	var buf bytes.Buffer
 	s := &Stream{w: &buf}
@@ -25,7 +23,7 @@ func TestBodyWriterKeepsCharactersWhole(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := bw.Write([]byte("\xe2\x82")); err != nil { // the start of "€", never finished
+	if _, err := bw.Write([]byte("\xe2\x82")); err != nil {
 		t.Fatal(err)
 	}
 	if err := bw.Close(); err != nil {
@@ -49,7 +47,6 @@ func TestBodyWriterKeepsCharactersWhole(t *testing.T) {
 		}
 		got.WriteString(piece)
 	}
-	// The unfinished character at the end arrives as U+FFFD, as the protocol says.
 	rest, ok := strings.CutPrefix(got.String(), text)
 	if !ok || rest == "" || strings.Trim(rest, "\uFFFD") != "" {
 		t.Fatalf("body = %q, want %q and U+FFFD", got.String(), text)

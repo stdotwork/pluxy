@@ -40,7 +40,6 @@ func TestRedactorEventOutputMedia(t *testing.T) {
 		t.Errorf("redacting mutated caller's OutputMedia")
 	}
 
-	// Known kind values are not replaced.
 	known := r.Event(llm.Event{
 		Type:  llm.EventMedia,
 		Media: &llm.OutputMedia{Kind: llm.MediaImage, MediaType: "image/png", Data: "AAAA"},

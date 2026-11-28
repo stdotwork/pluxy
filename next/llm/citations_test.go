@@ -94,22 +94,20 @@ func TestValidCitationURL(t *testing.T) {
 }
 
 func TestUTF8ByteAndRuneOffsets(t *testing.T) {
-	// "café 東京 🚀!"
-	// c(1) a(1) f(1) é(2) ' '(1) 東(3) 京(3) ' '(1) 🚀(4) !(1) = 18 bytes, 10 runes
 	s := "café 東京 🚀!"
 	pairs := []struct {
 		byteOff int
 		runeOff int
 	}{
 		{0, 0},
-		{3, 3},   // start of 'é'
-		{5, 4},   // space after 'é'
-		{6, 5},   // start of '東'
-		{9, 6},   // start of '京'
-		{12, 7},  // space after '京'
-		{13, 8},  // start of '🚀'
-		{17, 9},  // '!'
-		{18, 10}, // end
+		{3, 3},
+		{5, 4},
+		{6, 5},
+		{9, 6},
+		{12, 7},
+		{13, 8},
+		{17, 9},
+		{18, 10},
 	}
 	for _, p := range pairs {
 		gotR, ok := llm.UTF8ByteToRuneOffset(s, p.byteOff)
@@ -121,7 +119,6 @@ func TestUTF8ByteAndRuneOffsets(t *testing.T) {
 			t.Errorf("RuneToUTF8ByteOffset(%d) = (%d, %v), want (%d, true)", p.runeOff, gotB, ok, p.byteOff)
 		}
 	}
-	// Mid-rune byte offsets and out-of-range offsets must fail.
 	for _, bad := range []int{-1, 4, 7, 8, 14, 15, 16, 19} {
 		if _, ok := llm.UTF8ByteToRuneOffset(s, bad); ok {
 			t.Errorf("UTF8ByteToRuneOffset(%d) succeeded, want false", bad)
@@ -171,8 +168,6 @@ func TestReplyLossesSparesAClientOfTheUpstreamsFormat(t *testing.T) {
 	}
 }
 
-// A client the upstream's body reaches has every candidate after the first whole, so it loses
-// nothing at one; candidate 0 and what is not a candidate stay reported.
 func TestReplyLossesSparesLaterCandidatesOfAClientTheBodyReaches(t *testing.T) {
 	for path, spared := range map[string]bool{
 		"candidates[1].groundingMetadata":          true,
@@ -210,11 +205,11 @@ func TestBodyReachesClient(t *testing.T) {
 		{llm.FormatOpenAIResponses, true, true, true},
 		{llm.FormatOpenAIResponses, false, true, true},
 		{llm.FormatOpenAIResponses, false, false, true},
-		{llm.FormatOpenAIResponses, true, false, false}, // a stream built from a whole reply
+		{llm.FormatOpenAIResponses, true, false, false},
 		{llm.FormatGeminiGenerate, true, true, true},
 		{llm.FormatGeminiGenerate, true, false, true},
 		{llm.FormatGeminiGenerate, false, false, true},
-		{llm.FormatGeminiGenerate, false, true, false}, // a whole reply built from a stream
+		{llm.FormatGeminiGenerate, false, true, false},
 	} {
 		if got := req(c.format, c.clientStreams).BodyReachesClient(c.format, c.upStreams); got != c.want {
 			t.Errorf("%s, client streams %v, upstream streams %v: %v, want %v", c.format, c.clientStreams, c.upStreams, got, c.want)

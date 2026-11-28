@@ -14,8 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// serveFakeCitedReply is an extension at the current protocol minor whose every generate call
-// answers with one cited message, the citation's URL a bad one when badURL is set.
 func serveFakeCitedReply(badURL bool) {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
@@ -68,8 +66,6 @@ func serveFakeCitedReply(badURL bool) {
 	}
 }
 
-// recordT is a testing.TB that records what a check reports, so a test can ask whether the check
-// reported it.
 type recordT struct {
 	testing.TB
 	errs []string
@@ -83,8 +79,6 @@ func (r *recordT) Fatalf(format string, args ...any) {
 	r.TB.FailNow()
 }
 
-// The kit's collect checks the citations of every reply it reads, so an extension that sends one
-// the protocol does not allow fails the kit, and one that sends a good one does not.
 func TestCollectChecksReplyCitations(t *testing.T) {
 	for _, tc := range []struct {
 		mode    string

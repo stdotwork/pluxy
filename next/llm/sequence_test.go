@@ -20,7 +20,7 @@ func TestSequence(t *testing.T) {
 	cases := []struct {
 		name    string
 		events  []Event
-		wantErr string // substring of the error on the last event; empty means all accepted
+		wantErr string
 	}{
 		{"text reply", []Event{start, msg(0), text(0), text(0), end(0), finish}, ""},
 		{"interleaved tool calls", []Event{start, tool(0), tool(1), args(1), args(0), end(0), end(1), finish}, ""},

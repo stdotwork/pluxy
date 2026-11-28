@@ -15,8 +15,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// referenceWrite is the frame WriteFrame wrote before large call frames took their own path: v
-// through the encoder, with no HTML escaping.
 func referenceWrite(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(make([]byte, 4))
@@ -34,7 +32,6 @@ func referenceWrite(v any) ([]byte, error) {
 	return b, nil
 }
 
-// referenceRead is ReadFrame as it was before large call frames took their own path.
 func referenceRead(r io.Reader, v any) error {
 	var head [4]byte
 	if _, err := io.ReadFull(r, head[:]); err != nil {
@@ -68,8 +65,6 @@ func padded(before, after string) string {
 	return before + `"pad":"` + strings.Repeat("x", spliceMin) + `"` + after
 }
 
-// bodies are native bodies of at least spliceMin bytes: valid ones in every form the encoder
-// compacts, and invalid ones it refuses.
 func frameBodies() map[string]string {
 	pretty := func(s string) string {
 		var b bytes.Buffer
@@ -141,8 +136,6 @@ func TestCallFrameWriteSameAsEncoder(t *testing.T) {
 		check(name+"/format holds the mark", sameMark)
 		check(name+"/no native", noNative)
 	}
-	// Random bodies: values with whitespace between tokens, strings from awkward text, and edits
-	// that mostly make them invalid.
 	rng := rand.New(rand.NewSource(2))
 	for i := 0; i < randomBodies; i++ {
 		var b strings.Builder
@@ -161,7 +154,6 @@ func TestCallFrameWriteSameAsEncoder(t *testing.T) {
 	t.Logf("%d frames", cases)
 }
 
-// randomBodies is how many random bodies TestCallFrameWriteSameAsEncoder writes.
 const randomBodies = 2000
 
 func randomSpace(rng *rand.Rand, b *strings.Builder) {
@@ -206,7 +198,6 @@ func randomValue(rng *rand.Rand, b *strings.Builder, depth int) {
 	}
 }
 
-// sameRead decodes frame with ReadFrame and with the reference and reports a difference.
 func sameRead(frame []byte) string {
 	var got, want Call
 	gotErr := ReadFrame(bytes.NewReader(frame), &got)
@@ -234,7 +225,6 @@ func TestCallFrameReadSameAsUnmarshal(t *testing.T) {
 	nat := `{"format":"anthropic.messages","body":` + body + `,"headers":{"a":"b"}}`
 	seeds := []string{
 		req(nat),
-		// Keys reordered, repeated, in other case, spelled with escapes, and unknown ones.
 		`{"request":{"native":{"headers":{"a":"b"},"body":` + body + `,"format":"f"},"model":"m"},` + call + `}`,
 		`{"request":{"model":"a","native":{"body":1,"format":"f"}},` + call + `,"request":{"model":"b","native":{"body":` + body + `}}}`,
 		`{"request":{"native":{"body":` + body + `,"body":2}},` + call + `}`,
@@ -244,7 +234,6 @@ func TestCallFrameReadSameAsUnmarshal(t *testing.T) {
 		`{` + call + `,"request":{"native":null,"pad":"` + strings.Repeat("p", spliceMin) + `"}}`,
 		`{` + call + `,"request":"` + strings.Repeat("p", spliceMin) + `"}`,
 		`{` + call + `,"request":{"stream":"yes","native":{"body":` + body + `}},"account":7}`,
-		// A repeated list key, with different elements, past 4 KB of padding in another field.
 		`{` + call + `,"request":{"model":"m","pad":"` + strings.Repeat("p", 4<<10) + `","items":[{"role":"user"}],"items":[{"type":"message"}]}}`,
 		` ` + req(nat) + "\n",
 		`[` + req(nat) + `]`,
@@ -256,16 +245,16 @@ func TestCallFrameReadSameAsUnmarshal(t *testing.T) {
 	for _, s := range seeds {
 		frame := frameOf(s)
 		for cut := 0; cut <= len(frame); cut += 1 + rng.Intn(len(frame)/20+1) {
-			if d := sameRead(frame[:cut]); d != "" { // a frame cut short
+			if d := sameRead(frame[:cut]); d != "" {
 				t.Errorf("cut at %d of %.120q: %s", cut, s, d)
 			}
 			cases++
 		}
-		for i := 0; i < 300; i++ { // a few edits of the text, under a header that fits
+		for i := 0; i < 300; i++ {
 			b := []byte(s)
 			for n := 1 + rng.Intn(3); n > 0 && len(b) > 0; n-- {
 				at := rng.Intn(len(b))
-				if i%2 == 0 { // near the start and end, where the call's own fields are
+				if i%2 == 0 {
 					at = rng.Intn(min(len(b), 200)) + (len(b)-min(len(b), 200))*rng.Intn(2)
 				}
 				switch rng.Intn(3) {
@@ -292,8 +281,6 @@ func TestCallFrameReadSameAsUnmarshal(t *testing.T) {
 	t.Logf("%d frames", cases)
 }
 
-// TestLargeCallFrameTakesFastPaths fails if writeSplicedCall or ReadFrame stops taking its fast
-// path for a plain large call, which would still give the right bytes but at a higher cost.
 func TestLargeCallFrameTakesFastPaths(t *testing.T) {
 	call := benchCall(100 << 10)
 	var spliced bytes.Buffer
@@ -353,7 +340,6 @@ func BenchmarkReadCallFrame(b *testing.B) {
 	}
 }
 
-// benchCall is a native-only generate call carrying a client body of about size bytes.
 func benchCall(size int) Call {
 	var b strings.Builder
 	b.WriteString(`{"model":"claude-x","max_tokens":4096,"stream":true,"messages":[`)

@@ -31,7 +31,6 @@ func TestCandidateEventValidationAndSequence(t *testing.T) {
 		}
 	}
 
-	// JSON round-trip preserves CandidateCount and CandidateEvent; empty lists parse to nil.
 	req := Request{
 		Model:   "m",
 		Options: Options{CandidateCount: 3},
@@ -51,7 +50,6 @@ func TestCandidateEventValidationAndSequence(t *testing.T) {
 		t.Errorf("empty lists did not parse to nil: stop=%v tools=%v", gotReq.Options.Stop, gotReq.Tools)
 	}
 
-	// Invalid candidate events must be rejected.
 	invalid := []struct {
 		name string
 		c    *CandidateEvent

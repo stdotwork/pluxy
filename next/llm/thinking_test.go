@@ -2,9 +2,6 @@ package llm
 
 import "testing"
 
-// Suffixes are read as today's core reads them (core/internal/thinking/suffix.go): the text in
-// the last brackets at the end of the name, levels and none/auto in any case, -1 as auto, and
-// whole numbers of 0 or more as budgets. Anything else is part of the model's name.
 func TestSplitThinkingSuffix(t *testing.T) {
 	for _, c := range []struct{ in, model, suffix string }{
 		{"gpt-5(high)", "gpt-5", "high"},

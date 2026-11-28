@@ -14,7 +14,6 @@ import (
 	"time"
 )
 
-// post builds a POST with a body, as a token request is.
 func post(t *testing.T, url string) *http.Request {
 	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, strings.NewReader("grant_type=refresh_token"))
@@ -25,8 +24,6 @@ func post(t *testing.T, url string) *http.Request {
 	return req
 }
 
-// trackedDo sends req through client with TrackSend and returns the error and whether the
-// request counted as sent.
 func trackedDo(t *testing.T, client *http.Client, req *http.Request) (error, bool) {
 	t.Helper()
 	tracked, sent := TrackSend(req)
@@ -58,7 +55,6 @@ func TestTrackSendNotSent(t *testing.T) {
 			t.Error("the request reached a server whose certificate the client does not trust")
 		}))
 		defer srv.Close()
-		// A plain client does not trust the test certificate.
 		err, sent := trackedDo(t, &http.Client{Timeout: 10 * time.Second}, post(t, srv.URL+"/token"))
 		if err == nil {
 			t.Fatal("an untrusted certificate was accepted")
@@ -211,11 +207,6 @@ func TestTrackSendContext(t *testing.T) {
 	}
 }
 
-// A server may close a kept-alive connection while it is idle. A request the client writes to it
-// before it sees the close fails after it was written, so it counts as sent, though the server
-// never read it. A tracked request through Upstream goes out on a new connection instead: a
-// server that still listens answers it, and one that is gone refuses the connection, which counts
-// as not sent.
 func TestTrackSendStaleConnection(t *testing.T) {
 	for _, h2 := range []bool{false, true} {
 		name := "HTTP/1.1"
@@ -223,7 +214,6 @@ func TestTrackSendStaleConnection(t *testing.T) {
 			name = "HTTP/2"
 		}
 		t.Run(name, func(t *testing.T) {
-			// The control: the client does keep the connection and writes the next request to it.
 			t.Run("an untracked request is written to the closed connection", func(t *testing.T) {
 				srv, client, stale := staleSetup(t, h2)
 				stale(srv.CloseClientConnections)
@@ -261,10 +251,6 @@ func TestTrackSendStaleConnection(t *testing.T) {
 	}
 }
 
-// staleSetup starts a server, a client wrapped in Upstream, and sends one untracked request, which
-// leaves an idle kept-alive connection in the client's pool. stale(close) makes that connection
-// stale: close is the server closing it, and the client sees the close only once it writes to the
-// connection again, so its next request on it is written to a connection the server has closed.
 func staleSetup(t *testing.T, h2 bool) (*httptest.Server, *http.Client, func(close func())) {
 	t.Helper()
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -290,7 +276,6 @@ func staleSetup(t *testing.T, h2 bool) (*httptest.Server, *http.Client, func(clo
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Reading the body to its end returns the connection to the pool before Read reports the end.
 	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	if h2 != (resp.ProtoMajor == 2) {
@@ -304,8 +289,6 @@ func staleSetup(t *testing.T, h2 bool) (*httptest.Server, *http.Client, func(clo
 	}
 }
 
-// staleDialer dials connections that can be made stale: once held, a connection's reads, among
-// them its read of the server's close, wait until the client writes to it again.
 type staleDialer struct {
 	mu    sync.Mutex
 	conns []*staleConn
@@ -323,7 +306,6 @@ func (d *staleDialer) dial(ctx context.Context, network, addr string) (net.Conn,
 	return s, nil
 }
 
-// hold holds every connection dialed so far and returns how many there are.
 func (d *staleDialer) hold() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -333,7 +315,6 @@ func (d *staleDialer) hold() int {
 	return len(d.conns)
 }
 
-// release lets every held read finish.
 func (d *staleDialer) release() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -346,7 +327,7 @@ type staleConn struct {
 	net.Conn
 	held  atomic.Bool
 	once  sync.Once
-	wrote chan struct{} // closed at the first write after the connection was held
+	wrote chan struct{}
 }
 
 // Read returns what it read only after the next write once the connection is held: over TLS the

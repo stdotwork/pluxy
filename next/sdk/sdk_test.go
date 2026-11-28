@@ -18,12 +18,9 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// TestShutdownClosesEveryConnection closes stdin while connections are open in states that do
-// not end by themselves, and checks Serve still returns.
 func TestShutdownClosesEveryConnection(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		// open opens a connection to the extension and leaves it in the state under test.
 		open func(t *testing.T, socket string) net.Conn
 	}{
 		{"awaiting its first frame", func(t *testing.T, socket string) net.Conn {
@@ -35,7 +32,6 @@ func TestShutdownClosesEveryConnection(t *testing.T) {
 			if err := protocol.WriteFrame(conn, call); err != nil {
 				t.Fatal(err)
 			}
-			// Core reads nothing, so the handler's writes fill the socket and block.
 			return conn
 		}},
 	} {
@@ -51,7 +47,7 @@ func TestShutdownClosesEveryConnection(t *testing.T) {
 				}
 				chunk := strings.Repeat("x", 64<<10)
 				for n := 0; ; n++ {
-					if n == 64 { // 4 MiB is far beyond any socket buffer, so the writes are not blocking
+					if n == 64 {
 						close(wroteAll)
 					}
 					if err := out.Text(i, chunk); err != nil {
@@ -69,7 +65,7 @@ func TestShutdownClosesEveryConnection(t *testing.T) {
 				case <-time.After(500 * time.Millisecond):
 				}
 			} else {
-				time.Sleep(100 * time.Millisecond) // let Serve accept the connection
+				time.Sleep(100 * time.Millisecond)
 			}
 			stdin.Close()
 			select {
@@ -84,8 +80,6 @@ func TestShutdownClosesEveryConnection(t *testing.T) {
 	}
 }
 
-// startServe runs serve on a fresh socket and waits for its handshake. Closing the returned
-// writer closes serve's stdin; done receives serve's result.
 func startServe(t *testing.T, ext Extension) (socket string, stdin io.WriteCloser, done <-chan error) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "pluxy-sdk-") // short: unix socket paths are limited
@@ -130,9 +124,6 @@ func (s testSession) Turn(ctx context.Context, call Call, out *Stream) error {
 func (testSession) Interrupt(json.RawMessage) {}
 func (testSession) Close()                    {}
 
-// An extension with a session handler describes itself with protocol minor version 1 and the
-// session operation. A turn the handler leaves unfinished, or that panics, ends with an error
-// event, and the session takes the next turn.
 func TestSessionTurns(t *testing.T) {
 	n := 0
 	ext := Extension{ID: "test/sdk", Version: "0.0.0",
@@ -213,8 +204,6 @@ func (s blockingSession) Turn(ctx context.Context, _ Call, out *Stream) error {
 func (blockingSession) Interrupt(json.RawMessage) { select {} }
 func (blockingSession) Close()                    {}
 
-// Core closing a session's connection cancels what the extension is doing for it: an opening
-// that has not finished, and a running turn while an interrupt callback blocks.
 func TestSessionNoticesCoreGoing(t *testing.T) {
 	openEnded := make(chan struct{})
 	turnEnded := make(chan struct{})
@@ -273,8 +262,6 @@ func TestSessionNoticesCoreGoing(t *testing.T) {
 	wait(turnEnded, "the turn")
 }
 
-// An extension with a CountTokens handler lists count_tokens in describe and answers count calls
-// with it; one without answers them unsupported.
 func TestCountTokens(t *testing.T) {
 	count := func(_ context.Context, call Call, out *Stream) error {
 		if err := out.Start(llm.ResponseInfo{Model: call.Request.Model, Format: llm.FormatAnthropicMessages}); err != nil {
@@ -332,9 +319,6 @@ func TestCountTokens(t *testing.T) {
 	}
 }
 
-// An extension with an Endpoint handler lists endpoint in describe and answers endpoint calls
-// with it: StartBody names the content type and Body sends each piece as a JSON string. One
-// without answers them unsupported.
 func TestEndpoint(t *testing.T) {
 	serve := func(_ context.Context, call Call, out *Stream) error {
 		if err := out.StartBody(call.Request.Native.Format, "application/json"); err != nil {
@@ -396,8 +380,6 @@ func TestEndpoint(t *testing.T) {
 	}
 }
 
-// TestModels covers the models operation: describe lists it, a call returns the handler's list
-// with the account it was given, a nil list is an empty one, and a panic is an internal error.
 func TestModels(t *testing.T) {
 	ext := Extension{ID: "test/models", Version: "0.0.0", Generate: func(context.Context, Call, *Stream) error { return nil },
 		Models: func(_ context.Context, call ModelsCall) (*protocol.ModelList, error) {
@@ -449,9 +431,6 @@ func TestModels(t *testing.T) {
 	}
 }
 
-// TestCheck covers the check operation: describe lists it only with a handler, a call returns the
-// handler's result, an error is sent as it is, a nil result is an empty one, and a panic is an
-// internal error.
 func TestCheck(t *testing.T) {
 	gen := func(context.Context, Call, *Stream) error { return nil }
 	ext := Extension{ID: "test/check", Version: "0.0.0", Generate: gen,

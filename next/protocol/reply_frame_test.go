@@ -16,8 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// replyBodies are reply frame bodies: the shapes a streamed reply has, and the ones another
-// release, a bug or a hostile extension could send. The same bodies seed the edits below.
 func replyBodies() []string {
 	return []string{
 		`{"type":"text.delta","index":0,"delta":"hi"}`,
@@ -40,8 +38,6 @@ func replyBodies() []string {
 	}
 }
 
-// sameFrameRead reads frame with a FrameReader on the reader made by mk and with the reference
-// ReadFrame, into a Reply that holds the same earlier value, and reports a difference.
 func sameFrameRead(frame []byte, mk func(io.Reader) io.Reader, prior Reply) string {
 	got, want := prior, prior
 	gotErr := NewFrameReader(mk(bytes.NewReader(frame))).Read(&got)
@@ -72,9 +68,6 @@ var readerKinds = map[string]func(io.Reader) io.Reader{
 	"dataerr": iotest.DataErrReader,
 }
 
-// TestReplyFrameReadSameAsUnmarshal reads every reply body above, each cut short at many places,
-// and thousands of random edits of them, with a FrameReader on four kinds of reader, and checks
-// the value and the error are those of the reference (encoding/json after two reads).
 func TestReplyFrameReadSameAsUnmarshal(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
 	junk := []byte("\"{}[],:\\ 0n\xff\x00ueEtT-.")
@@ -115,7 +108,7 @@ func TestReplyFrameReadSameAsUnmarshal(t *testing.T) {
 					e = append(e[:at], append([]byte{junk[rng.Intn(len(junk))]}, e[at:]...)...)
 				case 2:
 					e[at] = junk[rng.Intn(len(junk))]
-				default: // another case for a letter, as a key spelled in another case
+				default:
 					if c := e[at]; c >= 'a' && c <= 'z' {
 						e[at] = c - 32
 					}
@@ -132,7 +125,6 @@ func TestReplyFrameReadSameAsUnmarshal(t *testing.T) {
 			check("edit", frame)
 		}
 	}
-	// A header that says more than MaxFrame, and one that says more than follows.
 	check("too big", binary.BigEndian.AppendUint32(nil, MaxFrame+1))
 	check("short", append(binary.BigEndian.AppendUint32(nil, 100), `{"type":"a"}`...))
 	if fast == 0 {
@@ -141,8 +133,6 @@ func TestReplyFrameReadSameAsUnmarshal(t *testing.T) {
 	t.Logf("%d reads compared (%d bodies decoded by the fast decoder)", cases, fast)
 }
 
-// TestFrameReaderReadsFramesInOrder reads many frames, big ones among them, through every kind of
-// reader and checks each equals what encoding/json reads.
 func TestFrameReaderReadsFramesInOrder(t *testing.T) {
 	var vs []any
 	for i := 0; i < 50; i++ {
@@ -179,7 +169,6 @@ func TestFrameReaderReadsFramesInOrder(t *testing.T) {
 		if err := fr.Read(new(Reply)); err != io.EOF {
 			t.Fatalf("%s: after the last frame: %v, want io.EOF", kind, err)
 		}
-		// Nothing handed on may share the reader's buffer: the values read earlier still hold.
 		for i, v := range vs {
 			b, _ := referenceWrite(v)
 			var want Reply
@@ -191,8 +180,6 @@ func TestFrameReaderReadsFramesInOrder(t *testing.T) {
 	}
 }
 
-// TestFrameReaderHandsOnNoBuffer overwrites the reader's buffer after each read and checks the
-// reply read keeps its value, for the fast decoder and for the fallback.
 func TestFrameReaderHandsOnNoBuffer(t *testing.T) {
 	for _, s := range []string{
 		`{"type":"text.delta","index":1,"delta":"abc","raw":{"k":"vvvv"}}`,
@@ -217,7 +204,6 @@ func TestFrameReaderHandsOnNoBuffer(t *testing.T) {
 	}
 }
 
-// A reader that fails after some bytes, as a connection past its deadline does.
 type failAfter struct {
 	data []byte
 	err  error
@@ -244,7 +230,6 @@ func TestFrameReaderKeepsReadErrors(t *testing.T) {
 	}
 }
 
-// TestFrameReaderReadsOnePerFrame fails when a frame that arrived whole costs more than one read.
 func TestFrameReaderReadsOnePerFrame(t *testing.T) {
 	var data []byte
 	for i := 0; i < 20; i++ {
@@ -293,9 +278,6 @@ func BenchmarkReadReplyFrame(b *testing.B) {
 	})
 }
 
-// A frame too big for the kept buffer that fails to arrive in full, as when the connection ends or
-// passes its deadline, leaves no big buffer behind: an ended call holds no more than the reader's
-// own.
 func TestFrameReaderDropsBigBufferOfFailedFrame(t *testing.T) {
 	boom := errors.New("boom")
 	head := binary.BigEndian.AppendUint32(nil, 64<<20)
@@ -313,8 +295,6 @@ func TestFrameReaderDropsBigBufferOfFailedFrame(t *testing.T) {
 	}
 }
 
-// TestFrameReaderUsesReplyDecoder fails when Read stops decoding a Reply with decodeReply: the
-// frame below then goes through encoding/json, which takes many more allocations.
 func TestFrameReaderUsesReplyDecoder(t *testing.T) {
 	body := []byte(`{"type":"text.delta","index":0,"delta":"hello there","raw":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello there"}}}`)
 	data := headed(body)
@@ -331,7 +311,6 @@ func TestFrameReaderUsesReplyDecoder(t *testing.T) {
 		var r Reply
 		_ = json.Unmarshal(body, &r)
 	})
-	// Measured: 4 allocations with decodeReply, 11 through encoding/json.
 	if got > 6 || got >= slow {
 		t.Fatalf("a reply frame took %v allocations to read, want at most 6 and fewer than encoding/json's %v", got, slow)
 	}

@@ -1,6 +1,3 @@
-// Command quiet is a provider extension for the conformance kit's own test of its alive check.
-// It streams GET <settings.url> through sdk.Upstream and passes on each "data: " line as text,
-// and nothing for any other line.
 package main
 
 import (

@@ -30,7 +30,6 @@ type Source struct {
 // Citations is a list of web citations whose empty JSON array parses to nil.
 type Citations []Citation
 
-// UnmarshalJSON decodes Citations and normalizes an empty JSON array to nil.
 func (c *Citations) UnmarshalJSON(data []byte) error {
 	var list []Citation
 	if err := json.Unmarshal(data, &list); err != nil {
@@ -47,7 +46,6 @@ func (c *Citations) UnmarshalJSON(data []byte) error {
 // Sources is a list of web search sources whose empty JSON array parses to nil.
 type Sources []Source
 
-// UnmarshalJSON decodes Sources and normalizes an empty JSON array to nil.
 func (s *Sources) UnmarshalJSON(data []byte) error {
 	var list []Source
 	if err := json.Unmarshal(data, &list); err != nil {
@@ -62,8 +60,6 @@ func (s *Sources) UnmarshalJSON(data []byte) error {
 }
 
 // ValidCitationURL reports whether raw is an absolute http or https URL with a non-empty host.
-// Non-http schemes (javascript:, data:, file:, ftp:) and relative paths are rejected so clients
-// never receive unsafe links.
 func ValidCitationURL(raw string) bool {
 	if raw == "" || strings.TrimSpace(raw) != raw {
 		return false
@@ -114,21 +110,17 @@ func RuneToUTF8ByteOffset(s string, runeOff int) (int, bool) {
 }
 
 // MaxCitationBytes bounds what one reply's citations hold, and, separately, what its sources hold.
-// Citations ride on their message item's end and sources on the finish event, so without a limit a
-// reply whose blocks each fit a protocol frame could still fail on the last one. What does not fit
-// is left out and reported as a loss. They have a limit each so that sources a client never sees
-// (a Chat client has no place for them) do not use up the room of the citations it does.
+// What does not fit is left out and reported as a loss.
 const MaxCitationBytes = 4 << 20
 
-// citationOverhead is about the JSON one citation or source adds around its URL and title.
 const citationOverhead = 64
 
 // CiteBudget counts the citations and the sources one reply has kept, each against
 // MaxCitationBytes. Use one per reply; the zero value is ready.
 type CiteBudget struct {
 	cites, sources     int
-	citesFull, srcFull bool // one did not fit
-	cut                bool // one was left out, whatever the reason
+	citesFull, srcFull bool
+	cut                bool
 }
 
 func (b *CiteBudget) take(used *int, full *bool, n int) bool {
@@ -150,7 +142,6 @@ func (b *CiteBudget) AddSource(s Source) bool {
 	return b.take(&b.sources, &b.srcFull, len(s.URL)+len(s.Title)+citationOverhead)
 }
 
-// KeepCitations returns the leading citations of cs that fit.
 func (b *CiteBudget) KeepCitations(cs []Citation) []Citation {
 	for i, c := range cs {
 		if !b.AddCitation(c) {
@@ -163,7 +154,6 @@ func (b *CiteBudget) KeepCitations(cs []Citation) []Citation {
 // LeftOut records that a citation or source was left out for a reason of the caller's.
 func (b *CiteBudget) LeftOut() { b.cut = true }
 
-// Cut reports whether any citation or source was left out.
 func (b *CiteBudget) Cut() bool { return b.cut }
 
 // LossPathCitations and LossPathFinish are the paths of the losses for what a reply's size limits
@@ -174,7 +164,6 @@ const (
 	LossPathFinish    = "finish"
 )
 
-// WithLoss adds the loss for citations and sources left out, if there were any, to losses.
 func (b *CiteBudget) WithLoss(losses []Loss) []Loss {
 	if !b.cut {
 		return losses
@@ -196,8 +185,6 @@ func ReplyLosses(losses []Loss, bodyReaches bool) []Loss {
 	})
 }
 
-// laterCandidatePath reports whether path is in a candidate after the first: candidates[N] or
-// choices[N] with N at least 1.
 func laterCandidatePath(path string) bool {
 	for _, p := range []string{"candidates[", "choices["} {
 		rest, ok := strings.CutPrefix(path, p)

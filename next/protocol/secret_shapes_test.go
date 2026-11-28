@@ -9,8 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/secretshapes"
 )
 
-// shapeFields are the fields of an account and a login, each with its kind and how a value gets
-// there.
 func shapeFields() []struct {
 	name, kind string
 	secrets    func(v string) []string
@@ -24,7 +22,6 @@ func shapeFields() []struct {
 		{"api_key", secretshapes.InCredential, func(v string) []string { return cred(Credential{APIKey: v}) }},
 		{"access_token", secretshapes.InCredential, func(v string) []string { return cred(Credential{AccessToken: v}) }},
 		{"refresh_token", secretshapes.InCredential, func(v string) []string { return cred(Credential{RefreshToken: v}) }},
-		// internal/host/credentials.go passes a login's secret input that is no JSON object so.
 		{"login secret input", secretshapes.InCredential, func(v string) []string { return cred(Credential{APIKey: v}) }},
 		{"secret header", secretshapes.InHeader, func(v string) []string {
 			return AccountSecrets(Account{Headers: map[string]string{"X-Api-Key": v}})
@@ -67,7 +64,6 @@ func shapeFields() []struct {
 			b, _ := json.Marshal(map[string]string{"base_url": "https://gw.example/v1?model=m;token=" + url.QueryEscape(v)})
 			return AccountSecrets(Account{Settings: b})
 		}},
-		// internal/host/credentials.go passes a login's input that is a URL so.
 		{"login URL password", secretshapes.InUserinfo, func(v string) []string {
 			u := url.URL{Scheme: "https", User: url.UserPassword("x", v), Host: "gw.example", Path: "/cb"}
 			return AccountSecretsWith(Account{}, []string{u.String()})
@@ -81,9 +77,6 @@ func shapeFields() []struct {
 	}
 }
 
-// Every shape against every kind of secret field: what is real secret leaves an error from the cut
-// length that applies, a cut just below it stays, and so do the public words. The expected values
-// are written by hand in secretshapes.Rows.
 func TestSecretShapes(t *testing.T) {
 	removed := func(text string, secrets []string) bool {
 		return RemovePieces("upstream said "+text+" here", secrets...) == "upstream said "+Redacted+" here"
@@ -133,8 +126,6 @@ func TestSecretShapes(t *testing.T) {
 	}
 }
 
-// The Redactor removes a credential's whole value and each part an upstream may echo alone, in
-// every credential field, and keeps the public words.
 func TestSecretShapesRedactor(t *testing.T) {
 	for _, row := range secretshapes.Rows() {
 		want, ok := row.Want[secretshapes.InCredential]
@@ -167,9 +158,6 @@ func TestSecretShapesRedactor(t *testing.T) {
 	}
 }
 
-// Which words of a URL count: its user name, password and the values of its parameters named like
-// a secret, in the query or the fragment an OAuth redirect carries, split on "&" or ";". The host,
-// the scheme and other parameters stay.
 func TestSecretShapesURLParts(t *testing.T) {
 	for _, c := range secretshapes.URLRows() {
 		for name, secrets := range map[string][]string{
@@ -194,8 +182,6 @@ func TestSecretShapesURLParts(t *testing.T) {
 	}
 }
 
-// A number below a secret settings key counts with its exact digits, from 8 bytes, as core's rules
-// for settings have it.
 func TestSecretShapesNumbers(t *testing.T) {
 	for _, c := range secretshapes.NumberRows() {
 		t.Run(c.Name, func(t *testing.T) {
@@ -216,7 +202,6 @@ func TestSecretShapesNumbers(t *testing.T) {
 	}
 }
 
-// Settings that are not one JSON value hold no secret AccountSecrets can read.
 func TestAccountSecretsSettingsNotJSON(t *testing.T) {
 	for _, settings := range []string{`{"api_key":"Qx7Rv2Lm9Tz4"} trailing`, `{"api_key":`} {
 		if got := AccountSecrets(Account{Settings: []byte(settings)}); len(got) != 0 {
@@ -234,21 +219,15 @@ func mustJSON(t *testing.T, v any) []byte {
 	return b
 }
 
-// A run with characters outside the token characters is read whole only for a secret that holds
-// such characters: for any other, the error's punctuation still ends a run.
 func TestRemovePiecesPunctuationOnlyForSecretsWithIt(t *testing.T) {
 	in := "bad key (" + secretshapes.Token[:4] + ") and more!"
 	if got, want := RemovePieces(in, secretshapes.Token), "bad key ([redacted]) and more!"; got != want {
 		t.Errorf("RemovePieces = %q, want %q", got, want)
 	}
-	// Quotes and commas end a run even for a secret that holds them, so a JSON error keeps its
-	// structure and loses only the word that shares a piece.
 	const body = `{"error":"bad","user":"bob"}`
 	if got, want := RemovePieces(body, `{"api_key":"Ab3Cd5Ef","user":"svc"}`), `{"error":"bad","[redacted]":"bob"}`; got != want {
 		t.Errorf("RemovePieces(%q) = %q, want %q", body, got, want)
 	}
-	// A secret that holds ":" joins a URL's parts into one run. The whole URL goes only when that
-	// run holds a piece of a secret; a URL that holds none stays.
 	const colon = "Fk3Rv2:" + secretshapes.Token
 	for in, want := range map[string]string{
 		"dial https://gw.example:8443/Qx7Rv2 failed": "dial [redacted] failed",

@@ -10,31 +10,20 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/jsonscan"
 )
 
-// This file holds the per-frame work of reading a streamed reply, which runs once for every chunk
-// the reply carries: a reader that takes one read from the socket for each frame, and a decoder
-// for the one shape nearly every reply frame has. Every frame the decoder does not handle goes
-// through encoding/json as before.
-
-// frameBufSize is the size of a FrameReader's buffer: a frame that fits arrives in one read.
 const frameBufSize = 4096
 
 // FrameReader reads frames from a stream. Unlike ReadFrame it reads ahead into a buffer it keeps,
-// so a frame that has arrived whole costs one read, not two. It decodes a frame from that buffer,
 // and no value it fills holds a slice of the buffer. Use one FrameReader for all the frames of a
 // connection, from one goroutine at a time, and read the connection through it only.
 type FrameReader struct {
 	r     io.Reader
-	buf   []byte // buf[start:end] has been read and not yet used
+	buf   []byte
 	start int
 	end   int
 }
 
-// NewFrameReader returns a FrameReader that reads from r.
 func NewFrameReader(r io.Reader) *FrameReader { return &FrameReader{r: r} }
 
-// fill reads until at least n bytes are buffered. A frame the buffer cannot hold is read into a
-// buffer of its own size, which the reader keeps only while that frame is being read: Read drops it
-// once the frame is used, and fill drops it when the read fails.
 func (f *FrameReader) fill(n int) error {
 	if f.end-f.start >= n {
 		return nil
@@ -43,7 +32,6 @@ func (f *FrameReader) fill(n int) error {
 		f.buf = make([]byte, frameBufSize)
 	}
 	if n > len(f.buf) {
-		// Too big for the kept buffer: move what is buffered into one that fits.
 		big := make([]byte, n)
 		f.end = copy(big, f.buf[f.start:f.end])
 		f.start = 0
@@ -60,7 +48,6 @@ func (f *FrameReader) fill(n int) error {
 		}
 		if err != nil {
 			if len(f.buf) > frameBufSize {
-				// A frame of its own size is not kept, whatever became of the frame.
 				f.buf = nil
 				f.start, f.end = 0, 0
 			}
@@ -100,26 +87,20 @@ func (f *FrameReader) Read(v any) error {
 	f.start += total
 	var err error
 	if r, ok := v.(*Reply); ok && r != nil && decodeReply(body, r) {
-		// decoded
 	} else {
 		err = json.Unmarshal(body, v)
 	}
 	if f.start == f.end {
 		f.start, f.end = 0, 0
 		if len(f.buf) > frameBufSize {
-			f.buf = nil // a frame of its own size is not kept
+			f.buf = nil
 		}
 	}
 	return err
 }
 
-// decodeReply decodes the reply frame body into r when body is a JSON object that has only the
-// members type, index, delta and raw, each once and spelled as the encoder writes them, with
-// values encoding/json decodes the same way. It copies what it keeps out of body. It reports
-// false, having changed nothing, for any other frame, which the caller decodes with
-// encoding/json.
 func decodeReply(body []byte, r *Reply) bool {
-	var space [4]jsonscan.Member // an object of up to four members costs no allocation
+	var space [4]jsonscan.Member
 	members, ok := jsonscan.AppendObject(space[:0], body)
 	if !ok || len(members) == 0 || len(members) > 4 {
 		return false
@@ -189,8 +170,6 @@ func decodeReply(body []byte, r *Reply) bool {
 	return true
 }
 
-// plainInt returns the integer a JSON number literal spells when it has no fraction or exponent
-// and fits an int; encoding/json decodes any other number into an int with an error.
 func plainInt(v []byte) (int, bool) {
 	if len(v) == 0 || len(v) > 18 {
 		return 0, false

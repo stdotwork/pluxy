@@ -127,7 +127,6 @@ func TestConformanceModelCapabilities(t *testing.T) {
 		t.Errorf("protocol.Minor = %d, want >= 24", protocol.Minor)
 	}
 
-	// 1. Conformance validation of ModelCapabilities fields.
 	valid := protocol.Model{
 		ID: "good-model",
 		Capabilities: &protocol.ModelCapabilities{
@@ -171,8 +170,6 @@ func TestConformanceModelCapabilities(t *testing.T) {
 		}
 	}
 
-	// 2. Wire round-trip and minor version 24 gating: minor 23 drops extension-sent capabilities,
-	// minor 24 preserves them and passes checkModelCapabilities.
 	for _, tc := range []struct {
 		mode    string
 		wantCap bool

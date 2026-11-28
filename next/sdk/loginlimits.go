@@ -2,18 +2,16 @@ package sdk
 
 import "time"
 
-// Limits on what a provider's login reply can set.
 const (
-	// MaxLoginWait is the longest a device code is believed to live: a day.
+	// MaxLoginWait is the longest a device code is believed to live.
 	MaxLoginWait = 24 * time.Hour
-	// MaxTokenLife is the longest an access token is believed to live: a year.
-	MaxTokenLife = 365 * 24 * time.Hour
-	// MaxPollInterval is the longest wait between polls of a device login.
+	// MaxTokenLife is the longest an access token is believed to live.
+	MaxTokenLife    = 365 * 24 * time.Hour
 	MaxPollInterval = 5 * time.Minute
 )
 
 // BoundSeconds turns a provider's number of seconds into a duration of at most max. Zero or
-// less returns 0, so a caller can fall back to its default; a huge number does not overflow.
+// less returns 0; a huge number does not overflow.
 func BoundSeconds(secs int64, max time.Duration) time.Duration {
 	if secs <= 0 {
 		return 0

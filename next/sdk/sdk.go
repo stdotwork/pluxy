@@ -2,7 +2,7 @@
 // the handshake, framing, cancellation and shutdown. An extension supplies a Generate handler,
 // Login and Refresh handlers if it signs in to accounts, a Session handler if it holds
 // sessions, a Models handler if it lists its accounts' models, a Quota handler if it reads their
-// quota, and calls Serve from main. See docs/extension-tutorial.md.
+// quota, and calls Serve from main.
 package sdk
 
 import (
@@ -24,7 +24,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol/nativeonly"
 )
 
-// Call is one generate call.
 type Call struct {
 	ID      string
 	Account protocol.Account
@@ -36,15 +35,13 @@ type Call struct {
 // ctx is cancelled when core cancels the call.
 type Handler func(ctx context.Context, call Call, out *Stream) error
 
-// LoginCall is one login call: sign in to a new account, or again to an existing one.
 type LoginCall struct {
 	ID string
 	// Account is the account being signed in to: its ID and settings, never a credential.
 	Account protocol.Account
 	// Method is one of Extension.LoginMethods, by its Method.
 	Method string
-	// Input is what the user entered when starting the login.
-	Input map[string]string
+	Input  map[string]string
 }
 
 // LoginHandler signs in to an account and returns its credential. It may prompt the user and
@@ -54,10 +51,8 @@ type LoginCall struct {
 // TrackSend to tell. A 5xx answer, and a request that failed after it was sent, are not.
 type LoginHandler func(ctx context.Context, call LoginCall, s *LoginSession) (*protocol.Grant, error)
 
-// RefreshCall is one refresh call.
 type RefreshCall struct {
-	ID string
-	// Account carries the credential to renew.
+	ID      string
 	Account protocol.Account
 }
 
@@ -69,10 +64,8 @@ type RefreshCall struct {
 // it was sent, are not retryable: the endpoint may have run the request.
 type RefreshHandler func(ctx context.Context, call RefreshCall) (*protocol.Credential, error)
 
-// ModelsCall is one models call.
 type ModelsCall struct {
-	ID string
-	// Account is the account whose models to list, with its credential.
+	ID      string
 	Account protocol.Account
 }
 
@@ -81,10 +74,8 @@ type ModelsCall struct {
 // list for. An *llm.Error is sent as it is, any other error as code internal.
 type ModelsHandler func(ctx context.Context, call ModelsCall) (*protocol.ModelList, error)
 
-// CheckCall is one check call.
 type CheckCall struct {
-	ID string
-	// Account is the account to check, with its credential.
+	ID      string
 	Account protocol.Account
 }
 
@@ -96,10 +87,8 @@ type CheckCall struct {
 // be checked without a generation. Any other error is sent as code internal.
 type CheckHandler func(ctx context.Context, call CheckCall) (*protocol.CheckResult, error)
 
-// QuotaCall is one quota call.
 type QuotaCall struct {
-	ID string
-	// Account is the account whose quota to read, with its credential.
+	ID      string
 	Account protocol.Account
 }
 
@@ -110,7 +99,6 @@ type QuotaCall struct {
 // error as code internal.
 type QuotaHandler func(ctx context.Context, call QuotaCall) (*protocol.Quota, error)
 
-// SessionCall is one session call: open a session of a kind on an account.
 type SessionCall struct {
 	ID      string
 	Account protocol.Account
@@ -139,7 +127,6 @@ type Session interface {
 	Close()
 }
 
-// Extension describes the extension to Serve.
 type Extension struct {
 	ID       string
 	Version  string
@@ -161,18 +148,16 @@ type Extension struct {
 	// 4). Core calls it when it starts, and when a reload or a login adds or changes an account.
 	Check CheckHandler
 	// Quota, when set, reads an account's quota (protocol minor version 5). Login, when set,
-	// should also report each grant's Identity (minor version 5), so core can check a new login
-	// to an existing account.
+	// should also report each grant's Identity (minor version 5).
 	Quota QuotaHandler
 	// Endpoint, when set, serves endpoint calls (protocol minor version 7): client requests to a
 	// provider endpoint beyond generation, named by call.Request.Native.Format (such as
 	// llm.FormatOpenAIResponsesCompact). It answers with out.StartBody, out.Body for each piece
 	// of the reply's body, and out.Finish; an account or endpoint it does not serve returns code
-	// unsupported with scope credential, retryable, so core tries another account.
+	// unsupported with scope credential, retryable.
 	Endpoint Handler
 }
 
-// operations lists the operations ext serves.
 func (ext Extension) operations() []string {
 	ops := []string{protocol.OpGenerate}
 	if ext.Login != nil {
@@ -233,7 +218,6 @@ func serve(ext Extension, stdin io.Reader, stdout io.Writer) error {
 		ln.Close()
 		return err
 	}
-	// Core closes stdin to stop us, and stdin also closes if core dies.
 	go func() {
 		_, _ = io.Copy(io.Discard, stdin)
 		ln.Close()
@@ -258,21 +242,18 @@ func serve(ext Extension, stdin io.Reader, stdout io.Writer) error {
 	return nil
 }
 
-// shutdownGrace is how long a cancelled call has to send its last frame at shutdown before its
-// connection is cut, so a handler blocked writing to core still returns.
 const shutdownGrace = time.Second
 
 type server struct {
 	ext   Extension
 	wg    sync.WaitGroup
 	mu    sync.Mutex
-	conns map[net.Conn]*callState // every open connection; nil until it runs a generate call
+	conns map[net.Conn]*callState
 	done  bool
 }
 
 type callState struct{ cancel context.CancelFunc }
 
-// track records an accepted connection, unless shutdown has begun.
 func (s *server) track(conn net.Conn) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -283,8 +264,6 @@ func (s *server) track(conn net.Conn) bool {
 	return true
 }
 
-// shutdown cancels running calls, gives them shutdownGrace to send their last frame, and closes
-// every other connection at once, including ones still waiting for their first frame.
 func (s *server) shutdown() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -350,8 +329,6 @@ func (s *server) handle(conn net.Conn) {
 	}
 }
 
-// generate answers a generate, count_tokens or endpoint call with handler h; none is the error message
-// when the extension has no handler for it.
 func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none string) {
 	ctx, cancel, ok := s.begin(conn)
 	if !ok {
@@ -360,8 +337,6 @@ func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none str
 	defer cancel()
 	ctx, capture := withUpstreamInfo(ctx, call)
 
-	// Core sends nothing after the call frame; the read ends when core closes the connection,
-	// which is how it cancels.
 	go func() {
 		_, _ = io.Copy(io.Discard, conn)
 		cancel()
@@ -386,9 +361,6 @@ func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none str
 	if h == nil {
 		err = &llm.Error{Code: llm.CodeUnsupported, Message: none, Scope: llm.ScopeRequest}
 	} else if call.NativeOnly {
-		// Core left the request's parsed form out: it is what the native body parses to. A
-		// native-only call without a request has no body to parse, and fails as one that does
-		// not parse.
 		if perr := nativeonly.Parse(&c.Request); perr != nil {
 			err = &llm.Error{Code: llm.CodeInternal, Message: "the request's native body does not parse: " + perr.Error()}
 		} else {
@@ -406,9 +378,6 @@ func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none str
 	_ = out.send(llm.Event{Type: llm.EventError, Error: asError(ctx, err)})
 }
 
-// session holds one session: it answers session.ready, then each turn frame as a generate call
-// on the session, and passes interrupts on while a turn runs. The connection closing ends the
-// session.
 func (s *server) session(conn net.Conn, call protocol.Call) {
 	ctx, cancel, ok := s.begin(conn)
 	if !ok {
@@ -423,10 +392,6 @@ func (s *server) session(conn net.Conn, call protocol.Call) {
 		refuse(&llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeRequest, Message: "this extension holds no sessions"})
 		return
 	}
-	// The reader runs from the start, so core closing the connection cancels the opening too.
-	// It hands turns to the loop below and interrupts to the interrupt loop, so a slow
-	// Interrupt does not stop it from seeing the connection close. Anything else, or the
-	// connection closing, ends the session.
 	turns := make(chan protocol.Call)
 	interrupts := make(chan json.RawMessage, 16)
 	go func() {
@@ -446,7 +411,7 @@ func (s *server) session(conn net.Conn, call protocol.Call) {
 			case protocol.TypeSessionInterrupt:
 				select {
 				case interrupts <- f.Raw:
-				default: // a client sending interrupts faster than they are passed on loses some
+				default:
 				}
 			default:
 				return
@@ -454,8 +419,6 @@ func (s *server) session(conn net.Conn, call protocol.Call) {
 		}
 	}()
 
-	// Upstream bytes of the session's connection reach the running turn's stream, whichever
-	// context the extension made the connection with.
 	sink := &aliveSink{}
 	ctx = withAlive(ctx, sink)
 	sc := SessionCall{ID: call.ID}
@@ -566,7 +529,6 @@ func runTurn(ctx context.Context, sess Session, c Call, out *Stream) (err error)
 	return sess.Turn(ctx, c, out)
 }
 
-// asError turns a handler's error into the error event's payload.
 func asError(ctx context.Context, err error) *llm.Error {
 	var le *llm.Error
 	if errors.As(err, &le) {
@@ -579,8 +541,6 @@ func asError(ctx context.Context, err error) *llm.Error {
 	return &llm.Error{Code: code, Message: err.Error()}
 }
 
-// begin registers a running call so shutdown can cancel it, and returns its context; ok is
-// false when shutdown has begun.
 func (s *server) begin(conn net.Conn) (ctx context.Context, cancel context.CancelFunc, ok bool) {
 	ctx, cancel = context.WithCancel(context.Background())
 	s.mu.Lock()
@@ -601,8 +561,6 @@ func (s *server) login(conn net.Conn, call protocol.Call) {
 	defer cancel()
 	ctx, _ = withUpstreamInfo(ctx, call)
 	sess := &LoginSession{inputs: make(chan map[string]string, 1), w: conn}
-	// After the call frame core sends only login.input frames; the read ends when core closes
-	// the connection, which is how it cancels.
 	go func() {
 		defer cancel()
 		for {
@@ -724,7 +682,6 @@ func (s *server) models(conn net.Conn, call protocol.Call) {
 	_ = protocol.WriteFrame(conn, reply)
 }
 
-// check answers a check call: one check.result or error frame.
 func (s *server) check(conn net.Conn, call protocol.Call) {
 	ctx, cancel, ok := s.begin(conn)
 	if !ok {
@@ -766,7 +723,6 @@ func runCheck(ctx context.Context, h CheckHandler, c CheckCall) (res *protocol.C
 	return h(ctx, c)
 }
 
-// quota answers a quota call: one quota.result or error frame.
 func (s *server) quota(conn net.Conn, call protocol.Call) {
 	ctx, cancel, ok := s.begin(conn)
 	if !ok {
@@ -829,7 +785,6 @@ func runRefresh(ctx context.Context, h RefreshHandler, c RefreshCall) (cred *pro
 	return h(ctx, c)
 }
 
-// LoginSession is a running login's line to the user, through core.
 type LoginSession struct {
 	inputs chan map[string]string
 	mu     sync.Mutex
@@ -879,21 +834,15 @@ func runHandler(ctx context.Context, h Handler, c Call, out *Stream) (err error)
 // the protocol's ordering rules or the connection to core is gone; the handler should then
 // return.
 type Stream struct {
-	// mu orders the handler's events with the alive frames upstream reads send (alive.go).
-	mu     sync.Mutex
-	w      io.Writer
-	seq    llm.Sequence
-	broken bool
-	// alive is set when core takes alive frames on this call; last is when the stream last
-	// wrote a frame, or the call started.
-	alive bool
-	last  time.Time
-	// capture is the call's, sent as a diagnostic frame before the terminal event; nil when core
-	// asked for none.
+	mu      sync.Mutex
+	w       io.Writer
+	seq     llm.Sequence
+	broken  bool
+	alive   bool
+	last    time.Time
 	capture *captureLog
 }
 
-// Send writes one event after checking it against the ordering rules.
 func (s *Stream) Send(ev llm.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -912,8 +861,6 @@ func (s *Stream) send(ev llm.Event) error {
 	return s.write(ev)
 }
 
-// ended reports whether the reply has ended: its terminal event was sent or the connection to
-// core is gone.
 func (s *Stream) ended() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -932,7 +879,6 @@ func (s *Stream) done() bool {
 	return s.seq.Done()
 }
 
-// write writes one event, and before a terminal one the capture's diagnostic frame. s.mu is held.
 func (s *Stream) write(ev llm.Event) error {
 	if s.broken {
 		return errors.New("sdk: connection to core is closed")
@@ -954,12 +900,10 @@ func (s *Stream) write(ev llm.Event) error {
 	return nil
 }
 
-// Start sends response.start.
 func (s *Stream) Start(info llm.ResponseInfo) error {
 	return s.Send(llm.Event{Type: llm.EventResponseStart, Response: &info})
 }
 
-// StartItem opens the next output item and returns its index.
 func (s *Stream) StartItem(item llm.ItemStart) (int, error) {
 	s.mu.Lock()
 	i := s.seq.NextIndex()
@@ -967,22 +911,18 @@ func (s *Stream) StartItem(item llm.ItemStart) (int, error) {
 	return i, s.Send(llm.Event{Type: llm.EventItemStart, Index: i, Item: &item})
 }
 
-// Text sends text for an open message item.
 func (s *Stream) Text(index int, delta string) error {
 	return s.Send(llm.Event{Type: llm.EventTextDelta, Index: index, Delta: delta})
 }
 
-// Reasoning sends reasoning text for an open reasoning item.
 func (s *Stream) Reasoning(index int, delta string) error {
 	return s.Send(llm.Event{Type: llm.EventReasoningDelta, Index: index, Delta: delta})
 }
 
-// ToolInput sends a fragment of a tool call's arguments.
 func (s *Stream) ToolInput(index int, delta string) error {
 	return s.Send(llm.Event{Type: llm.EventToolInputDelta, Index: index, Delta: delta})
 }
 
-// EndItem closes an output item.
 func (s *Stream) EndItem(index int) error {
 	return s.Send(llm.Event{Type: llm.EventItemEnd, Index: index})
 }
@@ -1012,15 +952,13 @@ func (s *Stream) Body(chunk string) error {
 // Call its Close after the last write, before Finish, to send what it holds.
 func (s *Stream) BodyWriter() *BodyWriter { return &BodyWriter{s: s} }
 
-// BodyWriter sends an endpoint reply's body as it is written (see Stream.BodyWriter).
 type BodyWriter struct {
 	s    *Stream
-	tail []byte // the start of a UTF-8 character the last write cut
+	tail []byte
 }
 
 func (w *BodyWriter) Write(p []byte) (int, error) {
 	b := append(w.tail, p...)
-	// Hold back the start of a character the write cut, at most 3 bytes.
 	cut := len(b)
 	for i := len(b) - 1; i >= 0 && i >= len(b)-3; i-- {
 		if utf8.RuneStart(b[i]) {
@@ -1039,7 +977,6 @@ func (w *BodyWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Close sends what the writer still holds.
 func (w *BodyWriter) Close() error {
 	if len(w.tail) == 0 {
 		return nil
@@ -1049,7 +986,6 @@ func (w *BodyWriter) Close() error {
 	return w.s.Body(string(t))
 }
 
-// Finish ends the reply successfully.
 func (s *Stream) Finish(f llm.Finish, usage *llm.Usage) error {
 	return s.Send(llm.Event{Type: llm.EventFinish, Finish: &f, Usage: usage})
 }
