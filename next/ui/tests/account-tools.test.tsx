@@ -3,9 +3,10 @@
 // cannot change, and Rename's limit.
 import { afterEach, expect, jest, test } from "bun:test";
 import { act } from "preact/test-utils";
-import { type Account, api } from "../kit/api";
+import { type Account, api, type QuotaLimit } from "../kit/api";
 import type { Host, Method, Reply } from "../kit/host";
 import { AccountPage, accountAddress } from "../kit/pages/account";
+import { balanceLabel, isBalanceLimit, limitTitle, paceOf, resetLabel } from "../kit/pages/account.helpers";
 import { forgetWindows } from "../kit/parts";
 import { PrivacyContext, privacyMasks } from "../kit/privacy";
 import { type Kit, KitContext } from "../kit/ui";
@@ -55,7 +56,7 @@ async function open(
     models?: string[];
     privacy?: boolean;
     /** An answer to any call, ahead of the defaults. */
-    reply?: (call: Call) => Reply<unknown> | undefined;
+    reply?: (call: Call) => Reply<unknown> | Promise<Reply<unknown>> | undefined;
   } = {},
 ) {
   Object.defineProperty(globalThis, "location", { configurable: true, value: { hash } });
@@ -65,7 +66,7 @@ async function open(
     call: async (method: Method, path: string, body?: unknown): Promise<Reply<unknown>> => {
       calls.push({ method, path, body });
       const given = more.reply?.({ method, path, body });
-      if (given) return given;
+      if (given) return await given;
       if (method === "GET" && path === "/status")
         return turn(more.status) ?? { status: 200, body: { extensions: [{ id: "pluxy/claude" }] } };
       if (method === "GET" && path.startsWith("/usage?"))
@@ -302,7 +303,7 @@ test("an account not in pluxy says so and leads back to the list", async () => {
 
 test("when the status cannot be read, the opening does not say Serving and the page says why", async () => {
   const page = await open(account(), undefined, { status: [hiccup] });
-  expect(page.text()).not.toContain("Serving.");
+  expect(page.text()).not.toContain("Serving");
   expect(page.text()).toContain("pluxy could not check whether Claude is running.");
   expect(page.text()).toContain("Could not check which providers are running.");
   expect(controls(page.root, "Try again")).toHaveLength(1);
@@ -384,4 +385,240 @@ test("saving the Edit settings dialog closes it and says Saved., as Rename does"
   expect(page.changes().map((c) => `${c.method} ${c.path}`)).toContain("PATCH /accounts/acc-1");
   expect(all(page.root, "form")).toHaveLength(0);
   expect(page.text()).toContain("Saved.");
+});
+
+test("resetLabel formats weekday and clock with relative countdown, date beyond a week, and passed resets", () => {
+  const now = new Date(2026, 10, 27, 12, 0, 0).getTime();
+  const soon = resetLabel(
+    { id: "5h", resets_at: Math.floor((now + (1 * 3600 + 52 * 60) * 1000) / 1000) },
+    now,
+  );
+  expect(soon?.text).toBe("Resets Fri 13:52 · in 1h 52m");
+  expect(soon?.at).toBeInstanceOf(Date);
+
+  const later = resetLabel({ id: "mo", resets_at: Math.floor((now + 14 * 86_400_000) / 1000) }, now);
+  expect(later?.text).toBe("Resets 11 Dec 12:00 · in 14d");
+
+  const passed = resetLabel({ id: "5h", resets_at: Math.floor((now - 60_000) / 1000) }, now);
+  expect(passed).toEqual({ text: "Reset available", passed: true });
+
+  expect(resetLabel({ id: "5h" }, now)).toBeUndefined();
+});
+
+test("paceOf places the even-burn tick and shows a sentence only when pace runs out before reset", () => {
+  const now = new Date(2026, 10, 27, 15, 0, 0).getTime();
+  const fiveH = 5 * 3600;
+  const fast = paceOf(
+    { id: "5h", window_seconds: fiveH, resets_at: Math.floor((now + 2 * 3600_000) / 1000), used_percent: 85 },
+    now,
+  );
+  expect(fast?.kind).toBe("fast");
+  expect(fast?.showTick).toBe(true);
+  expect(fast?.evenLeft).toBeCloseTo(40, 1);
+  expect(fast?.text).toBe("At this pace it runs out at 15:31, 1h 29m before it resets.");
+
+  const ok = paceOf(
+    { id: "5h", window_seconds: fiveH, resets_at: Math.floor((now + 2 * 3600_000) / 1000), used_percent: 25 },
+    now,
+  );
+  expect(ok?.kind).toBe("ok");
+  expect(ok?.showTick).toBe(true);
+  expect(ok?.text).toBeUndefined();
+
+  const unused = paceOf(
+    { id: "5h", window_seconds: fiveH, resets_at: Math.floor((now + 2 * 3600_000) / 1000), used_percent: 0 },
+    now,
+  );
+  expect(unused?.kind).toBe("even");
+  expect(unused?.text).toBeUndefined();
+
+  const justStarted = paceOf(
+    {
+      id: "5h",
+      window_seconds: fiveH,
+      resets_at: Math.floor((now + fiveH * 1000 - 60_000) / 1000),
+      used_percent: 10,
+    },
+    now,
+  );
+  expect(justStarted?.kind).toBe("even");
+  expect(justStarted?.text).toBeUndefined();
+
+  const underMinute = paceOf(
+    { id: "1h", window_seconds: 3600, resets_at: Math.floor((now + 15 * 60_000) / 1000), used_percent: 76 },
+    now,
+  );
+  expect(underMinute?.kind).toBe("fast");
+  expect(underMinute?.text).toBe("At this pace it runs out within a minute of the reset.");
+
+  const shortWindow = paceOf(
+    { id: "5m", window_seconds: 300, resets_at: Math.floor((now + 2 * 60_000) / 1000), used_percent: 80 },
+    now,
+  );
+  expect(shortWindow?.kind).toBe("fast");
+  expect(shortWindow?.text).toBe("At this pace it runs out at 15:00, 2m before it resets.");
+
+  const shortWindowJustStarted = paceOf(
+    { id: "5m", window_seconds: 300, resets_at: Math.floor((now + 285_000) / 1000), used_percent: 40 },
+    now,
+  );
+  expect(shortWindowJustStarted?.kind).toBe("even");
+  expect(shortWindowJustStarted?.text).toBeUndefined();
+
+  expect(
+    paceOf(
+      {
+        id: "5h",
+        window_seconds: fiveH,
+        resets_at: Math.floor((now + 2 * 3600_000) / 1000),
+        used_percent: 100,
+      },
+      now,
+    ),
+  ).toBeUndefined();
+  expect(
+    paceOf(
+      {
+        id: "5h",
+        window_seconds: fiveH,
+        resets_at: Math.floor((now + 2 * 3600_000) / 1000),
+        unlimited: true,
+      },
+      now,
+    ),
+  ).toBeUndefined();
+});
+
+test("limitTitle keeps scoped labels and isBalanceLimit formats USD credits without a bar", () => {
+  expect(limitTitle({ id: "5h", window_seconds: 5 * 3600 })).toBe("5-hour limit");
+  expect(
+    limitTitle({
+      id: "sonnet",
+      window_seconds: 7 * 86400,
+      models: ["claude-sonnet"],
+      label: "Weekly · Sonnet",
+    }),
+  ).toBe("Weekly · Sonnet");
+  const credit: QuotaLimit = { id: "credits", label: "Monthly credits", remaining: 42.1, unit: "usd" };
+  expect(isBalanceLimit(credit)).toBe(true);
+  expect(balanceLabel(credit)).toEqual({ title: "Monthly credits", value: "$42.10 left" });
+});
+
+test("the page renders the header mark, plan pill, full-width limits with pace and resets, and balance", async () => {
+  const now = Date.now();
+  const fiveH = 5 * 3600;
+  const quota = {
+    fetched_at: new Date(now).toISOString(),
+    quota: {
+      plan: "Max 20x",
+      limits: [
+        {
+          id: "5h",
+          window_seconds: fiveH,
+          resets_at: Math.floor((now + 2 * 3600_000) / 1000),
+          used_percent: 82,
+        },
+        {
+          id: "wk",
+          window_seconds: 7 * 86400,
+          resets_at: Math.floor((now + 3 * 86_400_000) / 1000),
+          used_percent: 20,
+        },
+        { id: "credits", label: "API credit", remaining: 42.1, unit: "usd" },
+      ],
+    },
+  };
+  const page = await open(account({ label: "studio-max", quota }));
+  expect(
+    all(page.root, "span").some((n) =>
+      n.attributes.some((a) => a.name === "data-part" && a.value === "provider-mark"),
+    ),
+  ).toBe(true);
+  const pill = all(page.root, "span").find((n) =>
+    n.attributes.some((a) => a.name === "data-part" && a.value === "plan-pill"),
+  );
+  expect(pill?.textContent).toBe("Max 20x");
+  expect(pill?.attributes.find((a) => a.name === "data-plan-tier")?.value).toBe("top");
+  const stateText = all(page.root, "span").find((n) =>
+    n.attributes.some((a) => a.name === "class" && a.value === "account-state-text"),
+  );
+  expect(stateText?.textContent).toBe("Serving");
+  expect(page.text()).toContain("18% left");
+  expect(page.text()).toContain("80% left");
+  expect(page.text()).toContain("Resets ");
+  expect(page.text()).toContain("At this pace it runs out");
+  expect(page.text()).not.toContain("At this pace it lasts until reset.");
+  expect(page.text()).toContain("$42.10 left");
+  const paceLines = all(page.root, "p").filter((n) =>
+    n.attributes.some((a) => a.name === "class" && a.value === "account-limit-pace"),
+  );
+  expect(paceLines).toHaveLength(1);
+  const ticks = all(page.root, "span").filter((n) =>
+    n.attributes.some((a) => a.name === "class" && a.value === "account-pace-tick"),
+  );
+  expect(ticks).toHaveLength(2);
+});
+
+test("when a provider reports no limits, the limits card names the provider and shows no meter", async () => {
+  const page = await open(account({ extension: "pluxy/xai" }), undefined, {
+    status: [{ status: 200, body: { extensions: [{ id: "pluxy/xai" }] } }],
+    reply: (c) => (c.method === "GET" && c.path.endsWith("/quota") ? { status: 422 } : undefined),
+  });
+  await painted();
+  expect(page.text()).toContain("Not reported by xAI");
+  expect(
+    all(page.root, "div").filter((n) => n.attributes.some((a) => a.name === "role" && a.value === "meter")),
+  ).toHaveLength(0);
+});
+
+test("a stale refresh sets data-stale on the account page while keeping the last data visible", async () => {
+  jest.useFakeTimers();
+  const none = { status: 200, body: { total_requests: 0, success_count: 0, models: [] } };
+  const page = await open(account(), undefined, { usage: [none, hiccup] });
+  const article = all(page.root, "article")[0];
+  expect(article?.attributes.some((a) => a.name === "data-stale")).toBe(false);
+  await act(async () => {
+    jest.advanceTimersByTime(10_000);
+  });
+  await settle();
+  const after = all(page.root, "article")[0];
+  expect(after?.attributes.some((a) => a.name === "data-stale")).toBe(true);
+});
+
+test("initial load shows only the final-shape skeleton after the delay, without a second loading pane", async () => {
+  jest.useFakeTimers();
+  const pending = new Promise<Reply<unknown>>(() => {});
+  const page = await open(account(), undefined, {
+    reply: (c) => (c.method === "GET" && c.path === "/accounts" ? pending : undefined),
+  });
+  expect(
+    all(page.root, "section").filter((n) =>
+      n.attributes.some((a) => a.name === "data-part" && a.value === "state-pane"),
+    ),
+  ).toHaveLength(0);
+  expect(
+    all(page.root, "div").filter((n) =>
+      n.attributes.some((a) => a.name === "class" && a.value === "account-skeleton"),
+    ),
+  ).toHaveLength(0);
+  const status = all(page.root, "div").find((n) =>
+    n.attributes.some((a) => a.name === "role" && a.value === "status"),
+  );
+  expect(status?.attributes.find((a) => a.name === "aria-busy")?.value).toBe("true");
+  expect(status?.attributes.find((a) => a.name === "aria-label")?.value).toBe("Loading accounts…");
+
+  await act(async () => {
+    jest.advanceTimersByTime(200);
+  });
+  await settle();
+  expect(
+    all(page.root, "div").filter((n) =>
+      n.attributes.some((a) => a.name === "class" && a.value === "account-skeleton"),
+    ),
+  ).toHaveLength(1);
+  expect(
+    all(page.root, "section").filter((n) =>
+      n.attributes.some((a) => a.name === "data-part" && a.value === "state-pane"),
+    ),
+  ).toHaveLength(0);
 });

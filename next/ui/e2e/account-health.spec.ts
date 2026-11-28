@@ -118,7 +118,7 @@ test("a closed account set in the settings file can be turned on from its row, i
     .locator('[data-part="account-opening"]')
     .getByRole("button", { name: "Turn on", exact: true })
     .click();
-  await expect(main).toContainText("Serving.");
+  await expect(main.locator('[data-part="account-opening"] .account-state-text')).toHaveText("Serving");
   expect(enabled).toEqual([{ disabled: false }]);
 
   banned = true;
