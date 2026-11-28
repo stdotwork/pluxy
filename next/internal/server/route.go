@@ -58,7 +58,7 @@ func promptCacheKey(body []byte) string {
 	for _, m := range members {
 		name, ok := jsonscan.Unquote(m.Key)
 		if !ok {
-			return promptCacheKeyDecoded(body) // a name encoding/json repairs: let it read the body
+			return promptCacheKeyDecoded(body) // a name encoding/json repairs
 		}
 		if !strings.EqualFold(name, "prompt_cache_key") {
 			continue

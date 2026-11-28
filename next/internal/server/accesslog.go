@@ -52,8 +52,7 @@ func accessLog(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// writeAccessLine logs one client request with the path alone (never the query string, where
-// Gemini clients send their key).
+// never the query string, where Gemini clients send their key.
 func writeAccessLine(status int, start time.Time, r *http.Request, t *trace) {
 	if status == 0 {
 		status = http.StatusOK

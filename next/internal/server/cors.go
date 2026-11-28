@@ -48,8 +48,7 @@ func (c *CORSConfig) perOrigin() bool {
 	return len(c.AllowedOrigins) > 0 && !slices.Contains(c.AllowedOrigins, "*")
 }
 
-// withCORS answers preflight requests before the client key is checked, since browsers send
-// no credentials with a preflight.
+// browsers send no credentials with a preflight.
 func withCORS(src Source, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g, release := src.Acquire()
@@ -58,7 +57,6 @@ func withCORS(src Source, next http.Handler) http.Handler {
 		release()
 		h := w.Header()
 		if perOrigin {
-			// Whether the reply has CORS headers depends on Origin, also when it has none, so
 			// a shared cache must not give one origin's reply to another.
 			h.Add("Vary", "Origin")
 		}

@@ -10,7 +10,7 @@ import (
 var keepAliveAfter = 15 * time.Second
 
 // The SSE format makes a line that starts with a colon a comment, which readers that follow it
-// skip; Google's Python Gemini SDK does not, so Gemini routes get none.
+// skip; Google's Python Gemini SDK does not.
 const keepAliveComment = ": keep-alive\n\n"
 
 type keepAlive struct {

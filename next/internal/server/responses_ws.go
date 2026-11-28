@@ -50,9 +50,7 @@ func serveResponsesWebSocket(w http.ResponseWriter, r *http.Request, src Source)
 	if ts := r.Header.Get("X-Codex-Turn-State"); ts != "" {
 		w.Header().Set("X-Codex-Turn-State", ts)
 	}
-	// A request that passed the client key check may come from any origin: a web page cannot set
-	// the key's header on a WebSocket. Without client keys, a web page on another site could drive
-	// core, so the library's same-origin check stays.
+	// a web page cannot set the key's header on a WebSocket.
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionNoContextTakeover,
 		InsecureSkipVerify: len(cfg.ClientKeys) > 0})
 	if err != nil {
