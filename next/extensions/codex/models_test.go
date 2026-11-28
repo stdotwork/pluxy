@@ -45,9 +45,6 @@ func closedCodexSettings(t *testing.T) json.RawMessage {
 	return raw
 }
 
-// TestListModels checks the built-in fallback list for each kind of account against what today's
-// core lists in GET /v1/models (and /v1beta/models) for the same account with no models in its
-// config, its gpt-image-* models included.
 func TestListModels(t *testing.T) {
 	closedSettings := closedCodexSettings(t)
 	images := []string{"gpt-image-1.5", "gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
@@ -59,7 +56,7 @@ func TestListModels(t *testing.T) {
 		name    string
 		cred    *protocol.Credential
 		ids     []string
-		context int // gpt-5.6-luna's context window, which differs between plans
+		context int
 	}{
 		{"api key", apiKey, full, 921000},
 		{"free", subscriptionWith(idTokenWithPlan("free")), free, 372000},
@@ -118,9 +115,6 @@ func TestListModels(t *testing.T) {
 	t.Error("gpt-6.1-terra is not listed")
 }
 
-// TestCodexClientVersionMatchesModelList checks that the model-list client_version and the
-// User-Agent claiming the Codex identity name the same client version, by default and when the
-// account sets codex_client_version.
 func TestCodexClientVersionMatchesModelList(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -376,9 +370,6 @@ func TestListModelsFallbackOnFailure(t *testing.T) {
 	})
 }
 
-// TestListModelsLiveKeepsBuiltinFields: a model of the live list that the plan's built-in list also
-// has takes the fields the live list does not give from the built-in entry, and never loses one
-// the live list gives.
 func TestListModelsLiveKeepsBuiltinFields(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"models": [

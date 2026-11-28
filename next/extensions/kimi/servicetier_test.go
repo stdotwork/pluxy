@@ -10,9 +10,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A request from another format goes to Kimi without the service tier and verbosity: nothing says
-// Kimi's API takes them, so each is reported as dropped, at the client's field, as before they were
-// carried across formats.
 func TestServiceTierAndVerbosityNotSent(t *testing.T) {
 	resp, err := openairesponses.ParseRequest([]byte(`{"model":"kimi-k3","service_tier":"priority","text":{"verbosity":"low"},"input":"hi"}`))
 	if err != nil {

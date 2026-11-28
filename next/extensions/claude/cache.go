@@ -8,28 +8,16 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Prompt caching. A Messages client places its own cache_control markers, and its body is sent as
-// it wrote it. A Chat Completions client's valid cache_control markers are carried over by
-// anthropicmessages.EncodeRequest, and a Responses client can ask for prompt_cache_retention
-// ("in_memory" -> "5m", "24h" -> "1h") or prompt_cache_options.ttl. Otherwise a translated request
-// gets the breakpoints today's core gives it: the end of the system prompt (or, without one, the
-// last tool) and the last block of the last message that can hold one, with the account's
-// cache_ttl ("5m" default, or "1h"). Each breakpoint caches everything before it
-// (https://platform.claude.com/docs/en/build-with-claude/prompt-caching); three stay within
-// Messages' limit of four.
-
 const (
 	cacheTTL5m = "5m"
 	cacheTTL1h = "1h"
 )
 
-// ephemeral is the default cache marker: Anthropic's five-minute cache.
 var (
 	ephemeral     = json.RawMessage(`{"type":"ephemeral"}`)
 	ephemeralHour = json.RawMessage(`{"type":"ephemeral","ttl":"1h"}`)
 )
 
-// uncacheable are block types that cannot carry cache_control.
 var uncacheable = map[string]bool{"thinking": true, "redacted_thinking": true}
 
 func cacheMarker(ttl string) json.RawMessage {
@@ -39,9 +27,6 @@ func cacheMarker(ttl string) json.RawMessage {
 	return ephemeral
 }
 
-// addCacheBreakpointsTTL adds cache breakpoints with ttl ("5m" or "1h") to a translated Messages
-// body that has none: where Messages takes cache_control (top-level, system blocks, tools, message
-// content blocks), none is set.
 func addCacheBreakpointsTTL(body []byte, ttl string) ([]byte, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
@@ -57,7 +42,6 @@ func addCacheBreakpointsTTL(body []byte, ttl string) ([]byte, error) {
 	if err := json.Unmarshal(m["messages"], &messages); err != nil {
 		return body, nil
 	}
-	// The content of each user or assistant message given as blocks; nil for the rest.
 	contents := make([][]map[string]json.RawMessage, len(messages))
 	for i, msg := range messages {
 		var role string
@@ -112,8 +96,6 @@ func addCacheBreakpointsTTL(body []byte, ttl string) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// applyClientCache applies Responses prompt_cache_retention / prompt_cache_options.ttl before
-// automatic breakpoints are added.
 func applyClientCache(body []byte, req llm.Request, losses []llm.Loss, defaultTTL string) ([]byte, []llm.Loss, string, error) {
 	if req.Native == nil || req.Native.Format != llm.FormatOpenAIResponses {
 		return body, losses, defaultTTL, nil

@@ -13,13 +13,8 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// statusPath is the seat management server's GetUserStatus method, a unary Connect call that
-// reports the user's plan and quota, as Devin's CLI and today's core call it.
 const statusPath = "/exa.seat_management_pb.SeatManagementService/GetUserStatus"
 
-// quota reads the account's plan and its daily and weekly quota from GetUserStatus on the account's
-// API server (base_url), with the session token and the client identity the account's chat
-// requests carry (protocol minor version 5). The call spends nothing from the plan.
 func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -29,7 +24,6 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	if token == "" {
 		return nil, &llm.Error{Code: llm.CodeAuth, Message: "the account has no Devin session token", Scope: llm.ScopeCredential}
 	}
-	// The request is the CLI's: the client's metadata, and nothing else.
 	meta := message{}.str(1, cliName).str(2, cliVersion).str(3, token).str(4, "en").str(5, runtime.GOOS).
 		str(7, cliVersion).str(12, cliName).str(31, deviceFingerprint(s.DeviceSeed))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.BaseURL+statusPath, bytes.NewReader(message{}.bytes(1, meta)))
@@ -65,9 +59,6 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	return q, nil
 }
 
-// quotaFailure turns a refusal of the quota read into an error as chat's refusals are, except that
-// what a rate limit or a missing method holds back is the account, not a model. secrets are the
-// account's (sdk.AccountSecrets).
 func quotaFailure(status int, body []byte, secrets []string, retryAfterHeader string) *llm.Error {
 	msg, keep := connectMessage(body, secrets)
 	e := statusError(status, msg, keep, retryAfterHeader)
@@ -83,26 +74,18 @@ func quotaFailure(status int, body []byte, secrets []string, retryAfterHeader st
 	return e
 }
 
-// userStatus is what GetUserStatus tells about the plan. Devin publishes no schema; the field
-// numbers are the ones today's core reads (core/internal/auth/devin/user_status.go).
 type userStatus struct {
 	plan          string
 	planEnd       int64
 	daily, weekly window
 }
 
-// window is one quota window: the percent of it remaining and when it resets. A field Devin
-// leaves out is not set.
 type window struct {
 	remaining    uint64
 	hasRemaining bool
 	resetAt      int64
 }
 
-// parseUserStatus reads a GetUserStatus reply: a message whose field 1 is the user status, whose
-// field 13 is the plan status. In it, field 1 is the plan (its name is field 2), field 3 the plan's
-// end (a timestamp, whose field 1 is Unix seconds), fields 14 and 15 the percent of the daily and
-// weekly quota remaining, and 17 and 18 the Unix time they reset.
 func parseUserStatus(b []byte) (*userStatus, error) {
 	if len(b) == 0 {
 		return nil, errBadMessage
@@ -168,7 +151,6 @@ func parseUserStatus(b []byte) (*userStatus, error) {
 	return st, nil
 }
 
-// limits maps the daily and weekly windows. A window Devin reports nothing for is left out.
 func (st *userStatus) limits() []protocol.QuotaLimit {
 	var out []protocol.QuotaLimit
 	for _, w := range []struct {
@@ -195,8 +177,6 @@ func (st *userStatus) limits() []protocol.QuotaLimit {
 	return out
 }
 
-// raw is the plan and quota part of the reply as JSON, for the quota's raw field. It leaves out
-// the user's name, e-mail address and IDs.
 func (st *userStatus) raw() map[string]any {
 	plan := map[string]any{"plan_name": st.plan}
 	if st.planEnd > 0 {

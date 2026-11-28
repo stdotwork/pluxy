@@ -45,7 +45,6 @@ func TestUpstreamErrors(t *testing.T) {
 	if e := upstreamError(resp, "m"); e.Code != llm.CodeRateLimit || e.Scope != llm.ScopeModel || !e.Retryable || e.RetryAfterMS != 7000 || e.ProviderCode != "RESOURCE_EXHAUSTED" {
 		t.Errorf("429 with RetryInfo 7s = %+v, want a retryable rate limit on the model", e)
 	}
-	// A used-up quota (ErrorInfo reason QUOTA_EXHAUSTED) is a quota error, not a rate limit.
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -57,7 +56,6 @@ func TestUpstreamErrors(t *testing.T) {
 	if e := upstreamError(resp, "m"); e.Code != llm.CodeQuota || e.Scope != llm.ScopeModel || !e.Retryable || e.RetryAfterMS != 3_600_000 {
 		t.Errorf("429 QUOTA_EXHAUSTED = %+v, want a retryable quota error on the model with the retry delay", e)
 	}
-	// The same 429 on a call for no model (login or the model list) is the account's.
 	resp = post(t, srv.URL+"/v1beta/models/m:generateContent", key)
 	if e := upstreamError(resp, ""); e.Code != llm.CodeQuota || e.Scope != llm.ScopeCredential {
 		t.Errorf("429 for no model = %+v, want it on the credential", e)
@@ -104,8 +102,6 @@ func TestVertexURLs(t *testing.T) {
 	}
 }
 
-// TestServiceAccount sends requests from a service account: they go to its project's path with
-// a bearer token, and concurrent requests share one token from the token endpoint.
 func TestServiceAccount(t *testing.T) {
 	srv := geminitest.New(t)
 	tokens = &tokenCache{entries: map[string]*tokenEntry{}}
@@ -311,9 +307,6 @@ func TestThinkingLevelsAndSummary(t *testing.T) {
 	})
 }
 
-// Google ErrorInfo reason CONSUMER_SUSPENDED and account-deactivation replies map to
-// account_closed with credential scope; matching is on ErrorInfo reason in error.details[],
-// not message text. 403 VALIDATION_REQUIRED and other permission replies stay permission.
 func TestAccountClosedMapping(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -323,13 +316,9 @@ func TestAccountClosedMapping(t *testing.T) {
 		scope     string
 		retryable bool
 	}{
-		// Built from Google's documented ErrorInfo example (google/api/error_reason.proto: CONSUMER_SUSPENDED), not a captured reply.
 		{"403 CONSUMER_SUSPENDED (from Google's documented example)", 403, `{"error":{"code":403,"message":"The consumer 'projects/123' is suspended.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"CONSUMER_SUSPENDED","domain":"googleapis.com","metadata":{"consumer":"projects/123","service":"generativelanguage.googleapis.com"}}]}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
-		// From OmniRoute's classifier tests (tests/unit/geminiProjectBlock.test.ts), not a captured reply.
 		{"403 account deactivated (from OmniRoute's classifier tests)", 403, `{"error":{"code":403,"message":"Your project has been denied access because your account has been deactivated.","status":"PERMISSION_DENIED"}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
-		// Guard: CONSUMER_SUSPENDED only in message text, without ErrorInfo reason, stays permission.
 		{"403 CONSUMER_SUSPENDED in message text only guard", 403, `{"error":{"code":403,"message":"CONSUMER_SUSPENDED: permission denied","status":"PERMISSION_DENIED"}}`, llm.CodePermission, llm.ScopeCredential, true},
-		// Guard: CLIProxyAPI #4272, #1374; OmniRoute antigravity-verify-account-403-not-a-ban.test.ts
 		{"403 VALIDATION_REQUIRED guard (CLIProxyAPI #4272)", 403, `{"error":{"code":403,"message":"Verify your account to continue.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"VALIDATION_REQUIRED"}]}}`, llm.CodePermission, llm.ScopeCredential, true},
 		{"403 generic permission guard", 403, `{"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}}`, llm.CodePermission, llm.ScopeCredential, true},
 	} {

@@ -33,9 +33,6 @@ func integralArguments(args []byte, schema json.RawMessage) []byte {
 	return out.Bytes()
 }
 
-// schemaOf reads the parts of a JSON schema this repair needs: whether it is an integer, its
-// properties and the schema of its array items. It returns nil when the schema says none of them
-// (a number, a string, a $ref), so nothing under it is touched.
 func schemaOf(raw json.RawMessage) *argSchema {
 	var m map[string]json.RawMessage
 	if len(raw) == 0 || json.Unmarshal(raw, &m) != nil || m == nil {
@@ -64,15 +61,12 @@ func schemaOf(raw json.RawMessage) *argSchema {
 	return s
 }
 
-// argSchema is what integralArguments reads of a property's schema.
 type argSchema struct {
 	integer    bool
 	properties map[string]*argSchema
 	items      *argSchema
 }
 
-// integerType reports whether a schema's type is integer, or a list holding integer and null
-// only: a nullable integer is still an integer.
 func integerType(raw json.RawMessage) bool {
 	var one string
 	if json.Unmarshal(raw, &one) == nil {
@@ -95,9 +89,6 @@ func integerType(raw json.RawMessage) bool {
 	return integer
 }
 
-// rewriteJSON copies one JSON value from src starting at i to out, rewriting the numbers the
-// schema declares integer, and returns the index after it. The bytes of everything else are
-// copied as they are.
 func rewriteJSON(src []byte, i int, out *bytes.Buffer, s *argSchema) int {
 	i = copySpace(src, i, out)
 	if i >= len(src) {
@@ -180,7 +171,6 @@ func rewriteJSON(src []byte, i int, out *bytes.Buffer, s *argSchema) int {
 	}
 }
 
-// copySpace copies the whitespace at src starting at i, and returns the index after it.
 func copySpace(src []byte, i int, out *bytes.Buffer) int {
 	for i < len(src) && space(src[i]) {
 		out.WriteByte(src[i])
@@ -191,8 +181,6 @@ func copySpace(src []byte, i int, out *bytes.Buffer) int {
 
 func space(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 
-// copyString copies the JSON string at src starting at i, and returns the index after it. key,
-// when not nil, receives the decoded string.
 func copyString(src []byte, i int, out *bytes.Buffer, key *string) int {
 	start := i
 	if i < len(src) && src[i] == '"' {
@@ -217,14 +205,10 @@ func copyString(src []byte, i int, out *bytes.Buffer, key *string) int {
 	return len(src)
 }
 
-// integralNumber returns the integer a number literal written with a zero fraction stands for,
-// when it does: 2500.0 and 2500e0 give 2500, while 2500.5, a literal already written as an
-// integer, and one beyond 2^53 do not. The literal is read exactly, so a fraction too small to
-// show in a float64 is still a fraction.
 func integralNumber(lit []byte) (string, bool) {
 	s := string(lit)
 	if !strings.ContainsAny(s, ".eE") {
-		return "", false // already an integer
+		return "", false
 	}
 	lower := strings.ToLower(s)
 	mantissa := lower
@@ -247,13 +231,11 @@ func integralNumber(lit []byte) (string, bool) {
 		return "", false
 	}
 	if n.Sign() == 0 && strings.HasPrefix(s, "-") {
-		return "", false // keep -0.0 as the upstream wrote it
+		return "", false
 	}
 	return r.Num().String(), true
 }
 
-// toolSchemas returns the parameters schema of each of the request's function tools, by the
-// client's name.
 func toolSchemas(req llm.Request) map[string]json.RawMessage {
 	out := map[string]json.RawMessage{}
 	for _, t := range geminigenerate.FunctionTools(req) {

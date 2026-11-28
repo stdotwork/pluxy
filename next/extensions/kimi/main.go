@@ -1,23 +1,3 @@
-// Command kimi is pluxy's provider extension for Kimi Code, Moonshot AI's coding subscription,
-// signed in with Kimi's device-code login (oauth.go).
-//
-// Account settings (all optional):
-//
-//	{"domain": "kimi.com", "base_url": "https://api.kimi.com/coding"}
-//
-// domain is kimi.com (the default) or kimi.ai, Kimi's two sites, each with its own login and API.
-// base_url is where the API lives; requests go to {base_url}/v1/chat/completions, /v1/responses or
-// /v1/messages, whichever speaks the client's format (Gemini clients are translated to Chat
-// Completions). Tests move the login host to a fake with auth_base_url (sdk.TestLoginHost); in a
-// normal run it is ignored.
-//
-// Token counts (core's count_tokens call) go to Kimi's own count endpoint,
-// {base_url}/v1/messages/count_tokens, for every client format, as today's core sends them
-// (count.go).
-//
-// The account's access token, or a Kimi Code API key, is sent as a bearer token with Kimi's device
-// headers (X-Msh-*), which name pluxy as the client and carry the device ID made at login. A
-// request in the upstream's format passes through with the changes Kimi needs (body.go).
 package main
 
 import (
@@ -49,7 +29,6 @@ const (
 	version = "0.1.0"
 )
 
-// anthropicVersion is the Messages API version sent when the client named none.
 const anthropicVersion = "2023-06-01"
 
 func main() {
@@ -70,7 +49,6 @@ func main() {
 	}
 }
 
-// Kimi's sites.
 const (
 	domainCom = "kimi.com"
 	domainAI  = "kimi.ai"
@@ -102,15 +80,11 @@ func readSettings(raw json.RawMessage) (settings, error) {
 	if s.AuthBaseURL = sdk.TestLoginHost(s.AuthBaseURL); s.AuthBaseURL == "" {
 		s.AuthBaseURL = "https://auth." + s.Domain
 	}
-	// A base URL given with its /v1 is taken as the same place.
 	s.BaseURL = strings.TrimSuffix(strings.TrimRight(s.BaseURL, "/"), "/v1")
 	s.AuthBaseURL = strings.TrimRight(s.AuthBaseURL, "/")
 	return s, nil
 }
 
-// client has no timeouts after the connection is made: a long generation is not a failure, and
-// cancellation comes from the call's context. It follows a redirect only to the same scheme and
-// host.
 var client = &http.Client{
 	Transport: sdk.Upstream(&http.Transport{
 		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -130,9 +104,6 @@ var client = &http.Client{
 	},
 }
 
-// deviceHeaders sets the headers Kimi's API and login take from every client: the platform and
-// version (pluxy's), the device model and the device ID made at login. The device's host name,
-// which Kimi's own CLI also sends, is left out: it would name the user's machine to Kimi.
 func deviceHeaders(h http.Header, deviceID string) {
 	h.Set("X-Msh-Platform", "pluxy")
 	h.Set("X-Msh-Version", version)
@@ -142,12 +113,10 @@ func deviceHeaders(h http.Header, deviceID string) {
 	}
 }
 
-// credentialData is what an account's credential keeps besides its tokens.
 type credentialData struct {
 	DeviceID string `json:"device_id"`
 }
 
-// upstream is one of Kimi's APIs.
 type upstream struct {
 	format, path string
 }
@@ -159,10 +128,6 @@ var (
 	upMessages = upstream{llm.FormatAnthropicMessages, "/v1/messages?beta=true"}
 )
 
-// upstreamFor returns the API that speaks the client's format: Responses and Messages clients
-// get their own, every other format Chat Completions.
-// bearer returns the token a credential sends to Kimi and its device data: a login's access token
-// with the device ID made at login, or a Kimi Code API key, which has no device ID.
 func bearer(c *protocol.Credential) (string, credentialData, error) {
 	var data credentialData
 	switch {
@@ -216,16 +181,12 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if call.Request.Stream {
 		req.Header.Set("Accept", "text/event-stream")
 		if up == upMessages {
-			// An uncompressed stream reaches the client event by event, as the Claude
-			// extension asks Anthropic.
 			req.Header.Set("Accept-Encoding", "identity")
 		}
 	} else {
 		req.Header.Set("Accept", "application/json")
 	}
 	if up == upMessages {
-		// Kimi's Messages API is Anthropic's: the client's own Messages headers go with its
-		// body, as the Claude extension sends them.
 		req.Header.Set("Anthropic-Version", anthropicVersion)
 		for _, h := range slices.Concat(anthropicmessages.Headers, anthropicmessages.ClientHeaders) {
 			if v := call.Request.Native.Headers[h]; v != "" {
@@ -276,8 +237,6 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	for _, l := range llm.ReplyLosses(losses, call.Request.BodyReachesClient(up.format, false)) {
 		logReplyLoss(l)
 	}
-	// Kept before the reply is sent, as replayDecoder keeps a stream's turn: a client may send its
-	// next turn the moment it has the reply, and that turn must find what was kept.
 	turn.keepResponse(raw)
 	for _, ev := range events {
 		if err := send.Send(ev); err != nil {
@@ -287,12 +246,10 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return nil
 }
 
-// reporting adds the translation report to the reply's response.start event, and gives each tool
-// call the client's own name for the tool when the request was sent under another (names).
 type reporting struct {
 	*sdk.Stream
 	tr    *llm.Translation
-	names map[string]string // the upstream's name -> the client's
+	names map[string]string
 	calls *openairesponses.CustomCallCheck
 }
 
@@ -309,7 +266,6 @@ func (r *reporting) Send(ev llm.Event) error {
 	return r.Stream.Send(ev)
 }
 
-// restore gives a tool call the client's own name for the tool.
 func (r *reporting) restore(ev *llm.Event) {
 	if ev.Type != llm.EventItemStart || ev.Item == nil || ev.Item.Kind != llm.ItemToolCall {
 		return
@@ -321,9 +277,6 @@ func (r *reporting) restore(ev *llm.Event) {
 	}
 }
 
-// replyNames maps each tool name a translated request was sent under back to the client's
-// (openaichat.ToolNames). A body in the upstream's own format passed through keeps the client's
-// names.
 func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
 	if tr.Passthrough {
 		return nil
@@ -350,8 +303,6 @@ var decoders = map[string]struct {
 	llm.FormatAnthropicMessages: {func() streamDecoder { return anthropicmessages.NewStreamDecoder() }, anthropicmessages.DecodeResponseLosses},
 }
 
-// reportLosses logs what a stream decoder had to leave out of the reply. A decoder without losses
-// has none to log.
 func reportLosses(dec streamDecoder, bodyReaches bool) {
 	lr, ok := dec.(interface{ Losses() []llm.Loss })
 	if !ok {
@@ -362,19 +313,12 @@ func reportLosses(dec streamDecoder, bodyReaches bool) {
 	}
 }
 
-// logReplyLoss writes one thing a reply had to leave out to the extension's log, which core
-// prefixes with the extension's ID. A reply's translation report goes out with its first event, so
-// a loss found while reading the reply has no other way to core.
 func logReplyLoss(l llm.Loss) {
 	fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
 }
 
-// relayStream decodes the upstream stream and sends each event as soon as it is decoded. A
-// blocked send blocks the next upstream read.
 func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }, dec streamDecoder, bodyReaches bool) error {
 	r := sse.NewReader(body)
-	// The report in response.start has gone by the time a decoder finds something it had to
-	// leave out of a reply, so its losses are logged, with core's prefix for this extension.
 	defer reportLosses(dec, bodyReaches)
 	for {
 		e, err := r.Next()
@@ -411,8 +355,6 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 	}
 }
 
-// upstreamError turns a non-2xx reply from Kimi (an OpenAI error body, or Anthropic's on the
-// Messages API) into a structured error.
 func upstreamError(resp *http.Response, model string) *llm.Error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var parsed struct {
@@ -445,10 +387,8 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		e.Code, e.Scope = llm.CodeNotFound, llm.ScopeModel
 		e.Retryable = model != "" && strings.Contains(e.Message, model)
 	case s == http.StatusTooManyRequests:
-		// Only the model waits on this account, as today's core cools only the model that answered.
 		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
 		if model == "" {
-			// A call for no model (the usage endpoint): the account is the one limited.
 			e.Scope = llm.ScopeCredential
 		}
 		if strings.Contains(e.ProviderCode, "quota") || strings.Contains(strings.ToLower(e.Message), "quota") {

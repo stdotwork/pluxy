@@ -11,7 +11,6 @@ import (
 	"testing"
 )
 
-// The multipart rebuild keeps every field, the filename, the media type and the file bytes.
 func TestAudioMultipart(t *testing.T) {
 	data := base64.StdEncoding.EncodeToString([]byte("RIFF\x00\xffWAVE"))
 	form := `{"model":"whisper-1","response_format":"verbose_json","timestamp_granularities[]":["word","segment"],` +

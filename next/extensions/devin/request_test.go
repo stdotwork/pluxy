@@ -27,9 +27,6 @@ func userText(s string) llm.Item {
 	return llm.Item{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: s}}}
 }
 
-// What Devin has no place for is listed as dropped: a client's fields kept beside the model,
-// parallel tool calls turned off and strict tool arguments. A replayed signature, which Devin
-// takes, is not.
 func TestDroppedFields(t *testing.T) {
 	no, yes := false, true
 	req := &llm.Request{Model: "swe-2", Options: llm.Options{ParallelToolCalls: &no},
@@ -62,8 +59,6 @@ func TestDroppedFields(t *testing.T) {
 	}
 }
 
-// Devin takes no allowed tool list: an auto choice narrowed to named tools is reported dropped,
-// so a client is not told the model was limited to them.
 func TestDroppedAllowedToolList(t *testing.T) {
 	req := &llm.Request{Model: "swe-2",
 		Options: llm.Options{ToolChoice: &llm.ToolChoice{Mode: llm.ToolChoiceAuto, Allowed: []string{"f"}}},
@@ -78,8 +73,6 @@ func TestDroppedAllowedToolList(t *testing.T) {
 	}
 }
 
-// A tool result given as content blocks keeps its text; its images, which Devin cannot take in a
-// result, are listed as dropped.
 func TestMixedToolResult(t *testing.T) {
 	for _, c := range []struct {
 		name, format, raw, dropped string
@@ -105,8 +98,6 @@ func TestMixedToolResult(t *testing.T) {
 	}
 }
 
-// A tool result carried as parts (protocol minor 25) keeps its text; its image and its error flag,
-// which Devin cannot take, are listed as dropped.
 func TestToolResultParts(t *testing.T) {
 	req := &llm.Request{Model: "swe-2", Items: []llm.Item{
 		userText("Weather?"),
@@ -126,8 +117,6 @@ func TestToolResultParts(t *testing.T) {
 	}
 }
 
-// A user turn left with nothing once media Devin cannot take is dropped is refused, as today's
-// core refuses it; a turn that keeps other content loses only the emptied message.
 func TestEmptiedUserTurn(t *testing.T) {
 	remote := llm.Item{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartImage, URL: "https://example.com/a.png"}}}
 	_, err := buildRequest(&llm.Request{Model: "swe-2", Items: []llm.Item{remote}})
@@ -150,8 +139,6 @@ func TestEmptiedUserTurn(t *testing.T) {
 	}
 }
 
-// A data: URL's scheme and ;base64 marker are case-insensitive: uppercase and mixed-case forms
-// produce the same image turn as the lowercase form.
 func TestDataImageURLSchemeCase(t *testing.T) {
 	reqFor := func(u string) *llm.Request {
 		return &llm.Request{Model: "swe-2", Items: []llm.Item{

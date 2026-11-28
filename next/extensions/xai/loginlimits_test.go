@@ -14,19 +14,16 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// The numbers a login server sends (interval, expires_in) are bounded before they become
-// durations or an expiry time: a huge one must not overflow, a negative one must not make a tight
-// polling loop or a past expiry.
 func TestServerNumbersAreBounded(t *testing.T) {
 	const (
 		maxInt64 = "9223372036854775807"
-		wraps    = "9300000000" // seconds; times time.Second this wraps int64
-		longLife = "9000000000" // 285 years: positive as a duration, but absurd
+		wraps    = "9300000000"
+		longLife = "9000000000"
 	)
 	for _, tc := range []struct {
 		name, interval, expiresIn string
 		wantWait                  time.Duration
-		wantExpiry                bool // the token reply's expires_in is positive
+		wantExpiry                bool
 	}{
 		{"negative", "-5", "-5", minPollInterval, false},
 		{"max int64", maxInt64, maxInt64, sdk.MaxPollInterval, true},

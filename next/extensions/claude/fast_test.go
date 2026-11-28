@@ -38,8 +38,6 @@ func TestIsFast(t *testing.T) {
 	}
 }
 
-// The bodies are today's core's (claude_executor_beta_policy_test.go): Anthropic's and Claude
-// Code's wording of the refusal, and two real rate limits.
 func TestFastCredits429(t *testing.T) {
 	for _, c := range []struct {
 		body    string
@@ -52,8 +50,6 @@ func TestFastCredits429(t *testing.T) {
 		{`Fast request rejected`, nil, false, llm.ScopeRequest},
 		{`{"type":"error","error":{"type":"rate_limit_error","message":"Number of requests has exceeded your rate limit."}}`, nil, false, llm.ScopeModel},
 		{`{"type":"error","error":{"type":"rate_limit_error","message":"This organization has exceeded its usage limit."}}`, nil, false, llm.ScopeModel},
-		// A refused shared window is the account's, whatever the message; with model-level
-		// cooling, today's core checks for the credits refusal first.
 		{`{"type":"error","error":{"type":"rate_limit_error","message":"Usage credits are required for fast mode."}}`,
 			map[string]string{"Anthropic-Ratelimit-Unified-5h-Status": "rejected"}, false, llm.ScopeCredential},
 		{`{"type":"error","error":{"type":"rate_limit_error","message":"Usage credits are required for fast mode."}}`,
@@ -63,13 +59,11 @@ func TestFastCredits429(t *testing.T) {
 			t.Errorf("%s (cooling %v): got %+v, want scope %s", c.body, c.cooling, e, c.scope)
 		}
 	}
-	// Only a 429 carries the refusal.
 	if e := upstreamError(response(500, nil, `{"error":{"message":"Usage credits are required for fast mode."}}`), "claude-x", false); e.Scope != llm.ScopeEndpoint {
 		t.Errorf("500: got %+v, want scope endpoint", e)
 	}
 }
 
-// A fast request's failure on Anthropic's API is the request's, except a refused shared window.
 func TestFastFailure(t *testing.T) {
 	for _, e := range []*llm.Error{
 		{Code: llm.CodeAuth, Scope: llm.ScopeCredential},
@@ -85,9 +79,6 @@ func TestFastFailure(t *testing.T) {
 	}
 }
 
-// post decides a request is fast from its anthropic-beta header and from the betas list of its
-// body, which bodyBetas takes out of the body, as well as from its speed. Each fast request that
-// fails on Anthropic's own API fails as the request's; the fast-mode beta goes upstream once.
 func TestPostSeesFastModeBeforeBetasAreStripped(t *testing.T) {
 	var sent http.Header
 	old := client.Transport
@@ -138,10 +129,6 @@ func TestPostSeesFastModeBeforeBetasAreStripped(t *testing.T) {
 	}
 }
 
-// A client's explicit priority tier reaches Claude as fast mode whatever its format: Chat and
-// Responses priority or fast, Gemini priority. The tiers that are not the priority tier, an absent
-// tier and a tier Messages cannot say never do; one it cannot say is reported as dropped, at the
-// client's field, and refuses the request under the reject drop policy.
 func TestServiceTierToFastMode(t *testing.T) {
 	chat := func(extra string) llm.Request {
 		r, err := openaichat.ParseRequest([]byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}]` + extra + `}`))
@@ -167,8 +154,8 @@ func TestServiceTierToFastMode(t *testing.T) {
 	for _, c := range []struct {
 		name     string
 		req      llm.Request
-		speed    string // the body's speed; "" for none
-		tier     string // the body's service_tier; "" for none
+		speed    string
+		tier     string
 		dropped  []string
 		rejected bool
 	}{
@@ -217,8 +204,6 @@ func TestServiceTierToFastMode(t *testing.T) {
 	}
 }
 
-// A Messages client's own speed still goes as it is sent, and a Messages client's service tier
-// keeps going as sent, with the fast-mode beta added when the body asks for fast mode.
 func TestServiceTierMessagesUnchanged(t *testing.T) {
 	for _, in := range []string{
 		`{"model":"claude-opus-4-8","max_tokens":5,"speed":"fast","messages":[{"role":"user","content":"hi"}]}`,
@@ -247,11 +232,6 @@ func TestServiceTierMessagesUnchanged(t *testing.T) {
 	}
 }
 
-// An account's base_url decides what Claude sends. Only Anthropic's own API takes a service tier
-// from a request in another format (a third-party host may refuse a field it does not list), and
-// fast mode follows it, except that a Responses client's priority tier still goes as fast mode on
-// any base_url, as it did before other formats' did. Anything left out is reported as dropped at
-// the client's field.
 func TestServiceTierByBaseURL(t *testing.T) {
 	chat := func(extra string) llm.Request {
 		r, err := openaichat.ParseRequest([]byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}]` + extra + `}`))
@@ -328,9 +308,6 @@ func TestServiceTierByBaseURL(t *testing.T) {
 	}
 }
 
-// overProtocol returns r as the extension gets it: encoded to JSON and decoded again, as the
-// extension protocol carries a request from core, so a test of a body builder starts from a client's
-// real body parsed by its format's own parser and sent the way core sends it.
 func overProtocol(t *testing.T, r llm.Request) llm.Request {
 	t.Helper()
 	b, err := json.Marshal(r)

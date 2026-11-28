@@ -1,15 +1,3 @@
-// Package geminitest is a fake Google for tests of the Gemini extension: the Gemini API with API
-// keys, Vertex AI with service account tokens or express mode keys, and the OAuth token endpoint
-// a service account trades a signed JWT at. It issues made-up keys and tokens and never talks to
-// Google.
-//
-// Routes:
-//
-//	POST {prefix}/v1beta/models/{model}:{method}                                       API key
-//	GET  {prefix}/v1beta/models                                                         API key
-//	POST {prefix}/v1/projects/{p}/locations/{l}/publishers/google/models/{model}:{method} bearer token
-//	POST {prefix}/v1/publishers/google/models/{model}:{method}                          API key
-//	POST /token                                                                         JWT bearer grant
 package geminitest
 
 import (
@@ -34,14 +22,10 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Request is a GenerateContent request the server received with a valid credential.
 type Request struct {
-	// Kind is "gemini" (the Gemini API), "vertex" (a project path with a bearer token) or
-	// "vertex-key" (Vertex express mode).
-	Kind    string
-	Prefix  string
-	Project string
-	// Location is the location in a project path.
+	Kind     string
+	Prefix   string
+	Project  string
 	Location string
 	Model    string
 	Method   string
@@ -50,29 +34,23 @@ type Request struct {
 	Body     []byte
 }
 
-// Server is the fake. Set its fields before requests arrive.
 type Server struct {
 	*httptest.Server
 
-	// Generate, if set, answers GenerateContent requests whose credential is valid. The
-	// default replies "Hello" (streamed for streamGenerateContent) with usage 11 in, 7 out.
-	Generate func(w http.ResponseWriter, r *http.Request, req Request)
-	// TokenDown makes the token endpoint answer 503.
+	Generate  func(w http.ResponseWriter, r *http.Request, req Request)
 	TokenDown bool
 
 	mu       sync.Mutex
 	n        int
 	keys     map[string]bool
 	tokens   map[string]bool
-	accounts map[string]*rsa.PublicKey // service account email to its public key
+	accounts map[string]*rsa.PublicKey
 	requests []Request
 	grants   int
 	models   int
 }
 
-// New starts a fake that is closed when the test ends.
 func New(t testing.TB) *Server {
-	// The fake's token endpoint is not Google's, which the extension takes only under a test.
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	s := &Server{keys: map[string]bool{}, tokens: map[string]bool{}, accounts: map[string]*rsa.PublicKey{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
@@ -80,7 +58,6 @@ func New(t testing.TB) *Server {
 	return s
 }
 
-// IssueKey returns a new API key the server accepts.
 func (s *Server) IssueKey() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -90,21 +67,18 @@ func (s *Server) IssueKey() string {
 	return k
 }
 
-// Requests returns the GenerateContent requests the server answered, in order.
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Request(nil), s.requests...)
 }
 
-// ModelRequests returns how many model list requests the server has received, valid or not.
 func (s *Server) ModelRequests() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.models
 }
 
-// Grants returns how many access tokens the token endpoint has issued.
 func (s *Server) Grants() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -116,8 +90,6 @@ var (
 	testKey *rsa.PrivateKey
 )
 
-// rsaKey returns one RSA key for every service account the package makes: generating one is
-// slow, and the accounts differ by email.
 func rsaKey() *rsa.PrivateKey {
 	keyOnce.Do(func() {
 		k, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -129,9 +101,6 @@ func rsaKey() *rsa.PrivateKey {
 	return testKey
 }
 
-// ServiceAccount returns a service account JSON key, for project, whose token_uri is the
-// server's token endpoint. With accepted false the server does not know the account and refuses
-// its JWT.
 func (s *Server) ServiceAccount(project string, accepted bool) []byte {
 	k := rsaKey()
 	s.mu.Lock()
@@ -153,7 +122,6 @@ func (s *Server) ServiceAccount(project string, accepted bool) []byte {
 	return b
 }
 
-// Revoke makes the server refuse an access token or API key it issued.
 func (s *Server) Revoke(credential string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -251,7 +219,6 @@ func (s *Server) validToken(r *http.Request) bool {
 	return ok && s.tokens[t]
 }
 
-// token answers a JWT bearer grant (RFC 7523) as Google's token endpoint does.
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	if s.TokenDown {
 		http.Error(w, "token endpoint down", http.StatusServiceUnavailable)
@@ -332,7 +299,6 @@ func googleError(w http.ResponseWriter, status int, code, msg, reason string) {
 	fmt.Fprintf(w, `{"error":{"code":%d,"message":%q,"status":%q,"details":%s}}`, status, msg, code, details)
 }
 
-// RateLimited writes Google's 429 with a RetryInfo delay of seconds.
 func RateLimited(w http.ResponseWriter, seconds int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusTooManyRequests)
@@ -340,11 +306,8 @@ func RateLimited(w http.ResponseWriter, seconds int) {
 		`"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"%ds"}]}}`, seconds)
 }
 
-// Usage is the usage the default replies report.
 const Usage = `{"promptTokenCount":11,"candidatesTokenCount":7,"totalTokenCount":18}`
 
-// StreamText writes a streamGenerateContent reply: one chunk per piece of text, the last with
-// finishReason STOP and Usage.
 func StreamText(w http.ResponseWriter, pieces ...string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	for i, p := range pieces {
@@ -360,7 +323,6 @@ func StreamText(w http.ResponseWriter, pieces ...string) {
 	}
 }
 
-// JSONText writes a generateContent reply holding text.
 func JSONText(w http.ResponseWriter, text string) {
 	t, _ := json.Marshal(text)
 	w.Header().Set("Content-Type", "application/json")

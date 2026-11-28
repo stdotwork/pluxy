@@ -25,7 +25,6 @@ func TestLoginErrorTextIsBounded(t *testing.T) {
 	}
 }
 
-// The error a pasted address carries is the user's to paste: it is bounded and cleaned too.
 func TestCallbackErrorTextIsBounded(t *testing.T) {
 	sdktest.CheckLoginError(t, "pasted error", callbackRefusal(sdktest.HostileCode+": "+sdktest.HostileText()), true)
 }

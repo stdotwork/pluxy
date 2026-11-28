@@ -56,8 +56,6 @@ func at(t *testing.T, s string) int64 {
 
 func near(p *float64, want float64) bool { return p != nil && *p == want }
 
-// A subscription's quota is read from the usage and profile endpoints, as the extension's own
-// requests are made (bearer token, OAuth beta, API version), and mapped to the old panel's labels.
 func TestQuotaReadsUsageAndProfile(t *testing.T) {
 	srv := claudetest.New(t)
 	acct := subscriptionAccount(srv)
@@ -109,7 +107,6 @@ func TestQuotaReadsUsageAndProfile(t *testing.T) {
 	if x := l["seven_day_sonnet"]; x.Label != "Weekly Sonnet limit" || !near(x.UsedPercent, 0) {
 		t.Errorf("seven_day_sonnet = %+v", x)
 	}
-	// Extra usage is in cents: 50.00 a month, 12.50 spent.
 	if x := l["extra_usage"]; x.Label != "Extra usage" || !near(x.UsedPercent, 25) || !near(x.Limit, 50) || !near(x.Used, 12.5) || !near(x.Remaining, 37.5) || x.Unit != "usd" {
 		t.Errorf("extra_usage = %+v", x)
 	}
@@ -119,7 +116,6 @@ func TestQuotaReadsUsageAndProfile(t *testing.T) {
 	}
 }
 
-// An API key has no subscription plan; nothing is sent upstream.
 func TestQuotaAPIKeyIsUnsupported(t *testing.T) {
 	srv := claudetest.New(t)
 	_, e := readQuota(t, protocol.Account{ID: "claude", Settings: srv.Settings(""),
@@ -132,7 +128,6 @@ func TestQuotaAPIKeyIsUnsupported(t *testing.T) {
 	}
 }
 
-// An expired token is an auth failure of the credential.
 func TestQuotaExpiredTokenIsAuthError(t *testing.T) {
 	srv := claudetest.New(t)
 	acct := subscriptionAccount(srv)
@@ -143,7 +138,6 @@ func TestQuotaExpiredTokenIsAuthError(t *testing.T) {
 	}
 }
 
-// Upstream failures are mapped as for the extension's other requests.
 func TestQuotaUpstreamFailures(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -179,7 +173,6 @@ func TestQuotaUpstreamFailures(t *testing.T) {
 	}
 }
 
-// A reply that is not JSON is an upstream fault, not an empty quota.
 func TestQuotaBadUsageReply(t *testing.T) {
 	for name, body := range map[string]string{"not JSON": `<html>`, "not an object": `[1]`, "null": `null`} {
 		srv := claudetest.New(t)
@@ -190,7 +183,6 @@ func TestQuotaBadUsageReply(t *testing.T) {
 	}
 }
 
-// When the profile cannot be read the usage is still reported, without a plan.
 func TestQuotaWithoutProfile(t *testing.T) {
 	srv := claudetest.New(t)
 	srv.ProfileStatus = http.StatusInternalServerError
@@ -208,8 +200,6 @@ func TestQuotaWithoutProfile(t *testing.T) {
 	}
 }
 
-// A credit pool counted in dollars keeps its amounts; Fable's window comes from the reply's list of
-// scoped limits when the reply has one; extra usage that is switched off is left out.
 func TestQuotaOtherWindows(t *testing.T) {
 	srv := claudetest.New(t)
 	srv.Usage = `{
@@ -263,8 +253,6 @@ func TestPlanOf(t *testing.T) {
 	}
 }
 
-// A subscription login names the upstream account by e-mail address, account ID and organization
-// ID, read from the token endpoint's reply; fields it does not give are left out.
 func TestLoginGrantsCarryIdentity(t *testing.T) {
 	srv := claudetest.New(t)
 	acct := subscriptionAccount(srv)
@@ -297,10 +285,6 @@ func TestLoginGrantsCarryIdentity(t *testing.T) {
 	}
 }
 
-// Each window says what it counts, so that routing holds an account only on a window that covers
-// the block it checks: the shared 5-hour and weekly windows count the whole account; a model
-// family's weekly window counts the catalogue's models of that family; the windows of other apps
-// and the credit pools count a feature of the plan.
 func TestQuotaWindowsSayWhatTheyCount(t *testing.T) {
 	srv := claudetest.New(t)
 	srv.Usage = `{

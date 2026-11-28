@@ -22,9 +22,6 @@ const googleQuotaError = `{"error":{"code":429,"message":"Quota exceeded for pro
 	`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaId":"PerDay","subject":"project:acme-prod-4821","quotaValue":"15"}]},` +
 	`{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"34s"}]}}`
 
-// An account can point at Google's own host. A client's error from it is in Google's shape, an
-// object or the array Google's OpenAI-compatible API wraps it in, and loses what names the owner's
-// project, with its classification unchanged, wherever the handler returns it from.
 func TestMaskGoogleMasksGoogleShapedErrors(t *testing.T) {
 	inner := strings.TrimSuffix(strings.TrimPrefix(googleQuotaError, `{"error":`), `}`)
 	for name, body := range map[string]string{"object": googleQuotaError, "array": "[" + googleQuotaError + "]", "error object alone, as a stream keeps it": inner} {
@@ -51,8 +48,6 @@ func TestMaskGoogleMasksGoogleShapedErrors(t *testing.T) {
 	}
 }
 
-// Another vendor's error that merely mentions a project is not Google's and is left alone, and so
-// is an error that is not an *llm.Error.
 func TestMaskGoogleLeavesOtherErrorsAlone(t *testing.T) {
 	const body = `{"error":{"message":"Project 'proj_abc' is over its budget","type":"insufficient_quota","code":"insufficient_quota"}}`
 	e := &llm.Error{Code: llm.CodeQuota, Message: "Project 'proj_abc' is over its budget", Raw: json.RawMessage(body)}
@@ -68,8 +63,6 @@ func TestMaskGoogleLeavesOtherErrorsAlone(t *testing.T) {
 	}
 }
 
-// The owner's own calls build their errors with upstreamError and are not wrapped: they keep the
-// project, which is how the owner finds the API to enable.
 func TestUpstreamErrorKeepsTheProject(t *testing.T) {
 	resp := &http.Response{StatusCode: http.StatusTooManyRequests, Status: "429 Too Many Requests", Header: http.Header{},
 		Body: io.NopCloser(strings.NewReader(googleQuotaError))}
@@ -79,10 +72,6 @@ func TestUpstreamErrorKeepsTheProject(t *testing.T) {
 	}
 }
 
-// An account pointed at googleapis.com (such as Vertex AI's OpenAI-compatible endpoint) masks
-// errors even with no Google-shaped body — such as an unreachable upstream whose URL names the
-// project — and passes the project in the base_url's /projects/<id>/ path as a known name.
-// Another vendor's host with a non-Google body stays byte-identical.
 func TestMaskGoogleHostErrors(t *testing.T) {
 	vertexCall := sdk.Call{Account: protocol.Account{
 		Settings: json.RawMessage(`{"base_url":"https://us-central1-aiplatform.googleapis.com/v1/projects/acme-prod-4821/locations/us-central1/endpoints/openapi"}`),

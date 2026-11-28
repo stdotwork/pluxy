@@ -9,8 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// reasoningBody returns the body a translated 100 KB request is sent as, with the effort it is
-// given already in it: the case applyReasoning leaves the body as it is.
 func reasoningBody(b *testing.B) ([]byte, llm.Request) {
 	b.Helper()
 	text := strings.Repeat("The quick brown fox jumps over the lazy dog. ", 2500)
@@ -43,7 +41,6 @@ func reasoningBody(b *testing.B) ([]byte, llm.Request) {
 	return body, req
 }
 
-// BenchmarkApplyReasoning measures setting the effort on the built body, as it was and as it is.
 func BenchmarkApplyReasoning(b *testing.B) {
 	body, req := reasoningBody(b)
 	b.Run("new", func(b *testing.B) {

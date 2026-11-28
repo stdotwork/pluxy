@@ -29,8 +29,6 @@ func imageCall(format, model, body string) sdk.Call {
 	}
 }
 
-// Core gives an endpoint call a multipart edit as JSON, its files as data URLs. The extension
-// rebuilds the form with the same fields and file bytes, and names the account's upstream model.
 func TestImageBodyRebuildsMultipartEdit(t *testing.T) {
 	call := imageCall(llm.FormatOpenAIImagesEdits, "upstream-image", `{
 		"model":"client-alias",
@@ -91,8 +89,6 @@ func TestImageBodyRebuildsMultipartEdit(t *testing.T) {
 	}
 }
 
-// A data: URL's scheme is case-insensitive: uppercase and mixed-case data URLs in an Images API
-// edit rebuild the same multipart form as lowercase data: URLs.
 func TestImageBodyRebuildsMultipartEditDataURLCase(t *testing.T) {
 	call := imageCall(llm.FormatOpenAIImagesEdits, "upstream-image", `{
 		"model":"client-alias",
@@ -151,7 +147,6 @@ func TestImageBodyRebuildsMultipartEditDataURLCase(t *testing.T) {
 	}
 }
 
-// A JSON edit that names an image by URL stays JSON, with the model renamed for the account.
 func TestImageBodyJSONEditKeepsURL(t *testing.T) {
 	call := imageCall(llm.FormatOpenAIImagesEdits, "upstream-image", `{"model":"client-alias","prompt":"p","images":[{"image_url":"https://example.com/a.png"}]}`)
 	body, contentType, err := imageBody(call)
@@ -175,7 +170,6 @@ func TestImageBodyJSONEditKeepsURL(t *testing.T) {
 	}
 }
 
-// A generation body that already names the routed model is sent byte for byte.
 func TestImageBodyGenerationKeepsBytes(t *testing.T) {
 	const body = `{"model":"image-model","prompt":"a cat","x_vendor":{"keep":true}}`
 	call := imageCall(llm.FormatOpenAIImagesGenerations, "image-model", body)

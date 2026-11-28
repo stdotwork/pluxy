@@ -30,7 +30,6 @@ func geminiSettings(srv *geminitest.Server) json.RawMessage {
 	return json.RawMessage(`{"base_url":"` + srv.URL + `"}`)
 }
 
-// A good API key is checked with the model list and the result names how many models it lists.
 func TestCheckAPIKeyListsModels(t *testing.T) {
 	srv := geminitest.New(t)
 	res, err := runCheck(geminiSettings(srv), &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: srv.IssueKey()})
@@ -48,7 +47,6 @@ func TestCheckAPIKeyListsModels(t *testing.T) {
 	}
 }
 
-// A refused key (Google answers 400 API_KEY_INVALID) is an auth error that does not repeat the key.
 func TestCheckRefusedKey(t *testing.T) {
 	srv := geminitest.New(t)
 	const key = "geminitest-key-not-issued"
@@ -58,8 +56,6 @@ func TestCheckRefusedKey(t *testing.T) {
 	}
 }
 
-// A Vertex account, with an API key or a service account, is answered unsupported without any
-// request to the upstream.
 func TestCheckVertexIsUnsupportedWithoutRequest(t *testing.T) {
 	srv := geminitest.New(t)
 	settings := json.RawMessage(`{"base_url":"` + srv.URL + `","vertex":{"project":"p","location":"us-central1"}}`)
@@ -77,7 +73,6 @@ func TestCheckVertexIsUnsupportedWithoutRequest(t *testing.T) {
 	}
 }
 
-// An upstream that cannot be reached is unavailable on the endpoint.
 func TestCheckUnreachable(t *testing.T) {
 	srv := geminitest.New(t)
 	key := srv.IssueKey()

@@ -10,9 +10,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// inputTokens counts a Responses request's input tokens. A Responses upstream takes the same
-// request at {base_url}/responses/input_tokens and returns the count; the other wires have no
-// such endpoint, so core estimates the count with another account.
 func inputTokens(ctx context.Context, call sdk.Call, out bodySender) error {
 	s, wire, key, err := account(call)
 	if err != nil {
@@ -26,7 +23,6 @@ func inputTokens(ctx context.Context, call sdk.Call, out bodySender) error {
 	if err := json.Unmarshal(call.Request.Native.Body, &body); err != nil || body == nil {
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "the input token count request body is not a JSON object", Scope: llm.ScopeRequest}
 	}
-	// An account's alias names the model upstream by another name: send the one routing chose.
 	upstream, _, err := withModel(call.Request.Native.Body, body, call.Request.Model)
 	if err != nil {
 		return err

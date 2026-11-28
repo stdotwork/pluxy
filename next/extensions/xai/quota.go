@@ -16,21 +16,8 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// A Grok login's quota is what the Grok CLI shows: two billing reads on the CLI's chat endpoint,
-// with the CLI's identity (setCLIIdentity), as the old panel read them.
-//
-//	GET {cli}/billing?format=credits   the weekly credit window
-//	GET {cli}/billing                  the monthly credits, the pay-as-you-go cap and the prepaid balance
-//
-// The plan's name comes from two profile reads, GET {cli}/user?include=subscription and
-// GET {cli}/settings; a failure of either only leaves the plan unnamed. Nothing is generated: today's
-// panel also sent a one-token chat to tell paid accounts apart, which spends from the account, and
-// this does not.
-
-// quotaBodyLimit bounds each reply read.
 const quotaBodyLimit = 1 << 20
 
-// Limit IDs.
 const (
 	limitWeekly   = "weekly"
 	limitMonthly  = "monthly_credits"
@@ -38,8 +25,6 @@ const (
 	limitPrepaid  = "prepaid"
 )
 
-// Monthly credit allowances (in cents) that name SuperGrok and SuperGrok Heavy when the profile reads
-// name no plan, the ones the old panel recognised.
 const (
 	superGrokLimitCents      = 15_000
 	superGrokHeavyLimitCents = 150_000
@@ -63,7 +48,6 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	// A refused token fails the call, whichever read it was; otherwise one good read is enough.
 	for _, e := range []*llm.Error{creditsErr, monthlyErr} {
 		if e != nil && e.Code == llm.CodeAuth {
 			return nil, e
@@ -109,7 +93,6 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	return q, nil
 }
 
-// quotaGet reads one of the CLI endpoint's GET paths with the login's token and the CLI's identity.
 func quotaGet(ctx context.Context, tg target, s settings, path string) ([]byte, *llm.Error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tg.base+path, nil)
 	if err != nil {
@@ -202,8 +185,6 @@ type billingPeriod struct {
 	End   instant `json:"end"`
 }
 
-// billingConfig is the config object of a billing reply. xAI's fields come in camelCase, and the
-// old clients also read snake_case.
 type billingConfig struct {
 	CurrentPeriod       *billingPeriod  `json:"currentPeriod"`
 	CurrentPeriodS      *billingPeriod  `json:"current_period"`
@@ -226,9 +207,8 @@ type billingConfig struct {
 	BillingEndS         instant         `json:"billing_period_end"`
 }
 
-// billing is one billing reply, read. Amounts are cents, shares are percents, instants Unix seconds.
 type billing struct {
-	kind                      string // "weekly" or "monthly": which clock the reply's period is
+	kind                      string
 	usagePercent              *float64
 	periodStart, periodEnd    int64
 	hasProducts               bool
@@ -253,7 +233,6 @@ func firstInstant(a, b instant) int64 {
 	return int64(b)
 }
 
-// parseBilling reads a billing reply, or nil when it holds nothing a limit can be made of.
 func parseBilling(body []byte) *billing {
 	var doc struct {
 		Config *billingConfig `json:"config"`
@@ -353,16 +332,12 @@ func usd(cents float64) *float64 {
 	return &v
 }
 
-// buildQuota makes the limits out of the credits reply (primary) and the billing reply (fallback),
-// either of which may be missing, or nil when neither holds anything.
 func buildQuota(primary, fallback *billing) *protocol.Quota {
 	if primary == nil && fallback == nil {
 		return nil
 	}
 	q := &protocol.Quota{Limits: []protocol.QuotaLimit{}}
 
-	// The reply that names the active period decides whether there is a weekly window; its dates are
-	// the window's, never the other reply's, which run on the billing month's clock.
 	source := primary
 	if source == nil {
 		source = fallback
@@ -425,7 +400,6 @@ func buildQuota(primary, fallback *billing) *protocol.Quota {
 	return q
 }
 
-// planName reads the plan from the profile reads: the settings' display name, else the user's tier.
 func planName(user []byte, userErr *llm.Error, settings []byte, settingsErr *llm.Error) string {
 	field := func(body []byte, err *llm.Error, keys ...string) string {
 		if err != nil {
@@ -449,7 +423,6 @@ func planName(user []byte, userErr *llm.Error, settings []byte, settingsErr *llm
 	return field(user, userErr, "subscriptionTier", "subscription_tier")
 }
 
-// planFromAllowance names the plan by its monthly credit allowance when the profile reads name none.
 func planFromAllowance(primary, fallback *billing) string {
 	limit := pick(primary, fallback, func(b *billing) *float64 { return b.monthlyLimit })
 	switch {

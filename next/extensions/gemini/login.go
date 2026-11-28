@@ -13,8 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// loginMethods add accounts from a key the user enters. There is no browser sign-in: Google's
-// Gemini API and Vertex AI take API keys and service accounts.
 var loginMethods = []protocol.LoginMethod{
 	{Method: "api_key", Kind: protocol.LoginAPIKey, Label: "API key", Inputs: []protocol.LoginInput{
 		{Name: "api_key", Label: "Gemini API key, or a Vertex AI express mode key for a Vertex account", Secret: true},
@@ -24,7 +22,6 @@ var loginMethods = []protocol.LoginMethod{
 	}},
 }
 
-// login checks the key the user entered and returns it as the account's credential.
 func login(ctx context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*protocol.Grant, error) {
 	set, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -43,8 +40,6 @@ func refused(msg string) *llm.Error {
 	return &llm.Error{Code: llm.CodeAuth, Message: msg, Scope: llm.ScopeCredential}
 }
 
-// apiKeyLogin checks a Gemini API key by listing one model with it. A Vertex express mode key is
-// taken as it is: Vertex has no call that checks a key without running a model.
 func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -65,7 +60,6 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		// A login error is retryable only when the request never reached Google.
 		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the Gemini API: " + err.Error(), Retryable: !sent(), Scope: llm.ScopeEndpoint}
 	}
 	defer resp.Body.Close()
@@ -77,20 +71,12 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 		return nil, refused("Google refused the key")
 	}
 	if e.Status >= 500 {
-		// A model request Google answered with a 5xx is not retried either, but a login call must
-		// not depend on that: it reached Google and may have run.
 		e.Retryable = false
 	}
-	// Core redacts the key as the user entered it; this one is trimmed, so remove it here.
 	r := protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key})
 	return nil, r.Event(llm.Event{Type: llm.EventError, Error: e}).Error
 }
 
-// serviceAccountLogin checks a service account key by fetching an access token with it. The
-// credential keeps only what is secret or names the key (client_email and private_key, and a
-// token_uri other than the default: an older key's, or a test's fake): core redacts every string of a credential from what reaches
-// clients, so the key's other fields, such as its project ID, would be cut out of replies. The
-// project goes in the account's settings (vertex.project) instead.
 func serviceAccountLogin(ctx context.Context, set settings, key string) (*protocol.Grant, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -110,8 +96,6 @@ func serviceAccountLogin(ctx context.Context, set settings, key string) (*protoc
 		}
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: msg, Scope: llm.ScopeRequest}
 	}
-	// The token fetch is shared with model requests, whose errors say the model request did not run.
-	// A login call is retryable only when the fetch never reached the token endpoint.
 	ctx, sent := sdk.TrackSendContext(ctx)
 	if _, err := tokens.get(ctx, sa); err != nil {
 		var e *llm.Error
@@ -120,7 +104,6 @@ func serviceAccountLogin(ctx context.Context, set settings, key string) (*protoc
 			case e.Code == llm.CodeAuth:
 				return nil, refused(e.Message)
 			case e.Code == llm.CodeUnavailable && e.Status == 0:
-				// The fetch got no reply.
 				c := *e
 				c.Retryable = !sent()
 				return nil, &c
@@ -143,8 +126,6 @@ func serviceAccountLogin(ctx context.Context, set settings, key string) (*protoc
 	}, nil
 }
 
-// serviceAccountIdentity names the service account a login signed in as, by the key's
-// client_email, so that core can refuse a new login to an account that signs in as another one.
 func serviceAccountIdentity(clientEmail string) map[string]string {
 	if clientEmail = strings.TrimSpace(clientEmail); clientEmail == "" {
 		return nil

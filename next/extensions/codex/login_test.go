@@ -17,8 +17,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// A renewed subscription keeps its ChatGPT account, takes the rotated refresh token, and is due
-// for renewal four days before its access token expires.
 func TestRefreshRotatesAndSchedulesRenewal(t *testing.T) {
 	srv := codextest.New(t)
 	srv.AccessTTL = func(int) time.Duration { return 10 * 24 * time.Hour }
@@ -42,13 +40,11 @@ func TestRefreshRotatesAndSchedulesRenewal(t *testing.T) {
 	if d.AccountID != codextest.AccountID || d.IDToken == "" {
 		t.Errorf("data = %s, want account %s and an ID token", got.Data, codextest.AccountID)
 	}
-	// The old refresh token was used up.
 	if _, err := refresh(context.Background(), sdk.RefreshCall{Account: testAccount(srv, old)}); err == nil {
 		t.Error("a used refresh token was accepted again")
 	}
 }
 
-// A token reply without a refresh token or ID token keeps the ones the credential had.
 func TestRenewalKeepsTokensTheServerDidNotSend(t *testing.T) {
 	old := subscription("old-access", "old-refresh")
 	g, err := grantFrom(&tokenResponse{AccessToken: "new-access", ExpiresIn: 3600}, old)
@@ -64,14 +60,11 @@ func TestRenewalKeepsTokensTheServerDidNotSend(t *testing.T) {
 	if d.IDToken != codextest.IDToken() || d.AccountID != codextest.AccountID {
 		t.Errorf("data = %s, want the old ID token and account", c.Data)
 	}
-	// An hour-long token is renewed by core's default lead, not four days ahead.
 	if c.RefreshAt != 0 {
 		t.Errorf("refresh_at = %d for an hour-long token, want 0", c.RefreshAt)
 	}
 }
 
-// A login server reply that redirects is not followed: following a 307 would send the refresh
-// token (or an authorization code and its verifier) to wherever the redirect points.
 func TestTokenEndpointRedirectIsNotFollowed(t *testing.T) {
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	var reached atomic.Int32
@@ -91,9 +84,6 @@ func TestTokenEndpointRedirectIsNotFollowed(t *testing.T) {
 	}
 }
 
-// A sign-in result whose state is not this login's is ignored, even when it reports an error, so
-// another tab or an earlier login cannot end this one; the callback listener does not pass such a
-// result on.
 func TestSignInResultChecksStateFirst(t *testing.T) {
 	const state = "state-of-this-login"
 	for _, tc := range []struct {
@@ -130,8 +120,6 @@ func TestSignInResultChecksStateFirst(t *testing.T) {
 	}
 }
 
-// The goroutine that forwards login input ends once the login's context is cancelled, even with
-// input it cannot hand over: nothing reads the inputs after the login ends.
 func TestForwardInputsStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	input := func(ctx context.Context) (map[string]string, error) {
@@ -141,7 +129,6 @@ func TestForwardInputsStops(t *testing.T) {
 		return map[string]string{"redirect_url": "x"}, nil
 	}
 	forwardInputs(ctx, input)
-	// Let the forwarder fill the inputs and block handing over the next one.
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	deadline := time.Now().Add(2 * time.Second)

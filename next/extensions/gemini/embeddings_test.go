@@ -21,7 +21,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// embeddingTestExtension builds the extension and returns a Gemini API account pointed at srv.
 func embeddingTestExtension(t *testing.T) (*host.Extension, *geminitest.Server, protocol.Account) {
 	t.Helper()
 	srv := geminitest.New(t)
@@ -38,7 +37,6 @@ func embeddingTestExtension(t *testing.T) (*host.Extension, *geminitest.Server, 
 	}
 }
 
-// embeddingEvents runs one OpenAI Embeddings endpoint call and returns its events.
 func embeddingEvents(t *testing.T, ext *host.Extension, acct protocol.Account, req llm.Request) []llm.Event {
 	t.Helper()
 	if req.Model == "" {
@@ -70,7 +68,6 @@ type openAIEmbeddingsReply struct {
 	} `json:"usage"`
 }
 
-// embeddingsReply unmarshals a successful Embeddings API endpoint reply.
 func embeddingsReply(t *testing.T, events []llm.Event) openAIEmbeddingsReply {
 	t.Helper()
 	if len(events) < 3 || events[0].Type != llm.EventResponseStart || events[len(events)-1].Type != llm.EventFinish {
@@ -101,8 +98,6 @@ func embeddingsReply(t *testing.T, events []llm.Event) openAIEmbeddingsReply {
 	return reply
 }
 
-// A single string input calls :embedContent with model, text part and outputDimensionality, and
-// returns an OpenAI list response with index 0 and usage from usageMetadata.
 func TestGeminiEmbeddingsSingle(t *testing.T) {
 	ext, srv, acct := embeddingTestExtension(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
@@ -166,7 +161,6 @@ func TestGeminiEmbeddingsSingle(t *testing.T) {
 	}
 }
 
-// A list of strings calls :batchEmbedContents and preserves exact input order and index values.
 func TestGeminiEmbeddingsBatch(t *testing.T) {
 	ext, srv, acct := embeddingTestExtension(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
@@ -229,8 +223,6 @@ func TestGeminiEmbeddingsBatch(t *testing.T) {
 	}
 }
 
-// encoding_format "base64" returns IEEE 754 little-endian float32 vectors encoded as base64 strings,
-// never silently returning float arrays.
 func TestGeminiEmbeddingsBase64(t *testing.T) {
 	ext, srv, acct := embeddingTestExtension(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
@@ -268,7 +260,6 @@ func TestGeminiEmbeddingsBase64(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("decoded float32s = %v, want %v", got, want)
 	}
-	// Upstream omitted usageMetadata: OpenAI reply still has 0/0, finish.Usage stays nil.
 	if reply.Usage.PromptTokens != 0 || reply.Usage.TotalTokens != 0 {
 		t.Errorf("reply usage = %+v, want 0/0", reply.Usage)
 	}
@@ -277,8 +268,6 @@ func TestGeminiEmbeddingsBase64(t *testing.T) {
 	}
 }
 
-// More than 100 inputs are split across sequential :batchEmbedContents calls of at most 100 items
-// each, preserving order, index and total usage.
 func TestGeminiEmbeddingsBatchLimit100(t *testing.T) {
 	ext, srv, acct := embeddingTestExtension(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
@@ -359,10 +348,6 @@ func TestGeminiEmbeddingsBatchLimit100(t *testing.T) {
 	}
 }
 
-// Vertex AI accounts route by model per Google's Vertex AI docs:
-//   - gemini-embedding-001 uses :predict with one input per request;
-//   - text-embedding-005 batches up to 250 inputs per :predict request;
-//   - gemini-embedding-2 uses :embedContent (with embedContentConfig.outputDimensionality), one input per request.
 func TestGeminiEmbeddingsVertex(t *testing.T) {
 	srv := geminitest.New(t)
 	ext, err := host.Start(conformance.BuildExtension(t, "pluxy-extension.json", "."), host.Options{Log: io.Discard})
@@ -524,11 +509,6 @@ func TestGeminiEmbeddingsVertex(t *testing.T) {
 	})
 }
 
-// Values Gemini will not serve (token-ID arrays, more than 2048 inputs, out-of-range dimensions,
-// unknown encoding_format, streaming, thinking suffix) are refused with retryable
-// credential-scoped CodeUnsupported so routing can move on to another provider; requests invalid
-// for every account (non-object body, empty/missing/malformed input, wrongly typed dimensions or
-// encoding_format) are refused with CodeInvalidRequest on ScopeRequest before calling the upstream.
 func TestGeminiEmbeddingsRefusals(t *testing.T) {
 	ext, srv, acct := embeddingTestExtension(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
@@ -725,8 +705,6 @@ func TestGeminiEmbeddingsRefusals(t *testing.T) {
 	}
 }
 
-// Malformed, short, streamed, or broken upstream replies fail this request only (ScopeRequest)
-// rather than ScopeEndpoint, so the account is not cooled down for later requests.
 func TestGeminiEmbeddingsUpstreamErrorScope(t *testing.T) {
 	ext, srv, acct := embeddingTestExtension(t)
 	for _, tc := range []struct {
@@ -784,8 +762,6 @@ func (r *recordSender) Send(ev llm.Event) error {
 	return nil
 }
 
-// A large embeddings reply is split into multiple EventNative body pieces bounded by
-// embeddingBodyChunkSize rather than sent as one oversized protocol frame.
 func TestGeminiEmbeddingsReplyChunking(t *testing.T) {
 	srv := geminitest.New(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {

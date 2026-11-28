@@ -7,11 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A client's own Messages body has its empty web search domain lists removed and its tool call
-// IDs with characters Anthropic refuses replaced, the same ID the same way, while everything else
-// stays: a non-empty list, a list on a tool that is not web search, valid IDs. The expected IDs
-// are the prefix and the old ID in unpadded URL-safe base64, worked out outside Go; a valid ID
-// that is already the new one pushes it to an underscore in front.
 func TestFixBodyRepairsMessagesBody(t *testing.T) {
 	in := `{"model":"claude-test","max_tokens":10,
 		"tools":[

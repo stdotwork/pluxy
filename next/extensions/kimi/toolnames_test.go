@@ -6,8 +6,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A translated request's tool names are the Chat names Kimi's encoder sends, and the reply's call
-// comes back to the client under its own name; a passthrough body keeps its names.
 func TestReplyNamesRestoresClientToolNames(t *testing.T) {
 	req := llm.Request{Tools: []llm.Tool{{Name: "mcp:server.tool"}, {Name: "get_weather"}}}
 	tr := &llm.Translation{To: llm.FormatOpenAIChat, From: llm.FormatAnthropicMessages}
@@ -21,7 +19,6 @@ func TestReplyNamesRestoresClientToolNames(t *testing.T) {
 	if got := ev.Item.Name; got != "mcp:server.tool" {
 		t.Errorf("sent name = %q, want the client's", got)
 	}
-	// A name that was not changed is left alone.
 	ev = llm.Event{Type: llm.EventItemStart, Item: &llm.ItemStart{
 		Kind: llm.ItemToolCall, CallID: "c1", Name: "get_weather"}}
 	(&reporting{names: names}).restore(&ev)

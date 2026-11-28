@@ -25,8 +25,6 @@ func jsonEqual(a, b json.RawMessage) bool {
 	return string(ja) == string(jb)
 }
 
-// A translated request carries the effort as thinking, and the effort is no longer reported as
-// dropped.
 func TestBuildBodyTranslatesEffort(t *testing.T) {
 	req := llm.Request{
 		Model:   "claude-opus-4-6",
@@ -46,7 +44,6 @@ func TestBuildBodyTranslatesEffort(t *testing.T) {
 	}
 }
 
-// A Messages request goes upstream byte for byte, thinking signatures and cache markers included.
 func TestBuildBodyPassesMessagesThrough(t *testing.T) {
 	in := `{"model":"claude-test","max_tokens":10,"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"x","signature":"Esig"}]},{"role":"user","content":[{"type":"text","text":"go on","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`
 	body, tr, err := buildBody(llm.Request{Model: "claude-test", Native: &llm.Native{Format: llm.FormatAnthropicMessages, Body: json.RawMessage(in)}})
@@ -77,7 +74,6 @@ func TestUpstreamError(t *testing.T) {
 		minWaitMS int64
 	}{
 		{"overloaded", response(529, nil, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`), llm.CodeUnavailable, llm.ScopeEndpoint, true, 0},
-		// A plain 429 keeps only the model out on the account, as in today's core.
 		{"rate limit", response(429, map[string]string{"Retry-After": "20"}, `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`), llm.CodeRateLimit, llm.ScopeModel, true, 20000},
 		{"subscription window used up", response(429, map[string]string{
 			"Anthropic-Ratelimit-Unified-Status": "rejected", "Anthropic-Ratelimit-Unified-Reset": itoa(int(reset)),
@@ -94,7 +90,6 @@ func TestUpstreamError(t *testing.T) {
 	}
 }
 
-// upstreamError carries the 429's window and the account's model_level_cooling (ratelimit.go).
 func TestUpstreamErrorSharedWindow(t *testing.T) {
 	reset := time.Now().Add(5 * time.Hour).Unix()
 	resp := func() *http.Response {
@@ -136,8 +131,6 @@ func TestWithBeta(t *testing.T) {
 	}
 }
 
-// Core redacts a login's input as the user entered it; the extension sends the key trimmed, so it
-// removes the trimmed key from an upstream error itself.
 func TestAPIKeyLoginErrorHidesTrimmedKey(t *testing.T) {
 	const key = "sk-ant-api-echoed"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -156,8 +149,6 @@ func TestAPIKeyLoginErrorHidesTrimmedKey(t *testing.T) {
 	}
 }
 
-// A translated request gets cache breakpoints unless it already has cache markers; a tool
-// property that happens to be named cache_control is not one.
 func TestCacheBreakpoints(t *testing.T) {
 	for _, c := range []struct{ name, in, want string }{
 		{"system and last message",
@@ -180,8 +171,6 @@ func TestCacheBreakpoints(t *testing.T) {
 	}
 }
 
-// Disabled Claude account/organization replies map to account_closed (retryable,
-// credential-scoped) while per-request 403/400/401 refusals keep their own codes.
 func TestAccountClosedMapping(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -191,13 +180,9 @@ func TestAccountClosedMapping(t *testing.T) {
 		scope     string
 		retryable bool
 	}{
-		// Captured reply: https://github.com/router-for-me/CLIProxyAPI/issues/2442 (also #3409).
 		{"400 org disabled (captured, CLIProxyAPI #2442)", 400, `{"type":"error","error":{"type":"invalid_request_error","message":"This organization has been disabled."},"request_id":"req_011CZam6yhqAXwtsQmHZ4Yuc"}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
-		// From OmniRoute's classifier tests (tests/unit/anthropic-request-not-allowed-cooldown-escalation.test.ts:259), not a captured reply.
 		{"403 org disabled (from OmniRoute's classifier tests)", 403, `{"type":"error","error":{"type":"permission_error","message":"Your organization has been disabled."}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
-		// From CLIProxyAPI PR #3268 tests (https://github.com/router-for-me/CLIProxyAPI/pull/3268), not a captured reply.
 		{"400 account disabled (CLIProxyAPI PR #3268 tests)", 400, `{"type":"error","error":{"type":"invalid_request_error","message":"Account has been disabled"}}`, llm.CodeAccountClosed, llm.ScopeCredential, true},
-		// Guard: Anthropic OAuth 403 "Request not allowed" (from OmniRoute's classifier tests, authTerminalStatus.ts) is NOT a ban.
 		{"403 request not allowed guard", 403, `{"type":"error","error":{"type":"permission_error","message":"Request not allowed"}}`, llm.CodePermission, llm.ScopeCredential, true},
 		{"400 plain invalid request guard", 400, `{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}`, llm.CodeInvalidRequest, llm.ScopeRequest, false},
 		{"401 bad key guard", 401, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`, llm.CodeAuth, llm.ScopeCredential, true},
@@ -208,7 +193,6 @@ func TestAccountClosedMapping(t *testing.T) {
 				c.name, e.Code, e.Scope, e.Retryable, c.code, c.scope, c.retryable)
 		}
 	}
-	// Fast mode does not downgrade account_closed to scope request.
 	e := fastFailure(upstreamError(response(400, nil, `{"type":"error","error":{"type":"invalid_request_error","message":"This organization has been disabled."}}`), "claude-sonnet-4-5", false))
 	if e.Code != llm.CodeAccountClosed || e.Scope != llm.ScopeCredential {
 		t.Errorf("fastFailure(account_closed): got %+v, want account_closed on credential", e)

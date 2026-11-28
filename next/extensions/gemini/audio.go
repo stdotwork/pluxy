@@ -20,30 +20,20 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// maxAudioReply limits what is read of one upstream GenerateContent audio reply.
 const maxAudioReply = 64 << 20
 
 // maxGeminiInlineRequestBytes is Google's documented 20 MB total request size limit for inline
 // audio data (https://ai.google.dev/gemini-api/docs/audio#inline-audio).
 var maxGeminiInlineRequestBytes = 20 * 1000 * 1000
 
-// audioBinaryChunkSize is the raw byte size of each binary piece base64-encoded into one
-// EventNative frame (~1 MiB base64, well below protocol.MaxFrame).
 var audioBinaryChunkSize = 768 << 10
 
-// audioTextChunkSize is the maximum byte size of each EventNative text piece for transcription
-// replies, well below protocol.MaxFrame.
 var audioTextChunkSize = 1 << 20
 
 // defaultGeminiPCMRate is Google's documented sample rate for Gemini TTS linear 16-bit PCM output
 // (24 kHz, mono, 16-bit signed little-endian).
 const defaultGeminiPCMRate = 24000
 
-// openAIToGeminiTTSVoices maps OpenAI's built-in TTS voice names to Gemini's prebuilt voices
-// (ported from LiteLLM's OPENAI_TO_GEMINI_TTS_VOICES in
-// litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py). "nova" has no entry in
-// that map and is answered unsupported; Gemini prebuilt or library voice names pass through
-// unchanged.
 var openAIToGeminiTTSVoices = map[string]string{
 	"alloy":   "Kore",
 	"ash":     "Iapetus",
@@ -104,7 +94,7 @@ var audioExtToMIME = map[string]string{
 type speechRequest struct {
 	input          string
 	voice          string
-	responseFormat string // "pcm" or "wav"
+	responseFormat string
 }
 
 type speechGenerateBody struct {
@@ -147,7 +137,7 @@ type audioInlineData struct {
 type transcriptionRequest struct {
 	mimeType       string
 	dataBase64     string
-	responseFormat string // "json" or "text"
+	responseFormat string
 	language       string
 	prompt         string
 	temperature    *float64
@@ -203,7 +193,6 @@ func (r *geminiAudioReply) usage() *llm.Usage {
 	return u
 }
 
-// audioSpeech serves OpenAI's POST /v1/audio/speech on a Gemini account through GenerateContent.
 func audioSpeech(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return audioSpeechTo(ctx, call, out)
 }
@@ -273,8 +262,6 @@ func audioSpeechTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	return send.Finish(llm.Finish{Reason: llm.FinishStop}, reply.usage())
 }
 
-// audioTranscriptions serves OpenAI's POST /v1/audio/transcriptions on a Gemini account through
-// GenerateContent with inline audio data.
 func audioTranscriptions(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return audioTranscriptionsTo(ctx, call, out)
 }
@@ -387,8 +374,6 @@ func postAudioGenerateContent(ctx context.Context, t target, model string, body 
 	return raw, nil
 }
 
-// sendBinaryBase64Chunks writes raw binary bytes as standalone base64 EventNative pieces, each
-// well under protocol.MaxFrame, so core's decodeAudioBody can decode every piece independently.
 func sendBinaryBase64Chunks(send *reporting, data []byte, chunkSize int) error {
 	if chunkSize <= 0 {
 		chunkSize = 768 << 10
@@ -454,7 +439,6 @@ func readSpeechRequest(r llm.Request) (speechRequest, error) {
 		return out, unsupportedAudio("stream: Gemini speech does not support streaming")
 	}
 
-	// OpenAI's default response_format is "mp3".
 	format := "mp3"
 	if raw, ok := body["response_format"]; ok && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &format); err != nil {
@@ -505,7 +489,7 @@ func extractSpeechAudio(reply *geminiAudioReply, wantFormat string) ([]byte, str
 		wavBytes     []byte
 		sampleRate   = defaultGeminiPCMRate
 		channels     = 1
-		foundKind    string // "pcm" or "wav"
+		foundKind    string
 		finishReason string
 	)
 	for _, cand := range reply.Candidates {
@@ -586,7 +570,6 @@ func extractSpeechAudio(reply *geminiAudioReply, wantFormat string) ([]byte, str
 		return wav, "audio/wav", nil
 	}
 
-	// Upstream already returned WAV.
 	if len(wavBytes) < 12 || string(wavBytes[0:4]) != "RIFF" || string(wavBytes[8:12]) != "WAVE" {
 		return nil, "", upstreamAudioError("Gemini returned audio/wav without a RIFF/WAVE header")
 	}
@@ -600,7 +583,6 @@ func extractSpeechAudio(reply *geminiAudioReply, wantFormat string) ([]byte, str
 	return pcm, "audio/pcm", nil
 }
 
-// wrapPCMAsWAV prepends a standard 44-byte RIFF/WAVE PCM header to raw little-endian PCM bytes.
 func wrapPCMAsWAV(pcm []byte, sampleRate, channels, bitsPerSample int) ([]byte, error) {
 	if uint64(len(pcm)) > math.MaxUint32-36 {
 		return nil, upstreamAudioError("speech audio exceeds WAV size limit")
@@ -614,8 +596,8 @@ func wrapPCMAsWAV(pcm []byte, sampleRate, channels, bitsPerSample int) ([]byte, 
 	binary.LittleEndian.PutUint32(out[4:8], 36+dataSize)
 	copy(out[8:12], "WAVE")
 	copy(out[12:16], "fmt ")
-	binary.LittleEndian.PutUint32(out[16:20], 16) // PCM fmt chunk size
-	binary.LittleEndian.PutUint16(out[20:22], 1)  // PCM audio format
+	binary.LittleEndian.PutUint32(out[16:20], 16)
+	binary.LittleEndian.PutUint16(out[20:22], 1)
 	binary.LittleEndian.PutUint16(out[22:24], uint16(channels))
 	binary.LittleEndian.PutUint32(out[24:28], uint32(sampleRate))
 	binary.LittleEndian.PutUint32(out[28:32], byteRate)
@@ -627,7 +609,6 @@ func wrapPCMAsWAV(pcm []byte, sampleRate, channels, bitsPerSample int) ([]byte, 
 	return out, nil
 }
 
-// stripWAVHeaderToPCM extracts the PCM data chunk from a RIFF/WAVE payload.
 func stripWAVHeaderToPCM(wav []byte) ([]byte, error) {
 	pos := 12
 	var isPCM bool

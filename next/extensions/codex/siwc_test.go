@@ -21,7 +21,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk/sdktest"
 )
 
-// siwcCred is a SIWC credential as the login makes it.
 func siwcCred(access, refresh string) *protocol.Credential {
 	data, _ := json.Marshal(credentialData{SIWC: true, ClientID: codextest.SIWCIssuedClientID,
 		DeviceID: "8a4f2c1e-3b5d-4e6f-9a7b-1c2d3e4f5a6b", Scope: codextest.SIWCScope, IDToken: codextest.IDToken()})
@@ -37,8 +36,6 @@ func formKeys(v url.Values) []string {
 	return keys
 }
 
-// The SIWC sign-in link asks for today's grant: the agent client, the API resource and the
-// direct-use scope, PKCE S256, state, nonce, this device, and the identifier as the agent's name.
 func TestSIWCAuthorizeURL(t *testing.T) {
 	const device = "8a4f2c1e-3b5d-4e6f-9a7b-1c2d3e4f5a6b"
 	for _, tc := range []struct{ setting, want string }{{"", "pluxy"}, {"  my-agent ", "my-agent"}} {
@@ -70,9 +67,6 @@ func TestSIWCAuthorizeURL(t *testing.T) {
 	}
 }
 
-// A SIWC sign-in exchanges its code as the issued client for the API resource, and the credential
-// keeps what renewal needs; a renewal sends the issued client, the refresh token and the resource,
-// keeps the ID token the reply leaves out, and is due five minutes before expiry.
 func TestSIWCSignInAndRenewal(t *testing.T) {
 	srv := codextest.New(t)
 	acct := testAccount(srv, nil)
@@ -133,7 +127,6 @@ func TestSIWCSignInAndRenewal(t *testing.T) {
 	if renewed.AccessToken == c.AccessToken || renewed.RefreshToken == c.RefreshToken || rd != d {
 		t.Errorf("renewed %+v, data %s; want new tokens and the same data", renewed, renewed.Data)
 	}
-	// The old refresh token was used up, and the Codex token endpoint was never called.
 	if _, err := refresh(context.Background(), sdk.RefreshCall{Account: testAccount(srv, c)}); err == nil {
 		t.Error("a used refresh token was accepted again")
 	}
@@ -142,9 +135,6 @@ func TestSIWCSignInAndRenewal(t *testing.T) {
 	}
 }
 
-// A grant without the direct-use scope cannot call the API, a sign-in result without the issued
-// client cannot be exchanged, a sign-in reply without an ID token or a renewal without a refresh
-// token is incomplete, and a credential without its issued client cannot be renewed.
 func TestSIWCGrantChecks(t *testing.T) {
 	srv := codextest.New(t)
 	srv.SIWCGrantScope = "openid profile email offline_access"
@@ -168,8 +158,6 @@ func TestSIWCGrantChecks(t *testing.T) {
 	_, err = siwcExchange(context.Background(), set, url.Values{"code": {"c"}, "client_id": {"x"}}, "v", "d")
 	sdktest.WantError(t, err, llm.CodeUpstream, false)
 
-	// A renewal reply without a refresh token is refused, as today's core refuses it, so core
-	// keeps the stored credential and its refresh token.
 	noRefresh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"access_token":"a2","scope":"`+codextest.SIWCScope+`","expires_in":3600}`)
 	}))
@@ -187,7 +175,6 @@ func TestSIWCGrantChecks(t *testing.T) {
 	sdktest.WantError(t, err, llm.CodeAuth, false)
 }
 
-// siwcRequest builds the upstream request generate would send on a SIWC account.
 func siwcRequest(t *testing.T, req llm.Request, s settings) (*upstreamRequest, http.Header, map[string]any) {
 	t.Helper()
 	a, err := accountOf(siwcCred("siwc-access", "r"))
@@ -205,9 +192,6 @@ func siwcRequest(t *testing.T, req llm.Request, s settings) (*upstreamRequest, h
 	return ur, h, body
 }
 
-// A SIWC account's request goes out under today's SIWC rules: the SIWC token and User-Agent, the
-// session as session_id and X-Client-Request-Id and none of the Codex headers; no image tool;
-// configuration_update items folded into the reasoning effort; blank instructions left out.
 func TestSIWCRequestRules(t *testing.T) {
 	req := wsRequest(t, `{"model":"gpt-6.1-sol","instructions":"  ","temperature":0.2,"prompt_cache_retention":"24h",
 		"store":true,"prompt_cache_key":"cache-1","reasoning":{"effort":"medium"},
@@ -247,8 +231,6 @@ func TestSIWCRequestRules(t *testing.T) {
 		t.Errorf("body %s keeps a configuration_update item or offers the image tool", b)
 	}
 
-	// A thinking suffix's effort wins over the items, which are still removed; nonblank
-	// instructions stay; the identifier setting names the User-Agent.
 	req = wsRequest(t, `{"model":"gpt-6.1-sol","instructions":"Be brief.","input":[{"role":"user","content":"hi"},
 		{"type":"configuration_update","reasoning":{"effort":"high"}}]}`)
 	req.Options.ThinkingSuffix = "low"
@@ -271,8 +253,6 @@ func TestSIWCRequestRules(t *testing.T) {
 	}
 }
 
-// capture is an upstream that records each request and refuses it, so a call ends before it
-// needs a reply stream.
 type capture struct {
 	*httptest.Server
 	mu   sync.Mutex
@@ -310,8 +290,6 @@ func siwcCall(c *capture, format, body string, headers map[string]string) sdk.Ca
 	}
 }
 
-// Compaction on a SIWC account goes to {base_url}/responses/compact with the SIWC token and
-// headers, without stream, store or the fields the API refuses.
 func TestSIWCCompaction(t *testing.T) {
 	c := newCapture(t)
 	call := siwcCall(c, llm.FormatOpenAIResponsesCompact,
@@ -337,9 +315,6 @@ func TestSIWCCompaction(t *testing.T) {
 	}
 }
 
-// A SIWC account refuses, for this account only so core tries another, a Codex client's request
-// (on HTTP, compaction and the WebSocket alike) and every endpoint but compaction; it has no
-// quota to report. None of these reaches the upstream.
 func TestSIWCRefusals(t *testing.T) {
 	c := newCapture(t)
 	codex := map[string]string{"user-agent": "codex_cli_rs/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11"}
@@ -359,14 +334,12 @@ func TestSIWCRefusals(t *testing.T) {
 	turn := siwcCall(c, llm.FormatOpenAIResponses, `{"model":"gpt-6.1-sol","input":[]}`, codex)
 	turn.Account = acct
 	unsupported("Codex client turn", sess.Turn(context.Background(), turn, nil))
-	// A quota call is not routed, so its refusal is not retryable (as for an API key).
 	_, err := quota(context.Background(), sdk.QuotaCall{Account: siwcCall(c, "", "{}", nil).Account})
 	sdktest.WantError(t, err, llm.CodeUnsupported, false)
 	if c.count() != 0 {
 		t.Errorf("%d requests reached the upstream", c.count())
 	}
 
-	// Other clients' requests are served.
 	err = generate(context.Background(), siwcCall(c, llm.FormatOpenAIResponses, `{"model":"gpt-6.1-sol","input":"hi"}`,
 		map[string]string{"user-agent": "OpenAI/Python 2.1.0"}), nil)
 	sdktest.WantError(t, err, llm.CodeInvalidRequest, false)
@@ -375,8 +348,6 @@ func TestSIWCRefusals(t *testing.T) {
 	}
 }
 
-// A SIWC socket is opened with the SIWC token and headers, and its turns go without stream and
-// background, not stored.
 func TestSIWCSocket(t *testing.T) {
 	f := newFakeWS(t)
 	cred := siwcCred("siwc-access", "r")
@@ -415,7 +386,6 @@ func TestSIWCSocket(t *testing.T) {
 	}
 }
 
-// A SIWC account lists its plan's models without the image models.
 func TestSIWCModels(t *testing.T) {
 	c := siwcCred("a", "r")
 	c.Data, _ = json.Marshal(credentialData{SIWC: true, IDToken: idTokenWithPlan("plus")})

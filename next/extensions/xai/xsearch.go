@@ -29,11 +29,8 @@ func requestHasSearch(m map[string]any) bool {
 	return hasSearch(tools)
 }
 
-// Match today's core: a forced hosted tool must not compete with injected search.
-// allowed_tools must also allow the injected tool, without losing the client's entries.
 func injectSearch(m map[string]any) {
 	tools, _ := m["tools"].([]any)
-	// A choice with no original tools must not force the optional injected search.
 	if len(tools) == 0 {
 		delete(m, "tool_choice")
 		delete(m, "parallel_tool_calls")
@@ -104,8 +101,6 @@ func injectSearch(m map[string]any) {
 		}
 	}
 	if !requestHasSearch(m) {
-		// Injection appends before the final cap, so it cannot survive a full list.
-		// Do not add an allowed_tools choice for a tool the cap will remove.
 		if len(tools) >= maxTools {
 			return
 		}
@@ -182,7 +177,6 @@ func (f *searchFilter) output(m map[string]any) bool {
 	return true
 }
 
-// Filter before the Responses decoder so all client formats see the same items and finish reason.
 func (f *searchFilter) response(raw []byte) []byte {
 	if !f.enabled {
 		return raw

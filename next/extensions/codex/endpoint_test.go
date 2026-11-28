@@ -18,8 +18,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// searchUpstream is a fake Codex search endpoint: it records the requests it gets and answers
-// each with status and reply (a JSON object when status is 200).
 type searchUpstream struct {
 	*httptest.Server
 	mu     sync.Mutex
@@ -62,7 +60,6 @@ func (u *searchUpstream) requests() []searchRequest {
 	return append([]searchRequest(nil), u.seen...)
 }
 
-// searchCall runs an alpha search endpoint call on the built extension and returns its events.
 func searchCall(t *testing.T, ext *host.Extension, acct protocol.Account, model, body string, headers map[string]string) []llm.Event {
 	t.Helper()
 	req := llm.Request{Model: model, Native: &llm.Native{Format: llm.FormatCodexAlphaSearch, Body: json.RawMessage(body), Headers: headers}}
@@ -88,10 +85,6 @@ func searchAccount(t *testing.T, u *searchUpstream, base string, cred *protocol.
 	return protocol.Account{ID: "codex", Settings: raw, Credential: cred}
 }
 
-// The search endpoint is served as today's core serves it: a subscription always, to
-// {base_url}/alpha/search, an API key only with alpha_search on. The body goes on without the
-// prompt cache hints, an API key's model renamed for the account; the headers are Codex's own
-// originator and the client's version, user agent and request IDs; the reply comes back whole.
 func TestAlphaSearch(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	ext, err := host.Start(manifest, host.Options{Log: io.Discard})
@@ -103,7 +96,6 @@ func TestAlphaSearch(t *testing.T) {
 	apiKey := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-search"}
 	body := `{"model":"alias","query":"q","prompt_cache_key":"k","prompt_cache_retention":"24h","id":"conv-1"}`
 
-	// finished checks the reply: the upstream's body in one piece, under its content type.
 	finished := func(t *testing.T, evs []llm.Event) {
 		t.Helper()
 		if len(evs) != 3 || evs[0].Type != llm.EventResponseStart || evs[0].Response.Format != llm.FormatCodexAlphaSearch ||
@@ -131,8 +123,6 @@ func TestAlphaSearch(t *testing.T) {
 				t.Errorf("%s = %q, want %q", name, got, want)
 			}
 		}
-		// The model is renamed for the account, as for an API key (routing does it for every
-		// endpoint; today's core leaves a subscription's body model as written).
 		want := map[string]any{"model": "up-model", "query": "q", "id": "conv-1"}
 		if !reflect.DeepEqual(reqs[0].body, want) {
 			t.Errorf("body = %v, want %v", reqs[0].body, want)
@@ -194,8 +184,6 @@ func TestAlphaSearch(t *testing.T) {
 			if len(evs) != 1 || e == nil || e.Code != code || e.Status != status || e.Message != "refused" {
 				t.Errorf("status %d: events = %+v, want code %s", status, evs, code)
 			}
-			// A 404 means the upstream has no search endpoint: it must not become a block on the
-			// model, which would stop the account generating with it.
 			if status == http.StatusNotFound && (e.Scope != llm.ScopeRequest || e.Retryable) {
 				t.Errorf("404: scope %q retryable %v, want a request-scoped error that blocks nothing", e.Scope, e.Retryable)
 			}
@@ -212,7 +200,6 @@ func TestAlphaSearch(t *testing.T) {
 	})
 }
 
-// With no base_url, a subscription's search goes where today's core sends it.
 func TestAlphaSearchDefaultURL(t *testing.T) {
 	if got := baseURL(settings{}, account{subscription: true}) + "/alpha/search"; got != "https://chatgpt.com/backend-api/codex/alpha/search" {
 		t.Errorf("subscription URL = %q", got)
@@ -222,9 +209,6 @@ func TestAlphaSearchDefaultURL(t *testing.T) {
 	}
 }
 
-// An Images request that the account does not serve (a free plan, the images setting off) is
-// refused for the account, so core tries another; one for a model that is not an image model is
-// refused for the request. None reaches the upstream.
 func TestImagesRefusals(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("the upstream got %s %s", r.Method, r.URL.Path)
@@ -241,7 +225,6 @@ func TestImagesRefusals(t *testing.T) {
 	key := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-test"}
 	free, _ := json.Marshal(credentialData{IDToken: idTokenWithPlan("free")})
 	freePlan := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "at", Data: free}
-	// Today's core compares the plan without case or surrounding spaces.
 	freeWritten, _ := json.Marshal(credentialData{IDToken: idTokenWithPlan(" Free ")})
 	freeWrittenPlan := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "at", Data: freeWritten}
 	for _, tc := range []struct {
@@ -271,7 +254,6 @@ func asError(err error, e **llm.Error) bool {
 	return ok
 }
 
-// Every plan's model list ends with the image models, which the Images API serves.
 func TestModelListsEndWithImageModels(t *testing.T) {
 	for plan, list := range planModels {
 		if len(list) < len(imageModels) {
@@ -285,21 +267,17 @@ func TestModelListsEndWithImageModels(t *testing.T) {
 	}
 }
 
-// roundTripFunc is an http.RoundTripper made of a function.
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// An API key with alpha_search on but no base_url of its own does not serve search: it is refused
-// for the account before anything is sent, so core tries another account, as today's core, which
-// keeps no Codex API key without a base URL, never serves search with one.
 func TestAlphaSearchAPIKeyWithoutBaseURL(t *testing.T) {
 	saved := client.Transport
 	t.Cleanup(func() { client.Transport = saved })
 	var sent []string
 	client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		sent = append(sent, r.URL.String())
-		return nil, io.ErrUnexpectedEOF // never reaches the network
+		return nil, io.ErrUnexpectedEOF
 	})
 	raw, _ := json.Marshal(map[string]any{"alpha_search": true})
 	err := alphaSearch(context.Background(), sdk.Call{
@@ -315,10 +293,6 @@ func TestAlphaSearchAPIKeyWithoutBaseURL(t *testing.T) {
 	}
 }
 
-// POST /responses/compact applies the same effort clamping and minimum output token floor as
-// /responses: a thinking suffix, body effort, or SIWC configuration_update effort outside the
-// model's catalog levels is clamped, and an integer max_output_tokens from 1 to 15 is raised to
-// 16. Supported efforts, uncataloged models, and requests without those fields stay unchanged.
 func TestCompactClampsEffortAndMinOutputTokens(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	ext, err := host.Start(manifest, host.Options{Log: io.Discard})

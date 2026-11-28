@@ -14,15 +14,8 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// tokenCountingBeta is the beta Anthropic's SDKs send with a token count, which today's core adds
-// to every count it sends Kimi.
 const tokenCountingBeta = "token-counting-2024-11-01"
 
-// countTokens counts a request's input tokens with Kimi's Messages count endpoint,
-// {base_url}/v1/messages/count_tokens, as today's core does for every client format: a Messages
-// request is counted as Kimi's Messages API would get it, any other is rebuilt as Messages with
-// the fields count_tokens takes. Under the reject drop policy it refuses what generating the same
-// request would refuse (countRefusal).
 func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -84,10 +77,6 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, &llm.Usage{InputTokens: &n, Raw: llm.RawJSON(raw)})
 }
 
-// countRefusal returns the refusal generating req would give under the reject drop policy, or
-// nil. A count is rebuilt as Messages, but generating sends a request in a format Kimi has an API
-// for as it came and rebuilds any other as Chat Completions (upstreamFor, passesThrough), so the
-// count refuses on what the Chat rebuild drops, not on what the Messages rebuild drops.
 func countRefusal(req llm.Request) error {
 	if req.DropPolicy != llm.DropReject || passesThrough(req, upstreamFor(req)) {
 		return nil
@@ -96,9 +85,6 @@ func countRefusal(req llm.Request) error {
 	return err
 }
 
-// countBody returns the count_tokens body for req, and whether it is the client's own Messages
-// body. Either way the model is Kimi's name for it and Claude Code's billing block is left out of
-// the system prompt, as for generating.
 func countBody(req llm.Request) ([]byte, bool, error) {
 	native := req.Native != nil && req.Native.Format == llm.FormatAnthropicMessages
 	var body []byte
@@ -123,7 +109,6 @@ func countBody(req llm.Request) ([]byte, bool, error) {
 	return out, native, err
 }
 
-// withBeta adds beta to a comma-separated anthropic-beta value unless it is already there.
 func withBeta(v, beta string) string {
 	for _, b := range strings.Split(v, ",") {
 		if strings.TrimSpace(b) == beta {

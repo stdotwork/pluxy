@@ -1,19 +1,3 @@
-// Command meta is pluxy's provider extension for Meta's Muse models on api.meta.ai: a Muse Code
-// subscription signed in with Meta's device-code login (login.go), or a Meta API key.
-//
-// Account settings (all optional):
-//
-//	{"base_url": "https://api.meta.ai/v1"}
-//
-// base_url is where Meta's API lives; requests go to {base_url}/responses. Without it a login's
-// requests go where Meta said when the key was made, and a key's to https://api.meta.ai/v1.
-// Tests move Meta's login and its key endpoint to a fake with auth_base_url and mint_url
-// (sdk.TestLoginHost); in a normal run they are ignored.
-//
-// Every client format is sent to Meta's Responses API, always as a stream, as Muse Code sends it
-// and today's core does: a Responses client's body passes through with the changes Meta needs
-// (body.go), and the other formats are translated to Responses. Requests carry Muse Code's client
-// identity (identity.go).
 package main
 
 import (
@@ -42,11 +26,8 @@ const (
 	version = "0.1.0"
 )
 
-// defaultBaseURL is Meta's API.
 const defaultBaseURL = "https://api.meta.ai/v1"
 
-// notFoundCooldownMS is how long an account is held back from a model Meta says it does not have,
-// when Meta names no reset time (today's core holds it five minutes).
 const notFoundCooldownMS = 5 * 60 * 1000
 
 func main() {
@@ -90,15 +71,10 @@ func readSettings(raw json.RawMessage) (settings, error) {
 	return s, nil
 }
 
-// credentialData is what a login's credential keeps besides its tokens.
 type credentialData struct {
-	// BaseURL is where Meta said the minted key's API is.
 	BaseURL string `json:"base_url,omitempty"`
 }
 
-// client has no timeouts after the connection is made: a long generation is not a failure, and
-// cancellation comes from the call's context. It follows a redirect only to the same scheme and
-// host, so the key is not sent elsewhere.
 var client = &http.Client{
 	Transport: sdk.Upstream(&http.Transport{
 		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -118,9 +94,6 @@ var client = &http.Client{
 	},
 }
 
-// target returns the key a credential sends to Meta and the API it goes to: a login's minted key
-// (its access token), or a Meta API key. A device-login token (dca:...) is not a key Meta's API
-// takes.
 func target(s settings, c *protocol.Credential) (key, baseURL string, err error) {
 	baseURL = s.BaseURL
 	switch {
@@ -202,7 +175,6 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return nil
 }
 
-// reporting adds the translation report to the reply's response.start event.
 type reporting struct {
 	*sdk.Stream
 	tr *llm.Translation
@@ -217,10 +189,6 @@ func (r *reporting) Send(ev llm.Event) error {
 	return r.Stream.Send(ev)
 }
 
-// relayStream decodes Meta's Responses stream and sends each event as soon as it is decoded. A
-// blocked send blocks the next upstream read. An error event ends the request with Meta's error.
-// Meta's response.subscription_usage events, which are not part of the Responses stream, are
-// ignored by the decoder like any event it does not know.
 func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }, model string) error {
 	r := sse.NewReader(body)
 	dec := openairesponses.NewStreamDecoder()
@@ -257,7 +225,6 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 			}
 			if failure != nil {
 				fe := streamError(failure, model, dec.Usage())
-				// Once the reply began, the model ran: trying again is not safe.
 				fe.Retryable = fe.Retryable && !sent
 				return fe
 			}
@@ -281,8 +248,6 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 	}
 }
 
-// streamError turns an error event of the stream into a structured error, with the status the
-// event names (a 502 when it names none).
 func streamError(data []byte, model string, usage *llm.Usage) *llm.Error {
 	var ev struct {
 		Error struct {
@@ -334,7 +299,6 @@ func parseError(raw []byte) metaError {
 	return p
 }
 
-// upstreamError turns a non-2xx reply from Meta into a structured error.
 func upstreamError(status int, raw []byte, h http.Header, model string, now time.Time) *llm.Error {
 	parsed := parseError(raw)
 	code := ""
@@ -366,8 +330,6 @@ func upstreamError(status int, raw []byte, h http.Header, model string, now time
 	case status == http.StatusForbidden:
 		e.Code, e.Scope, e.Retryable = llm.CodePermission, llm.ScopeCredential, true
 	case status == http.StatusNotFound:
-		// Today's core holds the account back from the model until Meta's reset time, or five
-		// minutes.
 		e.Code, e.Scope = llm.CodeNotFound, llm.ScopeModel
 		e.Retryable = model != "" && strings.Contains(e.Message, model)
 		e.RetryAfterMS = resetMS
@@ -375,8 +337,6 @@ func upstreamError(status int, raw []byte, h http.Header, model string, now time
 			e.RetryAfterMS = notFoundCooldownMS
 		}
 	case status == http.StatusTooManyRequests:
-		// Only the model waits on this account, as today's core cools only the model that
-		// answered; a used-up subscription quota is the account's.
 		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
 		if h != nil {
 			e.RetryAfterMS = sdk.RetryAfter(h.Get("Retry-After"), now)
@@ -400,8 +360,6 @@ func upstreamError(status int, raw []byte, h http.Header, model string, now time
 	return e
 }
 
-// subscriptionQuota reports whether a 429 says the subscription's quota is used up rather than
-// that the account is sending too fast, as today's core decides.
 func subscriptionQuota(p metaError, code string) bool {
 	msg, code := strings.ToLower(p.Error.Message), strings.ToLower(code)
 	if strings.Contains(msg, "subscription quota") || strings.Contains(msg, "quota exhausted") {

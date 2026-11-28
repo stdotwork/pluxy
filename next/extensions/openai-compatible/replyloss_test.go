@@ -36,13 +36,9 @@ func (b *logBuffer) String() string {
 	return b.buf.String()
 }
 
-// A client in the upstream's own format is given the upstream's body, which holds the citations the
-// decoder had to leave out of the model, unless the reply is built again from the model's events:
-// a Gemini stream sent whole, and a Responses reply sent whole as a stream. Only then is the loss
-// real and logged.
 func TestReplyLossLoggedOnlyWhenTheClientLosesTheCitations(t *testing.T) {
 	title := strings.Repeat("t", 20<<10)
-	const n = 300 // 6 MiB of citations, over the 4 MiB a reply keeps
+	const n = 300
 	var chunks, supports, anns []string
 	for i := range n {
 		chunks = append(chunks, fmt.Sprintf(`{"web":{"uri":"https://a.example/%d","title":%q}}`, i, title))

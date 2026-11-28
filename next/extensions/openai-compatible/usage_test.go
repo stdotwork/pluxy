@@ -16,8 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Usage the upstream reported before a streamed reply failed reaches core with the error, so
-// tokens the upstream counted are not lost when the reply does not finish.
 func TestStreamFailureKeepsUsage(t *testing.T) {
 	const (
 		text  = `{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}`
@@ -26,7 +24,6 @@ func TestStreamFailureKeepsUsage(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		scenario := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")[0]
 		if scenario == "broken" {
-			// A chunked reply cut off without its last chunk: the read fails mid-stream.
 			conn, buf, _ := w.(http.Hijacker).Hijack()
 			defer conn.Close()
 			fmt.Fprint(buf, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
@@ -42,7 +39,6 @@ func TestStreamFailureKeepsUsage(t *testing.T) {
 		if scenario == "error" {
 			fmt.Fprint(w, `data: {"error":{"message":"overloaded","code":"server_busy"}}`+"\n\n")
 		}
-		// "eof": the stream ends with neither a finish reason nor [DONE].
 	}))
 	t.Cleanup(up.Close)
 

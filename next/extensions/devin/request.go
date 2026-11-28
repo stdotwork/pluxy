@@ -14,38 +14,13 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A chat request is one GetChatMessageRequest message, built as Devin's own CLI builds it and
-// today's core sends it. Its fields, by number:
-//
-//	1  client metadata: the CLI's name and version, the session token, locale, OS and a
-//	   device fingerprint
-//	2  system prompt
-//	3  conversation turns, each: 1 ID, 2 source (1 user, 2 assistant, 4 tool result),
-//	   3 text, 6 tool calls (1 ID, 2 name, 3 arguments), 7 the call a result answers,
-//	   10 images (1 base64 data, 2 media type), 11 reasoning text, 12 reasoning signature,
-//	   18 its type
-//	7  5
-//	8  completion settings: 2 output token limit, 5 temperature, and fixed values
-//	10 tools: 1 name, 2 description, 3 JSON Schema of the parameters
-//	15 session: 1 session ID, 3 4, and 4 14 when the last turn is the user's
-//	16 cascade ID (the session ID)
-//	20 1
-//	21 model ID (models.go)
-//
-// The fixed values are the CLI's, with today's core's meaning unknown.
-
 const (
-	// cliName and cliVersion identify Devin's CLI, as today's core names it.
-	cliName    = "chisel"
-	cliVersion = "3000.10.21"
-	// maxOutputTokens is the output limit every model in today's Devin catalog has; a request
-	// gets it when it names none or more.
+	cliName         = "chisel"
+	cliVersion      = "3000.10.21"
 	maxOutputTokens = 64000
-	// fingerprintLen is the length of the device fingerprint, in hex digits.
-	fingerprintLen = 732
+	fingerprintLen  = 732
 )
 
-// Turn sources.
 const (
 	sourceUser      = 1
 	sourceAssistant = 2
@@ -57,9 +32,8 @@ type toolCall struct{ id, name, args string }
 type image struct{ data, mediaType string }
 
 type turn struct {
-	source  int
-	content string
-	// emptied marks a user turn that had parts Devin cannot take and nothing else.
+	source    int
+	content   string
 	emptied   bool
 	dropped   string
 	calls     []toolCall
@@ -102,7 +76,6 @@ func (t turn) encode() []byte {
 	return m
 }
 
-// chatRequest is what a request becomes before it is written.
 type chatRequest struct {
 	system      string
 	turns       []turn
@@ -117,8 +90,6 @@ func (c *chatRequest) lose(kind, path, detail string) {
 	c.losses = llm.AddLoss(c.losses, llm.Loss{Kind: kind, Path: path, Detail: detail})
 }
 
-// kept lists the fields o keeps beside the model as dropped, except the ones in used, which the
-// request takes.
 func (c *chatRequest) kept(o *llm.Origin, used ...string) {
 	if o == nil || len(o.Raw) == 0 {
 		return
@@ -146,9 +117,6 @@ func joinPath(path, key string) string {
 	return path + "." + key
 }
 
-// buildRequest turns a request into a chat request, listing what Devin has no place for. A user
-// turn left with nothing once the media Devin cannot take is dropped is refused, as today's core
-// refuses it.
 func buildRequest(req *llm.Request) (*chatRequest, error) {
 	c := &chatRequest{model: modelID(req.Model, req.Options.ReasoningEffort), maxTokens: maxOutputTokens, temperature: 1}
 	lose := c.lose
@@ -161,7 +129,6 @@ func buildRequest(req *llm.Request) (*chatRequest, error) {
 		c.temperature = *o.Temperature
 	}
 	if o.CandidateCount > 1 {
-		// The format parsers take the count out of the origin's raw fields, so kept no longer lists it.
 		lose(llm.LossDropped, llm.CandidateCountPath(*req), "Devin returns one candidate")
 	}
 	if o.TopP != nil {
@@ -198,7 +165,7 @@ func buildRequest(req *llm.Request) (*chatRequest, error) {
 	}
 
 	var system []string
-	pending := map[string]bool{} // calls a tool result may answer
+	pending := map[string]bool{}
 	last := func() *turn {
 		if len(c.turns) == 0 {
 			return nil
@@ -255,8 +222,6 @@ func buildRequest(req *llm.Request) (*chatRequest, error) {
 			if pending[it.CallID] {
 				c.turns = append(c.turns, turn{source: sourceTool, content: out, callID: it.CallID})
 			} else {
-				// A result for no call in the conversation goes as the user's text, as today's
-				// core sends it.
 				c.turns = append(c.turns, turn{source: sourceUser, content: out})
 			}
 		default:
@@ -270,9 +235,6 @@ func buildRequest(req *llm.Request) (*chatRequest, error) {
 	return c, nil
 }
 
-// dropEmptied refuses the request when a run of user turns (between assistant turns) has a turn
-// emptied by dropped media and nothing else to send, and otherwise removes the emptied turns, so
-// no empty user turn reaches Devin.
 func (c *chatRequest) dropEmptied() error {
 	start := 0
 	for i := 0; i <= len(c.turns); i++ {
@@ -296,9 +258,6 @@ func (c *chatRequest) dropEmptied() error {
 	return nil
 }
 
-// content returns a message's text, its parts joined by a line break, its images, and the type
-// of the first part it dropped. Devin takes images as base64 data, so an image given as a link
-// and other parts are dropped.
 func (c *chatRequest) content(it llm.Item, path string) (string, []image, string) {
 	var texts []string
 	var images []image
@@ -328,10 +287,6 @@ func (c *chatRequest) content(it llm.Item, path string) (string, []image, string
 	return strings.Join(texts, "\n"), images, dropped
 }
 
-// resultText returns a tool result's text. A result carried as parts keeps its text, in Output;
-// its other parts, such as images, and its error flag are dropped. A result the client gave as
-// content blocks that a core before protocol minor 25 kept beside the model (in content for
-// Messages or output for Responses) keeps its text blocks, joined by a line break, the same way.
 func (c *chatRequest) resultText(it llm.Item) string {
 	itemPath := ""
 	if it.Origin != nil {
@@ -385,8 +340,6 @@ func (c *chatRequest) resultText(it llm.Item) string {
 	return ""
 }
 
-// labelImages puts a line naming each image before a user turn's text, as Devin's CLI names
-// pasted images and today's core sends them: "[Image 1: pasted_image_1.png]".
 func labelImages(text string, images []image) string {
 	if len(images) == 0 || strings.Contains(text, "[Image ") {
 		return text
@@ -411,8 +364,6 @@ func labelImages(text string, images []image) string {
 	return header + "\n\n" + text
 }
 
-// dataImage reads an image given as a data: URL. RFC 3986 section 3.1 makes the scheme
-// case-insensitive, so DATA: and Data: are data URLs too, and ;base64 is matched the same way.
 func dataImage(u string) (image, bool) {
 	const scheme = "data:"
 	if len(u) < len(scheme) || !strings.EqualFold(u[:len(scheme)], scheme) {
@@ -430,9 +381,6 @@ func dataImage(u string) (image, bool) {
 	return image{data: data, mediaType: mediaType}, true
 }
 
-// signatureOf returns the reasoning signature a client replayed, as a reply gave it: a thinking
-// block's signature or a Responses reasoning item's encrypted_content. Devin's signatures are
-// text, sent as they are.
 func signatureOf(o *llm.Origin) []byte {
 	if o == nil || len(o.Raw) == 0 {
 		return nil
@@ -459,7 +407,6 @@ func originPath(o *llm.Origin, fallback string) string {
 	return fallback
 }
 
-// encode writes the chat request as a GetChatMessageRequest message.
 func (c *chatRequest) encode(token, fingerprint string) []byte {
 	session := newUUID()
 	meta := message{}.str(1, cliName).str(2, cliVersion).str(3, token).str(4, "en").str(5, runtime.GOOS).
@@ -494,9 +441,6 @@ func (c *chatRequest) encode(token, fingerprint string) []byte {
 	return m.str(16, session).varint(20, 1).str(21, c.model)
 }
 
-// deviceFingerprint returns the device fingerprint the CLI sends: from a seed, the SHA-256 of
-// "seed-0", "seed-1", ... in hex, joined and cut to length; without one, random hex, new for
-// each request, as today's core sends it.
 func deviceFingerprint(seed string) string {
 	if seed == "" {
 		b := make([]byte, fingerprintLen/2)
@@ -511,7 +455,6 @@ func deviceFingerprint(seed string) string {
 	return sb.String()[:fingerprintLen]
 }
 
-// newUUID returns a random (version 4) UUID.
 func newUUID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])

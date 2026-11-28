@@ -1,24 +1,3 @@
-// Command xai is pluxy's provider extension for xAI's Grok models: an xAI API key, or a Grok
-// account signed in as the Grok CLI signs in (login.go).
-//
-// Account settings (optional):
-//
-//	{"base_url": "https://api.x.ai/v1"}
-//
-// base_url is where xAI's API lives; requests go to {base_url}/responses. A Grok login's requests
-// go to the Grok CLI's chat endpoint (https://cli-chat-proxy.grok.com/v1) unless base_url names
-// another address, as today's core sends them. client_version replaces the Grok CLI version a
-// login's requests name. Tests move xAI's sign-in to a fake with auth_issuer (sdk.TestLoginHost);
-// in a normal run it is ignored.
-//
-// Every client format is sent to xAI's Responses API: a Responses client's body passes through
-// with the changes xAI needs (body.go), and the other formats are translated to Responses. An API
-// key's requests name this extension in their User-Agent (pluxy-xai); a login's carry the Grok
-// CLI's identity, which xAI's CLI endpoint expects.
-//
-// An account check (core's check call) of an api_key account reads xAI's model list,
-// GET {base_url}/models with the key as a bearer token, which costs the account nothing. A Grok
-// login (oauth) is left not checked, without a request.
 package main
 
 import (
@@ -46,18 +25,12 @@ const (
 	version = "0.1.0"
 )
 
-// defaultBaseURL is xAI's API.
 const defaultBaseURL = "https://api.x.ai/v1"
 
-// freeUsageCooldownMS is how long an account is held back when xAI reports its free usage used up
-// (the 24-hour cooldown today's core applies).
 const freeUsageCooldownMS = 24 * 60 * 60 * 1000
 
-// cliChatBaseURL is the Grok CLI's chat endpoint, where a login's requests go.
 const cliChatBaseURL = "https://cli-chat-proxy.grok.com/v1"
 
-// cliVersion is the Grok CLI version a login's requests name: today's core's fallback version,
-// which it uses until it reads a newer one from npm.
 const cliVersion = "1.0.46"
 
 func main() {
@@ -96,9 +69,6 @@ func readSettings(raw json.RawMessage) (settings, error) {
 	return s, nil
 }
 
-// client has no timeouts after the connection is made: a long generation is not a failure, and
-// cancellation comes from the call's context. It follows a redirect only to the same scheme and
-// host, so the key is not sent elsewhere.
 var client = &http.Client{
 	Transport: sdk.Upstream(&http.Transport{
 		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -118,15 +88,11 @@ var client = &http.Client{
 	},
 }
 
-// target is where an account's requests go and how they are signed.
 type target struct {
 	base, token string
-	cli         bool // a Grok login: the CLI's endpoint and identity
+	cli         bool
 }
 
-// accountTarget reads an account's credential: an API key goes to base_url; a Grok login goes to
-// the Grok CLI's chat endpoint, or to base_url when it names another address than xAI's API, as
-// today's core routes it.
 func accountTarget(s settings, c *protocol.Credential) (target, error) {
 	switch {
 	case c != nil && c.Kind == protocol.CredentialAPIKey && c.APIKey != "":
@@ -141,8 +107,6 @@ func accountTarget(s settings, c *protocol.Credential) (target, error) {
 	return target{}, &llm.Error{Code: llm.CodeAuth, Message: "the account has no xAI API key or Grok login", Scope: llm.ScopeCredential}
 }
 
-// check asks xAI for its model list with an API key, which costs nothing and generates nothing. A
-// credential of another kind (a Grok login) is answered unsupported without a request.
 func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
 	cred := call.Account.Credential
 	if cred != nil && cred.Kind != protocol.CredentialAPIKey {
@@ -187,8 +151,6 @@ func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, erro
 	return &protocol.CheckResult{Detail: fmt.Sprintf("the upstream lists %d models", len(list.Data))}, nil
 }
 
-// setCLIIdentity sets the Grok CLI's identity headers on a request to the CLI's endpoint, as today's
-// core sends them; the endpoint checks them. Requests and quota reads both carry them.
 func setCLIIdentity(req *http.Request, s settings) {
 	req.Header.Set("User-Agent", "xai-grok-workspace/"+s.ClientVersion)
 	req.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
@@ -233,8 +195,6 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	} else {
 		req.Header.Set("Accept", "application/json")
 	}
-	// The conversation's ID is the prompt cache key the body carries (the Responses client's own).
-	// Today's core derives one when the client sends none; this extension does not.
 	if conv := promptCacheKey(body); conv != "" {
 		req.Header.Set("x-grok-conv-id", conv)
 	}
@@ -266,7 +226,6 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	if bridge != nil {
-		// The reply is checked before any of it is sent.
 		if events, err = convert(bridge, events); err != nil {
 			return err
 		}
@@ -282,7 +241,6 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 
 type eventSender interface{ Send(llm.Event) error }
 
-// convert runs a bridge over a whole reply.
 func convert(b transformer, events []llm.Event) ([]llm.Event, error) {
 	var out []llm.Event
 	for _, ev := range events {
@@ -295,7 +253,6 @@ func convert(b transformer, events []llm.Event) ([]llm.Event, error) {
 	return out, nil
 }
 
-// promptCacheKey returns the body's prompt_cache_key, trimmed, or "".
 func promptCacheKey(body []byte) string {
 	var m struct {
 		Key string `json:"prompt_cache_key"`
@@ -304,7 +261,6 @@ func promptCacheKey(body []byte) string {
 	return strings.TrimSpace(m.Key)
 }
 
-// reporting adds the translation report to the reply's response.start event.
 type reporting struct {
 	*sdk.Stream
 	tr *llm.Translation
@@ -325,8 +281,6 @@ type streamDecoder interface {
 	Usage() *llm.Usage
 }
 
-// relayStream decodes the upstream stream and sends each event as soon as it is decoded. A
-// blocked send blocks the next upstream read.
 func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }, dec streamDecoder) error {
 	r := sse.NewReader(body)
 	for {
@@ -364,8 +318,6 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 	}
 }
 
-// upstreamError turns a non-2xx reply from xAI into a structured error. xAI's bodies name the
-// error in error.message and error.code, or with a top-level code and a string error.
 func upstreamError(resp *http.Response, model string) *llm.Error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var parsed struct {
@@ -405,7 +357,6 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 	case s == http.StatusUnauthorized:
 		e.Code, e.Scope, e.Retryable = llm.CodeAuth, llm.ScopeCredential, true
 	case s == http.StatusForbidden && badCredentials(lower):
-		// An invalid key is an authentication failure, not a permission one.
 		e.Code, e.Scope, e.Retryable = llm.CodeAuth, llm.ScopeCredential, true
 	case s == http.StatusForbidden:
 		e.Code, e.Scope, e.Retryable = llm.CodePermission, llm.ScopeCredential, true
@@ -413,14 +364,11 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		e.Code, e.Scope = llm.CodeNotFound, llm.ScopeModel
 		e.Retryable = model != "" && strings.Contains(e.Message, model)
 	case s == http.StatusTooManyRequests:
-		// Only the model waits on this account, as today's core cools only the model that answered.
 		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
 		if model == "" {
-			// A call for no model (the usage endpoint): the account is the one limited.
 			e.Scope = llm.ScopeCredential
 		}
 		if freeUsageUsedUp(lower) {
-			// Free usage is used up for a day; the model is held back on the account that long.
 			e.Code, e.RetryAfterMS = llm.CodeQuota, freeUsageCooldownMS
 			break
 		}
@@ -436,14 +384,10 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 	return e
 }
 
-// badCredentials reports whether an error body (lower-cased) says the key is invalid. Today's core
-// checks the same two markers, on a 403.
 func badCredentials(lower string) bool {
 	return strings.Contains(lower, "bad-credentials") || strings.Contains(lower, "access token could not be validated")
 }
 
-// freeUsageUsedUp reports whether a 429 body (lower-cased) says xAI's free usage is used up, the
-// markers today's core uses.
 func freeUsageUsedUp(lower string) bool {
 	return strings.Contains(lower, "free-usage-exhausted") || strings.Contains(lower, "included free usage")
 }

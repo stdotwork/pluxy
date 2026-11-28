@@ -20,26 +20,15 @@ import (
 )
 
 const (
-	// modelsTimeout stays under core's 15 s model-list read, so a hung provider still yields the built-in list.
 	modelsTimeout  = 10 * time.Second
 	modelsPageSize = 1000
 	modelsMaxPages = 100
 	modelsMaxBody  = 8 << 20
 )
 
-// modelsJSON is the built-in fallback model list for Claude accounts when querying /v1/models is
-// not possible or fails. It holds the models today's core lists for the "claude" provider when an
-// account's config names no models: core/sdk/cliproxy/service_models.go, case "claude", takes
-// registry.GetClaudeModels for both kinds (the claude section of
-// core/internal/registry/models/models.json) and owned_by "anthropic". Generated once from that
-// catalog, without the fields protocol.Model does not carry. To refresh it by hand, take the claude
-// section of models.json in https://github.com/router-for-me/models, the file the old core copied.
-//
 //go:embed models.json
 var modelsJSON []byte
 
-// listModels answers a models call by reading GET {base_url}/v1/models with the account's
-// credential and falling back to the built-in catalog when the read fails or returns nothing.
 func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, error) {
 	if models, ok := fetchModels(ctx, call); ok {
 		return &protocol.ModelList{
@@ -63,7 +52,7 @@ func builtinModels() (*protocol.ModelList, error) {
 func fetchModels(ctx context.Context, call sdk.ModelsCall) ([]protocol.Model, bool) {
 	fail := func(reason string) ([]protocol.Model, bool) {
 		if errors.Is(ctx.Err(), context.Canceled) {
-			return nil, false // the caller is gone; nobody is served the built-in list
+			return nil, false
 		}
 		modelReadFailed(call.Account.ID, call.Account.Credential, reason)
 		return nil, false
@@ -174,7 +163,6 @@ func fetchModels(ctx context.Context, call sdk.ModelsCall) ([]protocol.Model, bo
 	return models, true
 }
 
-// limits maps each model in modelsJSON to its output limit (max_completion_tokens).
 var limits = sync.OnceValue(func() map[string]int {
 	var list struct {
 		Models []struct {
@@ -194,14 +182,8 @@ var limits = sync.OnceValue(func() map[string]int {
 	return out
 })
 
-// dated is the snapshot date at the end of a Claude model id (claude-sonnet-4-5-20250929).
 var dated = regexp.MustCompile(`-\d{8}$`)
 
-// maxOutputTokens returns a model's output limit from the model list, the default max_tokens for a
-// request that names none, as LiteLLM and CLIProxyAPI take theirs from their model catalogs. The
-// name is read lowercase, without a context window in brackets ([1m]), a Vertex AI version after @
-// or a Bedrock prefix up to "anthropic.", and matches a listed id with or without its snapshot
-// date. ok is false for a model the list does not have.
 func maxOutputTokens(model string) (n int, ok bool) {
 	name := strings.ToLower(strings.TrimSpace(model))
 	name, _, _ = strings.Cut(name, "[")

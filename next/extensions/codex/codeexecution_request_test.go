@@ -139,7 +139,6 @@ func TestCodeExecutionToCodex(t *testing.T) {
 			})
 		}
 
-		// Third-party base_url gets no code_interpreter tool and a dropped loss.
 		t.Run(tc.name+"/third_party", func(t *testing.T) {
 			req := roundTripReq(t, tc.parse(t))
 			u, err := buildRequest(req, "acc1", settings{BaseURL: "https://proxy.example.com/v1"}, account{}, false)
@@ -283,7 +282,6 @@ func TestCodeExecutionToCodexWithFunctionsAndWebSearch(t *testing.T) {
 }
 
 func TestCodeExecutionToCodexToolChoice(t *testing.T) {
-	// Messages forcing code_execution -> Responses {"type":"code_interpreter"}.
 	req, err := anthropicmessages.ParseRequest([]byte(`{
 		"model":"gpt-5.4",
 		"max_tokens":1024,
@@ -310,7 +308,6 @@ func TestCodeExecutionToCodexToolChoice(t *testing.T) {
 		t.Errorf("unexpected dropped losses: %+v", u.tr.Losses)
 	}
 
-	// Dropped code tool (third-party base_url) -> tool_choice omitted + dropped loss at tool_choice.
 	uDrop, err := buildRequest(req, "acc1", settings{BaseURL: "https://proxy.example.com/v1"}, account{}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -330,7 +327,6 @@ func TestCodeExecutionToCodexToolChoice(t *testing.T) {
 		t.Errorf("dropped: dropped = %v, want tool_choice in %+v", uDrop.tr.DroppedPaths(), uDrop.tr.Losses)
 	}
 
-	// tool_choice: any (required) with only code_execution when dropped (unsupported model) -> no tool_choice + loss.
 	reqAny, err := anthropicmessages.ParseRequest([]byte(`{
 		"model":"gpt-5.4-pro",
 		"max_tokens":1024,
@@ -396,7 +392,6 @@ func TestCodeExecutionCodexSameFormatPreserved(t *testing.T) {
 	}
 }
 
-// No page says the ChatGPT backend takes code_interpreter, so a translated tool is not sent there.
 func TestCodeExecutionNotSentToChatGPT(t *testing.T) {
 	req, err := anthropicmessages.ParseRequest([]byte(`{"model":"gpt-5.5","max_tokens":9,
 		"messages":[{"role":"user","content":"compute"}],
@@ -427,8 +422,6 @@ func TestCodeExecutionNotSentToChatGPT(t *testing.T) {
 	}
 }
 
-// The Codex path rebuilds include, so a translated code tool's outputs are kept only where the
-// tool itself is sent: api.openai.com. The ChatGPT backend and a custom base_url get neither.
 func TestCodeExecutionOutputsIncludeCodex(t *testing.T) {
 	include := func(t *testing.T, req llm.Request, base string) ([]string, bool) {
 		t.Helper()
@@ -469,7 +462,6 @@ func TestCodeExecutionOutputsIncludeCodex(t *testing.T) {
 		}
 	}
 
-	// A Responses client's request is passed through: the shaper keeps its include as before.
 	native, err := openairesponses.ParseRequest([]byte(`{"model":"gpt-5.4","input":"run","include":["` + outputs + `"],"tools":[{"type":"code_interpreter","container":{"type":"auto"}}]}`))
 	if err != nil {
 		t.Fatal(err)

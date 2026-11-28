@@ -9,38 +9,19 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Namespace tools are how the Codex app groups tools: {"type":"namespace","name":N,"tools":[...]}.
-// xAI has no such tool, so, as today's core does (internal/runtime/executor/xai_executor_request.go
-// and xai_executor_response.go), the extension sends a namespace's tools as functions and restores
-// the namespace in the reply:
-//
-//   - flattened: each child function is sent as N__child (no prefix is added to a name that has
-//     one or starts with mcp__), and xAI's call to it comes back as the call to child in namespace N;
-//   - folded, when the flattened tools would be more than xAI takes (maxTools): the namespace is
-//     one function named N whose arguments are {"name": child, "arguments": {...}}, its description
-//     lists the children and their schemas, and xAI's call to it comes back as the call to child
-//     in namespace N. Folded namespaces come first when the tools are cut to maxTools.
-//
-// A function call in the history that names a namespace, and a tool_choice that does, are written
-// the way the tools were sent. tool_search tools in a namespace are dropped. The first tool of a
-// name stays when a name repeats.
-
 const namespaceType = "namespace"
 
-// nsRef says what a name sent to xAI stands for.
 type nsRef struct {
 	namespace, name string
 	dispatcher      bool
 	children        map[string]struct{}
 }
 
-// namespaceTools is how one request's namespace tools were sent.
 type namespaceTools struct {
 	fold bool
 	refs map[string]*nsRef
 }
 
-// qualifyName is the name a namespace's child is sent under.
 func qualifyName(namespace, name string) string {
 	namespace, name = strings.TrimSpace(namespace), strings.TrimSpace(name)
 	if namespace == "" || name == "" || strings.HasPrefix(name, "mcp__") {
@@ -58,7 +39,6 @@ func qualifyName(namespace, name string) string {
 
 func isTool(m map[string]any) bool { return m["type"] == "function" || m["type"] == "custom" }
 
-// flattenedCount is how many tools the request has once namespaces are flattened.
 func flattenedCount(tools []any) int {
 	seen := map[string]bool{}
 	count := 0
@@ -103,9 +83,6 @@ func flattenedCount(tools []any) int {
 	return count
 }
 
-// rewriteNamespaces sends the namespace tools in tools as functions. It returns nil when there
-// are none. injected is how many tools the extension adds after this (the x_search tool), which
-// count for the fold decision as today's core counts them.
 func rewriteNamespaces(tools []any, injected int) ([]any, *namespaceTools) {
 	has := false
 	for _, t := range tools {
@@ -117,7 +94,6 @@ func rewriteNamespaces(tools []any, injected int) ([]any, *namespaceTools) {
 		return tools, nil
 	}
 	st := &namespaceTools{fold: flattenedCount(tools)+injected > maxTools, refs: map[string]*nsRef{}}
-	// A namespace declared more than once is one namespace with the children of every declaration.
 	decls := map[string][]map[string]any{}
 	for _, t := range tools {
 		if m, ok := t.(map[string]any); ok && m["type"] == namespaceType {
@@ -186,7 +162,6 @@ func rewriteNamespaces(tools []any, injected int) ([]any, *namespaceTools) {
 			}
 		}
 	}
-	// The folded namespaces stay when the tools are cut to maxTools.
 	result := make([]any, 0, len(out))
 	if len(out) > maxTools {
 		for _, e := range out {
@@ -203,7 +178,6 @@ func rewriteNamespaces(tools []any, injected int) ([]any, *namespaceTools) {
 	return result, st
 }
 
-// childTools returns the tools of a namespace, without the tool_search ones and the unnamed ones.
 func childTools(ns map[string]any) []map[string]any {
 	var out []map[string]any
 	children, _ := ns["tools"].([]any)
@@ -215,8 +189,6 @@ func childTools(ns map[string]any) []map[string]any {
 	return out
 }
 
-// dispatcherTool is the one function that stands for a folded namespace, from every declaration of
-// it: the first description there is, and each child as its first declaration has it.
 func dispatcherTool(decls []map[string]any) map[string]any {
 	if len(decls) == 0 {
 		return nil
@@ -290,9 +262,6 @@ func isEmptyObjectSchema(p map[string]any) bool {
 	return len(p) == 2 && p["type"] == "object" && ok && len(props) == 0
 }
 
-// The Codex app's automation_update tool has a large oneOf schema with $ref references; with it
-// xAI accepts the request and sends no events. Its parameters are replaced by one that accepts any
-// object, as today's core replaces them.
 const permissiveParameters = `{"type":"object","properties":{},"additionalProperties":true}`
 
 func isAutomationUpdate(name, namespace string) bool {
@@ -302,8 +271,6 @@ func isAutomationUpdate(name, namespace string) bool {
 		strings.EqualFold(name, "codex_app__automation_update") || strings.EqualFold(name, "codex_apps__automation_update")
 }
 
-// simplifyAutomation gives a function that is the Codex app's automation_update the permissive
-// parameters. namespace and name are the ones the client declared.
 func simplifyAutomation(tool map[string]any, namespace, name string) {
 	if (tool["type"] != "function" && tool["type"] != "custom") || !isAutomationUpdate(name, namespace) {
 		return
@@ -316,7 +283,6 @@ func simplifyAutomation(tool map[string]any, namespace, name string) {
 	}
 }
 
-// rewriteChoice names a function choice that has a namespace the way the tools were sent.
 func (st *namespaceTools) rewriteChoice(v any) {
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -333,9 +299,6 @@ func (st *namespaceTools) rewriteChoice(v any) {
 	}
 }
 
-// sentName is the name a namespace's child is called by on xAI: the namespace's own when the
-// namespace was folded into a function (a function of that name that is not one does not count),
-// the qualified name otherwise.
 func (st *namespaceTools) sentName(namespace, child string) string {
 	if r := st.refs[strings.TrimSpace(namespace)]; r != nil && r.dispatcher {
 		return strings.TrimSpace(namespace)
@@ -343,8 +306,6 @@ func (st *namespaceTools) sentName(namespace, child string) string {
 	return qualifyName(namespace, child)
 }
 
-// rewriteHistory writes the function calls of the history that name a namespace the way the tools
-// were sent: a call of a folded namespace goes to its dispatcher.
 func (st *namespaceTools) rewriteHistory(input []any) {
 	for _, raw := range input {
 		item, ok := raw.(map[string]any)
@@ -375,18 +336,12 @@ func (st *namespaceTools) rewriteHistory(input []any) {
 	}
 }
 
-// nsRestorer turns xAI's calls to the functions that stand for namespace tools back into calls
-// to the tools in their namespaces, in the events a Responses client is sent. It changes events
-// one for one.
 type nsRestorer struct {
 	refs       map[string]*nsRef
-	first      bool              // the stream's first event, on response.start, was a call's added event
-	open       map[int]bool      // model item indexes of calls to restore
-	dispatched map[string]string // item ID of a call to a folded namespace -> namespace
-	// children is the child of a call to a folded namespace that is known before its done item, by
-	// item ID and call ID (dispatchHold has held the call's events until its arguments named it).
-	// The call's added item then names the child, which it cannot otherwise.
-	children map[string]string
+	first      bool
+	open       map[int]bool
+	dispatched map[string]string
+	children   map[string]string
 }
 
 func newNSRestorer(refs map[string]*nsRef) *nsRestorer {
@@ -396,8 +351,6 @@ func newNSRestorer(refs map[string]*nsRef) *nsRestorer {
 func (r *nsRestorer) Transform(ev llm.Event) (llm.Event, error) {
 	switch ev.Type {
 	case llm.EventResponseStart:
-		// A stream that does not open with response.created has its first event's raw here, and the
-		// item.start made of it has none.
 		if bytes.Contains(ev.Raw, []byte(`"response.output_item.added"`)) {
 			ev.Raw = r.rewrite(ev.Raw, func(m map[string]any) bool {
 				r.first = r.restoreItem(m["item"], true)
@@ -453,8 +406,6 @@ func (r *nsRestorer) Transform(ev llm.Event) (llm.Event, error) {
 	return ev, nil
 }
 
-// rewrite applies fn to the event in raw and returns the changed event, or raw when fn changed
-// nothing or raw is not an object.
 func (r *nsRestorer) rewrite(raw json.RawMessage, fn func(map[string]any) bool) json.RawMessage {
 	m, err := decodeObject(raw)
 	if err != nil || !fn(m) {
@@ -467,8 +418,6 @@ func (r *nsRestorer) rewrite(raw json.RawMessage, fn func(map[string]any) bool) 
 	return out
 }
 
-// restoreItem changes a function call item in place. added is true for the added event, whose
-// arguments have not come yet.
 func (r *nsRestorer) restoreItem(v any, added bool) bool {
 	item, ok := v.(map[string]any)
 	if !ok || item["type"] != "function_call" {
@@ -500,9 +449,6 @@ func (r *nsRestorer) restoreItem(v any, added bool) bool {
 	return true
 }
 
-// unwrapDispatcher reads the call a folded namespace's function was given: the child's name and
-// arguments. It is not a call to a child when the arguments are not an object with a name, or the
-// name is not one of the namespace's.
 func unwrapDispatcher(arguments string, ref *nsRef) (string, []byte, bool) {
 	var w struct {
 		Name      any             `json:"name"`

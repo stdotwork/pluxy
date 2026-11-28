@@ -12,8 +12,6 @@ import (
 
 func fp(v float64) *float64 { return &v }
 
-// samplingRequest is a translated Chat request for model with the given sampling settings and
-// reasoning effort.
 func samplingRequest(model string, temperature, topP *float64, effort string) llm.Request {
 	maxTokens := 32000
 	return llm.Request{
@@ -24,8 +22,6 @@ func samplingRequest(model string, temperature, topP *float64, effort string) ll
 	}
 }
 
-// A translated request reaches Claude without the sampling settings the model refuses, and each
-// one left out is reported as dropped.
 func TestBuildBodyDropsRefusedSampling(t *testing.T) {
 	for _, c := range []struct {
 		name                 string
@@ -34,8 +30,6 @@ func TestBuildBodyDropsRefusedSampling(t *testing.T) {
 		effort               string
 		wantSent, wantLosses []string
 	}{
-		// Rule 1: Claude 4.7 and later take a default alone, never both; claude- names not known
-		// as a Claude version get neither.
 		{"4.7 both", "claude-opus-4-7", fp(0.5), fp(0.9), "", nil, []string{"temperature", "top_p"}},
 		{"5.5 defaults", "claude-sonnet-5-5", fp(1), fp(0.99), "", nil, []string{"temperature", "top_p"}},
 		{"5.5 default top_p alone", "claude-haiku-5-5-20261001", nil, fp(0.99), "high", []string{"top_p"}, nil},
@@ -44,25 +38,20 @@ func TestBuildBodyDropsRefusedSampling(t *testing.T) {
 		{"Mythos 5", "claude-mythos-5", fp(0.2), nil, "", nil, []string{"temperature"}},
 		{"unplaced claude name", "claude-test", fp(0.5), fp(0.9), "", nil, []string{"temperature", "top_p"}},
 		{"unplaced claude name, default", "claude-mythos-preview", fp(1), nil, "", nil, []string{"temperature"}},
-		// The name as Claude's own and other platforms write it.
 		{"context window suffix", "claude-opus-4-7[1m]", fp(0.5), nil, "", nil, []string{"temperature"}},
 		{"Vertex AI version", "claude-opus-4-7@20260416", fp(0.5), nil, "", nil, []string{"temperature"}},
 		{"Bedrock profile", "us.anthropic.claude-opus-4-7", fp(0.5), nil, "", nil, []string{"temperature"}},
 		{"upper case", "Claude-Opus-4-7", fp(0.5), nil, "", nil, []string{"temperature"}},
 		{"Vertex AI 4.0, both", "claude-sonnet-4@20250514", fp(0.5), fp(0.9), "", []string{"temperature"}, []string{"top_p"}},
-		// Rule 2: an older model with thinking on.
 		{"4.5 budget thinking", "claude-sonnet-4-5", fp(0.5), fp(0.9), "high", nil, []string{"temperature", "top_p"}},
 		{"4.6 adaptive thinking", "claude-opus-4-6", fp(0.7), nil, "medium", nil, []string{"temperature"}},
 		{"3.7 thinking, temperature 1", "claude-3-7-sonnet-20250219", fp(1), nil, "low", []string{"temperature"}, nil},
 		{"4.5 thinking, top_p 0.95", "claude-sonnet-4-5", nil, fp(0.95), "high", []string{"top_p"}, nil},
-		// Rules 2 and 3: with thinking on, both at values Claude takes alone are still not sent together.
 		{"4.6 thinking, both allowed", "claude-opus-4-6", fp(1), fp(0.97), "medium", []string{"temperature"}, []string{"top_p"}},
-		// Rule 3: an older model without thinking, both set.
 		{"4.5 both", "claude-sonnet-4-5", fp(0.5), fp(0.9), "", []string{"temperature"}, []string{"top_p"}},
 		{"4.6 thinking off, both", "claude-sonnet-4-6", fp(0.5), fp(0.9), "none", []string{"temperature"}, []string{"top_p"}},
 		{"4.6 temperature alone", "claude-sonnet-4-6", fp(0.5), nil, "", []string{"temperature"}, nil},
 		{"4.1 top_p alone", "claude-opus-4-1-20250805", nil, fp(0.9), "", []string{"top_p"}, nil},
-		// Rule 4: a model name that is not Claude's.
 		{"other model", "glm-5", fp(0.5), fp(0.9), "", []string{"temperature", "top_p"}, nil},
 		{"claude inside another name", "my-claude-model", fp(0.5), fp(0.9), "", []string{"temperature", "top_p"}, nil},
 	} {
@@ -106,8 +95,6 @@ func must(b []byte, err error) []byte {
 	return b
 }
 
-// Under the reject drop policy, a request whose sampling settings the model refuses is refused,
-// naming them.
 func TestBuildBodyRejectsRefusedSampling(t *testing.T) {
 	req := samplingRequest("claude-opus-4-7", fp(0.5), nil, "")
 	req.DropPolicy = llm.DropReject
@@ -116,7 +103,6 @@ func TestBuildBodyRejectsRefusedSampling(t *testing.T) {
 	if !errors.As(err, &e) || e.Code != llm.CodeUnsupported || !strings.Contains(e.Message, "temperature") {
 		t.Fatalf("err = %v, want unsupported naming temperature", err)
 	}
-	// Settings the model takes are no reason to refuse.
 	req = samplingRequest("claude-sonnet-4-6", fp(0.5), nil, "")
 	req.DropPolicy = llm.DropReject
 	if _, _, err := buildBody(req); err != nil {
@@ -124,7 +110,6 @@ func TestBuildBodyRejectsRefusedSampling(t *testing.T) {
 	}
 }
 
-// A Messages client's own sampling settings go upstream as it wrote them, on any model.
 func TestBuildBodyKeepsMessagesSampling(t *testing.T) {
 	in := `{"model":"claude-opus-4-7","max_tokens":10,"temperature":0.5,"top_p":0.9,"messages":[{"role":"user","content":"hi"}]}`
 	body, tr, err := buildBody(llm.Request{Model: "claude-opus-4-7", Native: &llm.Native{Format: llm.FormatAnthropicMessages, Body: json.RawMessage(in)}})

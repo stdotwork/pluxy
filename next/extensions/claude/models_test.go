@@ -16,8 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// claudeModelIDs is the list today's core returns from GET /v1/models for an API-key account and
-// for a subscription login, when the account names no models (19 models, the same for both).
 var claudeModelIDs = []string{
 	"claude-3-5-haiku-20241022",
 	"claude-3-7-sonnet-20250219",

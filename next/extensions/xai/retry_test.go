@@ -25,7 +25,6 @@ func refreshCall(srv *xaitest.Server, tokenEndpoint string) sdk.RefreshCall {
 		Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: access, RefreshToken: rt, Data: data}}}
 }
 
-// A login or renewal call is retryable only when the request never reached xAI.
 func TestLoginRetryOnlyWhenNotSent(t *testing.T) {
 	ctx := context.Background()
 	t.Run("discovery refused", func(t *testing.T) {
@@ -103,8 +102,6 @@ func TestLoginRetryOnlyWhenNotSent(t *testing.T) {
 	})
 }
 
-// stubWait replaces the wait between polls so that a test does not sleep. After limit waits it
-// cancels the login, so that a loop that should have stopped cannot run for long.
 func stubWait(t *testing.T, cancel context.CancelFunc, limit int32) {
 	t.Helper()
 	old := waitPoll
@@ -118,7 +115,6 @@ func stubWait(t *testing.T, cancel context.CancelFunc, limit int32) {
 	}
 }
 
-// A poll that gets a 5xx, or fails after it was sent, ends the login at once.
 func TestDevicePollStopsWhenItMayHaveRun(t *testing.T) {
 	for _, c := range []struct {
 		name   string
@@ -156,11 +152,8 @@ func TestDevicePollStopsWhenItMayHaveRun(t *testing.T) {
 	}
 }
 
-// A poll whose request never left this machine is tried again at the next interval.
 func TestDevicePollContinuesWhenNotSent(t *testing.T) {
 	srv := xaitest.New(t)
-	// Every request opens its own connection: discovery, device start, then the polls. The first
-	// poll's connection is refused.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DisableKeepAlives = true
 	var dials atomic.Int32

@@ -14,26 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Thinking replay. Kimi's Messages API wants an assistant tool-use turn back with its signed
-// thinking, and some Messages clients resend earlier turns without their thinking blocks. As
-// today's core does, the extension keeps each Messages reply that has signed thinking and a tool
-// call, and when a later request in the same conversation resends that turn without thinking
-// but otherwise exactly as it was, it puts the kept content back before sending the request.
-//
-// What is kept is scoped by the request's caller (one client never gets another's reasoning),
-// the conversation (Claude Code's session ID) and the model family, as today's core scopes it.
-// A request without a caller or a session ID is sent as it is. Only Messages clients are
-// covered, as in today's core: a Chat client's tool calls get reasoning_content in fixToolTurns.
-//
-// shortcut: the kept turns live in the extension's memory, so they are gone when core stops the
-// extension after 10 minutes without requests, or restarts it; a turn resent after that goes to
-// Kimi without its thinking, as it would without this cache. Move them to a store that outlives
-// the program (the per-extension data folder the protocol plans) if that shows up in use.
-
-// Bounds, as today's core's: kept content expires an hour after it was last used, and the cache
-// holds at most replayMaxEntries turns and replayMaxBytes of content and keys (a key holds the
-// client's session ID, which the client chooses), dropping the least recently used first. A turn
-// over replayMaxEntryBytes, key included, or replayMaxBlocks is not kept.
 const (
 	replayTTL           = time.Hour
 	replayMaxEntries    = 10240
@@ -44,11 +24,10 @@ const (
 
 var replays = newReplayCache()
 
-// replayCache holds kept assistant content by key (replayTurn.key).
 type replayCache struct {
 	mu                   sync.Mutex
 	entries              map[string]*list.Element
-	order                *list.List // of *replayEntry, most recently used first
+	order                *list.List
 	bytes                int
 	maxEntries, maxBytes int
 	now                  func() time.Time
@@ -103,7 +82,6 @@ func (c *replayCache) put(key string, content []byte) {
 	}
 }
 
-// drop removes key's entry if it still holds content.
 func (c *replayCache) drop(key string, content []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -118,16 +96,13 @@ func (c *replayCache) remove(el *list.Element) {
 	c.bytes -= len(e.key) + len(e.content)
 }
 
-// replayTurn is the replay state of one request: its scope, and the kept content it put back.
 type replayTurn struct {
 	cache    *replayCache
 	scope    string
-	used     string // the key of the entry put back, "" when none
+	used     string
 	restored []byte
 }
 
-// newReplayTurn returns the replay state of a Messages request sent to Kimi's Messages API, or
-// nil when it has no caller or session ID.
 func newReplayTurn(cache *replayCache, req llm.Request) *replayTurn {
 	if req.Caller == "" || req.Native == nil || req.Native.Format != llm.FormatAnthropicMessages {
 		return nil
@@ -140,12 +115,8 @@ func newReplayTurn(cache *replayCache, req llm.Request) *replayTurn {
 	return &replayTurn{cache: cache, scope: scope}
 }
 
-// sessionSuffix is how Claude Code's older metadata.user_id ends: _session_<id>.
 var sessionSuffix = regexp.MustCompile(`_session_([a-f0-9-]+)$`)
 
-// claudeCodeSession returns a Claude Code conversation's session ID, from its
-// X-Claude-Code-Session-Id header or else its body's metadata.user_id, which Claude Code writes
-// either as user_<...>_session_<id> or as a JSON object with session_id.
 func claudeCodeSession(header string, body []byte) string {
 	if s := strings.TrimSpace(header); s != "" {
 		return s
@@ -173,8 +144,6 @@ func claudeCodeSession(header string, body []byte) string {
 	return ""
 }
 
-// replayFamily is the model family kept content is shared in: Kimi's name for the model, with
-// the variants of one model together, as today's core groups them.
 func replayFamily(model string) string {
 	switch m := strings.ToLower(upstreamModel(model)); m {
 	case "k3", "k3-256k":
@@ -186,15 +155,11 @@ func replayFamily(model string) string {
 	}
 }
 
-// key returns the cache key of an assistant turn in this scope, given the canonical form of the
-// turn's content without its thinking blocks.
 func (t *replayTurn) key(canonical []byte) string {
 	sum := sha256.Sum256(canonical)
 	return t.scope + "\x00" + string(sum[:])
 }
 
-// restore puts kept content back into the newest assistant turn of the Messages body m that has
-// a tool call, no thinking, and a kept counterpart whose content without thinking is the same.
 func (t *replayTurn) restore(m map[string]any) {
 	if t == nil {
 		return
@@ -229,8 +194,6 @@ func (t *replayTurn) restore(m map[string]any) {
 	}
 }
 
-// keep stores an assistant reply's content array (raw JSON) when it has signed thinking and a
-// tool call.
 func (t *replayTurn) keep(content []byte) {
 	if t == nil || len(content) > replayMaxEntryBytes {
 		return
@@ -246,7 +209,6 @@ func (t *replayTurn) keep(content []byte) {
 	t.cache.put(t.key(canonical), content)
 }
 
-// keepResponse stores the content of a non-streamed Messages reply (see keep).
 func (t *replayTurn) keepResponse(raw []byte) {
 	if t == nil {
 		return
@@ -259,16 +221,12 @@ func (t *replayTurn) keepResponse(raw []byte) {
 	}
 }
 
-// rejected forgets the content put back into a request Kimi refused as invalid (400 or 422), as
-// today's core does, so the next request goes without it.
 func (t *replayTurn) rejected(status int) {
 	if status == 400 || status == 422 {
 		t.forget()
 	}
 }
 
-// forget drops the content put back into this request, if any: Kimi refused the request, with
-// an error status or an error event in its stream.
 func (t *replayTurn) forget() {
 	if t != nil && t.restored != nil {
 		t.cache.drop(t.used, t.restored)
@@ -294,14 +252,11 @@ func hasThinking(content []any) bool {
 	})
 }
 
-// replayable reports whether content has a signed thinking block and a tool call with an ID.
 func replayable(content []any) bool {
 	signed := slices.ContainsFunc(content, func(p any) bool { return partType(p) == "thinking" && partString(p, "signature") != "" })
 	return signed && slices.ContainsFunc(content, func(p any) bool { return partType(p) == "tool_use" && partString(p, "id") != "" })
 }
 
-// withoutThinking returns the canonical JSON of content without its thinking blocks (object keys
-// sorted), and whether that has a tool call and every tool call has an ID.
 func withoutThinking(content []any) ([]byte, bool) {
 	rest := make([]any, 0, len(content))
 	tool := false
@@ -334,16 +289,13 @@ func decodeArray(b []byte) ([]any, error) {
 	return a, nil
 }
 
-// replayCapture rebuilds a streamed Messages reply's content array from its events, as the
-// reply passes to the client, for replayTurn.keep. It gives up on anything it cannot rebuild
-// exactly, and beyond the size bounds.
 type replayCapture struct {
 	blocks    map[int]*capturedBlock
 	started   bool
 	complete  bool
-	failed    bool // the stream had an error event
+	failed    bool
 	abandoned bool
-	kept      bool // the content was handed to the turn (replayDecoder)
+	kept      bool
 	size      int
 }
 
@@ -356,7 +308,6 @@ type capturedBlock struct {
 
 func newReplayCapture() *replayCapture { return &replayCapture{blocks: map[int]*capturedBlock{}} }
 
-// observe reads one event's data.
 func (c *replayCapture) observe(data []byte) {
 	if c.abandoned && c.failed {
 		return
@@ -434,8 +385,6 @@ func (c *replayCapture) observe(data []byte) {
 	}
 }
 
-// append adds a delta to one of a block's text fields, which starts from the field's value in
-// the block's start event.
 func (c *replayCapture) append(sb **strings.Builder, raw map[string]any, field, delta string) {
 	if *sb == nil {
 		initial, _ := raw[field].(string)
@@ -465,8 +414,6 @@ func (c *replayCapture) abandon() {
 	c.size = 0
 }
 
-// content returns the reply's content array, when the stream completed and every block was
-// rebuilt.
 func (c *replayCapture) content() ([]byte, bool) {
 	if !c.started || !c.complete || c.failed || c.abandoned {
 		return nil, false
@@ -501,10 +448,6 @@ func (c *replayCapture) content() ([]byte, bool) {
 	return bytes.TrimRight(buf.Bytes(), "\n"), true
 }
 
-// replayDecoder passes a Messages stream's events to a capture on their way to the decoder, and
-// keeps the turn as soon as the capture is complete, before the decoder turns the stream's last
-// event into the finish that ends the reply: a client may send its next turn the moment it has the
-// reply, and that turn must find what was kept.
 type replayDecoder struct {
 	streamDecoder
 	capture *replayCapture

@@ -8,7 +8,6 @@ import (
 	"unicode/utf16"
 )
 
-// asciiJSON is s as a JSON string with every character beyond ASCII written as a \u escape.
 func asciiJSON(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')
@@ -36,8 +35,6 @@ func asciiJSON(s string) string {
 	return b.String()
 }
 
-// Whatever the fragments split, the text comes out whole and in order, with every character
-// complete when it is handed out.
 func TestInputDecoderFragments(t *testing.T) {
 	texts := []string{
 		"",
@@ -77,7 +74,6 @@ func TestInputDecoderFragments(t *testing.T) {
 						t.Fatalf("%q: Finish = %q, %q, %v", whole, input, tail, err)
 					}
 				}
-				// One byte at a time.
 				var d inputDecoder
 				var got strings.Builder
 				for i := 0; i < len(whole); i++ {
@@ -126,7 +122,6 @@ func TestInputDecoderRefuses(t *testing.T) {
 			t.Errorf("%s: %q was accepted", name, args)
 		}
 	}
-	// A cut-off object is not complete.
 	var d inputDecoder
 	if _, err := d.Push(`{"input":"x`); err != nil || d.complete() {
 		t.Errorf("cut-off object: error %v, complete %v", err, d.complete())
@@ -136,7 +131,6 @@ func TestInputDecoderRefuses(t *testing.T) {
 	}
 }
 
-// The final arguments may carry more than the fragments did, never less or something else.
 func TestInputDecoderFinish(t *testing.T) {
 	var d inputDecoder
 	if out, err := d.Push(`{"input":"ab`); err != nil || out != "ab" {
@@ -150,7 +144,6 @@ func TestInputDecoderFinish(t *testing.T) {
 	if _, _, err := e.Finish(`{"input":"xy"}`, true); err == nil {
 		t.Error("Finish accepted final arguments that do not start with the text sent")
 	}
-	// With no fragments, the whole text is the input and there is no tail to send.
 	var f inputDecoder
 	if input, tail, err := f.Finish(`{"input":"whole"}`, true); err != nil || input != "whole" || tail != "" {
 		t.Errorf("Finish without fragments = %q, %q, %v", input, tail, err)

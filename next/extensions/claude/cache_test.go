@@ -110,7 +110,6 @@ func TestBuildBodyWithCacheTTLAndPost(t *testing.T) {
 		t.Errorf("upstream body:\n got %s\nwant %s", got.Body, want)
 	}
 
-	// Passthrough Messages body keeps its own markers untouched even under cache_ttl "1h".
 	passthroughIn := `{"model":"claude-sonnet-4-6","max_tokens":10,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
 	ptBody, tr, err := buildBodyWithTTL(llm.Request{Model: "claude-sonnet-4-6", Native: &llm.Native{Format: llm.FormatAnthropicMessages, Body: json.RawMessage(passthroughIn)}}, cacheTTL1h)
 	if err != nil {
