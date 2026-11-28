@@ -363,19 +363,43 @@ export function keyName(
 
 // ---- plan -------------------------------------------------------------------------------------
 
-/** How much a plan weighs on a row: top (the largest plans), high (the next), mid, or free. */
+/**
+ * How much a plan weighs on a row, by what it costs: top (the largest plans and pay-as-you-go API
+ * use: about $200 a month and up), high (the next: about $100), mid (any other paid plan) or free.
+ */
 export type PlanTier = "top" | "high" | "mid" | "free";
 
 /**
- * The tier of a plan word: Max 20x and Ultra are the largest plans the providers sell, and an API
- * key's pay-as-you-go plan sits with them; Max 5x and plain Max are the next; Free is free; any
- * other plan, known or not, is mid. One table: themes colour the tiers by data-plan-tier.
+ * The plan words each provider uses for its largest plans. A word means a different plan at each
+ * provider (ChatGPT's Pro is its $200 plan, Claude's Pro its $20 one), so the tier comes from the
+ * provider and the plan together, until extensions report a tier themselves.
  */
-export function planTier(plan: string): PlanTier {
+const TIERS: Record<string, { top: RegExp; high?: RegExp }> = {
+  claude: { top: /^max\s*20x\b/, high: /^max\b/ },
+  codex: { top: /^pro\b/ },
+  gemini: { top: /^ultra\b/ },
+  vertex: { top: /^ultra\b/ },
+  "ai-studio": { top: /^ultra\b/ },
+  aistudio: { top: /^ultra\b/ },
+  xai: { top: /^(supergrok\s+heavy|api)\b/ },
+  "openai-compatible": { top: /^(paid|api)\b/ },
+};
+
+/** Any provider not in TIERS, or a plan with no provider: the words of the largest plans anywhere. */
+const ANY = { top: /^(max\s*20x|ultra|api|paid)\b/, high: /^max\b/ };
+
+/**
+ * The tier of a plan word at its provider (extension, as an account names it): see TIERS. Free is
+ * free everywhere; a plan a provider's table does not place is mid. Themes colour the tiers by
+ * data-plan-tier.
+ */
+export function planTier(plan: string, extension?: string): PlanTier {
   const p = plan.trim().toLowerCase();
   if (/^free\b/.test(p)) return "free";
-  if (/^(max\s*20x|ultra|api)\b/.test(p)) return "top";
-  if (/^max\b/.test(p)) return "high";
+  const own = extension ? extension.slice(extension.lastIndexOf("/") + 1) : "";
+  const tiers = Object.hasOwn(TIERS, own) ? (TIERS[own] as (typeof TIERS)[string]) : ANY;
+  if (tiers.top.test(p)) return "top";
+  if (tiers.high?.test(p)) return "high";
   return "mid";
 }
 

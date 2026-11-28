@@ -43,7 +43,12 @@ test("Home with every account out says so and leads to each fix", async ({ page 
   await openPanel(page, core);
   await signIn(page, core);
   await expect(page.getByRole("heading", { level: 2, name: "2 accounts need you." })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Serving", exact: true })).toHaveCount(0);
+  // Both are in the band; no account is listed under its provider, and Alpha's pool says nothing serves.
+  await expect(page.locator('[data-part="needs-band"] [data-part="account-row"]')).toHaveCount(2);
+  await expect(page.locator(".home-group")).toHaveCount(0);
+  await expect(page.locator('[data-part="pool-card"][data-provider="alpha"]')).toContainText(
+    "Nothing is serving",
+  );
   // Each account that needs the person has its fix: turning a closed one on, signing the other in again.
   await expect(page.getByRole("button", { name: "Turn on: a", exact: true })).toBeVisible();
   const signInAgain = page.getByRole("link", { name: "Sign in again: b", exact: true });

@@ -51,10 +51,18 @@ test("panel shows core, switches layout and theme live, and recovers from custom
   );
   await expect(pageTitle(page)).toHaveText("Home");
 
-  // Home: the config accounts of both extensions, in the group of the accounts that serve.
-  const serving = page.getByRole("region", { name: "Serving", exact: true });
-  for (const id of ["local-1", "alpha-1", "alpha-2"]) {
-    await expect(serving.getByRole("link", { name: id, exact: true })).toBeVisible();
+  // Home: the config accounts of both extensions, each under its provider, serving.
+  for (const [provider, ids] of [
+    ["Local", ["local-1"]],
+    ["Alpha", ["alpha-1", "alpha-2"]],
+  ] as const) {
+    const group = page.locator(".home-group").and(page.getByRole("region", { name: provider, exact: true }));
+    for (const id of ids) {
+      const row = group.locator('[data-part="account-row"]').filter({
+        has: page.getByRole("link", { name: id, exact: true }),
+      });
+      await expect(row).toHaveAttribute("data-group", "serving");
+    }
   }
 
   // Accounts: config accounts of both extensions.
