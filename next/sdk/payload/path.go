@@ -10,9 +10,8 @@ import (
 
 // A rule path is a list of dotted parts. A part is a key, an array index (all digits) or a
 // query `#(...)` that picks the first matching element of the array before it, or every
-// matching element with `#(...)#`. These are the parts the old rule paths use; the rest of
-// their gjson/sjson syntax (wildcards, `|`, `@`, `-1` to append, `#` counts, multipaths) is
-// refused by Validate.
+// matching element with `#(...)#`. The rest of gjson/sjson syntax (wildcards, `|`, `@`, `-1` to
+// append, `#` counts, multipaths) is refused by Validate.
 //
 // A key may hold a dot written as `\.`; that is the only escape. A query is one or more terms
 // joined by `&&` and `||` (`&&` binds tighter), each `key==value` or `key!=value`, where key is
