@@ -34,7 +34,7 @@ and a status block at the foot of the navigation.
 | Destination | Page, tab or topic | Address | `data-page` | What it holds |
 | --- | --- | --- | --- | --- |
 | **Home** | **Home** | `#/status` | `status` | Service verdict, accounts needing attention, provider pools, connection details, 7-day summary and latest requests |
-| **Accounts** | **All accounts** (tab) | `#/accounts`, `#/quota` | `accounts` | Every account grouped by condition, provider filter, list or card view, search and batch actions |
+| **Accounts** | **All accounts** (tab) | `#/accounts` | `accounts` | Every account grouped by condition, provider filter, list or card view, search and batch actions |
 | **Accounts** | An account's page (under **All accounts**) | `#/accounts/<id>` | `account` | One account's limits, facts, weekly usage, settings, models and test request |
 | **Accounts** | **Add an account** (under **All accounts**) | `#/add-account` | `add-account` | Provider picker, sign-in and API-key flows, and CLIProxyAPI auth-file import |
 | **Accounts** | **Order & fallback** (tab) | `#/routing` | `routing` | Per-provider account priority and weight, model fallback chains and routing rules |
@@ -103,7 +103,7 @@ Settings opens on **General** and groups its topics into **This device** (**Gene
 
 ## Accounts
 
-- **Address:** `#/accounts` (also `#/quota`; `data-page="accounts"`), tab **All accounts**.
+- **Address:** `#/accounts` (`data-page="accounts"`), tab **All accounts**.
 - **Empty state:** when core has no accounts, shows **No accounts yet.** and **Add an account**
   (`#/add-account`).
 - **Summary and provider filter:** above the list, a counts line (total accounts and provider count,
@@ -283,9 +283,10 @@ single notice linking to **Turn it on in Config** (`#/config/logging`).
   - **Refresh:** reloads requests, accounts, keys, logging settings and summary. Requests do not
     auto-refresh on a timer, so rows do not shift while you inspect them.
   - **Save as spreadsheet:** exports up to 10,000 newest matching requests to
-    `pluxy-requests-YYYY-MM-DD.csv` with columns `Time, Model, Provider, Account, Client key,
-    Failed, Status, Latency, Tokens, Trace ID`. Notes if the export hit the 10,000-row cap, and
-    warns when **Hide names** is on that the downloaded CSV contains real names.
+    `pluxy-requests-YYYY-MM-DD.csv` with columns
+    `Time, Model, Provider, Account, Client key, Failed, Status, Latency, Tokens, Trace ID`. Notes
+    if the export hit the 10,000-row cap, and warns when **Hide names** is on that the downloaded
+    CSV contains real names.
 - **Filters:** **All** / **Failed** switch, **Filter** button opening dropdowns for **Provider**,
   **Account**, **Model** and **Key** (each appears when at least 2 options exist or the filter is
   active), removable filter chips, and **Clear filters**.
@@ -299,14 +300,15 @@ single notice linking to **Turn it on in Config** (`#/config/logging`).
   when older day files exist. If core dropped or failed to write usage records to disk since
   starting, a warning banner states the count and links to **Logs**.
 - **Request detail pane:** opens when you select a row. Shows:
-  - Provider, account, outcome chip, and three tiles: **Time taken**, **Tokens** (`{input} →
-    {output}`), and **Tries** (or **Fallback step**).
-  - Routing story: decision sentence (for example, `Tried <account>: rate limited. Then <account>
-    answered in 2.4 s.`), fallback note, accounts left out and why, and why the answering account
-    was chosen (linking to **Order & fallback** when driven by account order). When no account
-    serves the requested model, lists served models per account with **Add an alias** / **Add an
-    alias on {account}** links (opening `#/accounts/<id>?alias=<model>`) or **Open {account}** for
-    config-file accounts, plus a link to **Tools**.
+  - Provider, account, outcome chip, and three tiles: **Time taken**,
+    **Tokens** (`{input} → {output}`), and **Tries** (or **Fallback step**).
+  - Why it went where it did: a decision sentence (for example,
+    `Tried <account>: rate limited. Then <account> answered in 2.4 s.`), fallback note, accounts
+    left out and why, and why the answering account was chosen (linking to **Order & fallback** when
+    driven by account order). When no account serves the requested model, lists served models per
+    account with **Add an alias** / **Add an alias on {account}** links (opening
+    `#/accounts/<id>?alias=<model>`) or **Open {account}** for config-file accounts, plus a link to
+    **Tools**.
   - **Attempts** list when more than one attempt ran.
   - The request's facts: **Time**, **Account**, **Provider**, **Model used** (when different from
     requested), **Key**, **Path**, **Tokens** (`in`, `out`, `cached`), and **Trace** (links to
@@ -376,15 +378,7 @@ single notice linking to **Turn it on in Config** (`#/config/logging`).
     settings into the tool's file in the home folder of the user core runs as (preserving unrelated
     settings and tightening permissions to owner-only: `0600` for new files, or removing group and
     other bits on existing files):
-    - **Claude Code** (`~/.claude/settings.json`): merges `env` (`ANTHROPIC_BASE_URL`,
-      `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`,
-      `CLAUDE_CODE_AUTO_MODE_SERVER`, plus `ANTHROPIC_DEFAULT_OPUS_MODEL`,
-      `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` and top-level `model` when
-      a model is chosen) and removes `env.ANTHROPIC_API_KEY`.
-    - **Codex** (`~/.codex/config.toml`): sets root `model_provider = "pluxy"` (and `model` when
-      chosen) above tables, sets `[model_providers.pluxy]` (`name`, `base_url` ending in `/v1`,
-      `wire_api = "responses"`, `experimental_bearer_token`), and removes `env_key` and
-      `requires_openai_auth` from `[model_providers.pluxy]`.
+    - What each tool's file gets is in [clients.md](clients.md#what-each-tool-gets).
     - Core refuses symlinks, non-regular files, files larger than 2 MiB, files or folders owned by
       another user, unexpected formats, or a file modified while being updated.
     - Before writing, core saves a private backup record (original file contents, permissions,
