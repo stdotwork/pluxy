@@ -9,25 +9,12 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Web search from a Responses client. Responses has a hosted web_search tool and replays each
-// search as a web_search_call item; Messages has Claude's server web search tool and replays a
-// search as a server_tool_use block followed by a web_search_tool_result block. The two carry
-// the same exchange, so a Responses client's tool and items become Claude's, as today's core
-// does. (The Responses writer turns Claude's blocks back into web_search_call items.) A replayed
-// search must carry its results: without them the model treats its earlier answer as unsourced
-// and searches again.
-
-// webSearchToolType is the Claude server web search tool a Responses web_search tool becomes.
 const webSearchToolType = "web_search_20250305"
 
 // serverToolIDPrefix starts every Claude server tool ID; Anthropic takes only
 // ^srvtoolu_[a-zA-Z0-9_]+$.
 const serverToolIDPrefix = "srvtoolu_"
 
-// webSearchTool returns the Claude tool for a Responses web_search tool, or ok false when t is not
-// one. A tool the client marked external_web_access false asks for no search on the web, so it
-// becomes no tool (skip true). The tool's name (default web_search), max_uses,
-// filters.allowed_domains and user_location carry over; Claude's tool has nothing for the rest.
 func webSearchTool(t llm.Tool) (tool json.RawMessage, skip bool, carried rawjson.WebSearchCarried, ok bool) {
 	if t.Origin == nil || t.Origin.Format != llm.FormatOpenAIResponses {
 		return nil, false, carried, false
@@ -69,9 +56,6 @@ func webSearchTool(t llm.Tool) (tool json.RawMessage, skip bool, carried rawjson
 	return b, false, carried, true
 }
 
-// supportsWebSearch reports whether model is in a Claude model family listed on Anthropic's
-// web search tool page (https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool):
-// Claude 4.5 and later (Opus, Sonnet, Haiku, Fable, Mythos) and claude-mythos-preview.
 func supportsWebSearch(model string) bool {
 	m := claudeName(model)
 	if m == "claude-mythos-preview" || strings.HasPrefix(m, "claude-mythos-preview-") {
@@ -81,9 +65,6 @@ func supportsWebSearch(model string) bool {
 	return ok && (major > 4 || (major == 4 && minor >= 5))
 }
 
-// canonicalWebSearchTool returns the Claude tool for a canonical ToolWebSearch from another
-// format (Chat, Gemini, Responses web_search_preview, or synthetic). A Responses web_search tool
-// uses webSearchTool above so its exact output is unchanged.
 func canonicalWebSearchTool(t llm.Tool) (tool json.RawMessage, skip bool, carried rawjson.WebSearchCarried, ok bool) {
 	if t.WebSearch != nil && t.WebSearch.Disabled {
 		return nil, true, carried, true
@@ -133,7 +114,6 @@ func canonicalWebSearchTool(t llm.Tool) (tool json.RawMessage, skip bool, carrie
 	return b, false, carried, true
 }
 
-// webSearchCall is a replayed Responses web_search_call item.
 type webSearchCall struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
@@ -145,7 +125,6 @@ type webSearchCall struct {
 	Results json.RawMessage `json:"results"`
 }
 
-// asWebSearchCall reads it as a replayed Responses web_search_call, or ok false.
 func asWebSearchCall(it llm.Item) (c webSearchCall, ok bool) {
 	if it.Type != llm.ItemTypeNative || it.Origin == nil || it.Origin.Format != llm.FormatOpenAIResponses {
 		return c, false
@@ -159,8 +138,6 @@ func asWebSearchCall(it llm.Item) (c webSearchCall, ok bool) {
 	return c, true
 }
 
-// query is the search's query: action.query, else the first of action.queries, else the page an
-// open_page action opened.
 func (c webSearchCall) query() string {
 	if q := strings.TrimSpace(c.Action.Query); q != "" {
 		return q
@@ -173,16 +150,10 @@ func (c webSearchCall) query() string {
 	return strings.TrimSpace(c.Action.URL)
 }
 
-// paused reports whether the search was still running when its turn ended (Claude's pause_turn):
-// in progress and without results.
 func (c webSearchCall) paused() bool {
 	return strings.EqualFold(strings.TrimSpace(c.Status), "in_progress") && len(c.Results) == 0
 }
 
-// serverToolID is the Claude server tool ID for a web_search_call item ID: the ID without the
-// ws_ the Responses writer puts in front, each character Anthropic does not take as _, behind
-// srvtoolu_. A search from another provider (ws_0011aabb) gets one too; a Claude ID comes back
-// as it was.
 func serverToolID(itemID string) string {
 	body := strings.TrimPrefix(strings.TrimPrefix(itemID, "ws_"), serverToolIDPrefix)
 	b := []byte(body)
@@ -197,12 +168,6 @@ func serverToolID(itemID string) string {
 	return serverToolIDPrefix + string(b)
 }
 
-// webSearchResults turns a web_search_call's results back into the content of a
-// web_search_tool_result block: each result that still has its encrypted_content (Anthropic
-// refuses a result without its own) as a web_search_result, error entries as they are, an error
-// object as it is. owned, when set, keeps only the results it reports true for: Anthropic refuses
-// a result minted for another credential, so those are left out, and dropped counts them.
-// Nothing usable gives nil, which is sent as an empty list.
 func webSearchResults(raw json.RawMessage, owned func(string) bool) (json.RawMessage, int) {
 	if len(raw) > 0 && raw[0] == '{' {
 		return raw, 0
@@ -239,15 +204,10 @@ func webSearchResults(raw json.RawMessage, owned func(string) bool) (json.RawMes
 	return b, dropped
 }
 
-// webSearchHistory decides how each replayed web_search_call goes back, as today's core does.
-// A search paused at the end of the history (pause_turn, then the client continues) goes back as
-// its server_tool_use alone, which is how Anthropic continues it. A paused search whose result a
-// later item with the same ID brings, before the next user turn, is left out, and that later item
-// goes back whole with the paused item's query. Every other search goes back as both blocks.
 type webSearchHistory struct {
 	skip  map[int]bool
 	query map[int]string
-	tail  map[int]bool // no user turn after this item
+	tail  map[int]bool
 }
 
 // boundary reports whether it is a user turn. Tool results do not end the assistant's turn:
@@ -258,12 +218,10 @@ func boundary(it llm.Item) bool {
 
 func scanWebSearches(items []llm.Item) webSearchHistory {
 	h := webSearchHistory{skip: map[int]bool{}, query: map[int]string{}, tail: map[int]bool{}}
-	// One pass from the end parses each search once and finds, for each, the next search with
-	// the same ID before the next user turn.
 	calls := make([]webSearchCall, len(items))
 	isCall := make([]bool, len(items))
 	next := make([]int, len(items))
-	later := map[string]int{} // nearest later search of each ID in this turn
+	later := map[string]int{}
 	after := false
 	for i := len(items) - 1; i >= 0; i-- {
 		h.tail[i] = !after
@@ -298,8 +256,6 @@ func scanWebSearches(items []llm.Item) webSearchHistory {
 	return h
 }
 
-// blocks returns the Claude blocks for item i, a web_search_call, or none when it is left out or
-// has no usable ID, and how many of its results owned left out.
 func (h webSearchHistory) blocks(i int, c webSearchCall, owned func(string) bool) ([]json.RawMessage, int) {
 	id := serverToolID(c.ID)
 	if h.skip[i] || id == "" {

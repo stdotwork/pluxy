@@ -8,7 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// textAndFinish returns the text deltas of a reply joined, and its finish.
 func textAndFinish(t *testing.T, evs []llm.Event) (string, *llm.Finish) {
 	t.Helper()
 	var b strings.Builder
@@ -42,9 +41,6 @@ func streamReply(t *testing.T, chunks ...string) []llm.Event {
 	return append(out, evs...)
 }
 
-// A refusal the upstream sends in the message, or in a delta, reaches the client as a refusal:
-// its text is the reply's, and the reply finishes as a content filter, which a Messages client
-// renders as stop_reason "refusal".
 func TestRefusalReachesClient(t *testing.T) {
 	t.Run("nonstream", func(t *testing.T) {
 		evs, err := DecodeResponse([]byte(completionBody(`{"role":"assistant","content":null,"refusal":"I cannot help with that."}`)))
@@ -84,8 +80,6 @@ func TestRefusalReachesClient(t *testing.T) {
 	})
 }
 
-// A refusal the upstream sent in a shape other than a string is no refusal; it must not fail the
-// rest of the reply, which decoded before this field was read.
 func TestNonStringRefusalDoesNotFailTheReply(t *testing.T) {
 	t.Run("delta", func(t *testing.T) {
 		evs := streamReply(t, deltaChunk(`{"content":"Hi","refusal":{"x":1}}`), finishChunk)
@@ -112,8 +106,6 @@ func TestNonStringRefusalDoesNotFailTheReply(t *testing.T) {
 	})
 }
 
-// refusalChunks returns the refusal and non-empty content deltas of a Chat stream, and its finish
-// reason.
 func refusalChunks(t *testing.T, stream string) (refusal, content []string, finish string) {
 	t.Helper()
 	for _, block := range strings.Split(stream, "\n\n") {
@@ -148,8 +140,6 @@ func refusalChunks(t *testing.T, stream string) (refusal, content []string, fini
 	return refusal, content, finish
 }
 
-// A Chat client on a Chat upstream gets a refusal in the refusal field, with content left out and
-// the upstream's finish reason kept: an OpenAI SDK reads the field, not the content.
 func TestRefusalStaysARefusalForChatClient(t *testing.T) {
 	t.Run("nonstream", func(t *testing.T) {
 		evs, err := DecodeResponse([]byte(completionBody(`{"role":"assistant","content":null,"refusal":"I cannot help with that."}`)))

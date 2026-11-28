@@ -14,7 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// roundTripCandidateEvents marshals and unmarshals every event through JSON, checking the protocol crossing.
 func roundTripCandidateEvents(t *testing.T, evs []llm.Event) []llm.Event {
 	t.Helper()
 	var seq llm.Sequence
@@ -61,7 +60,6 @@ func parseSSEData(t *testing.T, raw string) []string {
 }
 
 func TestCandidateRequestsAcrossFormats(t *testing.T) {
-	// Chat n=3 -> Gemini candidateCount=3 (on supported model + option)
 	chatReq, err := openaichat.ParseRequest([]byte(`{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"hi"}],"n":3}`))
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +87,6 @@ func TestCandidateRequestsAcrossFormats(t *testing.T) {
 		t.Fatalf("gemini candidateCount = %v, want 3 (body=%s)", gemOut.GenerationConfig.CandidateCount, gemBody)
 	}
 
-	// Gemini candidateCount=2 -> Chat n=2 (on supported model + option)
 	gemReq, err := geminigenerate.ParseRequest("gpt-4o", false, []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"candidateCount":2}}`))
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +112,6 @@ func TestCandidateRequestsAcrossFormats(t *testing.T) {
 		t.Fatalf("chat n = %v, want 2 (body=%s)", chatOut.N, chatBody)
 	}
 
-	// Count 1 sends NO field and reports NO loss in either direction.
 	chatOne, err := openaichat.ParseRequest([]byte(`{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"hi"}],"n":1}`))
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +136,6 @@ func TestCandidateRequestsAcrossFormats(t *testing.T) {
 		t.Errorf("gemini candidateCount=1 -> chat: losses=%+v body=%s", l2, b2)
 	}
 
-	// Responses has no candidate count: reports a dropped loss at the source field.
 	_, respLosses, err := openairesponses.EncodeRequest(chatReq)
 	if err != nil {
 		t.Fatal(err)
@@ -235,12 +230,10 @@ func TestGeminiToChatCandidatesNonStreaming(t *testing.T) {
 	if got.Choices[2].Index != 2 || got.Choices[2].FinishReason != "content_filter" {
 		t.Errorf("choice[2] = %+v, want blocked content_filter", got.Choices[2])
 	}
-	// Usage counted once.
 	if got.Usage.PromptTokens != 10 || got.Usage.CompletionTokens != 25 {
 		t.Errorf("usage = %+v, want prompt=10 completion=25", got.Usage)
 	}
 
-	// Candidate 0 isolation for Messages and Responses consumers.
 	msgAgg := anthropicmessages.NewAggregator()
 	respAgg := openairesponses.NewAggregator(llm.Request{Model: "gemini-2.5-pro"})
 	for _, ev := range evs {
@@ -342,7 +335,6 @@ func TestGeminiToChatInterleavedStream(t *testing.T) {
 }
 
 func TestChatToGeminiCandidatesNonStreamingAndStream(t *testing.T) {
-	// Non-streaming Chat with 3 choices (text, tool call, blocked) -> Gemini
 	chatBody := []byte(`{
 		"id": "chatcmpl-1",
 		"object": "chat.completion",
@@ -404,7 +396,6 @@ func TestChatToGeminiCandidatesNonStreamingAndStream(t *testing.T) {
 		t.Errorf("usage = %+v", got.UsageMetadata)
 	}
 
-	// Streaming interleaved Chat -> Gemini
 	streamChunks := []string{
 		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi "},"finish_reason":null}]}`,
 		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-4o","choices":[{"index":1,"delta":{"role":"assistant","content":"Yo "},"finish_reason":null}]}`,
@@ -476,7 +467,6 @@ func TestChatToGeminiCandidatesNonStreamingAndStream(t *testing.T) {
 }
 
 func TestMalformedLaterCandidateDroppedWithLoss(t *testing.T) {
-	// Gemini malformed candidate 1 does not fail reply.
 	gemBody := []byte(`{
 		"responseId": "g2",
 		"modelVersion": "gemini-2.5-pro",
@@ -502,7 +492,6 @@ func TestMalformedLaterCandidateDroppedWithLoss(t *testing.T) {
 		t.Errorf("Chat output after malformed Gemini cand 1: err=%v body=%s", err, out)
 	}
 
-	// Chat malformed choice 1 does not fail reply.
 	chatBody := []byte(`{
 		"id": "c2",
 		"object": "chat.completion",
@@ -524,7 +513,6 @@ func TestMalformedLaterCandidateDroppedWithLoss(t *testing.T) {
 }
 
 func TestSameFormatCandidatesByteIdentical(t *testing.T) {
-	// Gemini -> Gemini non-streaming byte-identical.
 	gemRaw := []byte(`{"responseId":"g3","modelVersion":"gemini-2.5-pro","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"zero"}]},"finishReason":"STOP"},{"index":1,"content":{"role":"model","parts":[{"text":"one"}]},"finishReason":"STOP"}],"extraField":42}`)
 	evs, err := geminigenerate.DecodeResponse(gemRaw)
 	if err != nil {
@@ -543,7 +531,6 @@ func TestSameFormatCandidatesByteIdentical(t *testing.T) {
 		t.Errorf("Gemini->Gemini non-streaming not byte-identical:\ngot:  %s\nwant: %s", gOut, gemRaw)
 	}
 
-	// Gemini -> Gemini streaming byte-identical per chunk.
 	gDec := geminigenerate.NewStreamDecoder()
 	sevs, err := gDec.Decode(gemRaw)
 	if err != nil {
@@ -566,7 +553,6 @@ func TestSameFormatCandidatesByteIdentical(t *testing.T) {
 		t.Errorf("Gemini->Gemini streaming not byte-identical:\ngot:  %q\nwant: %q", gBuf.String(), wantStream)
 	}
 
-	// Chat -> Chat non-streaming preserves choice 1 verbatim (including extra fields).
 	chatRaw := []byte(`{"id":"c3","object":"chat.completion","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"zero"},"finish_reason":"stop"},{"index":1,"message":{"role":"assistant","content":"one","custom_x":9},"finish_reason":"stop"}]}`)
 	cevs, err := openaichat.DecodeResponse(chatRaw)
 	if err != nil {
@@ -585,7 +571,6 @@ func TestSameFormatCandidatesByteIdentical(t *testing.T) {
 		t.Errorf("Chat->Chat non-streaming not byte-identical:\ngot:  %s\nwant: %s", cOut, chatRaw)
 	}
 
-	// Chat -> Chat streaming preserves choice 1 verbatim (including extra fields).
 	chatStreamIn := []string{
 		`{"id":"c4","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"zero"},"finish_reason":null}]}`,
 		`{"id":"c4","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":1,"delta":{"role":"assistant","content":"one","custom_x":9},"finish_reason":"stop"}]}`,
@@ -784,7 +769,6 @@ func TestSameFormatCandidateCountByteIdenticalToBase(t *testing.T) {
 }
 
 func TestGeminiCandidateCountUpperLimit(t *testing.T) {
-	// At the documented maximum (8): carried with no loss.
 	req8, err := openaichat.ParseRequest([]byte(`{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"hi"}],"n":8}`))
 	if err != nil {
 		t.Fatal(err)
@@ -797,7 +781,6 @@ func TestGeminiCandidateCountUpperLimit(t *testing.T) {
 		t.Errorf("n=8 to gemini: losses=%+v body=%s", losses8, body8)
 	}
 
-	// Above the documented maximum (9): dropped with a reported loss.
 	req9, err := openaichat.ParseRequest([]byte(`{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"hi"}],"n":9}`))
 	if err != nil {
 		t.Fatal(err)

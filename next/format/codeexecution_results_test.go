@@ -86,8 +86,6 @@ func collectGeminiParts(chunks []map[string]any) []map[string]any {
 	return parts
 }
 
-// Real upstream reply bodies for Messages, Responses, and Gemini.
-
 const messagesBashReply = `{
   "id": "msg_ce_1",
   "type": "message",
@@ -394,14 +392,12 @@ func TestCodeExecutionCrossFormatMatrix(t *testing.T) {
 					t.Fatalf("decoded code execution = %+v, want code=%q output=%q failed=false", ce, up.wantCode, up.wantOut)
 				}
 
-				// 1. Gemini client (non-stream and stream)
 				if up.upFormat != llm.FormatGeminiGenerate {
 					gAgg, gAggLosses := renderGeminiAgg(t, evs)
 					gParts := collectGeminiParts([]map[string]any{gAgg})
 					gStr, gStrLosses := renderGeminiStream(t, evs)
 					gStrParts := collectGeminiParts(parseGeminiSSEChunks(t, gStr))
 					if up.name == "messages-bash" || up.name == "messages-text-editor" {
-						// Gemini's code part holds only Python, so these runs are reported, not shown.
 						for _, ps := range [][]map[string]any{gParts, gStrParts} {
 							for _, p := range ps {
 								if p["executableCode"] != nil || p["codeExecutionResult"] != nil {
@@ -418,7 +414,6 @@ func TestCodeExecutionCrossFormatMatrix(t *testing.T) {
 					}
 				}
 
-				// 2. Messages client (cross-format: no structured block, text unchanged, loss reported)
 				if up.upFormat != llm.FormatAnthropicMessages {
 					mAgg, mAggLosses := renderMessagesAgg(t, evs)
 					if !hasLossPrefix(mAggLosses, "content.code_execution") {
@@ -439,7 +434,6 @@ func TestCodeExecutionCrossFormatMatrix(t *testing.T) {
 					}
 				}
 
-				// 3. Responses client (cross-format: no structured block, text unchanged, loss reported)
 				if up.upFormat != llm.FormatOpenAIResponses {
 					rAgg, rAggLosses := renderResponsesAgg(t, evs)
 					if !hasLossPrefix(rAggLosses, "code_execution") {
@@ -456,7 +450,6 @@ func TestCodeExecutionCrossFormatMatrix(t *testing.T) {
 					}
 				}
 
-				// 4. Chat client (no structured block, text unchanged, loss reported)
 				cAgg, cAggLosses := renderChatAggWithLosses(t, evs)
 				if !hasLossPrefix(cAggLosses, "code_execution") {
 					t.Errorf("chat agg losses = %+v, want code_execution loss", cAggLosses)
@@ -598,7 +591,6 @@ func TestCodeExecutionFailedRuns(t *testing.T) {
 			if len(fin.CodeExecutions) != 1 || !fin.CodeExecutions[0].Failed || fin.CodeExecutions[0].Output != tc.wantOut {
 				t.Fatalf("got %+v, want failed=true output=%q", fin.CodeExecutions, tc.wantOut)
 			}
-			// Render a Python run to Gemini (for non-Gemini upstreams) and verify OUTCOME_FAILED.
 			if evs[0].Response.Format != llm.FormatGeminiGenerate && fin.CodeExecutions[0].Language == "python" {
 				gAgg, _ := renderGeminiAgg(t, evs)
 				parts := collectGeminiParts([]map[string]any{gAgg})
@@ -617,7 +609,6 @@ func TestCodeExecutionFailedRuns(t *testing.T) {
 }
 
 func TestCodeExecutionOnlyReplyNoText(t *testing.T) {
-	// Gemini reply holding ONLY executableCode + codeExecutionResult and NO text.
 	geminiCodeOnly := `{
 		"responseId": "gem_only",
 		"modelVersion": "gemini-3.8-flash",
@@ -643,7 +634,6 @@ func TestCodeExecutionOnlyReplyNoText(t *testing.T) {
 		t.Fatalf("code-only decoded = %+v", fin.CodeExecutions)
 	}
 
-	// Messages: valid empty content, stop_reason=end_turn, loss reported.
 	mBody, mLosses := renderMessagesAgg(t, evs)
 	if !hasLossPrefix(mLosses, "content.code_execution") {
 		t.Errorf("messages losses = %+v, want content.code_execution", mLosses)
@@ -656,7 +646,6 @@ func TestCodeExecutionOnlyReplyNoText(t *testing.T) {
 		t.Errorf("messages stop_reason = %v, want end_turn", mObj["stop_reason"])
 	}
 
-	// Responses: valid completed response with empty output, loss reported.
 	rObj, rLosses := renderResponsesAgg(t, evs)
 	if !hasLossPrefix(rLosses, "code_execution") {
 		t.Errorf("responses losses = %+v, want code_execution", rLosses)
@@ -665,7 +654,6 @@ func TestCodeExecutionOnlyReplyNoText(t *testing.T) {
 		t.Errorf("responses status = %v, want completed", rObj["status"])
 	}
 
-	// Chat: valid stop completion with empty content, loss reported.
 	cObj, cLosses := renderChatAggWithLosses(t, evs)
 	if !hasLossPrefix(cLosses, "code_execution") {
 		t.Errorf("chat losses = %+v, want code_execution", cLosses)
@@ -675,7 +663,6 @@ func TestCodeExecutionOnlyReplyNoText(t *testing.T) {
 		t.Errorf("chat finish_reason = %v, want stop", choices[0].(map[string]any)["finish_reason"])
 	}
 
-	// Responses code-only -> Gemini client gets executableCode + codeExecutionResult and STOP.
 	respCodeOnly := `{
 		"id":"resp_only","object":"response","created_at":1,"status":"completed","model":"gpt-6.2-astra",
 		"output":[{"id":"ci_only","type":"code_interpreter_call","status":"completed","container_id":"cntr_1","code":"print(42)","outputs":[{"type":"logs","logs":"42\n"}]}]
@@ -691,7 +678,6 @@ func TestCodeExecutionOnlyReplyNoText(t *testing.T) {
 	checkGeminiCodeParts(t, "code-only-stream", collectGeminiParts(parseGeminiSSEChunks(t, gStr)), "print(42)", "OUTCOME_OK", "42\n", "")
 }
 
-// wantOnlyLeftOut fails unless runs is exactly the one record that says runs were left out.
 func wantOnlyLeftOut(t *testing.T, label string, runs []llm.CodeExecution) {
 	t.Helper()
 	if len(runs) != 1 || runs[0] != (llm.CodeExecution{FilesOmitted: true}) {
@@ -699,9 +685,7 @@ func wantOnlyLeftOut(t *testing.T, label string, runs []llm.CodeExecution) {
 	}
 }
 
-// A run that gave no usable result is not carried, and is reported as left out.
 func TestCodeExecutionMalformedAndUnmatchedDropped(t *testing.T) {
-	// 1. Messages: result with no matching call + unknown result type -> reported as left out, text intact.
 	msgBad := `{
 		"id":"m_bad","type":"message","role":"assistant","model":"claude-sonnet-5",
 		"content":[
@@ -718,7 +702,6 @@ func TestCodeExecutionMalformedAndUnmatchedDropped(t *testing.T) {
 	}
 	wantOnlyLeftOut(t, "messages bad", mevs[len(mevs)-1].CodeExecutions)
 
-	// 2. Responses: in_progress (partial) and malformed outputs -> reported as left out, text intact.
 	respBad := `{
 		"id":"r_bad","object":"response","created_at":1,"status":"completed","model":"gpt-6.2-astra",
 		"output":[
@@ -732,7 +715,6 @@ func TestCodeExecutionMalformedAndUnmatchedDropped(t *testing.T) {
 	}
 	wantOnlyLeftOut(t, "responses bad", revs[len(revs)-1].CodeExecutions)
 
-	// 3. Gemini: result with no matching executableCode + unknown outcome -> reported as left out, text intact.
 	gemBad := `{
 		"responseId":"g_bad","modelVersion":"gemini-3.8-flash",
 		"candidates":[{"index":0,"content":{"role":"model","parts":[
@@ -750,7 +732,6 @@ func TestCodeExecutionMalformedAndUnmatchedDropped(t *testing.T) {
 }
 
 func TestCodeExecutionFilesAndImagesReportedAsLoss(t *testing.T) {
-	// Messages with generated file_id in content[].
 	msgWithFile := `{
 		"id":"m_file","type":"message","role":"assistant","model":"claude-sonnet-5",
 		"content":[
@@ -777,7 +758,6 @@ func TestCodeExecutionFilesAndImagesReportedAsLoss(t *testing.T) {
 		t.Errorf("gemini stream losses = %+v, want code_execution.files", gStrLosses)
 	}
 
-	// Responses with image output in code_interpreter_call.outputs[].
 	respWithImg := `{
 		"id":"r_img","object":"response","created_at":1,"status":"completed","model":"gpt-6.2-astra",
 		"output":[
@@ -808,8 +788,6 @@ func compactBody(t *testing.T, raw string) string {
 	return buf.String()
 }
 
-// wantRuns fails unless the finish event of evs holds n runs, so a test that then shows a
-// byte-identical reply has proved the decoder read the runs and the renderer left the reply alone.
 func wantRuns(t *testing.T, label string, evs []llm.Event, n int) {
 	t.Helper()
 	if got := len(evs[len(evs)-1].CodeExecutions); got != n {
@@ -818,7 +796,6 @@ func wantRuns(t *testing.T, label string, evs []llm.Event, n int) {
 }
 
 func TestCodeExecutionSameFormatByteIdentical(t *testing.T) {
-	// 1. Messages non-stream & stream.
 	msgWire := compactBody(t, messagesBashReply)
 	mevs, err := anthropicmessages.DecodeResponse([]byte(msgWire))
 	if err != nil {
@@ -857,7 +834,6 @@ func TestCodeExecutionSameFormatByteIdentical(t *testing.T) {
 		t.Errorf("messages stream same-format losses = %+v, want none", mStrLosses)
 	}
 
-	// 2. Responses non-stream & stream.
 	respWire := compactBody(t, responsesCodeInterpreterReply)
 	revs, err := openairesponses.DecodeResponse([]byte(respWire))
 	if err != nil {
@@ -900,7 +876,6 @@ func TestCodeExecutionSameFormatByteIdentical(t *testing.T) {
 		t.Errorf("responses stream same-format losses = %+v, want none", rStrLosses)
 	}
 
-	// 3. Gemini non-stream & stream.
 	gemWire := compactBody(t, geminiCodeExecReply)
 	gevs, err := geminigenerate.DecodeResponse([]byte(gemWire))
 	if err != nil {
@@ -940,8 +915,6 @@ func TestCodeExecutionSameFormatByteIdentical(t *testing.T) {
 }
 
 func TestCodeExecutionNextTurnReplay(t *testing.T) {
-	// Take a Responses code_interpreter_call reply rendered for a Gemini client, then replay that
-	// model turn in a next-turn Gemini request through ParseRequest and into every target encoder.
 	evs, err := openairesponses.DecodeResponse([]byte(responsesCodeInterpreterReply))
 	if err != nil {
 		t.Fatal(err)
@@ -964,7 +937,6 @@ func TestCodeExecutionNextTurnReplay(t *testing.T) {
 		t.Fatalf("ParseRequest on replayed Gemini reply: %v", err)
 	}
 
-	// Target 1: Gemini encoder preserves executableCode and codeExecutionResult.
 	gBody, _, err := geminigenerate.EncodeRequest(req)
 	if err != nil {
 		t.Fatalf("EncodeRequest -> gemini: %v", err)
@@ -973,7 +945,6 @@ func TestCodeExecutionNextTurnReplay(t *testing.T) {
 		t.Errorf("gemini replay missing code parts: %s", gBody)
 	}
 
-	// Target 2: Messages encoder drops foreign native parts with losses and succeeds.
 	mBody, mLosses, err := anthropicmessages.EncodeRequest(req)
 	if err != nil {
 		t.Fatalf("EncodeRequest -> messages: %v", err)
@@ -985,7 +956,6 @@ func TestCodeExecutionNextTurnReplay(t *testing.T) {
 		t.Errorf("messages replay must not send foreign code parts or invented IDs: %s", mBody)
 	}
 
-	// Target 3: Responses encoder drops foreign native parts with losses and succeeds.
 	rBody, rLosses, err := openairesponses.EncodeRequest(req)
 	if err != nil {
 		t.Fatalf("EncodeRequest -> responses: %v", err)
@@ -997,7 +967,6 @@ func TestCodeExecutionNextTurnReplay(t *testing.T) {
 		t.Errorf("responses replay must not send foreign code parts: %s", rBody)
 	}
 
-	// Target 4: Chat encoder drops foreign native parts with losses and succeeds.
 	cBody, cLosses, err := openaichat.EncodeRequest(req)
 	if err != nil {
 		t.Fatalf("EncodeRequest -> chat: %v", err)

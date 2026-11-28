@@ -14,8 +14,6 @@ type reasoningFields struct {
 	Details          json.RawMessage `json:"reasoning_details"`
 }
 
-// text returns the reasoning the fields hold, as one string. It reads the first field that has
-// any text, so a reply that sends the same text in more than one field shows it once.
 func (f reasoningFields) text() string {
 	if t := fieldText(f.ReasoningContent); t != "" {
 		return t
@@ -26,8 +24,6 @@ func (f reasoningFields) text() string {
 	return detailsText(f.Details)
 }
 
-// fieldText returns the text of a reasoning field: a string as it is, or the text of each part
-// of a list of parts.
 func fieldText(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
@@ -47,8 +43,6 @@ func fieldText(raw json.RawMessage) string {
 	return b.String()
 }
 
-// partText returns the text of one part of a reasoning field. A part that carries encrypted
-// reasoning holds no text: its data must not reach the client as readable reasoning.
 func partText(raw json.RawMessage) string {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
@@ -68,9 +62,6 @@ func partText(raw json.RawMessage) string {
 	return p.Text
 }
 
-// detailsText returns the text of OpenRouter's reasoning_details list: each entry's text
-// (reasoning.text) or, failing that, its summary (reasoning.summary). An encrypted entry
-// (reasoning.encrypted) holds data, not text, and contributes nothing.
 func detailsText(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""

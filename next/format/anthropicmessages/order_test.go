@@ -8,13 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Regression pin for StreamWriter in render.go (not request encoding in encode.go or fit.go):
-// replies from other formats reach a Messages client as blocks Anthropic's streaming protocol
-// allows (https://platform.claude.com/docs/en/build-with-claude/streaming): one block open at a
-// time with sequential indices, held deltas flushed when a queued block opens, and each thinking
-// block's signature_delta written before its content_block_stop. The cases are the ones reported
-// against today's core: a Gemini stream that ends on a signature-only thought after the text, a
-// thought that starts while text is still open, and two Responses reasoning items in a row.
 func TestStreamWriterThinkingBlockOrder(t *testing.T) {
 	text := &llm.ItemStart{Kind: llm.ItemMessage}
 	think := &llm.ItemStart{Kind: llm.ItemReasoning}
@@ -22,7 +15,7 @@ func TestStreamWriterThinkingBlockOrder(t *testing.T) {
 		name   string
 		format string
 		events []llm.Event
-		blocks []string // "type=content" or "type=content:signature" in order
+		blocks []string
 	}{
 		{"gemini trailing signature", llm.FormatGeminiGenerate, []llm.Event{
 			{Type: llm.EventItemStart, Index: 0, Item: text},

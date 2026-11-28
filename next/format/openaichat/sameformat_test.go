@@ -118,7 +118,6 @@ func TestSameFormatAnnotationsNonStreamAndStream(t *testing.T) {
 		t.Errorf("nonstream->stream SSE missing annotations:\n%s", sseOut)
 	}
 
-	// Streamed upstream with delta.annotations -> both StreamWriter and Aggregator keep them.
 	streamEvs, sLosses := decodeStream(t, []string{
 		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-5-search-api","choices":[{"index":0,"delta":{"role":"assistant","content":"hello world"}}]}`,
 		fmt.Sprintf(`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-5-search-api","choices":[{"index":0,"delta":{"annotations":%s},"finish_reason":"stop"}]}`, annJSON),
@@ -158,12 +157,10 @@ func TestSameFormatAnnotationsNonStreamAndStream(t *testing.T) {
 }
 
 func TestSameFormatAudioNonStreamAndStream(t *testing.T) {
-	// 4 bytes ("AQIDBA==") has base64 padding, 3 bytes ("BQYH") does not: merging must yield valid base64 of all 7 bytes.
 	part1 := base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4})
 	part2 := base64.StdEncoding.EncodeToString([]byte{5, 6, 7})
 	wantMerged := base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4, 5, 6, 7})
 
-	// 1. Non-stream upstream -> Aggregator and StreamWriter.
 	nonStreamBody := fmt.Sprintf(
 		`{"id":"c1","object":"chat.completion","created":1,"model":"gpt-4o-audio-preview","choices":[{"index":0,"message":{"role":"assistant","content":null,"audio":{"id":"audio_abc","data":%q,"expires_at":1730000000,"transcript":"Hello."}},"finish_reason":"stop"}]}`,
 		part1,
@@ -173,7 +170,6 @@ func TestSameFormatAudioNonStreamAndStream(t *testing.T) {
 		t.Fatalf("DecodeResponseLosses: err=%v losses=%+v", err, losses)
 	}
 	checkEventsFitMaxFrame(t, evs)
-	// Verify EventMedia does not duplicate the base64 audio data inside Raw.
 	for _, ev := range evs {
 		if ev.Type == llm.EventMedia && bytes.Contains(ev.Raw, []byte(part1)) {
 			t.Errorf("EventMedia.Raw duplicated audio data: %s", ev.Raw)
@@ -219,7 +215,6 @@ func TestSameFormatAudioNonStreamAndStream(t *testing.T) {
 		t.Errorf("nonstream->stream SSE missing audio:\n%s", sseOut)
 	}
 
-	// 2. Stream upstream with multiple audio chunks (including a data-less metadata chunk in the middle and at the end).
 	streamEvs, sLosses := decodeStream(t, []string{
 		fmt.Sprintf(`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-4o-audio-preview","choices":[{"index":0,"delta":{"role":"assistant","audio":{"id":"audio_abc","data":%q,"transcript":"Hel"}},"finish_reason":null}]}`, part1),
 		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-4o-audio-preview","choices":[{"index":0,"delta":{"audio":{"transcript":"lo"}},"finish_reason":null}]}`,
@@ -276,7 +271,6 @@ func TestSameFormatAudioNonStreamAndStream(t *testing.T) {
 }
 
 func TestSameFormatReplyWithoutAnnotationsOrAudioStaysByteIdentical(t *testing.T) {
-	// Plain reply and reply with empty annotations: [] must both stay byte-identical.
 	for _, tc := range []struct {
 		name string
 		body string
@@ -303,7 +297,7 @@ func TestSameFormatReplyWithoutAnnotationsOrAudioStaysByteIdentical(t *testing.T
 }
 
 func TestSameFormatOversizedAnnotationsAndAudioMetaBounded(t *testing.T) {
-	bigText := strings.Repeat("a", 5<<20) // 5 MiB > 4 MiB cap
+	bigText := strings.Repeat("a", 5<<20)
 	bigAnnBody := fmt.Sprintf(
 		`{"id":"c1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi","annotations":[{"type":"vendor","data":%q}]},"finish_reason":"stop"}]}`,
 		bigText,

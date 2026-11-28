@@ -11,20 +11,8 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// OpenAI's legacy text completions (POST /v1/completions) are served as Chat Completions, as
-// today's core serves them: the request becomes a Chat request with the prompt as one user
-// message, and the Chat reply is written back in the completions shape. The upstream sees a
-// Chat request.
-
-// completionsPrompt is the user message of a request with an empty prompt, as today's core sends
-// it.
 const completionsPrompt = "Complete this:"
 
-// ParseCompletionsRequest reads a legacy completions request as the Chat request it is served
-// as. The prompt (a string, or a list of one string) becomes the one user message; max_tokens,
-// temperature, top_p, frequency_penalty, presence_penalty, stop, stream, logprobs (as a switch),
-// top_logprobs and echo are carried over, as today's core carries them; other fields (n, suffix,
-// best_of, user, ...) are left out.
 func ParseCompletionsRequest(body []byte) (llm.Request, error) {
 	in := rawjson.Object(body)
 	if in == nil {
@@ -39,8 +27,6 @@ func ParseCompletionsRequest(body []byte) (llm.Request, error) {
 		if json.Unmarshal(raw, &prompt) != nil {
 			var list []string
 			if json.Unmarshal(raw, &list) != nil || len(list) > 1 {
-				// Several prompts ask for one completion each, which one Chat request cannot
-				// carry; token arrays have no Chat form either.
 				return llm.Request{}, invalid("prompt must be a string or a list of one string")
 			}
 			if len(list) == 1 {
@@ -56,8 +42,6 @@ func ParseCompletionsRequest(body []byte) (llm.Request, error) {
 	if json.Unmarshal(in["model"], &model) == nil {
 		out["model"] = model
 	}
-	// Numbers keep their kind (max_tokens and top_logprobs whole, the rest as given); logprobs
-	// and echo become switches; stop goes as it came.
 	for _, k := range []string{"max_tokens", "top_logprobs"} {
 		var f float64
 		if json.Unmarshal(in[k], &f) == nil {
@@ -85,7 +69,6 @@ func ParseCompletionsRequest(body []byte) (llm.Request, error) {
 	return ParseRequest(chat)
 }
 
-// truthy reads a JSON value as a switch: true, a non-zero number or a string that says true.
 func truthy(raw json.RawMessage) bool {
 	var v any
 	if json.Unmarshal(raw, &v) != nil {
@@ -102,7 +85,6 @@ func truthy(raw json.RawMessage) bool {
 	return false
 }
 
-// textCompletion is a reply in the completions shape.
 type textCompletion struct {
 	ID      string           `json:"id"`
 	Object  string           `json:"object"`
@@ -112,10 +94,6 @@ type textCompletion struct {
 	Usage   json.RawMessage  `json:"usage,omitempty"`
 }
 
-// toCompletion turns a Chat reply or stream chunk into the completions shape: its id, created,
-// model and usage, and each choice's index, text (the message's or delta's content),
-// finish_reason and logprobs. In a chunk an absent or empty content is text "" and a null
-// finish_reason is left out.
 func toCompletion(chat []byte, chunk bool) ([]byte, error) {
 	var in struct {
 		ID      string          `json:"id"`
@@ -159,20 +137,16 @@ func toCompletion(chat []byte, chunk bool) ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// contentOnly reads a message's or delta's content as text; null and absent are nil.
 type contentOnly struct {
 	Content *string `json:"content"`
 }
 
-// CompletionsAggregator collects events into a non-streamed completions reply.
 type CompletionsAggregator struct{ *Aggregator }
 
-// NewCompletionsAggregator returns an aggregator for one completions reply.
 func NewCompletionsAggregator() *CompletionsAggregator {
 	return &CompletionsAggregator{NewAggregator()}
 }
 
-// Response returns the reply in the completions shape.
 func (a *CompletionsAggregator) Response() ([]byte, error) {
 	chat, err := a.Aggregator.Response()
 	if err != nil {
@@ -181,22 +155,16 @@ func (a *CompletionsAggregator) Response() ([]byte, error) {
 	return toCompletion(chat, false)
 }
 
-// CompletionsStreamWriter writes events to a client as a completions stream: the Chat stream's
-// chunks in the completions shape. A chunk with no text, no finish reason and no usage (such as
-// the first, which names the role) is left out; "[DONE]" and an error object go as they are.
 type CompletionsStreamWriter struct {
 	*StreamWriter
 	conv *completionsConverter
 }
 
-// NewCompletionsStreamWriter returns a writer for one completions stream. includeUsage adds
-// the final usage chunk.
 func NewCompletionsStreamWriter(w io.Writer, includeUsage bool) *CompletionsStreamWriter {
 	conv := &completionsConverter{w: w}
 	return &CompletionsStreamWriter{StreamWriter: NewStreamWriter(conv, includeUsage), conv: conv}
 }
 
-// completionsConverter takes the Chat stream's bytes and writes each event converted.
 type completionsConverter struct {
 	w   io.Writer
 	buf []byte
@@ -217,7 +185,6 @@ func (c *completionsConverter) Write(p []byte) (int, error) {
 	}
 }
 
-// frame converts one event of the Chat stream, which StreamWriter writes as one data line.
 func (c *completionsConverter) frame(frame []byte) error {
 	data, ok := bytes.CutPrefix(frame, []byte("data: "))
 	if !ok || bytes.Equal(data, []byte("[DONE]")) {
@@ -226,9 +193,8 @@ func (c *completionsConverter) frame(frame []byte) error {
 	}
 	var probe struct {
 		Choices []struct {
-			Delta *contentOnly `json:"delta"`
-			// FinishReason is a string or null.
-			FinishReason *string `json:"finish_reason"`
+			Delta        *contentOnly `json:"delta"`
+			FinishReason *string      `json:"finish_reason"`
 		} `json:"choices"`
 		Usage json.RawMessage `json:"usage"`
 		Error json.RawMessage `json:"error"`

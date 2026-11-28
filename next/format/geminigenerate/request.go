@@ -1,15 +1,3 @@
-// Package geminigenerate converts between Gemini's GenerateContent API and pluxy's internal model:
-// core uses it to read client requests and write client replies, and provider extensions use it
-// to read replies from an upstream that speaks GenerateContent.
-//
-// A request read here keeps its body as the native form, so an upstream that speaks
-// GenerateContent gets it unchanged, thought signatures included. A reply from such an upstream
-// keeps every upstream chunk in its raw field, so a Gemini client gets the upstream's chunks
-// unchanged; a reply from another format is rebuilt into GenerateContent chunks.
-//
-// Gemini reads both the camelCase and the snake_case spelling of every field name (proto3 JSON),
-// so the parser accepts both. Unlike the other formats, the model and whether the reply streams
-// are in the request path.
 package geminigenerate
 
 import (
@@ -34,9 +22,6 @@ func invalid(msg string, args ...any) *llm.Error {
 	return &llm.Error{Code: llm.CodeInvalidRequest, Message: fmt.Sprintf(msg, args...), Scope: llm.ScopeRequest}
 }
 
-// camel returns m with snake_case keys renamed to camelCase, so one spelling can be read. A key
-// already present in camelCase wins. Only this level of the object is renamed: nested values,
-// such as function arguments and schemas, are user data and keep their keys.
 func camel(m map[string]json.RawMessage) map[string]json.RawMessage {
 	var out map[string]json.RawMessage
 	for k, v := range m {
@@ -71,7 +56,6 @@ func snakeToCamel(s string) string {
 	return strings.Join(parts, "")
 }
 
-// object reads raw as a JSON object with camelCase keys, or nil when it is not an object.
 func object(raw json.RawMessage) map[string]json.RawMessage {
 	return camel(rawjson.Object(raw))
 }
@@ -81,14 +65,8 @@ func isNull(raw json.RawMessage) bool {
 	return len(t) == 0 || bytes.Equal(t, []byte("null"))
 }
 
-// requestFields are the top-level fields the model carries. toolConfig and generationConfig are
-// carried only in the shapes the parser knows; anything else in them stays in Origin.Raw.
 var requestFields = []string{"contents", "systemInstruction", "tools", "toolConfig", "generationConfig"}
 
-// ParseRequest reads a GenerateContent request body for model, streamed or not (from the request
-// path). The result keeps body as its Native form, and every item, part and tool keeps the fields
-// the model has no place for (thought signatures and the like) in its Origin. Errors are
-// *llm.Error with code invalid_request.
 func ParseRequest(model string, stream bool, body []byte) (llm.Request, error) {
 	if !json.Valid(body) {
 		var v any
@@ -122,7 +100,6 @@ func ParseRequest(model string, stream bool, body []byte) (llm.Request, error) {
 	}
 	modelled := requestFields
 	if tier, ok := rawjson.Text(top["serviceTier"]); ok {
-		// unspecified is standard, as an absent tier is: it names no tier of its own.
 		switch tier {
 		case "standard":
 			req.Options.ServiceTier = llm.ServiceTierDefault
@@ -173,8 +150,6 @@ func ParseRequest(model string, stream bool, body []byte) (llm.Request, error) {
 	return req, nil
 }
 
-// parseGenerationConfig reads the generation options the model carries into o and returns the
-// fields it does not carry.
 func parseGenerationConfig(raw json.RawMessage, o *llm.Options) (json.RawMessage, error) {
 	m := object(raw)
 	if m == nil {
@@ -200,8 +175,6 @@ func parseGenerationConfig(raw json.RawMessage, o *llm.Options) (json.RawMessage
 		o.MaxOutputTokens = &n
 	}
 	modelled := []string{"temperature", "topP", "maxOutputTokens", "stopSequences"}
-	// Only a plain whole number is a count. Anything else (a string, 1.5, 2.0, a number past int32)
-	// stays in Origin as the client wrote it, so a same-format upstream gets what it always did.
 	var n int32
 	if json.Unmarshal(g.CandidateCount, &n) == nil && n >= 1 {
 		modelled = append(modelled, "candidateCount")
@@ -236,16 +209,11 @@ func parseGenerationConfig(raw json.RawMessage, o *llm.Options) (json.RawMessage
 	return rest.Raw, nil
 }
 
-// Thinking budgets at or below these get the named reasoning effort; above the last, xhigh. They
-// are today's core's thresholds, shared with the Messages format.
 var effortBudgets = []struct {
 	max    int
 	effort string
 }{{0, "none"}, {512, "minimal"}, {1024, "low"}, {8192, "medium"}, {24576, "high"}}
 
-// reasoningEffort reads thinkingConfig: thinkingLevel as the effort it names; a thinking budget as
-// the effort it falls in, -1 (dynamic) as auto. It returns the fields the effort does not carry
-// (the budget among them).
 func reasoningEffort(raw json.RawMessage) (string, json.RawMessage) {
 	m := object(raw)
 	if m == nil {
@@ -265,8 +233,6 @@ func reasoningEffort(raw json.RawMessage) (string, json.RawMessage) {
 	if t.Budget == nil {
 		return "", nil
 	}
-	// The budget itself is not carried by the effort: it stays in the fields returned, so a
-	// translation reports it.
 	if *t.Budget < 0 {
 		return "auto", rawjson.Encode(m)
 	}
@@ -280,10 +246,6 @@ func reasoningEffort(raw json.RawMessage) (string, json.RawMessage) {
 	return effort, rawjson.Encode(m)
 }
 
-// parseToolConfig reads toolConfig.functionCallingConfig: AUTO, NONE, ANY (one allowed function
-// names it; otherwise any tool is required) and VALIDATED (the model calls one of the allowed
-// functions or answers in text). The allowed function names, which Gemini sets with ANY or
-// VALIDATED, become the choice's allowed list. Anything else stays in the fields it returns.
 func parseToolConfig(raw json.RawMessage) (*llm.ToolChoice, json.RawMessage) {
 	m := object(raw)
 	fcRaw, ok := m["functionCallingConfig"]
@@ -314,13 +276,10 @@ func parseToolConfig(raw json.RawMessage) (*llm.ToolChoice, json.RawMessage) {
 			choice = &llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: c.Allowed[0]}
 			modelled = append(modelled, "allowedFunctionNames")
 		default:
-			// ANY with several names is a forced call narrowed to them.
 			choice = &llm.ToolChoice{Mode: llm.ToolChoiceRequired, Allowed: c.Allowed}
 			modelled = append(modelled, "allowedFunctionNames")
 		}
 	case "VALIDATED":
-		// VALIDATED lets the model call one of the allowed functions or answer in text, which is
-		// an allowed list with an auto choice.
 		if len(c.Allowed) > 0 {
 			choice = &llm.ToolChoice{Mode: llm.ToolChoiceAuto, Allowed: c.Allowed}
 			modelled = append(modelled, "allowedFunctionNames")
@@ -342,10 +301,6 @@ func parseToolConfig(raw json.RawMessage) (*llm.ToolChoice, json.RawMessage) {
 	return choice, other
 }
 
-// parseTools reads one Tool object: each function declaration becomes a function tool; any other
-// tool in it survives whole as a native tool, except googleSearch, which becomes a canonical web
-// search tool, and a non-null codeExecution, a canonical code execution tool; each keeps the
-// client's JSON in its origin.
 func parseTools(raw json.RawMessage, path string) []llm.Tool {
 	m := object(raw)
 	if m == nil {
@@ -388,8 +343,6 @@ func parseDeclaration(raw json.RawMessage, path string) llm.Tool {
 	}
 	t := llm.Tool{Name: d.Name, Description: d.Description}
 	modelled := []string{"name", "description"}
-	// parametersJsonSchema is JSON Schema; parameters is Gemini's Schema (an OpenAPI subset),
-	// read as JSON Schema.
 	if p := m["parametersJsonSchema"]; !isNull(p) {
 		t.Parameters = p
 		modelled = append(modelled, "parametersJsonSchema")
@@ -401,8 +354,6 @@ func parseDeclaration(raw json.RawMessage, path string) llm.Tool {
 	return t
 }
 
-// parseSystem reads systemInstruction, a Content (or, as Gemini also accepts, a string), into one
-// system message.
 func parseSystem(raw json.RawMessage) (*llm.Item, error) {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
@@ -436,23 +387,16 @@ func parseSystem(raw json.RawMessage) (*llm.Item, error) {
 	return it, nil
 }
 
-// parser reads contents in order. pending holds, per function name, the call ids waiting for
-// their results, so a result without an id pairs with the earliest call of the same name, as
-// Gemini's function-calling guide describes. A result with neither name nor id pairs with the
-// earliest waiting call of any name, as the Gemini-upstream repair does; seq numbers the calls in
-// the order they were read, to tell which of several queues holds it.
 type parser struct {
 	pending map[string][]pendingCall
 	seq     int
 }
 
-// pendingCall is a call id waiting for its result, and where the call came in the contents.
 type pendingCall struct {
 	id  string
 	seq int
 }
 
-// earliestPending removes and returns the id of the earliest waiting call of any name.
 func (p *parser) earliestPending() (string, bool) {
 	name, best := "", -1
 	for n, q := range p.pending {
@@ -468,19 +412,11 @@ func (p *parser) earliestPending() (string, bool) {
 	return id, true
 }
 
-// syntheticID returns the id for a call or result Gemini sent without one: deterministic, so the
-// same conversation gets the same ids on every turn. kind is "call" or "response"; payload is
-// the call's arguments or the result as sent. The form is today's core's.
 func syntheticID(kind string, content, part int, name string, payload json.RawMessage) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d|%s|%s", kind, content, part, name, payload)))
 	return "call_" + hex.EncodeToString(sum[:12])
 }
 
-// content reads contents[ci] into items, in part order: runs of text and media parts become a
-// message item, and each function call, function response and thought becomes its own item, so
-// their order survives. It returns the role it read the content as. A content without a role is
-// read as a model turn when it holds a function call, a user turn when it holds a function
-// response, and otherwise as the turn after the previous one.
 func (p *parser) content(raw json.RawMessage, ci int, prevRole string) ([]llm.Item, string, error) {
 	path := fmt.Sprintf("contents[%d]", ci)
 	m := object(raw)
@@ -522,7 +458,7 @@ func (p *parser) content(raw json.RawMessage, ci int, prevRole string) ([]llm.It
 	}
 	origin := rawjson.Origin(format, path, m, []string{"role", "parts"}, nil)
 	var items []llm.Item
-	msg := -1 // index in items of the message item collecting parts, or -1
+	msg := -1
 	messageOrigin := func() *llm.Origin {
 		if origin == nil || len(origin.Raw) == 0 {
 			return &llm.Origin{Format: format, Path: path}
@@ -552,9 +488,6 @@ func (p *parser) content(raw json.RawMessage, ci int, prevRole string) ([]llm.It
 			}
 			item(it)
 		case isThought(pm):
-			// A thought is a summary of the model's reasoning, shown to the user; Gemini does
-			// not need it back, and like today's core no other format gets it: it stays whole
-			// as a native item, reported when a translation drops it.
 			item(llm.Item{Type: llm.ItemTypeNative, Origin: &llm.Origin{Format: format, Path: pp, Raw: append(json.RawMessage(nil), pr...)}})
 		case pm["text"] != nil || pm["inlineData"] != nil || pm["fileData"] != nil:
 			if msg < 0 {
@@ -562,22 +495,15 @@ func (p *parser) content(raw json.RawMessage, ci int, prevRole string) ([]llm.It
 				msg = len(items) - 1
 			}
 			items[msg].Content = append(items[msg].Content, parsePart(pr, pm, pp))
-			// Gemini has no plain-string content. A message of one plain text part is marked as
-			// text content, so a format that has a string form sends it as one, as today's
-			// core does.
 			c := items[msg].Content
 			items[msg].TextContent = len(c) == 1 && c[0].Type == llm.PartText && (c[0].Origin == nil || len(c[0].Origin.Raw) == 0)
 		default:
-			// Executable code, code results, server-side tool calls and their responses:
-			// opaque to the model, kept whole and in place.
 			item(llm.Item{Type: llm.ItemTypeNative, Origin: &llm.Origin{Format: format, Path: pp, Raw: append(json.RawMessage(nil), pr...)}})
 		}
 	}
 	if len(head.Parts) == 0 {
 		return []llm.Item{{Type: llm.ItemTypeMessage, Role: role, Origin: messageOrigin()}}, role, nil
 	}
-	// A content whose parts all became other items keeps its own fields on an empty message
-	// item, as the Messages format does: first for a model turn, last for a user turn.
 	if origin != nil && len(origin.Raw) > 0 {
 		it := llm.Item{Type: llm.ItemTypeMessage, Role: role, Origin: origin}
 		if role == llm.RoleAssistant {
@@ -603,8 +529,6 @@ func isThought(pm map[string]json.RawMessage) bool {
 	return json.Unmarshal(pm["thought"], &t) == nil && t
 }
 
-// call reads a functionCall part. Its id is kept, or made up when Gemini sent none. The part's
-// other fields, such as its thought signature, stay in Origin.Raw.
 func (p *parser) call(pm map[string]json.RawMessage, ci, pi int, path string) (llm.Item, error) {
 	fm := object(pm["functionCall"])
 	if fm == nil {
@@ -638,10 +562,6 @@ func (p *parser) call(pm map[string]json.RawMessage, ci, pi int, path string) (l
 		Origin: rawjson.Origin(format, path, pm, []string{"functionCall"}, nested)}, nil
 }
 
-// response reads a functionResponse part. Without an id it pairs with the earliest waiting call
-// of the same name; without a name too, with the earliest waiting call of any name. It gets a
-// made-up id when there is none. The output is the response as JSON
-// text, its content when that is all it holds, or its error's value when it reports a failure.
 func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string) (llm.Item, error) {
 	fm := object(pm["functionResponse"])
 	if fm == nil {
@@ -658,9 +578,6 @@ func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string
 	resp := fm["response"]
 	out := resp
 	rm := rawjson.Object(resp)
-	// A response that holds only content is sent as that content, as today's core does; a
-	// response with an "error" key is a failed call (FunctionResponse.response documents it),
-	// whose error value is the result's text; any other response is sent whole.
 	isError := rm["error"] != nil && !isNull(rm["error"])
 	if len(rm) == 1 && rm["content"] != nil {
 		out = rm["content"]
@@ -669,8 +586,6 @@ func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string
 	queue := p.pending[fr.Name]
 	switch {
 	case id != "":
-		// A result without a name still answers its call, whichever name queue holds it: the
-		// waiting call with that id that came first.
 		names := []string{fr.Name}
 		if fr.Name == "" {
 			names = slices.Sorted(maps.Keys(p.pending))
@@ -712,9 +627,6 @@ func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string
 		output = string(out)
 	}
 	it := llm.Item{Type: llm.ItemTypeToolResult, CallID: id, Output: output, IsError: isError}
-	// The name is carried by the call the result pairs with. Media in the response's parts
-	// follow its text as the result's parts. A response whose error sits beside other fields
-	// keeps them unmodelled, so they go back unchanged beside the error.
 	modelled := []string{"id", "name"}
 	if !isError || len(rm) == 1 {
 		modelled = append(modelled, "response")
@@ -734,8 +646,6 @@ func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string
 	return it, nil
 }
 
-// errorValue returns a failed functionResponse's error value as the result's text: a string as it
-// is, any other JSON as its text. The encoder writes it back under the response's error key.
 func errorValue(raw json.RawMessage) string {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
@@ -744,8 +654,6 @@ func errorValue(raw json.RawMessage) string {
 	return string(raw)
 }
 
-// parsePart reads a text, inlineData or fileData part. Inline data and file URIs are images when
-// their MIME type is an image type, files otherwise.
 func parsePart(raw json.RawMessage, pm map[string]json.RawMessage, path string) llm.Part {
 	native := llm.Part{Type: llm.PartNative, Format: format, Data: append(json.RawMessage(nil), raw...), Origin: &llm.Origin{Format: format, Path: path}}
 	var text *string
@@ -790,26 +698,17 @@ func parsePart(raw json.RawMessage, pm map[string]json.RawMessage, path string) 
 		if strings.HasPrefix(strings.ToLower(f.MimeType), "image/") {
 			p = llm.Part{Type: llm.PartImage, URL: f.URI}
 		}
-		// The MIME type is kept: a file URL has no other place for it.
 		p.Origin = rawjson.Origin(format, path, pm, []string{"fileData"}, map[string]json.RawMessage{"fileData": rawjson.Rest(fm, "fileUri")})
 		return p
 	}
 	return native
 }
 
-// geminiTypes are the type names of Gemini's Schema, which JSON Schema spells in lower case.
 var geminiTypes = map[string]bool{"STRING": true, "NUMBER": true, "INTEGER": true, "BOOLEAN": true, "ARRAY": true, "OBJECT": true, "NULL": true}
 
 // schemaInts are Schema fields that are int64, which ProtoJSON may write as strings.
 var schemaInts = []string{"maxItems", "minItems", "maxLength", "minLength", "maxProperties", "minProperties"}
 
-// jsonSchema returns a Gemini Schema (responseSchema, a declaration's parameters) as JSON Schema:
-// type names in lower case, nullable as a "null" type, and int64 limits written as strings as
-// numbers. It follows only the fields that hold schemas (properties, items, anyOf), so example and
-// default values are left as they are.
-//
-// shortcut: other OpenAPI-only fields (propertyOrdering, format values JSON Schema does not know)
-// are left as they are; convert them when an upstream rejects them.
 func jsonSchema(raw json.RawMessage) json.RawMessage {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -828,7 +727,6 @@ func jsonSchema(raw json.RawMessage) json.RawMessage {
 	return b
 }
 
-// convertSchema converts one schema object in place and reports whether it changed anything.
 func convertSchema(m map[string]any) bool {
 	changed := false
 	if t, ok := m["type"].(string); ok && geminiTypes[t] {
@@ -911,7 +809,6 @@ func (n *int32Number) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// protoInt reads s as a whole number that fits in a signed integer of the given bits.
 func protoInt(s string, bits int) (int64, error) {
 	f, _, err := big.ParseFloat(strings.TrimSpace(s), 10, 256, big.ToNearestEven)
 	if err != nil || f.IsInf() || !f.IsInt() {

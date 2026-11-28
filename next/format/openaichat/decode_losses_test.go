@@ -6,8 +6,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// The non-streamed reply reports a dropped call like the stream does, and does not finish as
-// tool_calls when none survived.
 func TestDecodeResponseLossesAndFinish(t *testing.T) {
 	body := `{"id":"x","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[
 		{"id":"call_a","type":"function","function":{"arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`

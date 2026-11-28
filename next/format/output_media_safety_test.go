@@ -13,7 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// An unlabelled image whose header is padding then four other bytes must not crash the decoder.
 func TestImageSniffShortHeadAfterPadding(t *testing.T) {
 	data := base64.StdEncoding.EncodeToString([]byte(strings.Repeat(" ", 14) + "abcd"))
 	body := fmt.Sprintf(`{"id":"r","object":"response","status":"completed","model":"m","output":[{"id":"ig_1","type":"image_generation_call","status":"completed","result":%q}]}`, data)
@@ -22,7 +21,6 @@ func TestImageSniffShortHeadAfterPadding(t *testing.T) {
 	}
 }
 
-// An unlabelled SVG is still refused.
 func TestImageSniffRefusesSVG(t *testing.T) {
 	data := base64.StdEncoding.EncodeToString([]byte(strings.Repeat(" ", 14) + "<svg"))
 	body := fmt.Sprintf(`{"id":"r","object":"response","status":"completed","model":"m","output":[{"id":"ig_1","type":"image_generation_call","status":"completed","result":%q}]}`, data)
@@ -40,7 +38,6 @@ func TestImageSniffRefusesSVG(t *testing.T) {
 	}
 }
 
-// A streamed piece of PCM has no header, and silence (0xFF 0xFF) looks like an MP3 frame.
 func TestChatStreamAudioIsNotSniffed(t *testing.T) {
 	data := base64.StdEncoding.EncodeToString([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
 	d := openaichat.NewStreamDecoder()
@@ -59,7 +56,6 @@ func TestChatStreamAudioIsNotSniffed(t *testing.T) {
 	}
 }
 
-// Audio arriving between pieces of text must not split the text item.
 func TestChatStreamAudioKeepsTextItem(t *testing.T) {
 	d := openaichat.NewStreamDecoder()
 	var evs []llm.Event
@@ -85,7 +81,6 @@ func TestChatStreamAudioKeepsTextItem(t *testing.T) {
 	}
 }
 
-// Google's offsets count within a part, so once media split the text they cannot name a range.
 func TestGeminiCitationAfterMediaHasNoRange(t *testing.T) {
 	body := `{"responseId":"g","candidates":[{"content":{"role":"model","parts":[{"text":"AAAA"},{"inlineData":{"mimeType":"image/png","data":"AQID"}},{"text":"BBBB"}]},"finishReason":"STOP",` + groundingAAAA + `}]}`
 	evs, err := geminigenerate.DecodeResponse([]byte(body))
@@ -98,7 +93,6 @@ func TestGeminiCitationAfterMediaHasNoRange(t *testing.T) {
 	}
 }
 
-// A Responses item needs an ID only OpenAI issues, which the client would send back.
 func TestResponsesClientGetsNoInventedImageItem(t *testing.T) {
 	evs := []llm.Event{
 		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "g", Model: "m", Format: llm.FormatGeminiGenerate}},
@@ -124,7 +118,6 @@ func TestResponsesClientGetsNoInventedImageItem(t *testing.T) {
 	}
 }
 
-// A Chat upstream's reply to a Chat client keeps its message.audio.
 func TestChatSameFormatAudioReplyKept(t *testing.T) {
 	body := `{"id":"c","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":null,"audio":{"id":"a","data":"AQID","expires_at":1,"transcript":"hi"}}}]}`
 	evs, _, err := openaichat.DecodeResponseLosses([]byte(body))

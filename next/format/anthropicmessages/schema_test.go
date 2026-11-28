@@ -269,8 +269,6 @@ func TestEncodeStructuredOutputSchemaAdaptation(t *testing.T) {
 	})
 }
 
-// A custom base_url may be a Claude-compatible upstream with its own schema rules, so only
-// Anthropic's own API gets the schema changed or left out.
 func TestEncodeStructuredOutputLeavesOtherUpstreamsAlone(t *testing.T) {
 	const schema = `{"type":"object","properties":{"n":{"type":"integer","minimum":1}},"additionalProperties":true}`
 	for _, model := range []string{"claude-opus-4-1", "claude-opus-5-5", "glm-5"} {
@@ -292,7 +290,6 @@ func TestEncodeStructuredOutputLeavesOtherUpstreamsAlone(t *testing.T) {
 	}
 }
 
-// A client's chain of $defs that each name the next twice must not take time doubling per link.
 func TestStructuredSchemaRefChainIsLinear(t *testing.T) {
 	const links = 60
 	var defs strings.Builder

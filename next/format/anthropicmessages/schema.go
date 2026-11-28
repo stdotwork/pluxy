@@ -11,12 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// supportsStructuredOutput reports whether model is known to support Messages output_config.format
-// json_schema, per https://platform.claude.com/docs/en/build-with-claude/structured-outputs.
-// Anthropic lists Claude 4.5 and later (Opus, Sonnet, Haiku, Fable, Mythos) and
-// claude-mythos-preview; recognized older Claude versions (3.x, 4.0, 4.1) are not supported.
-// A name it cannot place (such as claude-mythos-preview) returns true, so a working request is not
-// changed.
 func supportsStructuredOutput(model string) bool {
 	major, minor, ok := parseClaudeVersion(model)
 	if !ok {
@@ -25,8 +19,6 @@ func supportsStructuredOutput(model string) bool {
 	return major > 4 || (major == 4 && minor >= 5)
 }
 
-// supportedStringFormats are the JSON Schema string formats Anthropic's structured outputs
-// grammar accepts (https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
 var supportedStringFormats = map[string]bool{
 	"date-time": true,
 	"time":      true,
@@ -40,9 +32,6 @@ var supportedStringFormats = map[string]bool{
 	"uuid":      true,
 }
 
-// droppedSchemaConstraints are JSON Schema validation keywords that Anthropic's structured outputs
-// grammar refuses with 400 and that can be dropped with a reported loss (matching the Anthropic
-// SDK's transform_schema behavior).
 var droppedSchemaConstraints = map[string]bool{
 	"minimum":               true,
 	"maximum":               true,
@@ -65,8 +54,6 @@ var droppedSchemaConstraints = map[string]bool{
 	"unevaluatedProperties": true,
 }
 
-// unrepresentableSchemaKeywords are JSON Schema keywords that Anthropic's structured outputs
-// grammar refuses and that cannot be dropped without inverting or breaking the schema's meaning.
 var unrepresentableSchemaKeywords = map[string]bool{
 	"not":               true,
 	"if":                true,
@@ -78,7 +65,6 @@ var unrepresentableSchemaKeywords = map[string]bool{
 	"dependentRequired": true,
 }
 
-// unionAnnotationKeywords are keywords Anthropic allows alongside anyOf in the same schema object.
 var unionAnnotationKeywords = map[string]bool{
 	"anyOf":       true,
 	"oneOf":       true,
@@ -96,15 +82,9 @@ type schemaAdapter struct {
 	root    map[string]any
 	losses  []llm.Loss
 	changed bool
-	checked map[string]bool // $refs already followed and found free of cycles
+	checked map[string]bool
 }
 
-// adaptStructuredSchema checks and adapts a cross-format JSON Schema for Messages
-// output_config.format. A schema Anthropic already accepts is returned byte-identically with no
-// losses. Adaptable differences (closing objects that have properties, rewriting oneOf to anyOf,
-// dropping unsupported numeric/string/array/object constraints) are applied and reported as
-// losses. A schema that cannot be made valid without breaking its meaning returns ok false with a
-// single dropped loss on response_format.
 func adaptStructuredSchema(raw json.RawMessage) (json.RawMessage, []llm.Loss, bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -137,7 +117,6 @@ func (a *schemaAdapter) lose(kind, path, detail string) {
 	a.losses = append(a.losses, llm.Loss{Kind: kind, Path: path, Detail: detail})
 }
 
-// checkCycles rejects external $refs and recursive local $ref cycles.
 func (a *schemaAdapter) checkCycles(node any, visiting map[string]bool) string {
 	m, ok := node.(map[string]any)
 	if !ok || m == nil {
@@ -157,8 +136,6 @@ func (a *schemaAdapter) checkCycles(node any, visiting map[string]bool) string {
 		if visiting[ref] {
 			return "Messages output_config.format does not support recursive schemas"
 		}
-		// Each $ref is followed once, so a chain of definitions that each name the next several
-		// times, from the client's request, costs time in its length and not exponentially.
 		if target := a.resolvePointer(ref); target != nil && !a.checked[ref] {
 			visiting[ref] = true
 			reason := a.checkCycles(target, visiting)
@@ -214,14 +191,12 @@ func (a *schemaAdapter) resolvePointer(ref string) any {
 }
 
 func (a *schemaAdapter) walk(m map[string]any, path string) string {
-	// Reject unrepresentable keywords first.
 	for _, k := range sortedKeys(m) {
 		if unrepresentableSchemaKeywords[k] {
 			return fmt.Sprintf("Messages output_config.format does not support %s", k)
 		}
 	}
 
-	// Reject complex (object/array) values in enum or const.
 	if enumVal, hasEnum := m["enum"]; hasEnum {
 		list, ok := enumVal.([]any)
 		if !ok {
@@ -237,7 +212,6 @@ func (a *schemaAdapter) walk(m map[string]any, path string) string {
 		return "Messages output_config.format does not support complex values in const"
 	}
 
-	// Handle oneOf / anyOf.
 	_, hasAnyOf := m["anyOf"]
 	_, hasOneOf := m["oneOf"]
 	if hasAnyOf && hasOneOf {
@@ -257,8 +231,6 @@ func (a *schemaAdapter) walk(m map[string]any, path string) string {
 		}
 	}
 
-	// Check allOf restrictions: 2+ branches cannot directly contain $ref, anyOf, oneOf, or allOf,
-	// nor have conflicting scalar types.
 	if allOfVal, hasAllOf := m["allOf"]; hasAllOf {
 		if branches, ok := allOfVal.([]any); ok && len(branches) >= 2 {
 			seenType := ""
@@ -282,7 +254,6 @@ func (a *schemaAdapter) walk(m map[string]any, path string) string {
 		}
 	}
 
-	// Object additionalProperties handling.
 	if isObjectSchema(m) {
 		ap, hasAP := m["additionalProperties"]
 		if hasAP {
@@ -304,7 +275,6 @@ func (a *schemaAdapter) walk(m map[string]any, path string) string {
 		}
 	}
 
-	// Drop unsupported constraints deterministically.
 	for _, k := range sortedKeys(m) {
 		switch {
 		case droppedSchemaConstraints[k]:
@@ -332,7 +302,6 @@ func (a *schemaAdapter) walk(m map[string]any, path string) string {
 		}
 	}
 
-	// Recurse into child schemas in deterministic order.
 	for _, key := range []string{"properties", "$defs", "definitions"} {
 		if sub, ok := m[key].(map[string]any); ok {
 			for _, k := range sortedKeys(sub) {
@@ -404,9 +373,6 @@ func isAllowedMinItems(v any) bool {
 	return false
 }
 
-// unsupportedRegex reports whether pat uses a regex construct Anthropic's structured outputs
-// grammar refuses: backreferences (\1..\9), lookahead/lookbehind ((?=, (?!, (?<=, (?<!), or
-// word boundaries (\b, \B) outside a character class.
 func unsupportedRegex(pat string) bool {
 	inClass := false
 	for i := 0; i < len(pat); i++ {

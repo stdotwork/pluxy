@@ -1,9 +1,5 @@
 package openaichat
 
-// This file holds EncodeRequest as it was before its messages were written as they stand, and
-// compares the two over the requests the package's tests build and a generated set: the bytes,
-// the losses and the error must be the same.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -15,8 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// outRequestRef is the request body as it was: the messages among its fields, so one marshal
-// wrote the whole body.
 type outRequestRef struct {
 	Model         string            `json:"model"`
 	Messages      []json.RawMessage `json:"messages"`
@@ -35,7 +29,6 @@ type outRequestRef struct {
 	ReasoningEffort   string            `json:"reasoning_effort,omitempty"`
 }
 
-// encodeRequestRef is EncodeRequest as it was.
 func encodeRequestRef(req llm.Request) ([]byte, []llm.Loss, error) {
 	e := &encoder{}
 	names := ToolNames(req)
@@ -174,8 +167,6 @@ func encodeRequestRef(req llm.Request) ([]byte, []llm.Loss, error) {
 	return rawjson.Merge(b, e.kept(req.Origin)), e.losses, nil
 }
 
-// TestEncodeRequestMatchesReference compares EncodeRequest with the reference copy over the
-// requests the tests in this package build and a generated set, byte for byte.
 func TestEncodeRequestMatchesReference(t *testing.T) {
 	reqs := refBuiltRequests(t)
 	reqs = append(reqs, refGeneratedRequests()...)
@@ -210,8 +201,6 @@ type refCase struct {
 	req  llm.Request
 }
 
-// refBuiltRequests returns the requests the tests in this package build: the Chat bodies they
-// read into the model, and the request they state directly.
 func refBuiltRequests(t *testing.T) []refCase {
 	t.Helper()
 	bodies := []struct{ name, body string }{
@@ -242,8 +231,6 @@ func refBuiltRequests(t *testing.T) []refCase {
 	 {"role":"assistant","name":"bot","tool_calls":[{"id":"c1","type":"custom","custom":{"name":"patch","input":"*** Begin"}}]},
 	 {"role":"tool","tool_call_id":"c1","content":"ok"}
 	]}`},
-		// The kept fields of a source with whitespace in them: the reference compacts what it
-		// writes into the body, so the messages' bytes must come out compact too.
 		{"kept-fields-with-space", `{ "model" : "m" , "stream" : true ,
 	"tools" : [ { "type" : "function" , "function" : { "name" : "f" , "parameters" : { "type" : "object" , "properties" : { "a" : { "type" : "string" } } } } } ] ,
 	"messages" : [ { "role" : "user" , "content" : "hi" , "x_kept" : { "a" : [ 1 , 2 ] } } ] }`},
@@ -279,9 +266,6 @@ func refBuiltRequests(t *testing.T) []refCase {
 func ptr[T any](v T) *T       { return &v }
 func ptrF(v float64) *float64 { return &v }
 
-// refGeneratedRequests returns requests over the shapes the encoder writes: every item and part
-// kind, kept fields from the same and another format, every reasoning effort and option, and
-// text the encoder has to escape.
 func refGeneratedRequests() []refCase {
 	strict := true
 	notStrict := false
@@ -324,7 +308,6 @@ func refGeneratedRequests() []refCase {
 	}
 	var out []refCase
 	add := func(name string, req llm.Request) { out = append(out, refCase{name: name, req: req}) }
-	// Every item on its own and after a tool call, with and without kept fields, every text.
 	for name, it := range items {
 		for _, k := range kept {
 			it := it
@@ -336,7 +319,6 @@ func refGeneratedRequests() []refCase {
 			}})
 		}
 	}
-	// Content parts, with text the encoder escapes.
 	parts := []struct {
 		name string
 		p    llm.Part
@@ -358,7 +340,6 @@ func refGeneratedRequests() []refCase {
 				{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: tc.text}, part}},
 			}})
 		}
-		// The text alone, as a string and as parts, in every role.
 		for _, role := range []string{llm.RoleSystem, llm.RoleUser, llm.RoleAssistant} {
 			add("text/"+tc.name+"/"+role+"/string", llm.Request{Model: tc.text, Items: []llm.Item{
 				{Type: llm.ItemTypeMessage, Role: role, Content: []llm.Part{{Type: llm.PartText, Text: tc.text}}, TextContent: true},
@@ -369,8 +350,6 @@ func refGeneratedRequests() []refCase {
 				{Type: llm.ItemTypeMessage, Role: llm.RoleAssistant, Content: []llm.Part{{Type: llm.PartText, Text: "ok"}}},
 			}})
 		}
-		// A tool call's arguments carry text the same way, and reasoning before the message it
-		// belongs to.
 		add("text/"+tc.name+"/call", llm.Request{Model: "m", Items: []llm.Item{
 			{Type: llm.ItemTypeReasoning, Text: tc.text},
 			{Type: llm.ItemTypeToolCall, CallID: "c1", Name: "f", Arguments: tc.text},
@@ -382,7 +361,6 @@ func refGeneratedRequests() []refCase {
 			{Type: llm.ItemTypeToolResult, CallID: "c1", Output: tc.text},
 		}})
 	}
-	// Tools: schemas that nest, strict flags, kept fields, every tool type.
 	schemas := []struct{ name, schema string }{
 		{"none", ""},
 		{"object", `{"type":"object"}`},
@@ -408,7 +386,6 @@ func refGeneratedRequests() []refCase {
 	add("tool/native-other", llm.Request{Model: "m", Tools: []llm.Tool{
 		{Type: llm.ToolNative, Origin: &llm.Origin{Format: llm.FormatAnthropicMessages, Path: "t", Raw: json.RawMessage(`{"type":"web_search"}`)}},
 	}})
-	// Every option, alone and together, with and without tools.
 	efforts := []string{"", "none", "minimal", "low", "medium", "high", "xhigh", "max", "auto", "turbo"}
 	choice := []*llm.ToolChoice{nil,
 		{Mode: llm.ToolChoiceAuto}, {Mode: llm.ToolChoiceNone}, {Mode: llm.ToolChoiceRequired},
@@ -441,16 +418,12 @@ func refGeneratedRequests() []refCase {
 			add(fmt.Sprintf("format/%d/stream%v", fi, stream), req)
 		}
 	}
-	// A request's own kept fields, merged into the body last.
 	for _, k := range kept {
 		req := llm.Request{Model: "m", Items: base, Origin: k.o}
 		add("origin/"+k.name, req)
 		req2 := llm.Request{Model: "m", Items: base, Options: llm.Options{MaxOutputTokens: ptr(5)}, Origin: k.o}
 		add("origin-options/"+k.name, req2)
 	}
-	// A part whose kept JSON is broken makes its message's marshal fail, which writes null for
-	// that message: a body built from a decoded request cannot hold one, but the encoder must
-	// still write what it wrote.
 	add("broken-part", llm.Request{Model: "m", Items: []llm.Item{
 		{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{
 			{Type: llm.PartText, Text: "hi"},

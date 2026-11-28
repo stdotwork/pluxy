@@ -82,8 +82,6 @@ func chatStream(t *testing.T, evs []llm.Event) string {
 	return buf.String()
 }
 
-// Gemini leaves out a zero index, so a candidate with none is candidate 0 even when it is listed
-// after candidate 1.
 func TestGeminiMissingIndexIsCandidateZero(t *testing.T) {
 	body := `{"candidates":[{"index":1,"content":{"parts":[{"text":"B"}]},"finishReason":"STOP"},{"content":{"parts":[{"text":"A"}]},"finishReason":"STOP"}]}`
 	evs, _, err := geminigenerate.DecodeResponseLosses([]byte(body))
@@ -100,7 +98,6 @@ func TestGeminiMissingIndexIsCandidateZero(t *testing.T) {
 	if len(got.Choices) != 2 || *got.Choices[0].Message.Content != "A" || *got.Choices[1].Message.Content != "B" {
 		t.Errorf("streamed: %s", raw)
 	}
-	// Two candidates with no index are candidate 0 and the one listed second.
 	evs, _, err = geminigenerate.DecodeResponseLosses([]byte(`{"candidates":[{"content":{"parts":[{"text":"A"}]},"finishReason":"STOP"},{"content":{"parts":[{"text":"B"}]},"finishReason":"STOP"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +107,6 @@ func TestGeminiMissingIndexIsCandidateZero(t *testing.T) {
 	}
 }
 
-// A later candidate the stream ends before finishing is not reported as a normal stop.
 func TestGeminiLaterCandidateCutOffIsReported(t *testing.T) {
 	chunk := `{"candidates":[{"index":0,"content":{"parts":[{"text":"A"}]},"finishReason":"STOP"},{"index":1,"content":{"parts":[{"text":"cut off mid-sen"}]}}]}`
 	evs, losses := candGeminiStream(t, chunk)
@@ -132,7 +128,6 @@ func TestGeminiLaterCandidateCutOffIsReported(t *testing.T) {
 	if len(got.Choices) != 2 || got.Choices[0].FinishReason != "stop" || got.Choices[1].FinishReason != "length" {
 		t.Errorf("aggregated: %s", raw)
 	}
-	// A whole body is held to the same standard.
 	devs, dlosses, err := geminigenerate.DecodeResponseLosses([]byte(chunk))
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +144,6 @@ type chatChoicesStream struct {
 	} `json:"choices"`
 }
 
-// What a later candidate holds that the reply cannot carry is reported, per candidate.
 func TestGeminiLaterCandidateLossesAreReported(t *testing.T) {
 	body := `{"candidates":[
 		{"index":0,"content":{"parts":[{"text":"A"}]},"finishReason":"STOP"},
@@ -182,8 +176,6 @@ func TestGeminiLaterCandidateLossesAreReported(t *testing.T) {
 					t.Errorf("no loss at %s in %+v", path, losses)
 				}
 			}
-			// The reply's runs end with the record that says some were left out, though candidate 0
-			// has none of its own.
 			var finish llm.Event
 			for _, ev := range evs {
 				if ev.Type == llm.EventFinish {
@@ -195,7 +187,6 @@ func TestGeminiLaterCandidateLossesAreReported(t *testing.T) {
 			}
 		})
 	}
-	// Nothing is reported for a client the body reaches: it has the candidate whole.
 	evs, losses, err := geminigenerate.DecodeResponseLosses([]byte(body))
 	if err != nil || len(evs) == 0 {
 		t.Fatal(err)
@@ -208,7 +199,6 @@ func TestGeminiLaterCandidateLossesAreReported(t *testing.T) {
 	}
 }
 
-// Citations on a Chat choice after the first have no place in a Gemini reply, and say so.
 func TestChatLaterChoiceAnnotationsAreReported(t *testing.T) {
 	ann := `[{"type":"url_citation","url_citation":{"url":"https://example.com","title":"t","start_index":0,"end_index":1}}]`
 	_, losses, err := openaichat.DecodeResponseLosses([]byte(`{"id":"c","choices":[
@@ -242,8 +232,6 @@ func TestChatLaterChoiceAnnotationsAreReported(t *testing.T) {
 	}
 }
 
-// A candidateCount core cannot read as a count goes on as the client wrote it, as it did before
-// counts were read, and is no reason to refuse the request.
 func TestGeminiCandidateCountSameFormatAsWritten(t *testing.T) {
 	for _, written := range []string{`"x"`, `1.5`, `2147483648`, `"2"`, `2.0`, `0`, `-1`, `true`} {
 		body := `{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"candidateCount":` + written + `}}`
@@ -275,7 +263,6 @@ func TestGeminiCandidateCountSameFormatAsWritten(t *testing.T) {
 	}
 }
 
-// A same-format Chat reply keeps a choice whose index is negative, as it did before candidates.
 func TestSameFormatChatKeepsNegativeIndexChoice(t *testing.T) {
 	evs, _, err := openaichat.DecodeResponseLosses([]byte(`{"id":"c","object":"chat.completion","model":"m","choices":[
 		{"index":0,"message":{"role":"assistant","content":"a"},"finish_reason":"stop"},
@@ -309,8 +296,6 @@ func TestSameFormatChatKeepsNegativeIndexChoice(t *testing.T) {
 	}
 }
 
-// A later candidate whose function call Gemini could not parse reaches a Chat client as a finish
-// reason Chat has, with the loss reported, not as Gemini's own word.
 func TestGeminiMalformedCallInLaterCandidateIsMapped(t *testing.T) {
 	body := `{"candidates":[{"index":0,"content":{"parts":[{"text":"A"}]},"finishReason":"STOP"},{"index":1,"finishReason":"MALFORMED_FUNCTION_CALL","finishMessage":"bad"}]}`
 	evs, losses, err := geminigenerate.DecodeResponseLosses([]byte(body))
@@ -330,7 +315,6 @@ func TestGeminiMalformedCallInLaterCandidateIsMapped(t *testing.T) {
 	}
 }
 
-// A Chat upstream that repeats a choice's finish gives a Gemini client that candidate's finish once.
 func TestChatRepeatedFinishOnLaterChoiceForwardedOnce(t *testing.T) {
 	dec := openaichat.NewStreamDecoder()
 	var evs []llm.Event
@@ -385,11 +369,7 @@ func TestChatRepeatedFinishOnLaterChoiceForwardedOnce(t *testing.T) {
 	}
 }
 
-// A client that chose a later candidate replays that candidate's call, not candidate 0's, in each
-// format a request can go to.
 func TestReplayChosenLaterCandidateNextTurn(t *testing.T) {
-	// Gemini answered with a text candidate 0 and a tool call in candidate 1; the Chat client takes
-	// choices[1] as its assistant message and sends the tool's answer back.
 	evs, _, err := geminigenerate.DecodeResponseLosses([]byte(`{"candidates":[
 		{"index":0,"content":{"parts":[{"text":"ZERO-TEXT"}]},"finishReason":"STOP"},
 		{"index":1,"content":{"parts":[{"functionCall":{"id":"fc_1","name":"lookup","args":{"q":"go"}}}]},"finishReason":"STOP"}]}`))
@@ -430,7 +410,6 @@ func TestReplayChosenLaterCandidateNextTurn(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		// The request declares no tools, so the name can only come from the replayed call.
 		for _, want := range []string{"lookup", "fc_1", "Go is a language"} {
 			if !strings.Contains(string(body), want) {
 				t.Errorf("%s: the replayed turn lacks %q: %s", name, want, body)

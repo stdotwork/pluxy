@@ -4,9 +4,6 @@ import (
 	"testing"
 )
 
-// The version parser reads a Claude model name however a platform writes it: with a context
-// window in brackets, a Vertex AI @version, a Bedrock prefix or in upper case. A minor version is
-// never skipped except before an 8-digit date.
 func TestParseClaudeVersion(t *testing.T) {
 	for _, c := range []struct {
 		model        string
@@ -46,7 +43,6 @@ func TestParseClaudeVersion(t *testing.T) {
 	}
 }
 
-// A null sampling setting is not a value: it does not count as set.
 func TestDropRefusedSamplingNull(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-4-5","temperature":null,"top_p":0.9}`)
 	got, losses, err := DropRefusedSampling(body, "claude-sonnet-4-5")

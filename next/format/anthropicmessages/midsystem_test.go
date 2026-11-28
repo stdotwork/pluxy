@@ -12,11 +12,6 @@ func textItem(role, text string) llm.Item {
 	return llm.Item{Type: llm.ItemTypeMessage, Role: role, Content: []llm.Part{{Type: llm.PartText, Text: text}}}
 }
 
-// System text after the conversation has started stays where it was, so the prefix Claude caches
-// does not change: as a system message on a model that takes one there, after the user turn it
-// follows (or the next one, since it may not follow an assistant turn); on other Claude models
-// as a <system-reminder> in that user turn. Leading system text is the system prompt, and other
-// vendors' models get every system message there, as before.
 func TestEncodeKeepsMidConversationSystemInPlace(t *testing.T) {
 	const reminder = "<system-reminder>\\nS1\\n</system-reminder>"
 	afterAssistant := []llm.Item{textItem(llm.RoleSystem, "S0"), textItem(llm.RoleUser, "u1"), textItem(llm.RoleAssistant, "a1"),
@@ -62,9 +57,6 @@ func TestEncodeKeepsMidConversationSystemInPlace(t *testing.T) {
 	}
 }
 
-// Multiple mid-conversation system runs separated only by user turns must all sit after the last
-// user turn before the next assistant turn (or end of messages), merged into one system message,
-// so no system message is followed by a user turn.
 func TestEncodePlacesInterleavedMidConversationSystem(t *testing.T) {
 	interleaved := []llm.Item{
 		textItem(llm.RoleSystem, "S0"), textItem(llm.RoleUser, "u1"),
@@ -120,7 +112,6 @@ func TestEncodePlacesInterleavedMidConversationSystem(t *testing.T) {
 	}
 }
 
-// fieldOf returns one top-level field of a JSON body.
 func fieldOf(t *testing.T, body []byte, key string) []byte {
 	t.Helper()
 	var m map[string]json.RawMessage

@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// A Codex reply can hold a commentary message before the final answer. Both are output items of
-// their own: the commentary must not become part of the answer's text.
 func TestCommentaryItemStaysOutOfFinalAnswer(t *testing.T) {
 	commentary := `{"id":"msg_c","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Looking."}]}`
 	final := `{"id":"msg_f","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done."}]}`
@@ -57,7 +55,6 @@ func TestCommentaryItemStaysOutOfFinalAnswer(t *testing.T) {
 	}
 }
 
-// A non-streamed Response keeps its message items apart too.
 func TestCommentaryItemStaysApartWhenAggregated(t *testing.T) {
 	body := `{"id":"r1","object":"response","model":"m","status":"completed","output":[` +
 		`{"id":"msg_c","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Looking."}]},` +

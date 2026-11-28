@@ -52,11 +52,9 @@ func TestThinkingOf(t *testing.T) {
 func TestApplyEffort(t *testing.T) {
 	for _, c := range []struct {
 		model, effort string
-		want          string // thinkingConfig as JSON, "" when not applied
+		want          string
 	}{
 		{"gemini-2.5-pro", "high", `{"includeThoughts":true,"thinkingBudget":24576}`},
-		// Token budgets, as a thinking suffix names them: kept within the model's range, or the
-		// level they fall in on a model with levels.
 		{"gemini-2.5-pro", "16000", `{"includeThoughts":true,"thinkingBudget":16000}`},
 		{"gemini-2.5-pro", "50", `{"includeThoughts":true,"thinkingBudget":128}`},
 		{"gemini-2.5-flash", "99999", `{"includeThoughts":true,"thinkingBudget":24576}`},
@@ -114,7 +112,6 @@ func TestApplyEffort(t *testing.T) {
 		}
 	}
 
-	// An explicit includeThoughts on the incoming thinkingConfig survives a thinking suffix.
 	body := []byte(`{"contents":[],"generationConfig":{"thinkingConfig":{"includeThoughts":false,"thinkingLevel":"low"}}}`)
 	out, ok, err := ApplyEffort(body, "gemini-4-neon", "xhigh")
 	if err != nil {
@@ -240,7 +237,6 @@ func TestApplyEffortSnakeCase(t *testing.T) {
 		})
 	}
 
-	// Non-thinking model body stays byte-identical.
 	raw := `{"contents":[],"generation_config":{"temperature":0.5}}`
 	out, losses, ok, err := ApplyEffortReport([]byte(raw), "gemini-2.0-flash", "high")
 	if err != nil || ok || len(losses) != 0 || string(out) != raw {
@@ -252,7 +248,7 @@ func TestApplyEffortReport(t *testing.T) {
 	body := []byte(`{"contents":[]}`)
 	for _, c := range []struct {
 		model, effort string
-		wantLossPath  string // "" for no loss
+		wantLossPath  string
 	}{
 		{"gemini-4-neon", "xhigh", ""},
 		{"gemini-4-neon", "max", "generationConfig.thinkingConfig.thinkingLevel"},

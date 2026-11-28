@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// TestAppendStringMatchesMarshal checks the escaping against json.Marshal, the writer's reference:
-// every byte value alone and between letters, the runes that need an escape, and random bytes.
 func TestAppendStringMatchesMarshal(t *testing.T) {
 	var cases []string
 	for b := 0; b < 256; b++ {
@@ -34,9 +32,6 @@ func TestAppendStringMatchesMarshal(t *testing.T) {
 	}
 }
 
-// TestEncodeRequestAllocation holds the body to one copy of its text: building a request with a
-// 100 KB turn allocates under two and a half times the body. Escaping the text into a buffer of
-// its own and copying it from one buffer to the next had made it four times.
 func TestEncodeRequestAllocation(t *testing.T) {
 	req := benchRequest()
 	body, _, err := EncodeRequest(req)

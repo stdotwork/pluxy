@@ -15,17 +15,13 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// A reply whose citations and sources are larger than a reply may carry keeps those that fit and
-// reports the rest as lost, on every decoder and on both the streamed and the whole path.
-
 const (
 	manyCites = 40
-	citeTitle = 256 << 10 // 40 of them are 10 MiB, over llm.MaxCitationBytes
+	citeTitle = 256 << 10
 )
 
 func bigTitle() string { return strings.Repeat("t", citeTitle) }
 
-// citedBytes is what a reply's events hold in citations, and in sources.
 func citedBytes(evs []llm.Event) (cites, sources int) {
 	for _, ev := range evs {
 		for _, c := range ev.Citations {
@@ -175,8 +171,6 @@ func TestCitationsAndSourcesAreCappedPerReply(t *testing.T) {
 	})
 }
 
-// A same-format reply carries its code runs and sources in the body it passes on as Raw, so the
-// finish event must not add them to a frame the body nearly fills.
 func TestFinishFitsOneFrameBesideItsRawBody(t *testing.T) {
 	check := func(t *testing.T, evs []llm.Event, losses []llm.Loss) {
 		t.Helper()
@@ -195,7 +189,6 @@ func TestFinishFitsOneFrameBesideItsRawBody(t *testing.T) {
 		}
 	}
 	t.Run("responses runs", func(t *testing.T) {
-		// Two runs of 3.9 and 58 MiB: the first fits the runs' own cap, and with the body it is too much.
 		body := fmt.Sprintf(`{"id":"r","object":"response","status":"completed","model":"gpt","output":[
 			{"type":"code_interpreter_call","id":"ci_1","status":"completed","code":"print(1)","container_id":"c","outputs":[{"type":"logs","logs":%q}]},
 			{"type":"code_interpreter_call","id":"ci_2","status":"completed","code":"print(2)","container_id":"c","outputs":[{"type":"logs","logs":%q}]}],
@@ -224,10 +217,6 @@ func TestFinishFitsOneFrameBesideItsRawBody(t *testing.T) {
 	})
 }
 
-// A Gemini reply of the client's own format holds its runs and sources in the chunks it keeps, so
-// the aggregator does not count them again. The event here is built by hand, with its text only in
-// Raw; the decoder also puts the text in Delta, which counts twice (a separate row), so this does
-// not show that a plain reply of 33 to 64 MiB passes.
 func TestGeminiAggregatorDoesNotCountANativeRepliesRunsAgain(t *testing.T) {
 	a := geminigenerate.NewAggregator()
 	raw := json.RawMessage(`{"candidates":[{"content":{"parts":[{"text":"` + strings.Repeat("x", 62<<20) + `"}]}}]}`)
@@ -240,8 +229,6 @@ func TestGeminiAggregatorDoesNotCountANativeRepliesRunsAgain(t *testing.T) {
 	}
 }
 
-// A Gemini upstream that streams to a client that asked for the whole reply: the reply is built
-// again from the chunks, and keeps its supports.
 func TestSameFormatGeminiStreamKeepsItsGroundingSupports(t *testing.T) {
 	d := geminigenerate.NewStreamDecoder()
 	chunks := []string{
@@ -279,10 +266,8 @@ func TestSameFormatGeminiStreamKeepsItsGroundingSupports(t *testing.T) {
 	}
 }
 
-// A message whose citation covers it all is written twice over, as text and as the text a support
-// repeats, and that growth has to be seen while images can still be left out.
 func TestCitedTextIsCountedBeforeImagesAreLeftOut(t *testing.T) {
-	image := strings.Repeat("QUJD", (16515072)/4) // 15.75 MiB of valid base64, shared by every part
+	image := strings.Repeat("QUJD", (16515072)/4)
 	text := strings.Repeat("a", 700<<10)
 	end := len([]rune(text))
 	zero := 0
@@ -315,7 +300,6 @@ func TestCitedTextIsCountedBeforeImagesAreLeftOut(t *testing.T) {
 	}
 }
 
-// Sources a Chat client never sees do not use up the room of the citations it does.
 func TestSourcesDoNotUseUpTheCitationBudget(t *testing.T) {
 	title := strings.Repeat("t", 20<<10)
 	var srcs, anns []string
@@ -344,8 +328,6 @@ func TestSourcesDoNotUseUpTheCitationBudget(t *testing.T) {
 	}
 }
 
-// Each support repeats its cited text, so a long message with many citations is longer than the
-// text and the citations it came as.
 func TestGeminiSegmentTextIsCountedAndBounded(t *testing.T) {
 	text := strings.Repeat("a", 1<<20)
 	var cites []string
@@ -366,7 +348,7 @@ func TestGeminiSegmentTextIsCountedAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Size() < len(out)-len(out)/20 { // Size is about the bytes, before JSON escaping
+	if a.Size() < len(out)-len(out)/20 {
 		t.Errorf("Size = %d for a response of %d bytes: the check against the reply limit does not see it", a.Size(), len(out))
 	}
 	if len(out) > 4<<20 {
@@ -377,10 +359,8 @@ func TestGeminiSegmentTextIsCountedAndBounded(t *testing.T) {
 	}
 }
 
-// Images that together pass the limit for a reply sent whole are left out, last first, with a
-// loss, and the text arrives.
 func TestImagesOverTheNonStreamedLimitAreLeftOut(t *testing.T) {
-	image := strings.Repeat("QUJD", (15<<20)/4) // 15 MiB of valid base64, shared by every part
+	image := strings.Repeat("QUJD", (15<<20)/4)
 	a := geminigenerate.NewAggregator()
 	evs := []llm.Event{
 		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r", Model: "gpt", Format: llm.FormatOpenAIResponses}},
@@ -416,8 +396,6 @@ func TestImagesOverTheNonStreamedLimitAreLeftOut(t *testing.T) {
 	}
 }
 
-// A reply of the client's own format that is built again from its chunks keeps the cited text its
-// supports repeat, whatever its size, as the upstream sent it.
 func TestSameFormatGeminiStreamKeepsLongCitedText(t *testing.T) {
 	text := strings.Repeat("a", 2<<20)
 	d := geminigenerate.NewStreamDecoder()

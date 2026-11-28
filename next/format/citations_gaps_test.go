@@ -22,8 +22,6 @@ func lossPaths(losses []llm.Loss) []string {
 	return out
 }
 
-// citedReply is a reply from a Messages upstream: one message item, with a citation on "Alpha",
-// and two web search sources, one of them the cited one.
 func citedReply(cited, uncited string) []llm.Event {
 	s, e := 0, 5
 	return []llm.Event{
@@ -35,8 +33,6 @@ func citedReply(cited, uncited string) []llm.Event {
 	}
 }
 
-// A Chat client is given the citations of a JSON reply as annotations; what it cannot be given is
-// reported, and what it is given is not.
 func TestChatClientReportsWhatItIsNotGivenJSON(t *testing.T) {
 	evs := roundTripEvents(t, citedReply("https://a.example/", "https://b.example/"))
 	got, body := chatReply(t, evs)
@@ -58,7 +54,6 @@ func TestChatClientReportsWhatItIsNotGivenJSON(t *testing.T) {
 		t.Errorf("the delivered citation is reported lost: %v", lossPaths(losses))
 	}
 
-	// With every source cited there is nothing left to report.
 	agg = openaichat.NewAggregator()
 	for _, ev := range roundTripEvents(t, citedReply("https://a.example/", "https://a.example/")) {
 		agg.Add(ev)
@@ -71,7 +66,6 @@ func TestChatClientReportsWhatItIsNotGivenJSON(t *testing.T) {
 	}
 }
 
-// A Chat stream from another format has no annotations, so what it left out is reported.
 func TestChatClientReportsWhatItIsNotGivenStream(t *testing.T) {
 	var sb strings.Builder
 	w := openaichat.NewStreamWriter(&sb, true)
@@ -109,7 +103,6 @@ func respAnn(part int, start, end int) string {
 		string(rune('0'+start)) + `,"end_index":` + string(rune('0'+end)) + `}}`
 }
 
-// A stream with no output_item.done still ends with the citations its annotation events carried.
 func TestResponsesStreamWithoutItemDoneKeepsCitations(t *testing.T) {
 	want := map[string][]string{"Alpha beta. ": {"https://a.example/ Alpha"}}
 	t.Run("annotation.added", func(t *testing.T) {
@@ -124,7 +117,6 @@ func TestResponsesStreamWithoutItemDoneKeepsCitations(t *testing.T) {
 	})
 }
 
-// An annotation event says which content part it is on: its offsets count within that part.
 func TestResponsesAnnotationEventKeepsItsContentIndex(t *testing.T) {
 	evs := decodeResponsesStream(t, []string{respCreated, respAdded,
 		respDelta(0, "Alpha beta. "), respDelta(1, "Gamma delta."), respAnn(1, 0, 5),
@@ -137,8 +129,6 @@ func chatAnnChunk(delta string) string {
 	return `{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":` + delta + `}]}`
 }
 
-// Annotations that arrive with no text open have no citation to join. A client of another format
-// is told so; a Chat client is given them as they came, so it loses nothing.
 func TestChatAnnotationsOutsideOpenTextAreReported(t *testing.T) {
 	ann := `{"annotations":[{"type":"url_citation","url_citation":{"url":"https://a.example/","title":"A","start_index":0,"end_index":5}}]}`
 	text := `{"content":"Alpha beta."}`
@@ -166,7 +156,6 @@ func TestChatAnnotationsOutsideOpenTextAreReported(t *testing.T) {
 			}
 		})
 	}
-	// With the text open, the same annotation is a citation, and nothing is lost.
 	dec := openaichat.NewStreamDecoder()
 	for _, c := range []string{chatAnnChunk(`{"role":"assistant","content":"Alpha beta."}`), chatAnnChunk(ann)} {
 		if _, err := dec.Decode([]byte(c)); err != nil {
@@ -178,8 +167,6 @@ func TestChatAnnotationsOutsideOpenTextAreReported(t *testing.T) {
 	}
 }
 
-// A Responses annotation that a Gemini client is given as a citation is not reported lost; one
-// that has no citation to become is, and a Messages client, which is given no citation, is told.
 func TestDeliveredResponsesAnnotationsAreNotReportedLost(t *testing.T) {
 	annotated := func(ann string) []string {
 		return []string{respCreated, respAdded, respDelta(0, "Alpha beta. "),
@@ -214,7 +201,6 @@ func TestDeliveredResponsesAnnotationsAreNotReportedLost(t *testing.T) {
 			t.Errorf("%s: an annotation that is no citation is not reported lost: %v", name, lossPaths(losses))
 		}
 	}
-	// The same on a JSON reply.
 	body := `{"id":"r1","model":"m","status":"completed","output":[{"id":"m1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Alpha beta. ","annotations":[` + url + `]}]}]}`
 	evs, err := openairesponses.DecodeResponse([]byte(body))
 	if err != nil {

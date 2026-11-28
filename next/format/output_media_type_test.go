@@ -11,8 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A media type is parsed whole before it is compared, so nothing after the subtype can hide an
-// SVG from the refusal: a comma and markup, parameters, case, whitespace, or a type not listed.
 var hostileMediaTypes = []string{
 	"image/svg+xml,<svg/onload=alert(1)>",
 	"image/svg+xml,",
@@ -29,7 +27,6 @@ var hostileMediaTypes = []string{
 	"image/png\x00",
 }
 
-// jsonString quotes s as JSON, so control characters survive into the body.
 func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
@@ -107,8 +104,6 @@ func TestResponsesHostileOutputFormatRefused(t *testing.T) {
 	}
 }
 
-// The Gemini renderer checks the type again, so an extension that sends a hostile type on a
-// media event reaches the client with no inlineData part, streamed or not.
 func TestGeminiRenderRefusesHostileMediaType(t *testing.T) {
 	for _, mt := range hostileMediaTypes {
 		t.Run(fmt.Sprintf("%q", mt), func(t *testing.T) {

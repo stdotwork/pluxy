@@ -1,25 +1,3 @@
-// Package clienttools sends a Responses client's custom, namespace and tool_search tools to a
-// format that has none of them (Messages, GenerateContent, Chat Completions) as plain functions,
-// and says how to give the reply's calls back.
-//
-//   - A custom tool (Codex's apply_patch, say) becomes a function with one required string
-//     argument, input, and its grammar moves into the description. Its replayed calls and outputs
-//     become function calls and results. A reply's call to it reaches the client only when its
-//     arguments are one whole input string (CustomInput).
-//   - A namespace's tools become functions named N__child. A name that already has the prefix or
-//     starts with mcp__ keeps its name, and so does a tool in Codex's default namespace, functions,
-//     which Codex treats as the same tool as the plain name.
-//   - An additional_tools input item's tools count as the request's.
-//   - A tool_search the client runs (execution "client") becomes a function, its replayed call and
-//     output a function call and result, and the tools an output loaded are declared. Tools marked
-//     defer_loading stay off the request until a search loads them. A search the provider runs has
-//     no counterpart on another provider, so it stays a reported loss.
-//   - Names that are the same once flattened are one tool: the tools list comes before an
-//     additional_tools item, a top-level tool before a namespace's, and then the first declared.
-//
-// The rules follow extensions/xai (namespace.go, patch.go). Everything here depends only on the
-// request, so an encoder and the Responses writer that restores the reply agree without any state
-// passing between them.
 package clienttools
 
 import (
@@ -37,26 +15,20 @@ import (
 
 const responses = llm.FormatOpenAIResponses
 
-// SearchName is the function a client-run tool_search is sent as.
 const SearchName = "tool_search"
 
 // defaultNamespace is the namespace the Codex client puts its plain tools in on Responses Lite. A
 // call in it is the same tool as a call with no namespace (codex-rs/protocol/src/tool_name.rs).
 const defaultNamespace = "functions"
 
-// Kind says what a function sent upstream stands for.
 type Kind int
 
 const (
-	// KindFunction is a function tool in a namespace.
 	KindFunction Kind = iota
-	// KindCustom is a custom tool: the function's input argument is the tool's text.
 	KindCustom
-	// KindSearch is a tool_search the client runs.
 	KindSearch
 )
 
-// Ref is the tool a function sent upstream stands for, as the client declared it.
 type Ref struct {
 	Kind      Kind
 	Namespace string
@@ -85,7 +57,6 @@ Example input:
 +new
 *** End Patch`
 
-// SentName is the function name a tool in namespace is sent under.
 func SentName(namespace, name string) string {
 	namespace, name = strings.TrimSpace(namespace), strings.TrimSpace(name)
 	if namespace == "" || namespace == defaultNamespace || name == "" || strings.HasPrefix(name, "mcp__") {
@@ -101,8 +72,6 @@ func SentName(namespace, name string) string {
 	return prefix + name
 }
 
-// Lower returns req with its Responses client tools as plain functions, and what that could not
-// carry. A request with none of them is returned as it is, and so is one already lowered.
 func Lower(req llm.Request) (llm.Request, []llm.Loss) {
 	if !needed(req) {
 		return req, nil
@@ -115,8 +84,6 @@ func Lower(req llm.Request) (llm.Request, []llm.Loss) {
 	return out, p.losses
 }
 
-// Refs returns the tools of req that are sent as functions standing for something else, by the
-// name they are sent under. A name not in it is a plain function.
 func Refs(req llm.Request) map[string]Ref {
 	if !needed(req) {
 		return nil
@@ -124,7 +91,6 @@ func Refs(req llm.Request) map[string]Ref {
 	return analyze(req).refs
 }
 
-// head is the part of a tool or item that says what it is.
 type head struct {
 	Type      string `json:"type"`
 	Execution string `json:"execution"`
@@ -139,7 +105,6 @@ func headOf(raw []byte) head {
 
 func fromResponses(o *llm.Origin) bool { return o != nil && o.Format == responses }
 
-// lowersItem reports whether a native item is one Lower replaces.
 func lowersItem(raw []byte) bool {
 	h := headOf(raw)
 	switch h.Type {
@@ -151,8 +116,6 @@ func lowersItem(raw []byte) bool {
 	return false
 }
 
-// needed reports whether req holds anything Lower changes. It runs for every translated request,
-// so it reads only what it must.
 func needed(req llm.Request) bool {
 	var seen map[string]bool
 	for i := range req.Tools {
@@ -200,21 +163,18 @@ func needed(req llm.Request) bool {
 	return false
 }
 
-// decl is one declaration of a tool.
 type decl struct {
-	sent     string
-	tool     llm.Tool
-	ref      Ref
-	path     string
-	priority int  // 0 the tools list, 1 an additional_tools item, 2 loaded by a search
-	direct   bool // at the top level, not in a namespace
-	deferred bool
-	order    int
-	// nsDescription is the description of the namespace it is in.
+	sent          string
+	tool          llm.Tool
+	ref           Ref
+	path          string
+	priority      int
+	direct        bool
+	deferred      bool
+	order         int
 	nsDescription string
 }
 
-// precedes is the rule for which declaration of a name stays.
 func (d *decl) precedes(o *decl) bool {
 	if d.priority != o.priority {
 		return d.priority < o.priority
@@ -225,7 +185,6 @@ func (d *decl) precedes(o *decl) bool {
 	return d.order < o.order
 }
 
-// entry is one tool in the request's order: a declaration, or a tool passed on as it is.
 type entry struct {
 	d    *decl
 	tool llm.Tool
@@ -312,8 +271,6 @@ func analyze(req llm.Request) *plan {
 	return p
 }
 
-// spec declares the tool in raw, and reports whether it is one this package handles: any other
-// is passed on as it is, for the encoder to carry or report.
 func (p *plan) spec(raw json.RawMessage, path string, priority int) bool {
 	m := rawjson.Object(raw)
 	var typ string
@@ -368,8 +325,6 @@ func (p *plan) spec(raw json.RawMessage, path string, priority int) bool {
 	return false
 }
 
-// member makes the declaration of a function or custom tool, in namespace when it has one. It is
-// nil for a tool with no name.
 func member(m map[string]json.RawMessage, typ, namespace, path string) *decl {
 	var f struct {
 		name, description string
@@ -404,8 +359,6 @@ func customSchema(name string) json.RawMessage {
 	return json.RawMessage(customParameters)
 }
 
-// customDescription is the description of the function a custom tool is sent as: the client's
-// own, then how to fill input and the tool's grammar, which a function has no field for.
 func customDescription(name, description string, format json.RawMessage) string {
 	var f struct {
 		Syntax     string `json:"syntax"`
@@ -445,7 +398,6 @@ func customDescription(name, description string, format json.RawMessage) string 
 	return b.String()
 }
 
-// settle picks the declaration of each name and writes the request's tools.
 func (p *plan) settle() {
 	clientSearch := false
 	for _, e := range p.entries {
@@ -474,7 +426,6 @@ func (p *plan) settle() {
 			continue
 		}
 		if winners[d.sent] != d {
-			// A search's result repeats tools the request may already declare; that loses nothing.
 			if d.priority < 2 {
 				p.lose(llm.LossDropped, d.path, "another tool has the same name once flattened: "+d.sent)
 			}
@@ -485,8 +436,6 @@ func (p *plan) settle() {
 		}
 		tool := d.tool
 		if ns := d.ref.Namespace; ns != "" && d.nsDescription != "" && !described[ns] {
-			// A function has no group to describe, so the namespace's description goes on its
-			// first tool, once.
 			described[ns] = true
 			tool.Description = strings.TrimSpace("Tools in " + ns + ": " + d.nsDescription + "\n\n" + tool.Description)
 		}
@@ -498,11 +447,10 @@ func (p *plan) settle() {
 	}
 }
 
-// inputArguments is the arguments of the function call that stands for a custom tool's call.
 func inputArguments(input string) string {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false) // the text is a patch or code, and goes up as the client wrote it
+	enc.SetEscapeHTML(false)
 	if enc.Encode(map[string]string{"input": input}) != nil {
 		return "{}"
 	}
@@ -534,8 +482,6 @@ func lowerItems(items []llm.Item) []llm.Item {
 	return out
 }
 
-// unnamespaced flattens the name of a replayed function call, and takes the namespace off a call
-// or result, whose call ID already says which tool it is.
 func unnamespaced(it llm.Item) llm.Item {
 	if !bytes.Contains(it.Origin.Raw, []byte(`"namespace"`)) {
 		return it
@@ -555,9 +501,6 @@ func unnamespaced(it llm.Item) llm.Item {
 	return it
 }
 
-// lowerNative makes a replayed custom tool or tool_search item a function call or result. It
-// reports false for an item that goes up as nothing: an additional_tools item, whose tools are
-// declared.
 func lowerNative(it llm.Item) (llm.Item, bool) {
 	m := rawjson.Object(it.Origin.Raw)
 	path := it.Origin.Path
@@ -570,8 +513,6 @@ func lowerNative(it llm.Item) (llm.Item, bool) {
 	bookkeeping := []string{"type", "id", "status"}
 	switch field("type") {
 	case "custom_tool_call":
-		// A custom tool's input is a string; anything else is kept as its JSON text rather than
-		// leaving the call's output with no call to answer.
 		var input string
 		if json.Unmarshal(m["input"], &input) != nil {
 			input = string(m["input"])
@@ -595,11 +536,9 @@ func lowerNative(it llm.Item) (llm.Item, bool) {
 		return llm.Item{Type: llm.ItemTypeToolResult, ID: it.ID, CallID: callID, Output: searchOutput(tools),
 			Origin: rawjson.Origin(responses, path, m, append(bookkeeping, "call_id", "execution", "tools"), nil)}, true
 	}
-	return llm.Item{}, false // additional_tools: its tools are in the request's
+	return llm.Item{}, false
 }
 
-// searchArguments is a tool_search call's arguments as a function call's: the client writes them
-// as a JSON value, a function call as a string of JSON.
 func searchArguments(raw json.RawMessage) string {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
@@ -611,8 +550,6 @@ func searchArguments(raw json.RawMessage) string {
 	return string(raw)
 }
 
-// searchOutput is what the model reads as a search's result: the tools it can now call, which the
-// request declares.
 func searchOutput(tools []json.RawMessage) string {
 	var names []string
 	for _, raw := range tools {
@@ -644,9 +581,6 @@ func searchOutput(tools []json.RawMessage) string {
 	return "Loaded these tools, which are now callable: " + strings.Join(names, ", ")
 }
 
-// lowerChoice names a tool choice that stayed in the request's fields, because it names a custom
-// or namespaced tool, by the function that tool is sent as. A choice naming a tool the request
-// does not declare is left where it is, so it stays a reported loss.
 func (p *plan) lowerChoice(req *llm.Request) {
 	if req.Options.ToolChoice != nil || !fromResponses(req.Origin) {
 		return
@@ -703,13 +637,6 @@ func (p *plan) lowerChoice(req *llm.Request) {
 	req.Origin = &o
 }
 
-// Call helpers for the reply.
-
-// CustomInput reads a custom tool's text out of the arguments of the function call it came back
-// as. ok is true only for exactly one whole {"input":"<string>"} object. Anything else (arguments
-// cut off, empty, {}, another shape, extra fields or anything after the object) must not reach the
-// client as a call: Codex runs a done item whatever its status says, so a cut-off command would
-// run.
 func CustomInput(arguments string) (input string, ok bool) {
 	var d InputDecoder
 	d.Push(arguments)
@@ -719,15 +646,11 @@ func CustomInput(arguments string) (input string, ok bool) {
 	return d.input.String(), true
 }
 
-// NotWholeError is the error that ends a reply whose custom tool call is not whole, on a finish
-// that does not explain it. It names the tool and never repeats the arguments.
 func NotWholeError(name string, usage *llm.Usage) *llm.Error {
 	return &llm.Error{Code: llm.CodeUpstream, Status: http.StatusBadGateway, Scope: llm.ScopeRequest, Usage: usage,
 		Message: "invalid arguments for custom tool " + name + " received from upstream"}
 }
 
-// SearchCallArguments reads a tool_search call's arguments, which the client takes as a JSON
-// object. ok is false when they are not one, which then reads as an empty object.
 func SearchCallArguments(arguments string) (json.RawMessage, bool) {
 	raw := bytes.TrimSpace([]byte(arguments))
 	if rawjson.Object(raw) == nil {
@@ -736,7 +659,6 @@ func SearchCallArguments(arguments string) (json.RawMessage, bool) {
 	return json.RawMessage(raw), true
 }
 
-// OutputPath names a reply's output item, or a field of it, in a loss.
 func OutputPath(index int, field string) string {
 	path := "output[" + strconv.Itoa(index) + "]"
 	if field == "" {

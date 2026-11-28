@@ -15,8 +15,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// defaultMaxTokens is max_tokens when the client set no output limit: Messages requires one.
-// It is today's core's value for clients in other formats.
 const defaultMaxTokens = 32000
 
 // maxCacheBreakpoints is the maximum number of cache_control breakpoints Anthropic's Messages API
@@ -24,11 +22,8 @@ const defaultMaxTokens = 32000
 const maxCacheBreakpoints = 4
 
 type encoder struct {
-	losses []llm.Loss
-	// keepModelTurn: the conversation's trailing assistant turns are kept (EncodeOptions).
-	keepModelTurn bool
-	// searchResultOwned reports whether a replayed web search result was minted by this request's
-	// account (EncodeOptions); nil keeps every result.
+	losses            []llm.Loss
+	keepModelTurn     bool
 	searchResultOwned func(string) bool
 }
 
@@ -36,8 +31,6 @@ func (e *encoder) lose(kind, path, detail string) {
 	e.losses = append(e.losses, llm.Loss{Kind: kind, Path: path, Detail: detail})
 }
 
-// kept returns o's kept fields when o came from Messages, so they are written back; for another
-// format it carries a valid cache_control field and reports any other kept fields as dropped.
 func (e *encoder) kept(o *llm.Origin) json.RawMessage {
 	if o == nil {
 		return nil
@@ -59,8 +52,6 @@ func (e *encoder) kept(o *llm.Origin) json.RawMessage {
 	return nil
 }
 
-// validCacheControl reports whether raw is a Messages ephemeral cache_control object (with optional
-// ttl "5m" or "1h") and returns its trimmed JSON.
 func validCacheControl(raw json.RawMessage) (json.RawMessage, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
@@ -98,8 +89,6 @@ func marshal(v any, raw json.RawMessage) json.RawMessage {
 	return rawjson.Merge(b, raw)
 }
 
-// turnOf names the source turn an item came from: the first segment of its origin path (for
-// example contents[2]), so the items one turn was split into go back into one message.
 func turnOf(it llm.Item, i int) string {
 	if it.Origin != nil && it.Origin.Path != "" {
 		p, _, _ := strings.Cut(it.Origin.Path, ".")
@@ -109,86 +98,32 @@ func turnOf(it llm.Item, i int) string {
 }
 
 type outMessage struct {
-	role    string
-	turn    string
-	content []json.RawMessage
-	// paths names where each content block came from in the source body, and path the message.
-	paths []string
-	path  string
-	// raw is the message as a Messages client sent it (RepairTurns); changed says its content
-	// was repaired, so it is written again.
-	raw     json.RawMessage
-	changed bool
-	// joinNext: the next item of the same role goes in this message too. A replayed thinking
-	// block opens the assistant turn its tool calls and text belong to.
+	role     string
+	turn     string
+	content  []json.RawMessage
+	paths    []string
+	path     string
+	raw      json.RawMessage
+	changed  bool
 	joinNext bool
 }
 
-// EncodeRequest builds a Messages request body from req's items, tools and options, and returns
-// what it could not carry over. System and developer messages become the system prompt; the
-// items of one source turn (a message split into text, tool calls and results) become one
-// message, in order; tool results go in a user message. Function names Messages does not take
-// are sent under the names ToolNames gives them, and each tool's parameter schema is made one
-// Messages takes (an object schema without a root union). A tool choice that names the tools the
-// model may call (an allowed list) is carried by defining only those function tools, since
-// Messages has no such list; every other tool, hosted ones included, is dropped, and an allowed
-// name the request does not define beside them is reported as dropped. A list that leaves no tool
-// to define is an invalid_request error: nothing would hold the model to it. Reasoning from
-// another provider cannot be replayed to a Messages upstream (its signatures do not verify), so it
-// is dropped and reported, as is the reasoning effort (thinking budgets are model-specific; the
-// Claude provider sets them). A user turn left with nothing to send after its unsupported parts
-// are dropped is an invalid_request error, never sent empty.
-//
-// For a Claude model (a claude- name), system and developer messages after the conversation has
-// started stay where they are, so the prefix Claude caches stays the same when a client adds one:
-// placeSystem says how. Other models get every system message in the system prompt. The
-// conversation then gets the repairs RepairTurns describes, each reported. It does not look at
-// req.Native; callers that can pass the native body through do so first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	return EncodeRequestWith(req, EncodeOptions{})
 }
 
-// EncodeOptions changes how EncodeRequestWith builds a body.
 type EncodeOptions struct {
-	// KeepModelTurn keeps the conversation's trailing assistant turns on every model: they are
-	// the end of the conversation, not a prefill the reply continues. It is for requests that
-	// Anthropic takes ending on the model's turn, such as on-demand compaction; a generation
-	// leaves it off. Every other repair still runs.
-	KeepModelTurn bool
-	// SearchResultOwned, when set, reports whether a replayed web search result's
-	// encrypted_content was minted by the account this request goes to. Anthropic refuses a
-	// result minted for another credential, so an entry it reports false for is left out and the
-	// result block keeps an empty list. nil keeps every result, as EncodeRequest does.
+	KeepModelTurn     bool
 	SearchResultOwned func(encryptedContent string) bool
-	// ServiceTier says the caller knows its upstream takes a service tier: a request from another
-	// format then carries the client's auto and default tiers as service_tier (and its priority
-	// tier as speed, with FastMode). Without it every tier is left out and reported as dropped,
-	// since a third-party upstream may refuse a field it does not list. A Messages client's own
-	// tier is written either way.
-	ServiceTier bool
-	// FastMode lets the priority service tier be sent as "speed": "fast", whether or not
-	// ServiceTier is set (a caller may send fast mode where it sends no other tier).
+	ServiceTier       bool
 	// Anthropic takes the field only with the fast-mode beta header (and only on some models), so
-	// the caller sets it only when it adds that header to the request it sends. Left off, the
-	// priority tier is dropped and reported.
-	FastMode bool
-	// WebSearch says the caller knows its upstream takes a Messages web_search_20250305 tool:
-	// a request from another format then carries a canonical web search tool, and without it the
-	// tool is left out and reported as dropped. A Messages client's own tool is written either
-	// way.
-	WebSearch bool
-	// CodeExecution says the caller knows its upstream takes a Messages code_execution_20250825
-	// tool: a request from another format then carries a canonical code execution tool on the
-	// documented Claude model families, and without it the tool is left out and reported as
-	// dropped. A Messages client's own tool is written either way.
-	CodeExecution bool
-	// StructuredOutputRules says the upstream is Anthropic's own API, whose structured output
-	// refuses some schemas and older models: a request from another format then has its schema
-	// fitted to those rules or left out with a loss. Any other upstream gets the schema as it came.
+	// the caller sets it only when it adds that header to the request it sends.
+	FastMode              bool
+	WebSearch             bool
+	CodeExecution         bool
 	StructuredOutputRules bool
 }
 
-// EncodeRequestWith builds a Messages request body as EncodeRequest does, changed by opts.
 func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
 	e := &encoder{keepModelTurn: opts.KeepModelTurn, searchResultOwned: opts.SearchResultOwned}
 	req, lowered := clienttools.Lower(req)
@@ -250,11 +185,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 
 	names := ToolNames(req)
-	// Messages has no allowed tool list: a choice that names the tools the model may call is
-	// carried by defining those tools alone, which is what the list asks for. Every tool the
-	// list does not name is off the request, hosted and native ones included, since the list
-	// says which tools the model may call; nothing is reported for them, as the client's
-	// constraint is kept, not approximated.
 	allowed := map[string]bool{}
 	if tc := o.ToolChoice; tc != nil {
 		for _, name := range tc.Allowed {
@@ -264,8 +194,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	var tools []json.RawMessage
 	emittedCodeExecName := ""
 	droppedCodeExec := false
-	// Messages refuses a request whose tools share a name. The client's functions win: a hosted
-	// tool translated from another format is sent only when no tool already has its name.
 	sent := map[string]bool{}
 	if len(allowed) == 0 {
 		for _, t := range req.Tools {
@@ -274,8 +202,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			}
 		}
 	}
-	// claim reports whether a translated hosted tool may be sent, and if so takes its name. When
-	// the name is taken it reports the loss and returns false.
 	claim := func(tool json.RawMessage, path string) bool {
 		var named struct {
 			Name string `json:"name"`
@@ -382,8 +308,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			}
 		}
 		if len(tools) == 0 {
-			// Nothing is defined to narrow to, so the request cannot say which tools the model
-			// may call; sending it would let the model call any of them, or answer with text.
 			return nil, nil, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest,
 				Message: fmt.Sprintf("tool_choice allows no function tool this request defines: %s", strings.Join(missing, ", "))}
 		}
@@ -441,9 +365,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		switch it.Type {
 		case llm.ItemTypeMessage:
 			if len(it.Content) == 0 && !it.TextContent && it.Origin != nil && it.Origin.Format != format && len(it.Origin.Raw) > 0 {
-				// An empty message from another format only holds its own fields; keep a valid
-				// cache_control so it can attach to the turn's last emitted block (such as a
-				// tool_use block on a tool-call-only Chat assistant message), and report the rest.
 				if raw := e.kept(it.Origin); len(raw) > 0 {
 					pendingCC = append(pendingCC, pendingCacheControl{turn: turn, role: it.Role, path: p, raw: raw})
 				}
@@ -521,8 +442,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				break
 			}
 			if c, ok := asWebSearchCall(it); ok {
-				// A search goes in the assistant message around it, with the text and calls
-				// before and after it, as Claude wrote that turn.
 				blocks, dropped := searches.blocks(i, c, e.searchResultOwned)
 				if dropped > 0 {
 					e.lose(llm.LossDropped, p, "web search results this account did not mint (Anthropic refuses another credential's encrypted content); the result block is sent with an empty list")
@@ -659,9 +578,6 @@ func encodeToolChoice(tc *llm.ToolChoice, parallel *bool, names map[string]strin
 	return out
 }
 
-// content encodes a message's parts as Messages content blocks, with the path each came from.
-// sendable reports whether any block with something in it was kept, dropped whether any part was
-// dropped and reported.
 func (e *encoder) content(it llm.Item, msgPath string) (blocks []json.RawMessage, paths []string, sendable, dropped bool) {
 	for i, p := range it.Content {
 		pp := pathOf(p.Origin, fmt.Sprintf("%s.content[%d]", msgPath, i))
@@ -719,8 +635,6 @@ func (e *encoder) content(it llm.Item, msgPath string) (blocks []json.RawMessage
 	return blocks, paths, sendable, dropped
 }
 
-// source returns the Messages source of an image or file part: inline base64 from a data URL, a
-// URL, or a file id. Documents inline take PDF or plain text only.
 func source(p llm.Part) map[string]any {
 	url := p.URL
 	if p.Type == llm.PartFile && p.FileData != "" {
@@ -736,8 +650,6 @@ func source(p llm.Part) map[string]any {
 			return nil
 		}
 		if p.Origin == nil || p.Origin.Format != format {
-			// Only a part translated from another format is checked; one the client sent to
-			// Messages is what Messages accepts, and its media type goes back as written.
 			mediaType = mediainput.Type(mediaType)
 			if !mediainput.Base64(data) {
 				return nil
@@ -760,12 +672,6 @@ func source(p llm.Part) map[string]any {
 	return nil
 }
 
-// replayedSignature returns the Claude thinking signature a Responses reasoning item carries in
-// encrypted_content, or "" when it carries none. The Responses writer puts a Claude signature
-// there unchanged; OpenAI's own encrypted content is a Fernet token, which starts with "g".
-//
-// shortcut: a Claude signature is told apart by its shape (claudeSignature); an origin record that
-// travels with the item would be exact.
 func replayedSignature(it llm.Item) string {
 	if it.Origin == nil || it.Origin.Format != llm.FormatOpenAIResponses {
 		return ""
@@ -782,11 +688,6 @@ func replayedSignature(it llm.Item) string {
 	return r.EncryptedContent
 }
 
-// claudeSignature reports whether sig has the shape of a thinking signature Claude issues: base64
-// of a protobuf message. The older forms start with E (first byte 0x12, field 2) or R (base64 of
-// such a string), as today's core checks. Claude 5 models issue a newer envelope that starts with C:
-// field 1, a one-byte version varint, then field 2 (0x08, version, 0x12), the layout CLIProxyAPI
-// describes for it (internal/signature/claude_validation.go, "CAIS envelope").
 func claudeSignature(sig string) bool {
 	if sig == "" || (sig[0] != 'E' && sig[0] != 'R' && sig[0] != 'C') {
 		return false
@@ -800,12 +701,6 @@ func claudeSignature(sig string) bool {
 	return sig[0] != 'C' || (len(b) > 2 && b[0] == 0x08 && b[1] < 0x80 && b[2] == 0x12)
 }
 
-// serviceTier writes the request's service tier into out as Messages says it: auto as
-// service_tier auto, the default tier as service_tier standard_only (standard capacity only),
-// and the priority tier as speed fast (fast mode) when opts allows it. No other tier has a place
-// in a Messages request: flex, scale, ultrafast and any value the model does not know are
-// dropped and reported, never moved to the nearest tier. A request from another format whose
-// upstream is not known to take a tier (opts.ServiceTier) loses it whole.
 func (e *encoder) serviceTier(req llm.Request, opts EncodeOptions, out map[string]any) {
 	tier := req.Options.ServiceTier
 	if tier == "" {
@@ -814,7 +709,6 @@ func (e *encoder) serviceTier(req llm.Request, opts EncodeOptions, out map[strin
 	own := req.SourceFormat() == format
 	t := llm.CanonicalServiceTier(tier)
 	if t == llm.ServiceTierPriority {
-		// Fast mode has its own switch: a caller may send it where it sends no other tier.
 		if opts.FastMode || own {
 			out["speed"] = "fast"
 		} else {

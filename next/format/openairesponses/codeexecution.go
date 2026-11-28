@@ -8,14 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// codeInterpreterModels holds the OpenAI model IDs whose official model pages under
-// https://developers.openai.com/api/docs/models/ list code_interpreter under "Supported tools"
-// for the Responses API and whose endpoint table supports Responses. Dated snapshots (<id>-YYYY-MM-DD) match their base model ID; models
-// that do not list code_interpreter (such as gpt-5.4-pro, gpt-5.2-pro, gpt-5*-codex, gpt-5-pro,
-// o1, o1-pro, o3-pro, gpt-4o-search-preview, audio/realtime/image/embedding models) are absent.
-//
-// shortcut: decided from a name list of documented models, since protocol v0 has no per-model
-// code execution capability. Move this to per-model capabilities when describe carries them.
 var codeInterpreterModels = map[string]struct{}{
 	"chat-latest":              {},
 	"gpt-4.1":                  {},
@@ -60,8 +52,6 @@ var codeInterpreterModels = map[string]struct{}{
 	"o4-mini-deep-research":    {},
 }
 
-// supportsCodeExecution reports whether model is listed on OpenAI's official model pages as
-// supporting the Responses code_interpreter tool.
 func supportsCodeExecution(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if _, ok := codeInterpreterModels[m]; ok {
@@ -74,7 +64,6 @@ func supportsCodeExecution(model string) bool {
 	return false
 }
 
-// stripDateSuffix removes a trailing -YYYY-MM-DD dated snapshot suffix from a model ID.
 func stripDateSuffix(m string) (string, bool) {
 	if len(m) <= 11 || m[len(m)-11] != '-' || m[len(m)-6] != '-' || m[len(m)-3] != '-' {
 		return "", false
@@ -88,9 +77,6 @@ func stripDateSuffix(m string) (string, bool) {
 	return m[:len(m)-11], true
 }
 
-// canonicalCodeExecutionTool returns the Responses code_interpreter tool JSON for a translated
-// canonical code execution tool. The Responses API requires container; {"type":"auto"} selects
-// the default auto-provisioned 1g container.
 func canonicalCodeExecutionTool() json.RawMessage {
 	return json.RawMessage(`{"type":"code_interpreter","container":{"type":"auto"}}`)
 }
@@ -100,10 +86,6 @@ func canonicalCodeExecutionTool() json.RawMessage {
 // when it is asked for: https://developers.openai.com/api/reference/resources/responses/create
 const codeInterpreterOutputs = "code_interpreter_call.outputs"
 
-// withInclude returns the request's include list with value added: the client's own include values
-// when its request came from Responses (kept as they were, in order), then value unless it is
-// already there. Only a Responses upstream is asked for this value, and only when the code tool
-// was translated, so a request that carries its own tool is left as the client sent it.
 func withInclude(client *llm.Origin, value string) []json.RawMessage {
 	var out []json.RawMessage
 	if client != nil && client.Format == format {

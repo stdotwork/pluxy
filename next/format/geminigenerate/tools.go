@@ -10,16 +10,8 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Tool names. GenerateContent takes a function name of 1 to 128 characters from a-z, A-Z, 0-9,
-// underscores, dots, colons and dashes, and Vertex AI also wants it to start with a letter or an
-// underscore (https://ai.google.dev/api/caching#FunctionDeclaration and
-// https://cloud.google.com/vertex-ai/docs/reference/rest/v1beta1/FunctionDeclaration). A client
-// in another format may use other characters (MCP tools often have slashes), so such a name is
-// sent under a GenerateContent name and the reply's calls go back to the client under its own.
 const maxToolName = 128
 
-// validToolName reports whether GenerateContent takes name as it is, on both the Gemini API and
-// Vertex AI.
 func validToolName(name string) bool {
 	if name == "" || len(name) > maxToolName {
 		return false
@@ -35,16 +27,11 @@ func validToolName(name string) bool {
 	return true
 }
 
-// toolNameByte reports whether c is one of the characters GenerateContent takes in a function
-// name.
 func toolNameByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
 		c == '_' || c == '.' || c == ':' || c == '-'
 }
 
-// sanitizeToolName replaces each character GenerateContent does not take with an underscore,
-// starts the name with an underscore when it does not start with a letter or underscore, and
-// cuts it to 128 bytes.
 func sanitizeToolName(name string) string {
 	b := []byte(name)
 	for i, c := range b {
@@ -64,15 +51,8 @@ func sanitizeToolName(name string) string {
 	return string(b)
 }
 
-// ToolNames returns the GenerateContent name of each function name in req that GenerateContent
-// does not take as it is, keyed by the client's name: the tools' names first, then the names of
-// the tool calls replayed in its items. Every name sent is distinct. A name is kept when it is
-// valid and not taken, otherwise sanitized (each other character an underscore, at most 128
-// bytes); when two sanitized names would be the same, or one is already taken, each gets a hash
-// of the client's name after the first 117 bytes. The result depends only on req, so the request
-// and its reply agree.
 func ToolNames(req llm.Request) map[string]string {
-	req, _ = clienttools.Lower(req) // the names the encoder sends
+	req, _ = clienttools.Lower(req)
 	n := toolNames{to: map[string]string{}, taken: map[string]bool{}}
 	var declared, called []string
 	for _, t := range req.Tools {
@@ -152,15 +132,11 @@ func (n *toolNames) allocate(names []string) {
 	}
 }
 
-// FunctionTools returns the function tools EncodeRequest declares for req, each under the name the
-// reply's calls go back to the client with (a Responses client's custom and namespace tools are
-// sent as functions).
 func FunctionTools(req llm.Request) []llm.Tool {
 	req, _ = clienttools.Lower(req)
 	return req.Tools
 }
 
-// ToolName returns the GenerateContent name for a client's function name.
 func ToolName(names map[string]string, name string) string {
 	if to, ok := names[name]; ok {
 		return to
