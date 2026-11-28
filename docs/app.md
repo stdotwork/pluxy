@@ -362,7 +362,7 @@ A few things are outside what the app does today, or work only in part:
 - **Codex OAuth sign-in and catalog options.** Codex connects to pluxy with a client key only (no
   OAuth sign-in or OpenAI provider-identity switch). The Codex model list changes only when you
   press **Import models from pluxy**, and its editor omits `supports_parallel_tool_calls`, which
-  Codex no longer reads.
+  Codex does not read.
 - **Editing or deleting Codex sessions.** **Codex sessions** is read-only: it lists, views, exports
   as JSONL and opens sessions, and does not sync historical sessions, repair index entries, edit
   messages or delete session files.
@@ -380,9 +380,9 @@ A few things are outside what the app does today, or work only in part:
   (**Settings file** tab; see [routing.md](routing.md)).
 - **Built-in reverse proxy or Allow-LAN switch.** The app runs no reverse proxy of its own and has
   no single Allow-LAN toggle. To let other computers reach pluxy, set **Address pluxy listens on**
-  (for example `0.0.0.0:8317`) and turn on **Let other computers manage pluxy** in **Config**
-  (**Settings** tab, **Other computers**), then restart pluxy; configure TLS directly in
-  `config.json` ([config.md](config.md#tls)).
+  (for example `0.0.0.0:8317`) in **Config** (**Settings** tab, **Other computers**) and restart
+  pluxy; to let them also manage it, turn on **Let other computers manage pluxy** there, which takes
+  effect at once. Configure TLS directly in `config.json` ([config.md](config.md#tls)).
 - **Following the system proxy.** pluxy does not read the system or environment proxy for provider
   requests. Set **Outbound proxy** in **Config** (**Settings** tab), `proxy_url` in `config.json`,
   or the proxy field on an account's Edit form.
