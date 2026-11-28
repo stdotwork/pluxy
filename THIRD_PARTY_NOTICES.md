@@ -573,8 +573,9 @@ SOFTWARE.
 
 ## IBM/plex
 
-The typefaces IBM Plex Sans and IBM Plex Mono, from <https://github.com/IBM/plex>, which the UI's
-default theme uses. `next/ui/kit/fonts/` holds five of their font files, copied byte for byte from
+The typefaces IBM Plex Sans and IBM Plex Mono, from <https://github.com/IBM/plex>. Plex Mono is the
+default theme's monospaced face (`font.mono`); Plex Sans ships for themes that name it (the default
+body face is Inter, below). `next/ui/kit/fonts/` holds five of their font files, copied byte for byte from
 the Fontsource packages `@fontsource/ibm-plex-sans` 5.3.0 and `@fontsource/ibm-plex-mono` 5.3.0
 (<https://fontsource.org>), which publish Latin subsets in WOFF2: Plex Sans 400, 500 and 600
 (`plex-sans-400.woff2`, `plex-sans-500.woff2`, `plex-sans-600.woff2`; version 3.201 in their
@@ -682,8 +683,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ## rsms/inter
 
-Inter, from <https://github.com/rsms/inter>, the typeface Inter, which the UI's default theme uses for
-its body text (`font.body`). `next/ui/kit/fonts/` holds one of its font files,
+The typeface Inter, from <https://github.com/rsms/inter>, the default theme's body face
+(`font.body`). `next/ui/kit/fonts/` holds one of its font files,
 `inter-latin-wght-normal.woff2`: the Latin subset of Inter's variable font (weights 100 to 900, normal
 style), copied byte for byte from the Fontsource package `@fontsource-variable/inter` 5.3.0
 (<https://fontsource.org>), its `files/inter-latin-wght-normal.woff2`. The font's own name table gives
@@ -785,4 +786,36 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
+~~~
+
+## lobehub/lobe-icons
+
+The provider marks in `next/ui/kit/parts/providerMark.tsx` (Claude, Codex, Gemini, xAI, Kimi and
+OpenAI) are *copied* from the SVG path data of `@lobehub/icons-static-svg` 1.106.0, from
+<https://github.com/lobehub/lobe-icons>: the same paths, drawn in a brand colour or the text colour in place of the
+files' gradients. The marks are their owners' trademarks; the licence below covers the drawings.
+Licence text, as it is in the project's `LICENSE`:
+
+~~~text
+MIT License
+
+Copyright (c) 2023 LobeHub
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ~~~

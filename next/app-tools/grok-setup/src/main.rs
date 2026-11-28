@@ -1,11 +1,3 @@
-//! pluxy/grok-setup: sets up Grok Build to use pluxy's core, and starts it, for pluxy's desktop
-//! app (README.md). Its operations: `preview` (read: pins Grok Build's config.toml and reads its
-//! values back, never the key), `apply`, `clear` and `restore` (write: each call asks the person;
-//! `apply` receives the client key as a secret's value and writes it where Grok Build reads it),
-//! `status` (read), `recipe` (read: how the launcher starts Grok Build) and the backup browser's
-//! standard operations. Writes go through pluxy-transactions: link-preserving, journalled, with
-//! the originals and manual backups in the host's vault.
-
 mod config;
 
 use config::{Checked, Model, Settings};

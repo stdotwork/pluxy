@@ -5,7 +5,7 @@ import { afterEach, expect, jest, test } from "bun:test";
 import { act } from "preact/test-utils";
 import { type Account, api } from "../kit/api";
 import type { Host, Method, Reply } from "../kit/host";
-import { AccountsPage } from "../kit/pages/accounts";
+import { ACCOUNTS_VIEW_KEY, AccountsPage } from "../kit/pages/accounts";
 import { AuthImport } from "../kit/pages/authImport";
 import { forgetWindows } from "../kit/parts";
 import { PrivacyContext, privacyMasks } from "../kit/privacy";
@@ -44,7 +44,12 @@ interface Call {
  */
 async function mount(
   replies: (Reply<unknown> | "pending")[],
-  more: { status?: Reply<unknown>[]; usage?: Reply<unknown>[] } = {},
+  more: {
+    status?: Reply<unknown>[];
+    usage?: Reply<unknown>[];
+    listLayout?: "table" | "cards";
+    onSetLayout?: (option: string, value: string | undefined) => void;
+  } = {},
 ) {
   const next = (list: Reply<unknown>[] | undefined) => (list && list.length > 1 ? list.shift() : list?.[0]);
   const calls: Call[] = [];
@@ -74,10 +79,28 @@ async function mount(
     prefs: { get: () => null, set: () => {} },
     features: new Set(),
   } as unknown as Host;
+  let currentList: "table" | "cards" = more.listLayout ?? "table";
+  const listeners = new Set<() => void>();
+  const themes = {
+    get resolved() {
+      return { layout: { tabs: "top", list: currentList } };
+    },
+    subscribe(fn: () => void) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    setLayout(option: string, value: string | undefined) {
+      more.onSetLayout?.(option, value);
+      if (option === "list" && (value === "table" || value === "cards")) {
+        currentList = value;
+        for (const fn of listeners) fn();
+      }
+    },
+  };
   const kit = {
     host,
     api: api(host),
-    themes: { resolved: { layout: { tabs: "top" } }, subscribe: () => () => {} },
+    themes,
     unauthorized: () => {},
     extensionsChanged: () => {},
   } as unknown as Kit;
@@ -325,6 +348,192 @@ test("selected accounts the search hides are counted in the bar and the question
   expect(page.text()).toContain("The search hides 1 of them.");
   await click(button(page.root, "Remove"));
   expect(page.changes().sort()).toEqual(["DELETE /accounts/alpha", "DELETE /accounts/beta"]);
+});
+
+test("provider chips appear for two or more providers, filter rows, show that provider's pool card, and report filter-hidden selections", async () => {
+  const page = await mount([
+    reply(
+      account("claude-a", { extension: "pluxy/claude" }),
+      account("claude-b", { extension: "pluxy/claude" }),
+      account("gemini-a", { extension: "pluxy/gemini" }),
+    ),
+  ]);
+  const chip = (label: string) => {
+    const found = all(page.root, "button").find((b) => b.textContent.includes(label));
+    if (!found) throw new Error(`no chip matching ${label}`);
+    return found;
+  };
+  expect(chip("All").textContent).toContain("3");
+  expect(chip("Claude").textContent).toContain("2");
+  expect(chip("Gemini").textContent).toContain("1");
+  expect(
+    all(page.root, "section").some((s) =>
+      s.attributes.some((a) => a.name === "data-part" && a.value === "pool-card"),
+    ),
+  ).toBe(false);
+
+  await click(chip("Claude"));
+  expect(rowNames(page.root)).toEqual(["claude-a", "claude-b"]);
+  expect(
+    all(page.root, "section").some((s) =>
+      s.attributes.some((a) => a.name === "data-part" && a.value === "pool-card"),
+    ),
+  ).toBe(true);
+
+  await click(button(page.root, "Select"));
+  await act(async () => {
+    box(page.root, "claude-a").checked = true;
+    box(page.root, "claude-a").dispatchEvent(new Event("change"));
+  });
+  await click(chip("Gemini"));
+  expect(rowNames(page.root)).toEqual(["gemini-a"]);
+  expect(page.text()).toContain("1 selected, 1 hidden");
+  await click(button(page.root, "Remove…"));
+  expect(page.text()).toContain("The filter hides it.");
+  await click(button(page.root, "Cancel"));
+  await click(chip("All"));
+  expect(rowNames(page.root)).toEqual(["claude-a", "claude-b", "gemini-a"]);
+});
+
+test("selecting a provider chip scopes the summary counts line and state bar to that provider", async () => {
+  const page = await mount([
+    reply(
+      account("claude-bad", { extension: "pluxy/claude", state: "reauth_required" }),
+      account("claude-ok", { extension: "pluxy/claude" }),
+      account("gemini-ok", { extension: "pluxy/gemini" }),
+    ),
+  ]);
+  const chip = (label: string) => {
+    const found = all(page.root, "button").find((b) => b.textContent.includes(label));
+    if (!found) throw new Error(`no chip matching ${label}`);
+    return found;
+  };
+  const barGroups = () => {
+    const bar = all(page.root, "div").find((d) =>
+      d.attributes.some((a) => a.name === "class" && a.value === "accounts-state-bar"),
+    );
+    return (bar ? all(bar, "span") : []).map((s) => s.attributes.find((a) => a.name === "data-group")?.value);
+  };
+  const countsText = () =>
+    all(page.root, "p").find((p) =>
+      p.attributes.some((a) => a.name === "class" && a.value.includes("accounts-counts")),
+    )?.textContent;
+
+  expect(countsText()).toBe("3 accounts at 2 providers · 1 needs you · 2 serving");
+  expect(barGroups()).toEqual(["serving", "needs"]);
+
+  await click(chip("Claude"));
+  expect(countsText()).toBe("2 Claude accounts · 1 needs you · 1 serving");
+  expect(barGroups()).toEqual(["serving", "needs"]);
+
+  await click(chip("Gemini"));
+  expect(countsText()).toBe("1 Gemini account · 1 serving");
+  expect(barGroups()).toEqual(["serving"]);
+
+  await click(chip("All"));
+  expect(countsText()).toBe("3 accounts at 2 providers · 1 needs you · 2 serving");
+  expect(barGroups()).toEqual(["serving", "needs"]);
+});
+
+test("List | Cards starts from the theme's list layout, stores an Accounts-only choice, and never calls setLayout", async () => {
+  const store = new Map<string, string>();
+  const fakeStorage = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      store.set(key, value);
+    },
+    removeItem: (key: string) => {
+      store.delete(key);
+    },
+  };
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: fakeStorage });
+  try {
+    const calls: [string, string | undefined][] = [];
+    const page = await mount([reply(account("a"), account("b"))], {
+      listLayout: "cards",
+      onSetLayout: (opt, val) => calls.push([opt, val]),
+    });
+    const container = () =>
+      all(page.root, "div").find((d) => d.attributes.some((a) => a.name === "data-view"));
+    expect(container()?.attributes.find((a) => a.name === "data-view")?.value).toBe("cards");
+
+    await click(button(page.root, "Cards"));
+    expect(store.has(ACCOUNTS_VIEW_KEY)).toBe(false);
+    expect(calls).toEqual([]);
+
+    await click(button(page.root, "List"));
+    expect(calls).toEqual([]);
+    expect(store.get(ACCOUNTS_VIEW_KEY)).toBe("list");
+    expect(container()?.attributes.find((a) => a.name === "data-view")?.value).toBe("list");
+    await page.unmount();
+
+    const reloaded = await mount([reply(account("a"), account("b"))], {
+      listLayout: "cards",
+      onSetLayout: (opt, val) => calls.push([opt, val]),
+    });
+    const reloadedContainer = all(reloaded.root, "div").find((d) =>
+      d.attributes.some((a) => a.name === "data-view"),
+    );
+    expect(reloadedContainer?.attributes.find((a) => a.name === "data-view")?.value).toBe("list");
+    await click(button(reloaded.root, "Cards"));
+    expect(store.get(ACCOUNTS_VIEW_KEY)).toBe("cards");
+    expect(calls).toEqual([]);
+    await reloaded.unmount();
+
+    const throwingStorage = {
+      getItem: () => {
+        throw new Error("storage blocked");
+      },
+      setItem: () => {
+        throw new Error("storage blocked");
+      },
+    };
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: throwingStorage });
+    const blocked = await mount([reply(account("a"), account("b"))], {
+      listLayout: "cards",
+      onSetLayout: (opt, val) => calls.push([opt, val]),
+    });
+    const blockedContainer = () =>
+      all(blocked.root, "div").find((d) => d.attributes.some((a) => a.name === "data-view"));
+    expect(blockedContainer()?.attributes.find((a) => a.name === "data-view")?.value).toBe("cards");
+    await click(button(blocked.root, "List"));
+    expect(blockedContainer()?.attributes.find((a) => a.name === "data-view")?.value).toBe("list");
+    expect(calls).toEqual([]);
+  } finally {
+    if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  }
+});
+
+test("the view keeps at most one filled primary button: the first repair when one exists, else Add an account", async () => {
+  const primaries = (root: FakeNode) =>
+    [...all(root, "a"), ...all(root, "button")].filter((el) =>
+      el.attributes.some((a) => a.name === "data-variant" && a.value === "primary"),
+    );
+
+  const broken = await mount([
+    reply(
+      account("first-bad", { state: "reauth_required" }),
+      account("second-bad", { state: "reauth_required" }),
+      account("healthy"),
+    ),
+  ]);
+  expect(primaries(broken.root).map((el) => el.textContent.trim())).toEqual(["Sign in again"]);
+  await broken.unmount();
+
+  const healthy = await mount([reply(account("ok-1"), account("ok-2"))]);
+  expect(primaries(healthy.root).map((el) => el.textContent.trim())).toEqual(["Add an account"]);
+});
+
+test("a failed reload marks the page stale while keeping the rows", async () => {
+  jest.useFakeTimers();
+  const page = await mount([reply(account("work-01")), hiccup]);
+  const rootDiv = () => all(page.root, "div").find((d) => d.attributes.some((a) => a.name === "data-view"));
+  expect(rootDiv()?.attributes.some((a) => a.name === "data-stale")).toBe(false);
+  await advance(10_000);
+  expect(rootDiv()?.attributes.some((a) => a.name === "data-stale")).toBe(true);
+  expect(rowNames(page.root)).toEqual(["work-01"]);
 });
 
 // ---- Import files… (the end of Add an account) -------------------------------------------------

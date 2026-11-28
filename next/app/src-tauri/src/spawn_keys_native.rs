@@ -49,11 +49,11 @@ struct Key {
     value: String,
 }
 
-/// Captures a client key for client as label, confirmed, and reads its value from core's config.
+/// Captures a client key for client as label (no confirmation of its own: its use asks), and
+/// reads its value from core's config.
 fn capture(
-    app: &AppHandle,
     main: &Webview,
-    (base, config, audit): (&str, &Path, &Path),
+    (_base, config, audit): (&str, &Path, &Path),
     client: &str,
     label: &str,
 ) -> Result<Key, String> {
@@ -63,9 +63,7 @@ fn capture(
         "client_key_capture",
         json!({"label": label, "client": client}),
     )?;
-    dialog_with(app, &[base, client, label])?;
-    press("alt+o")?;
-    let r = settle(main, &slot)?;
+    let r = settle_unasked(main, &slot)?;
     let value = new_key(&before, &core_keys(config)?)?;
     note(audit, &value)?;
     let v = &r["value"];
@@ -273,7 +271,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 (LAUNCHER, "launcher key three"),
                 (OTHER, "other key"),
             ] {
-                keys.push(capture(app, main, core, client, label)?);
+                keys.push(capture(main, core, client, label)?);
             }
             Ok(())
         })(),

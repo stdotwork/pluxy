@@ -12,13 +12,19 @@
 // current management key, also after a rotation. Core writes its log to files (logs.to_file). It runs until stdin reaches
 // EOF or it gets SIGINT or SIGTERM, then stops core and removes its files.
 //
+// In every mode core runs with a new empty home folder of its own, "home" beside its config
+// file, as HOME and USERPROFILE and with none of the caller's XDG_ folders, so what core does in
+// a home folder (Connect writing a coding tool's settings) stays in the temporary folder and goes
+// with it. Nothing of the caller's home is copied in. Without -first-run core keeps the caller's
+// PATH, so the coding tools installed on the machine still show.
+//
 // With -tls, core's API is reached through an https proxy whose certificate comes from a new
 // authority: base is https://127.0.0.1:port, and "ca" names the authority's PEM file.
 //
 // With -first-run, core starts as a new install does: nothing installed, no accounts, and its
 // bundled registry offers one pick, pluxy/claude (the test extension under that ID, so setup
-// suggests it). Core runs with a new empty home folder and a PATH that holds only a claude
-// program printing a version, so its scan finds Claude Code and nothing of the machine's own.
+// suggests it). Core's PATH holds only a claude program printing a version, so its scan finds
+// Claude Code and nothing of the machine's own.
 // With -cpa as well, that home folder holds a CLIProxyAPI setup (~/.cli-proxy-api: a config.yaml
 // and an auth folder of three made-up accounts), which the scan finds and an import can read.
 //
@@ -88,7 +94,7 @@ func main() {
 	prepare := flag.String("prepare", "", "only build core and its bundled test packages into this folder, then exit")
 	withTLS := flag.Bool("tls", false, "reach core's API through an https proxy with a certificate from a new authority")
 	probe := flag.Bool("probe", false, "also offer test/probe, the desktop app's native test page")
-	firstRun := flag.Bool("first-run", false, "start core as a new install: nothing installed, no accounts, a home folder and PATH of its own")
+	firstRun := flag.Bool("first-run", false, "start core as a new install: nothing installed, no accounts, a PATH of its own")
 	cpa := flag.Bool("cpa", false, "with -first-run: put a CLIProxyAPI setup (a config.yaml and three auth files, all made up) in the home folder")
 	demoMode := flag.Bool("demo", false, "fill core with accounts in every state, usage and request logs (not with -first-run or -prepare)")
 	listen := flag.String("listen", "127.0.0.1:0", "the address core listens on (default: a random free port on loopback)")
@@ -221,15 +227,13 @@ func serve(withTLS, firstRun, cpa, demo bool, listen, keyFile string) error {
 			return err
 		}
 	}
-	var env []string
-	if firstRun {
-		if env, err = firstRunEnv(dir); err != nil {
+	env, err := coreEnv(dir, firstRun)
+	if err != nil {
+		return err
+	}
+	if cpa {
+		if err := writeCPASetup(filepath.Join(dir, "home")); err != nil {
 			return err
-		}
-		if cpa {
-			if err := writeCPASetup(filepath.Join(dir, "home")); err != nil {
-				return err
-			}
 		}
 	}
 
@@ -421,15 +425,28 @@ var firstRunPackage = pkg{
 // fakeClaudeVersion is the version -first-run's claude program prints.
 const fakeClaudeVersion = "2.4.1"
 
-// firstRunEnv makes the home folder and the claude program of a -first-run core below dir, and
-// returns the environment core runs with: that home folder, and a PATH that holds only the
-// folder of the claude program.
-func firstRunEnv(dir string) ([]string, error) {
-	home, bin := filepath.Join(dir, "home"), filepath.Join(dir, "bin")
-	for _, d := range []string{home, bin} {
-		if err := os.Mkdir(d, 0o755); err != nil {
-			return nil, err
-		}
+// coreEnv makes the home folder core runs with, dir/home, and returns core's environment: this
+// program's, with that folder as HOME and USERPROFILE and none of the XDG_ variables (they name
+// folders of the caller's home), so nothing core writes in a home folder reaches the caller's.
+// firstRun: PATH is a folder below dir holding only a claude program, which prints a version;
+// otherwise this program's PATH is kept.
+func coreEnv(dir string, firstRun bool) ([]string, error) {
+	home := filepath.Join(dir, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		return nil, err
+	}
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		k, _, _ := strings.Cut(kv, "=")
+		k = strings.ToUpper(k) // Windows names are not case-sensitive
+		return k == "HOME" || k == "USERPROFILE" || strings.HasPrefix(k, "XDG_") || (firstRun && k == "PATH")
+	})
+	env = append(env, "HOME="+home, "USERPROFILE="+home)
+	if !firstRun {
+		return env, nil
+	}
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		return nil, err
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -442,12 +459,7 @@ func firstRunEnv(dir string) ([]string, error) {
 	if err := os.WriteFile(filepath.Join(bin, "claude"+exe), prog, 0o755); err != nil {
 		return nil, err
 	}
-	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
-		k, _, _ := strings.Cut(kv, "=")
-		k = strings.ToUpper(k) // Windows names are not case-sensitive
-		return k == "HOME" || k == "USERPROFILE" || k == "PATH" || strings.HasPrefix(k, "XDG_")
-	})
-	return append(env, "HOME="+home, "USERPROFILE="+home, "PATH="+bin), nil
+	return append(env, "PATH="+bin), nil
 }
 
 // writeLocal puts the test extension in the local folder, with the manifest the config runs from
@@ -694,8 +706,8 @@ type core struct {
 }
 
 // startCore runs core with the config at cfgPath and the registry index at index as its bundled
-// packages. Core's stderr goes to this program's stderr, each line prefixed "core: ". env, when
-// not nil, is the environment core runs with instead of this program's.
+// packages. Core's stderr goes to this program's stderr, each line prefixed "core: ". env is the
+// environment core runs with (coreEnv).
 func startCore(bin, cfgPath, index string, env []string) (*core, error) {
 	cmd := exec.Command(bin, "-config", cfgPath, "-bundled", index, "-watch-interval", "0")
 	cmd.Env = env

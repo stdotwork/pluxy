@@ -1,6 +1,3 @@
-// The theme contract, version 0, as code. themes/README.md is its reference; tests/contract.test.ts
-// checks that the two agree.
-
 import type { T3Appearance, T3RoleMap } from "./t3";
 
 export const THEME_VERSION = 0;
@@ -30,12 +27,12 @@ export const TOKENS = {
   "color.secondary-label": { light: "var(--px-color-text-muted)" },
   "color.border": { light: "#e6e6e9", dark: "#242428" },
   "color.accent": { light: "#2f5bea", dark: "#4f7bff" },
-  "color.accent-text": { light: "#ffffff" },
+  "color.accent-text": { light: "#ffffff", dark: "#0a0d1a" },
   "color.message-action": {
     light: "var(--px-color-accent)",
     dark: "color-mix(in srgb, var(--px-color-accent) 85%, black)",
   },
-  "color.message-action-foreground": { light: "var(--px-color-accent-text)" },
+  "color.message-action-foreground": { light: "var(--px-color-accent-text)", dark: "#ffffff" },
   "color.message-action-hover": { light: "color-mix(in srgb, var(--px-color-message-action) 88%, black)" },
   "color.ok": { light: "#15803d", dark: "#4ade80" },
   "color.warn": { light: "#b45309", dark: "#fbbf24" },
@@ -70,12 +67,16 @@ export const TOKENS = {
     light: "color-mix(in srgb, var(--px-color-text) 78%, var(--px-color-bg))",
   },
   "color.chart-failure": { light: "var(--px-color-error)" },
-  "color.chart-1": { light: "#d97757", dark: "#e08a6d" },
+  "color.chart-1": { light: "#cf6a49", dark: "#e08a6d" },
   "color.chart-2": { light: "#5b6bf5", dark: "#7684f7" },
-  "color.chart-3": { light: "#4f8bff", dark: "#6c9eff" },
+  "color.chart-3": { light: "#3b7bf5", dark: "#6c9eff" },
   "color.chart-4": { light: "var(--px-color-text)" },
-  "color.chart-5": { light: "#14b8a6", dark: "#2dd4bf" },
+  "color.chart-5": { light: "#0f9a8b", dark: "#2dd4bf" },
   "color.chart-6": { light: "#a855f7", dark: "#b875f8" },
+  "color.provider-claude": { light: "#d97757", dark: "#e08a6d" },
+  "color.provider-codex": { light: "#5b5ff5", dark: "#8b93ff" },
+  "color.provider-gemini": { light: "#3186ff", dark: "#5b9dff" },
+  "color.provider-kimi": { light: "#1783ff", dark: "#4ea1ff" },
   "color.plan-top": {
     light:
       "linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 20%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 40%, var(--px-color-surface)))",
@@ -113,7 +114,10 @@ export const TOKENS = {
   "color.overlay": { light: "var(--px-color-surface)" },
   "color.card": { light: "var(--px-color-surface)" },
   "color.card-border": { light: "var(--px-color-border)" },
-  "color.input-border": { light: "#d4d4d8", dark: "#34343a" },
+  "color.input-border": {
+    light: "color-mix(in srgb, var(--px-color-text-muted) 80%, var(--px-color-surface))",
+    dark: "color-mix(in srgb, var(--px-color-text-muted) 65%, var(--px-color-surface))",
+  },
   "color.placeholder": { light: "var(--px-color-text-muted)" },
   "color.selected": { light: "var(--px-color-surface-raised)" },
   "color.selected-text": { light: "var(--px-color-text)" },
@@ -175,8 +179,8 @@ export const TOKENS = {
   "motion.easing": { light: "cubic-bezier(0.2, 0, 0, 1)" },
   "motion.easing-drawer": { light: "cubic-bezier(0.32, 0.72, 0, 1)" },
   "motion.press-scale": { light: "0.97" },
-  "meter.mid-below": { light: "60" },
-  "meter.low-below": { light: "20" },
+  "meter.mid-below": { light: "70" },
+  "meter.low-below": { light: "30" },
 } as const satisfies Record<string, TokenDef>;
 
 /** Tokens that hold a length of time: reduced motion sets each to 0ms. */
@@ -274,6 +278,8 @@ export const PARTS = [
   "auth-import",
   "round-notice",
   "method-group",
+  "provider-tiles",
+  "provider-tile",
   "more-options",
   "login-details",
   "account-added",
@@ -284,12 +290,24 @@ export const PARTS = [
   "state-pane",
   "plan-pill",
   "limits",
+  "provider-mark",
+  "pool-card",
+  "connection-card",
+  "needs-band",
   "activity",
   "activity-filters",
   "usage-chart",
   "usage-chip",
   "usage-numbers",
   "usage-breakdown",
+  "requests-table",
+  "request-story",
+  "filter-menu",
+  "filter-button",
+  "filter-chip",
+  "word-chip",
+  "usage-panel",
+  "usage-tiles",
   "tool-steps",
   "tool-key",
 ] as const;

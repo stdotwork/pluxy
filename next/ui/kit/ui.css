@@ -909,9 +909,9 @@
     /* Centred on the label's first line. */
     margin-block-start: calc((var(--px-font-size) * var(--px-font-line-height) - 16px) / 2);
     border-radius: 999px;
-    /* Off: a grey that stands out from the page (an input's border is too faint for a control's
-       only shape). */
-    background: color-mix(in srgb, var(--px-color-text-muted) 60%, var(--px-color-bg));
+    /* Off: the text colour halfway into the page, so the track (the control's only shape) and the
+       knob on it each reach 3:1 in the default theme, light and dark. */
+    background: color-mix(in srgb, var(--px-color-text) 50%, var(--px-color-bg));
     position: relative;
     transition: background var(--t);
   }

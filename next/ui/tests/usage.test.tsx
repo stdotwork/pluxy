@@ -8,6 +8,8 @@ import {
   csvName,
   csvOf,
   dayHeading,
+  decisionOf,
+  detourOf,
   FIND_PAGES,
   figuresOf,
   filtersOf,
@@ -137,6 +139,73 @@ test("a request that went to a fallback says so before the line about the accoun
     story(event({ chain_step: 3, tried: [{ account: "a", provider: "p", model: "m2", result: "ok" }] }))
       .lines,
   ).toEqual(["fake-model did not work, so pluxy used its fallback m2 (step 3)."]);
+});
+
+test("the pane's decision sentence names what was tried, what each came to, and who answered", () => {
+  const tried = [
+    { account: "b", provider: "p", result: "rate_limit" },
+    { account: "c", provider: "p", result: "quota" },
+    { account: "a", provider: "p", result: "ok" },
+  ];
+  expect(decisionOf(event({ account: "a", tried }), name, "2.4 s")).toBe(
+    "Tried borealis: rate limited; cirrus: limit used up. Then aurora answered in 2.4 s.",
+  );
+  expect(decisionOf(event({ account: "a" }), name, "2.4 s")).toBe("aurora answered in 2.4 s.");
+  expect(decisionOf(event({}), name, "2.4 s")).toBeUndefined();
+  expect(
+    decisionOf(
+      event({ failed: true, status: 429, tried: [{ account: "a", provider: "p", result: "rate_limit" }] }),
+      name,
+      "1 s",
+    ),
+  ).toBe("Tried aurora: rate limited. No account answered.");
+  expect(decisionOf(event({ failed: true, error_code: "not_found" }), name, "1 s")).toBeUndefined();
+  expect(timeTaken(0)).toBe("<1 ms");
+  expect(timeTaken(0.4)).toBe("<1 ms");
+  expect(timeTaken(1)).toBe("1 ms");
+  expect(decisionOf(event({ account: "a" }), name, timeTaken(0))).toBe("aurora answered in <1 ms.");
+});
+
+test("the story's rest leaves out the sentences the decision says, and keeps the others", () => {
+  const e = event({
+    account: "a",
+    chain_step: 2,
+    tried: [
+      { account: "b", provider: "p", model: "fake-model", result: "quota" },
+      { account: "a", provider: "p", model: "fallback-model", result: "ok" },
+    ],
+  });
+  expect(story(e).rest).toEqual([
+    "fake-model did not work, so pluxy used its fallback fallback-model (step 2).",
+  ]);
+  expect(story(event({ failed: true, error_code: "not_found" })).rest).toEqual([
+    "No account serves fake-model.",
+  ]);
+  const every = story(
+    event({
+      failed: true,
+      tried: [
+        { account: "a", provider: "p", result: "rate_limit" },
+        { account: "b", provider: "p", result: "upstream" },
+      ],
+    }),
+  );
+  expect(every.rest).toEqual([]);
+});
+
+test("the list notes a detour in two words: 2nd, 3rd, via backup, fallback 2", () => {
+  const tried = (n: number) => [
+    ...Array.from({ length: n }, () => ({ account: "b", provider: "p", result: "rate_limit" })),
+    { account: "a", provider: "p", result: "ok" },
+  ];
+  expect(detourOf(event({ account: "a", tried: tried(1) }))).toBe("2nd");
+  expect(detourOf(event({ account: "a", tried: tried(2) }))).toBe("3rd");
+  expect(detourOf(event({ account: "a", tried: tried(3) }))).toBe("4th");
+  expect(detourOf(event({ account: "a", tried: tried(4) }))).toBe("5th or later");
+  expect(detourOf(event({ account: "a", why: "backup" }))).toBe("via backup");
+  expect(detourOf(event({ account: "a", chain_step: 2 }))).toBe("fallback 2");
+  expect(detourOf(event({ account: "a", why: "first" }))).toBeUndefined();
+  expect(detourOf(event({ failed: true, tried: tried(1) }))).toBeUndefined();
 });
 
 test("a request that failed on its one attempt names the account and the failure, and links the account", () => {

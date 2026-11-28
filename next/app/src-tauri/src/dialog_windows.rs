@@ -173,7 +173,22 @@ fn layout(spec: &Spec) -> Layout {
     l.buttons = y;
     y += 14 + MARGIN;
     l.height = y;
+    // A dialog is wide enough for its bottom buttons, each as wide as its label needs.
+    let w = button_widths(spec);
+    let row = w.iter().sum::<i32>() + BUTTON_GAP * w.len().saturating_sub(1) as i32;
+    l.width = l.width.max(row + 2 * MARGIN);
     l
+}
+
+/// The gap between the bottom buttons, in dialog units.
+const BUTTON_GAP: i32 = 4;
+
+/// The bottom buttons' widths, in dialog units.
+fn button_widths(spec: &Spec) -> Vec<i32> {
+    spec.buttons
+        .iter()
+        .map(|(_, label)| crate::confirmation::text::button_width_win(label) as i32)
+        .collect()
 }
 
 /// The in-memory dialog template: no controls, a caption, the message font (Segoe UI, 9 pt).
@@ -543,8 +558,9 @@ fn build(hwnd: HWND, s: &mut State) {
         );
         s.buttons.push((ctl, *id, b));
     }
-    let n = spec.buttons.len() as i32;
-    let mut x = l.width - MARGIN - n * 54 + 4;
+    let widths = button_widths(&spec);
+    let row = widths.iter().sum::<i32>() + BUTTON_GAP * widths.len().saturating_sub(1) as i32;
+    let mut x = l.width - MARGIN - row;
     for (i, (id, label)) in spec.buttons.iter().enumerate() {
         let ctl = BUTTON + i as i32;
         let default = spec.default == Some(*id);
@@ -561,7 +577,7 @@ fn build(hwnd: HWND, s: &mut State) {
             style,
             WINDOW_EX_STYLE(0),
             ctl,
-            px(hwnd, x, l.buttons, 50, 14),
+            px(hwnd, x, l.buttons, widths[i], 14),
             font,
         );
         if default {
@@ -575,7 +591,7 @@ fn build(hwnd: HWND, s: &mut State) {
             }
         }
         s.buttons.push((ctl, *id, b));
-        x += 54;
+        x += widths[i] + BUTTON_GAP;
     }
     if l.height > MAX_HEIGHT {
         let total = px(hwnd, 0, 0, 0, l.height).bottom;

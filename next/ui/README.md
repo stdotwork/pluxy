@@ -7,8 +7,8 @@ written in Preact and built with Bun's bundler. It has two builds:
 - **The desktop app** ([`../app`](../app/README.md)), which builds the same kit in a Tauri window
   and adds pages of its own.
 
-Both builds read the same theme files ([theme contract](themes/README.md)), and core keeps the
-themes a person adds and which one is on ([where themes are kept](themes/README.md#where-themes-are-kept)),
+Both builds read the same theme files ([theme contract](../../docs/themes.md)), and core keeps the
+themes a person adds and which one is on ([where themes are kept](../../docs/themes.md#where-themes-are-kept)),
 so both show the same ones. What each of the panel's pages does is in
 [docs/panel.md](../../docs/panel.md).
 
@@ -16,8 +16,8 @@ so both show the same ones. What each of the panel's pages does is in
 | --- | --- |
 | `kit/` | What both builds share: the host-services interface (`host.ts`), the management API calls by area (`api/`), the string layer (`strings.ts`), privacy mode's masks (`privacy.ts`), components (`ui.tsx`, `ui.css`), the parts every page shows an account, a request, a setting, a coding tool and a loading, empty or failed pane with (`parts/`), its icons (`icons.tsx`), the shell (`shell.tsx`) and the application frame it shows its pages in (`frame.tsx`, `shell.css`, with the page model in `destinations.ts`), the stylesheet that puts the kit's CSS in order (`kit.css`), the typefaces the default theme names (`fonts/`, declared in `fonts.css`), the theme engine (`theme/`) and the pages core offers (`pages/`, listed in `pages/core.ts`) |
 | `panel/` | The browser build: its entry page, `browserHost.ts`, the kit's host in a browser, and `status.ts`, what its status block says |
-| `themes/` | The theme contract and the built-in themes, as theme files |
-| `extension-pages/` | The extension pages contract, and `pluxy-page.js`, the module an extension's page loads to talk to the panel |
+| `themes/` | The built-in themes, as theme files ([theme contract](../../docs/themes.md)) |
+| `extension-pages/` | `pluxy-page.js`, the module an extension's page loads to talk to the panel ([extension pages](../../docs/extension-pages.md)) |
 | `tests/` | Unit tests (`bun test`) |
 | `e2e/` | The browser test (Playwright), against a real core |
 
@@ -47,9 +47,9 @@ render(
 | `pages` | The pages to show. `corePages()` (`kit/pages/core.ts`) is the pages core offers: the panel shows these, and the desktop app adds its own after them. The shell leaves out Setup when core answers `GET /setup` with 404 |
 | `privacy` | Privacy mode, kept where the build keeps it: the panel in the host's prefs (`prefsPrivacy`), the desktop app natively |
 | `status` | What the status block at the navigation's foot says (a `FrameStatus`, `kit/frame.tsx`) |
-| `extensionPages` | Adds the pages of the extensions that run, after the build's own ([extension pages](extension-pages/README.md)) |
+| `extensionPages` | Adds the pages of the extensions that run, after the build's own ([extension pages](../../docs/extension-pages.md)) |
 | `extensionPage` | Draws an extension page the host's own way, as the desktop app does |
-| `safeAddress` | The sign-in page mentions `?safe`, which turns custom CSS off ([turning custom CSS off](themes/README.md#turning-custom-css-off)). Left out by a host whose address cannot take it |
+| `safeAddress` | The sign-in page mentions `?safe`, which turns custom CSS off ([turning custom CSS off](../../docs/themes.md#turning-custom-css-off)). Left out by a host whose address cannot take it |
 
 `corePages` takes options a build uses to change core's pages; the panel passes none.
 `general: { signOut: false }` removes General's Sign out row (the desktop app's Sign out is on its
@@ -75,7 +75,7 @@ while the person shares their screen (`kit/privacy.ts`). While it is on, the hea
 - Where the desktop app says it saved a file, privacy mode shows the file and its folder only
   (`shownPath` in `kit/save.tsx`), because the folders above it hold the person's user name.
 - Extension pages get the setting as `privacy` in the theme snapshot
-  ([extension pages](extension-pages/README.md#the-theme-snapshot)); the kit cannot hide what a
+  ([extension pages](../../docs/extension-pages.md#the-theme-snapshot)); the kit cannot hide what a
   page shows itself.
 
 ### The frame, and where a page sits in it
@@ -86,7 +86,7 @@ scrolls. Around it:
 - **The navigation** holds five destinations: Home, Accounts, Activity, Tools and Settings. A
   destination no page belongs to is not shown. The theme's `nav` option draws it as a sidebar, a
   rail of icons or a row on top, and a narrow window overrides that
-  ([layout options](themes/README.md#layout-options)).
+  ([layout options](../../docs/themes.md#layout-options)).
 - **The status block** at the navigation's foot says whether pluxy runs and where. The host fills
   it through the shell's `status`.
 - **The header strip** over the page holds the page's one `h1`, the destination's tabs and the
@@ -143,6 +143,9 @@ English text. Only English ships.
 A page lives in `kit/pages/<page>.tsx` and owns everything about itself, so pages added side by
 side touch shared files only to list themselves:
 
+- **Scope:** pages in `corePages()` show only what core runs. A setting gets a field only once core
+  runs it; the rest of the config file stays editable as text in Config's **Settings file** tab.
+  Richer views and tools that act on the local machine belong to the desktop app.
 - **The page and its strings:** `kit/pages/<page>.tsx` declares its texts with
   `strings("<page>", {...})` and exports its `PageDef` as a function, such as
   `export const routingPage = (): PageDef => ({ id: "routing", dest: "accounts", kind: "tab", label: t("tab"), title: t("title"), tip: t("tip"), render: () => <RoutingPage /> })`.
@@ -161,7 +164,7 @@ side touch shared files only to list themselves:
   Colours come from tokens.
 - **Themes:** lists use the kit's `List`, a list with details `MasterDetail`, and every new
   visible part carries a `data-part` hook. A new hook, token or layout value goes into
-  [the theme contract](themes/README.md) and `kit/theme/contract.ts` in the same change.
+  [the theme contract](../../docs/themes.md) and `kit/theme/contract.ts` in the same change.
 - **Refreshing:** a page that refreshes on its own does so only while the document is visible.
   Use `useLoad` to read and `usePoll` (`kit/ui.tsx`) to keep a live value fresh; do not write a
   timer in a page.
@@ -210,7 +213,9 @@ go run ./e2e/panelcore -demo -listen 127.0.0.1:8330
 It prints one line of JSON and runs until its stdin ends or you press Ctrl-C:
 `{"base":"http://127.0.0.1:8330","key":"…","client_key":"…","config":"…"}`. Open `<base>/panel/` and
 sign in with `key` (the management key); send requests with `client_key`. Without `-listen` the
-port is random.
+port is random. Core runs with an empty home folder of its own in panelcore's temporary folder, so
+**Connect** on the Tools page writes there, not in your own `~/.claude` or `~/.codex`, and what it
+wrote goes when panelcore stops. The coding tools on your `PATH` still show.
 
 The demo is seeded: 11 accounts of four providers, in every state an account can be in except a
 broken credential file, three client keys and a fallback (`demo-best`). When it starts, it sends

@@ -1,15 +1,3 @@
-//! Signed native-tier admission for this device's catalog (`../app-host/README.md`). A native
-//! tool installs only from a curated registry (one a trust root names by its index), with a
-//! descriptor signed by that root's first-party key and verified (`artifact.rs`) before its
-//! archive is unpacked. It installs disabled. Enabling it takes a native confirmation that says
-//! it has full access to your user account; the confirmed admission is bound to the active
-//! release's digest, its source, its signer and key. A new release, a rollback, disabling or
-//! removing it ends the admission.
-//!
-//! `Catalog::admitted` is the record the program host takes: it checks the admission, the root
-//! and signature again, and every file of the installed package, each time. Nothing here starts
-//! a process.
-
 use super::*;
 use crate::artifact::{self, PublisherKeys, Tier, VerifiedDescriptor};
 
@@ -194,9 +182,20 @@ pub struct Admitted {
     pub(super) exports: Option<ExportDecl>,
     pub(super) produces: Vec<ProduceDecl>,
     pub(super) consumes: Vec<ConsumeDecl>,
+    /// Its manifest's name for people and summary (`Release::title`), empty when it has none.
+    pub(super) title: String,
+    pub(super) summary: String,
 }
 
 impl Admitted {
+    /// Its name for people: its manifest's title, or its ID when it has none.
+    pub fn name(&self) -> &str {
+        if self.title.is_empty() {
+            &self.id
+        } else {
+            &self.title
+        }
+    }
     /// Package ID, `publisher/name`.
     pub fn id(&self) -> &str {
         &self.id
@@ -326,6 +325,58 @@ impl Admitted {
             launch: None,
             environment: None,
         }
+    }
+}
+
+impl Admitted {
+    /// What the native confirmation enabling it says first, in plain words, from its checked
+    /// record: what it is, that it runs with full access to the user account, who signed it and
+    /// where it came from, the add-ons it uses, and last its manifest's summary of what it does.
+    /// The exact record follows below it.
+    #[cfg(native_stack)]
+    pub fn enable_headline(&self) -> String {
+        self.headline(format!(
+            "Turn on the {} add-on.",
+            crate::confirmation::one_line(self.name())
+        ))
+    }
+
+    /// `enable_headline` for an update from version from to this release.
+    #[cfg(native_stack)]
+    pub fn update_headline(&self, from: &str) -> String {
+        use crate::confirmation::one_line;
+        self.headline(format!(
+            "Update the {} add-on from {} to {}. {} keeps working until {} is ready.",
+            one_line(self.name()),
+            one_line(from),
+            one_line(&self.version),
+            one_line(from),
+            one_line(&self.version)
+        ))
+    }
+
+    #[cfg(native_stack)]
+    fn headline(&self, first: String) -> String {
+        use crate::confirmation::one_line;
+        // The app's own words all come before the manifest's summary, so a long summary can push
+        // only its own end out of view, never the full-access line.
+        let mut s = first;
+        s.push_str(&format!(
+            "\n\nIt runs as you on this computer, with full access to your user account. It is verified: signed by {} and installed from {}.",
+            one_line(&self.signed.publisher),
+            one_line(&self.source.name)
+        ));
+        if !self.imports.is_empty() {
+            let uses: Vec<String> = self.imports.iter().map(|i| one_line(&i.package)).collect();
+            s.push_str(&format!(
+                "\n\nIt also uses these add-ons: {}.",
+                uses.join(", ")
+            ));
+        }
+        if !self.summary.is_empty() {
+            s.push_str(&format!("\n\n{}", one_line(&self.summary)));
+        }
+        s
     }
 }
 
@@ -626,6 +677,8 @@ impl Catalog {
             exports: r.exports.clone(),
             produces: r.produces.clone(),
             consumes: r.consumes.clone(),
+            title: r.title.clone(),
+            summary: r.summary.clone(),
         };
         Ok((a, r.tree.clone()))
     }

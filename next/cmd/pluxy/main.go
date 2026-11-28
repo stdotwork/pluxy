@@ -1,7 +1,7 @@
 // Command pluxy is the pluxy core: pluxy serve (or pluxy with no subcommand) serves the client
 // APIs and answers through a provider extension; pluxy init writes a first config; pluxy help
 // lists the subcommands without calling core; every other subcommand is a client of a running
-// core's management API (next/management/README.md), but for pluxy key management, which reads
+// core's management API (docs/management-api.md), but for pluxy key management, which reads
 // only the config.
 package main
 
@@ -178,6 +178,70 @@ func firstStart(configPath string, inHome, inherited bool) error {
 	}
 	log.Printf("first start: wrote a new config, %s, listening on %s; its client key and management key are in that file", fc.Path, fc.Listen)
 	return nil
+}
+
+// displayListenAddr formats a bound listener address for a person to read. When the bound host
+// is unspecified (0.0.0.0, ::, or empty — Go's dual-stack tcp listener reports [::] on Linux
+// even for 0.0.0.0), it keeps the host family the config wrote (0.0.0.0 for empty or 0.0.0.0,
+// :: for ::) with the bound port, and reports everyAddress=true so callers can add plain words.
+// Specific addresses stay unchanged.
+func displayListenAddr(configured, bound string) (addr string, everyAddress bool) {
+	bHost, bPort, err := net.SplitHostPort(bound)
+	if err != nil {
+		return bound, false
+	}
+	bIP := net.ParseIP(bHost)
+	if bHost != "" && (bIP == nil || !bIP.IsUnspecified()) {
+		return bound, false
+	}
+	host := bHost
+	if configured != "" {
+		if cHost, _, err := net.SplitHostPort(configured); err == nil {
+			if cHost == "" {
+				host = "0.0.0.0"
+			} else if cIP := net.ParseIP(cHost); cIP != nil && cIP.IsUnspecified() {
+				if cIP.To4() != nil {
+					host = "0.0.0.0"
+				} else {
+					host = "::"
+				}
+			}
+		}
+	}
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	return net.JoinHostPort(host, bPort), true
+}
+
+// listeningLine is the first line core prints once its listener is bound: "listening on <url>"
+// with nothing after the URL (programs such as the desktop app read everything after the prefix
+// as core's base address). configured is cfg.Listen ("" when serving on an inherited -listen-fd
+// socket); bound is ln.Addr().String().
+func listeningLine(scheme, configured, bound string) string {
+	addr, _ := displayListenAddr(configured, bound)
+	return fmt.Sprintf("listening on %s://%s", scheme, addr)
+}
+
+// everyAddressLine is the plain-words line printed right after listeningLine when the bound
+// host is unspecified (0.0.0.0, ::, or empty). It returns "" for a specific address.
+func everyAddressLine(scheme, bound string) string {
+	_, every := displayListenAddr("", bound)
+	if !every {
+		return ""
+	}
+	_, port, err := net.SplitHostPort(bound)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("that is every address of this computer; on this computer open %s://127.0.0.1:%s", scheme, port)
+}
+
+// extensionPagesLine is the line core prints for its extension-pages listener: URL-only, using
+// the config's host family when unspecified.
+func extensionPagesLine(configured, bound string) string {
+	addr, _ := displayListenAddr(configured, bound)
+	return fmt.Sprintf("extension pages on http://%s", addr)
 }
 
 // setupStartLine is what core's start says while first-run setup has not ended: where to go
@@ -393,8 +457,6 @@ func run(configPath string, byRule, safeMode bool, watch time.Duration, bundled 
 		}
 	}
 	c.SetListenAddr(ln.Addr().String())
-	// Extension pages have a listener of their own, so they are served on another site than
-	// the panel (next/ui/extension-pages/README.md).
 	pagesLn, err := net.Listen("tcp", cfg.ExtensionPages.Listen)
 	if err != nil {
 		ln.Close()
@@ -450,8 +512,15 @@ func run(configPath string, byRule, safeMode bool, watch time.Duration, bundled 
 		}
 	}()
 
-	fmt.Fprintf(os.Stderr, "pluxy: listening on %s://%s\n", scheme, ln.Addr())
-	fmt.Fprintf(os.Stderr, "pluxy: extension pages on http://%s\n", pagesLn.Addr())
+	configuredListen := cfg.Listen
+	if listenFD >= 0 {
+		configuredListen = ""
+	}
+	fmt.Fprintf(os.Stderr, "pluxy: %s\n", listeningLine(scheme, configuredListen, ln.Addr().String()))
+	if note := everyAddressLine(scheme, ln.Addr().String()); note != "" {
+		fmt.Fprintf(os.Stderr, "pluxy: %s\n", note)
+	}
+	fmt.Fprintf(os.Stderr, "pluxy: %s\n", extensionPagesLine(cfg.ExtensionPages.Listen, pagesLn.Addr().String()))
 	// A core handed its socket was started by a program, which shows setup itself.
 	if listenFD < 0 && c.Status().FirstRun {
 		if local, err := server.LocalURL(ln.Addr().String(), tlsConfig != nil); err == nil {

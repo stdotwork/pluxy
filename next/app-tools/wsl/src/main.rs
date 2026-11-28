@@ -1,13 +1,3 @@
-//! pluxy/wsl: the WSL distributions on this Windows computer and their users, for pluxy's desktop
-//! app, which sets clients up and starts them inside the one the person picks. Its operations, all
-//! reads (README.md): `distros` (from `wsl.exe --list --quiet` and the registry; no distribution is
-//! started), `users` (starts the distribution and reads its accounts as its default user), `check`
-//! (as the selected user: their home, the processor and the Windows drives mounted) and `prepare`
-//! (finds a program and folder inside the distribution as the user, and answers the exact
-//! `wsl.exe` launch, which it never starts). It writes nothing anywhere and runs only Windows'
-//! own `wsl.exe`, each time with one fixed script; names reach the scripts only as arguments.
-//! On other systems every operation is refused.
-
 #[cfg_attr(not(windows), allow(dead_code))]
 mod distro;
 #[cfg(windows)]

@@ -1,6 +1,3 @@
-// Package pages serves extension pages on their own site (next/ui/extension-pages/README.md):
-// the files of the ui folders of the extensions that run, each with a Content Security Policy
-// that sandboxes the document and lets it load only its own folder's files.
 package pages
 
 import (

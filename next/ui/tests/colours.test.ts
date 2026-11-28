@@ -34,7 +34,7 @@ const NOT_COLOURS: { file: string; literal: string; why: string }[] = [
 
 const FIX =
   "Use a theme token (next/ui/kit/theme/contract.ts): read it as var(--px-color-...) in CSS, or in a new " +
-  "token if none fits (see next/ui/themes/README.md, 'Changes to this contract'). The baseline may only shrink.";
+  "token if none fits (see docs/themes.md, 'Changes to this contract'). The baseline may only shrink.";
 
 const HEX = /(?<![\w&/.$-])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-])/g;
 const COLOUR_FUNCTION = /\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(([^()]*)\)/gi;

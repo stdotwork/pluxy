@@ -51,10 +51,18 @@ test("panel shows core, switches layout and theme live, and recovers from custom
   );
   await expect(pageTitle(page)).toHaveText("Home");
 
-  // Home: the config accounts of both extensions, in the group of the accounts that serve.
-  const serving = page.getByRole("region", { name: "Serving", exact: true });
-  for (const id of ["local-1", "alpha-1", "alpha-2"]) {
-    await expect(serving.getByRole("link", { name: id, exact: true })).toBeVisible();
+  // Home: the config accounts of both extensions, each under its provider, serving.
+  for (const [provider, ids] of [
+    ["Local", ["local-1"]],
+    ["Alpha", ["alpha-1", "alpha-2"]],
+  ] as const) {
+    const group = page.locator(".home-group").and(page.getByRole("region", { name: provider, exact: true }));
+    for (const id of ids) {
+      const row = group.locator('[data-part="account-row"]').filter({
+        has: page.getByRole("link", { name: id, exact: true }),
+      });
+      await expect(row).toHaveAttribute("data-group", "serving");
+    }
   }
 
   // Accounts: config accounts of both extensions.
@@ -478,6 +486,25 @@ test("the status block says where pluxy runs; its menu copies the address and cl
   await expect(menu).toHaveCount(0);
 });
 
+test("the status menu hears Escape as soon as it opens, before the next paint", async ({ page }) => {
+  await open(page);
+  await signIn(page, core);
+  await expect(page.locator('[data-part="status"]')).toHaveAttribute("data-state", "running");
+  const seen = await page.evaluate(async () => {
+    const shown = () => document.querySelector('[data-part="status-menu"]') !== null;
+    const settle = async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    };
+    document.querySelector<HTMLButtonElement>('[data-part="status"] button.status-block')?.click();
+    await settle();
+    const opened = shown();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await settle();
+    return { opened, closed: !shown() };
+  });
+  expect(seen).toEqual({ opened: true, closed: true });
+});
+
 test("a change of page opens the new page at its top; a change inside a page keeps the place", async ({
   page,
 }) => {
@@ -505,6 +532,8 @@ test("a change of page opens the new page at its top; a change inside a page kee
     "aria-selected",
     "true",
   );
+  // The Settings tab draws while settings are still loading; wait for its rows before scrolling.
+  await expect(page.locator("#network h2")).toBeVisible();
   await scrollDown();
   await page.evaluate(() => {
     location.hash = "#/config/logging";

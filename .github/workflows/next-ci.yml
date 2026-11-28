@@ -11,10 +11,11 @@ on:
     paths:
       - 'next/**'
       - '.github/workflows/next-ci.yml'
-      # The docs TestDocs reads (next/cmd/pluxy/docs_test.go: docFiles and docs/*.md).
+      # The docs TestDocs reads (next/cmd/pluxy/docs_test.go: docFiles, docs/*.md and docs/design/*.md).
       - 'README.md'
       - 'AGENTS.md'
       - 'docs/*.md'
+      - 'docs/design/*.md'
 
 concurrency:
   # A literal name: called from ci.yml, github.workflow is the caller's name, the same for every

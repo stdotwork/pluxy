@@ -1,7 +1,3 @@
-//! The `open` operation, served over real pipes to a host played here: it reads the `call` frames
-//! the tool sends for `pluxy/execution` (`next/app/app-host/README.md`, "Frames") and answers them
-//! by hand, as the host does once the person has confirmed the launch.
-
 use super::*;
 use pluxy_program::{read_frame, serve, write_frame, Description, Identity, MAX_INBOUND};
 use std::io::PipeWriter;

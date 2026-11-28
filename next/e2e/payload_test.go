@@ -143,8 +143,8 @@ func clientPost(t *testing.T, base, path, body string, header map[string]string)
 	return resp.StatusCode, string(b)
 }
 
-// payloadChannels are the payload rules' protocol for each provider extension, as next/README.md
-// lists them, and the member of its upstream body that holds the request ("" for the body).
+// payloadChannels are the payload rules' protocol for each provider extension, as docs/routing.md
+// ("Payload rules") lists them, and the member of its upstream body that holds the request ("" for the body).
 // Devin's upstream body is protobuf, which payload rules do not apply to.
 var payloadChannels = map[string]struct{ channel, root string }{
 	"pluxy/openai-compatible": {"openai", ""},

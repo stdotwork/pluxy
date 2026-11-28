@@ -28,7 +28,7 @@ import {
 import { parseTheme, parseThemeText } from "../kit/theme/validate";
 
 const themesDir = join(import.meta.dir, "..", "themes");
-const readme = readFileSync(join(themesDir, "README.md"), "utf8");
+const readme = readFileSync(join(import.meta.dir, "..", "..", "..", "docs", "themes.md"), "utf8");
 const env = { systemDark: false, reducedMotion: false };
 const base = { theme_version: 0, id: "test/t", name: "T" };
 
@@ -363,6 +363,24 @@ describe("resolving", () => {
     expect(r.theme.tokens["meter.mid-below"]).toBeUndefined();
     expect(r.theme.tokens["meter.low-below"]).toBe("15");
     expect(r.warnings.length).toBeGreaterThan(0);
+  });
+
+  test("the red cut cannot sit above the amber cut: the field keeps both defaults, with a warning", () => {
+    const r = parseTheme({ ...base, tokens: { "meter.mid-below": "10", "meter.low-below": "40" } });
+    if (!r.ok) throw new Error(r.error);
+    expect(r.theme.tokens["meter.mid-below"]).toBeUndefined();
+    expect(r.theme.tokens["meter.low-below"]).toBeUndefined();
+    expect(r.warnings).toContain(
+      "tokens: meter.low-below (40) is above meter.mid-below (10); both keep their defaults",
+    );
+    // One cut alone is checked against the other's default (mid 70).
+    const alone = parseTheme({ ...base, dark: { "meter.low-below": "80" } });
+    if (!alone.ok) throw new Error(alone.error);
+    expect(alone.theme.dark?.["meter.low-below"]).toBeUndefined();
+    const fine = parseTheme({ ...base, tokens: { "meter.mid-below": "50", "meter.low-below": "50" } });
+    if (!fine.ok) throw new Error(fine.error);
+    expect(fine.theme.tokens["meter.low-below"]).toBe("50");
+    expect(fine.warnings).toEqual([]);
   });
 
   test("the newer colour tokens follow the older ones until a theme sets them", () => {

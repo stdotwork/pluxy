@@ -1,15 +1,3 @@
-//! The CLIProxyAPI provider adapter for Pi this program carries (`../adapter`, README.md): the
-//! upstream `@router-for-me/pi-cliproxyapi-provider` package, reviewed and patched, written into
-//! the agent folder as a local Pi package, `pluxy-cliproxyapi-provider/`. Pi loads a local package
-//! from its folder and never installs or updates it, so nothing here runs Pi or npm, and the copy
-//! changes only when this program writes the one it carries.
-//!
-//! The folder is pluxy's only when it holds pluxy's marker file; any other folder of that name is
-//! the person's, never written or removed. The folder is written, replaced and removed through
-//! pluxy-transactions' [`Folder`]: through a handle on the agent folder, the copy moved aside
-//! checked to be the one pinned, each hidden copy removed or put back only while it is the folder
-//! the operation recorded, each change journalled and reconciled at the next start.
-
 use crate::pi::FOLDER;
 use pluxy_program::Error;
 use pluxy_transactions::{sha256_of, Folder, Id, Pin, Selection, Target, Transactions};

@@ -191,7 +191,11 @@ function FieldRow(props: RowProps) {
     placeholder: f.placeholder,
     value: draft,
     onInput: (e: Event) => {
-      setDraft((e.currentTarget as HTMLInputElement).value);
+      const typed = (e.currentTarget as HTMLInputElement).value;
+      // Noted now, not at the next draw: the effect after a reply (above) can run before that draw
+      // and would take the field for untouched and put pluxy's value over what was just typed.
+      draftNow.current = typed;
+      setDraft(typed);
       setRefused(undefined);
     },
     onBlur: commit,

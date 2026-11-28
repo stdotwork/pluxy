@@ -778,6 +778,9 @@ test("remote management and the listen address save from the Settings tab, and a
   await listen.fill(`192.0.2.77:${port}`);
   await listen.press("Enter");
   await expect(row(page, "Address pluxy listens on")).toContainText("cannot serve on the address");
+  // The box goes back to the address pluxy serves on a moment after the reason shows: wait for
+  // that before typing the next address, or the typing and the box going back cross.
+  await expect(listen).toHaveValue(active);
   expect((await settings()).listen_after_restart).toBeUndefined();
 
   // A new port: the page is open at the old one, so it asks first.

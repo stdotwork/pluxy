@@ -788,6 +788,26 @@ test("text that is not an address and a port is not sent, and says what to type"
   }
 });
 
+test("text typed just after a save's reply is kept: the reply does not put the field back to what pluxy holds", async () => {
+  const refusal = held();
+  const w = world((c) => (c.method === "PATCH" ? refusal.reply : undefined), undefined, false, {
+    address: "http://127.0.0.1:8317",
+  });
+  const { root } = await w.mount();
+  await type(listenField(root), "192.0.2.77:8317");
+  await enter(listenField(root));
+  expect(patchesIn(w.calls)).toEqual([{ listen: "192.0.2.77:8317" }]);
+  // The reply comes in and the page draws it; the next text is typed before the page has run what
+  // follows a reply (in a browser, the rest of that frame).
+  refusal.answer({ status: 400, error: { code: "invalid_request", message: "cannot serve on the address" } });
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  await type(listenField(root), "127.0.0.1:9000");
+  await settle();
+  expect(listenField(root).value).toBe("127.0.0.1:9000");
+  await enter(listenField(root));
+  expect(dialog(root)?.textContent).toContain("This page is open at 127.0.0.1:8317");
+});
+
 test("an address only this computer can use, saved from another computer, asks first", async () => {
   const w = world(() => undefined, undefined, false, {
     settings: { ...FROM_ELSEWHERE, listen: "0.0.0.0:8317" },

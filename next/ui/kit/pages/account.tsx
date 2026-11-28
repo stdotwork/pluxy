@@ -1,14 +1,10 @@
-// One account on its own page (#/accounts/<id>; the header strip says "Accounts / <name>"): what
-// state it is in and the one fix, its limits and facts, what it did this week and its latest
-// requests, then the ways to change it. #/accounts/<id>/sign-in opens its sign-in under the
-// opening. The list of every account is accounts.tsx.
-
 import { useEffect, useMemo, useState } from "preact/hooks";
 import {
   type Account,
   type LoginMethod,
   leftOut,
   problem,
+  type QuotaLimit,
   runningExtensions,
   type Status,
   type UsageGroup,
@@ -16,7 +12,9 @@ import {
 import type { UsageSummary } from "../api/usage";
 import type { UsageEventsReply } from "../api/usageEvents";
 import type { Reply } from "../host";
+import { Icon } from "../icons";
 import { LoginFlow } from "../loginFlow";
+import { Meter, meterTone, useThresholds } from "../meter";
 import {
   accountCondition,
   accountFix,
@@ -27,21 +25,26 @@ import {
   conditionUnchecked,
   forgetWindow,
   GroupMark,
-  LimitLine,
+  leftPercent,
+  Placeholder,
   PlanPill,
+  ProviderMark,
   providerName,
   RequestRow,
   StatePane,
   tryAgainWord,
   uncheckedReason,
   useNaming,
+  useShownAfter,
   useWindows,
   type Windows,
 } from "../parts";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
-import { Button, Facts, Notice, PageHead, useKit, useLoad, when } from "../ui";
+import { fullTime } from "../time";
+import { BUSY_SHOWS_AFTER_MS, Button, Facts, Notice, PageHead, useKit, useLoad, when } from "../ui";
+import { balanceLabel, isBalanceLimit, limitTitle, paceOf, resetLabel } from "./account.helpers";
 import { AccountEdit, AccountSettings } from "./accountSettings";
 import { ACCOUNTS_POLL_MS, type Reads, RoundNotice, useRound } from "./accounts";
 import { nameProblem, orderWord, signsInWith } from "./accounts.helpers";
@@ -56,7 +59,7 @@ const t = strings("account", {
   notFound: "This account is not in pluxy.",
   notFoundText: "It may have been removed.",
   back: "Back to accounts",
-  serving: "Serving.",
+  serving: "Serving",
   said: "“{error}”",
   saidAt: "“{error}”, {when}",
   brokenFix:
@@ -65,6 +68,10 @@ const t = strings("account", {
   configFix: "Change its key in pluxy's settings file.",
   openSettingsFile: "Open the settings file",
   limits: "Limits",
+  left: "{percent}% left",
+  usedUp: "Used up",
+  noLimit: "No limit",
+  gauge: "{account}, {name}",
   manualResets: "Manual resets: {count} left",
   subscriptionEnds: "Subscription ends {date}",
   readAt: "Read at {time}",
@@ -72,6 +79,7 @@ const t = strings("account", {
   notRead: "Limits are read while the account takes requests.",
   reading: "Reading limits…",
   none: "No limits reported",
+  notReported: "Not reported by {provider}",
   unavailable: "Limits unavailable",
   about: "About",
   provider: "Provider",
@@ -158,6 +166,21 @@ type Round = {
   latest: UsageEventsReply;
 };
 
+function AccountSkeleton() {
+  const shown = useShownAfter(BUSY_SHOWS_AFTER_MS);
+  if (!shown) return null;
+  return (
+    <div class="account-skeleton" aria-hidden="true">
+      <i class="account-skeleton-hero" />
+      <i class="account-skeleton-limits" />
+      <div class="account-skeleton-cols">
+        <i class="account-skeleton-card" />
+        <i class="account-skeleton-card" />
+      </div>
+    </div>
+  );
+}
+
 function AccountView(props: { id: string; part: string }) {
   const { api } = useKit();
   const filter = { since: "7d", account: props.id, model: "", provider: "", key_id: "", failed: "" };
@@ -175,7 +198,13 @@ function AccountView(props: { id: string; part: string }) {
   const a = list?.find((x) => x.id === props.id);
   const naming = useNaming(list);
   if (!a) {
-    if (accounts.phase === "loading") return <StatePane kind="loading" title={t("loading")} rows={5} />;
+    if (accounts.phase === "loading") {
+      return (
+        <div class="account-page" role="status" aria-busy="true" aria-label={t("loading")}>
+          <AccountSkeleton />
+        </div>
+      );
+    }
     if (!list)
       return (
         <StatePane
@@ -257,9 +286,51 @@ function Loaded(props: {
   const [notice, setNotice] = useState<string>();
   const signingIn = props.part === "sign-in" && a.source === "login";
   const broken = c.kind === "broken";
+  const stale = [accounts, status, week, latest].some((r) => r.phase === "failed" && r.data !== undefined);
+  const hasLatest = (latest.data?.events.length ?? 0) > 0 || (latest.phase === "failed" && !latest.data);
+
+  const aboutCard = (
+    <section class="account-section card account-about" aria-labelledby="account-about">
+      <h2 id="account-about">{t("about")}</h2>
+      <About account={a} all={props.all} ids={ids} />
+    </section>
+  );
+
+  const weekCard = (
+    <section class="account-section card" aria-labelledby="account-week">
+      <div class="account-section-head">
+        <h2 id="account-week">{t("week")}</h2>
+        {(week.data?.total_requests ?? 0) > 0 && (
+          <a class="account-onward" href={`#/activity?account=${encodeURIComponent(a.id)}`}>
+            {t("seeRequests")}
+            <Icon name="chevron" size={12} />
+          </a>
+        )}
+      </div>
+      {week.data ? (
+        <Week
+          total={week.data.total_requests}
+          succeeded={week.data.success_count}
+          models={week.data.models}
+          ids={accountIdentities(a)}
+        />
+      ) : week.phase === "failed" ? (
+        <SectionFailed text={t("weekFailed")} error={week.error} ids={ids} onRetry={props.run} />
+      ) : (
+        <div role="status" aria-busy="true">
+          <Placeholder rows={3} />
+        </div>
+      )}
+    </section>
+  );
 
   return (
-    <article class="account-page" data-part="account-page" data-group={c.group}>
+    <article
+      class="account-page"
+      data-part="account-page"
+      data-group={c.group}
+      data-stale={stale ? "" : undefined}
+    >
       <PageHead title={props.name} />
       <RoundNotice
         reads={[accounts, status, week, latest]}
@@ -267,104 +338,94 @@ function Loaded(props: {
         ids={ids}
         onRetry={props.run}
       />
-      <Opening
-        account={a}
-        c={c}
-        unchecked={unchecked}
-        w={w}
-        now={now}
-        signingIn={signingIn}
-        busy={fix.busy}
-        onRun={(r) =>
-          void fix.run(r === "turnOn" ? () => api.setDisabled(a.id, false) : () => api.resetCooldown(a.id))
-        }
-      />
-      {fix.error && <Notice tone="danger">{p.text(fix.error, ids)}</Notice>}
-      {notice && <Notice tone="ok">{notice}</Notice>}
-      {signingIn && (
-        <SignInAgain
+      <div class="account-fade">
+        <Opening
           account={a}
-          onDone={() => {
-            setNotice(t("signedIn"));
-            reload();
-            location.hash = accountHref(a.id);
-          }}
+          name={props.name}
+          c={c}
+          unchecked={unchecked}
+          w={w}
+          now={now}
+          signingIn={signingIn}
+          busy={fix.busy}
+          onRun={(r) =>
+            void fix.run(r === "turnOn" ? () => api.setDisabled(a.id, false) : () => api.resetCooldown(a.id))
+          }
         />
-      )}
-      {!broken && (
-        <div class="account-columns">
-          <div class="account-column">
-            <section class="account-section" aria-labelledby="account-limits">
+        {fix.error && <Notice tone="danger">{p.text(fix.error, ids)}</Notice>}
+        {notice && <Notice tone="ok">{notice}</Notice>}
+        {signingIn && (
+          <SignInAgain
+            account={a}
+            onDone={() => {
+              setNotice(t("signedIn"));
+              reload();
+              location.hash = accountHref(a.id);
+            }}
+          />
+        )}
+        {!broken && (
+          <>
+            <section class="account-section card account-limits-card" aria-labelledby="account-limits">
               <div class="account-section-head">
                 <h2 id="account-limits">{t("limits")}</h2>
                 {w?.at !== undefined && (
                   <span class="account-read muted">
-                    {t("readAt", { time: clock(w.at) })}{" "}
+                    {t("readAt", { time: clock(w.at) })}
                     <Button
                       onClick={() => {
                         forgetWindow(a.id);
                         setRefreshed((n) => n + 1);
                       }}
                     >
+                      <Icon name="refresh" size={14} />
                       {t("refresh")}
                     </Button>
                   </span>
                 )}
               </div>
-              <LimitList w={w} name={props.name} ids={ids} now={now} />
+              <LimitList
+                w={w}
+                name={props.name}
+                provider={a.extension ? providerName(a.extension) : undefined}
+                ids={ids}
+                now={now}
+              />
             </section>
-            <section class="account-section" aria-labelledby="account-about">
-              <h2 id="account-about">{t("about")}</h2>
-              <About account={a} all={props.all} ids={ids} />
-            </section>
-          </div>
-          <div class="account-column">
-            <section class="account-section" aria-labelledby="account-week">
-              <div class="account-section-head">
-                <h2 id="account-week">{t("week")}</h2>
-                {(week.data?.total_requests ?? 0) > 0 && (
-                  <a class="account-onward" href={`#/activity?account=${encodeURIComponent(a.id)}`}>
-                    {t("seeRequests")} <span aria-hidden="true">→</span>
-                  </a>
-                )}
+            {hasLatest ? (
+              <>
+                <div class="account-columns">
+                  {weekCard}
+                  <section class="account-section card" aria-labelledby="account-latest">
+                    <h2 id="account-latest">{t("latest")}</h2>
+                    {latest.data ? (
+                      <div class="account-requests">
+                        {latest.data.events.map((e) => (
+                          <RequestRow key={e.seq} event={e} name={props.byId} keys={keys.data?.keys} />
+                        ))}
+                      </div>
+                    ) : (
+                      <SectionFailed
+                        text={t("latestFailed")}
+                        error={latest.error}
+                        ids={ids}
+                        onRetry={props.run}
+                      />
+                    )}
+                  </section>
+                </div>
+                {aboutCard}
+              </>
+            ) : (
+              <div class="account-columns" data-even="">
+                {weekCard}
+                {aboutCard}
               </div>
-              {week.data ? (
-                <Week
-                  total={week.data.total_requests}
-                  succeeded={week.data.success_count}
-                  models={week.data.models}
-                  ids={accountIdentities(a)}
-                />
-              ) : week.phase === "failed" ? (
-                <SectionFailed text={t("weekFailed")} error={week.error} ids={ids} onRetry={props.run} />
-              ) : (
-                <p class="muted">{t("loading")}</p>
-              )}
-            </section>
-            {/* None this week: This week says so. One never read says it could not be read. */}
-            {((latest.data?.events.length ?? 0) > 0 || (latest.phase === "failed" && !latest.data)) && (
-              <section class="account-section" aria-labelledby="account-latest">
-                <h2 id="account-latest">{t("latest")}</h2>
-                {latest.data ? (
-                  <div class="account-requests">
-                    {latest.data.events.map((e) => (
-                      <RequestRow key={e.seq} event={e} name={props.byId} keys={keys.data?.keys} />
-                    ))}
-                  </div>
-                ) : (
-                  <SectionFailed
-                    text={t("latestFailed")}
-                    error={latest.error}
-                    ids={ids}
-                    onRetry={props.run}
-                  />
-                )}
-              </section>
             )}
-          </div>
-        </div>
-      )}
-      <ChangeIt account={a} c={c} name={props.name} ids={ids} reload={reload} onSaved={setNotice} />
+          </>
+        )}
+        <ChangeIt account={a} c={c} name={props.name} ids={ids} reload={reload} onSaved={setNotice} />
+      </div>
     </article>
   );
 }
@@ -384,9 +445,9 @@ function SectionFailed(props: {
   );
 }
 
-/** The opening: provider and plan, the condition and why, core's last error, and the one fix. */
 function Opening(props: {
   account: Account;
+  name: string;
   c: Condition;
   unchecked: boolean;
   w?: Windows;
@@ -405,57 +466,76 @@ function Opening(props: {
   const failing = c.group === "needs" || c.group === "waiting";
   const error = failing ? a.last_error : undefined;
   const plan = props.w?.plan;
+  const provider = a.extension ? providerName(a.extension) : undefined;
+  const resting = c.kind === "serving" && c.resting.length > 0;
+  const configKeyFix = c.kind === "needs_login" && a.source === "config";
+  const showFix = fix && !sayWhat && !(props.signingIn && fix.href);
+  const showProvider = !!provider && !reason.startsWith(provider);
   return (
-    <header class="account-opening" data-part="account-opening">
-      {/* An account pluxy cannot read has no provider it knows of: nothing to say here. */}
-      {a.extension && (
-        <p class="account-dateline muted">
-          {providerName(a.extension)}
-          {plan && (
+    <header
+      class="account-opening"
+      data-part="account-opening"
+      data-group={c.group}
+      data-resting={resting ? "" : undefined}
+    >
+      <div class="account-hero">
+        <div class="account-hero-top">
+          <span class="account-hero-mark">
+            <ProviderMark extension={a.extension} />
+            <GroupMark c={c} unchecked={props.unchecked} dot />
+          </span>
+          <h2 class="account-hero-name">{props.name}</h2>
+          {plan && <PlanPill plan={plan} provider={a.extension} />}
+        </div>
+        <p
+          class="account-state"
+          data-group={c.group}
+          data-resting={resting ? "" : undefined}
+          data-unchecked={props.unchecked ? "" : undefined}
+        >
+          <span class="account-state-text">{p.text(reason, ids)}</span>
+          {showProvider && (
             <>
-              {" · "}
-              <PlanPill plan={plan} />
+              <span class="account-meta-sep" aria-hidden="true">
+                ·
+              </span>
+              <span class="muted">{provider}</span>
             </>
           )}
         </p>
-      )}
-      <p class="account-state" data-group={c.group}>
-        <GroupMark c={c} unchecked={props.unchecked} />
-        <span>{p.text(reason, ids)}</span>
-      </p>
-      {error && (
-        <p class="account-said muted">
-          {a.last_error_at
-            ? rich(t("saidAt", { error: p.text(error.message, ids) ?? "" }), { when: when(a.last_error_at) })
-            : t("said", { error: p.text(error.message, ids) ?? "" })}
-        </p>
-      )}
-      {c.kind === "broken" && (
-        <>
-          <p>{t("brokenFix")}</p>
-          {a.health?.why && (
-            <details class="account-details">
-              <summary>{t("details")}</summary>
-              <pre class="mono">{p.text(a.health.why, ids)}</pre>
-            </details>
-          )}
-        </>
-      )}
-      {c.kind === "needs_login" && a.source === "config" && (
-        <p>
-          {t("configFix")}{" "}
-          <a class="btn" data-part="button" data-variant="primary" href={configAddress("source", a.id)}>
-            {t("openSettingsFile")}
-          </a>
-        </p>
-      )}
-      {fix && !sayWhat && !(props.signingIn && fix.href) && (
-        <div class="actions">
-          {fix.href ? (
+        {error && (
+          <p class="account-said muted">
+            {a.last_error_at
+              ? rich(t("saidAt", { error: p.text(error.message, ids) ?? "" }), {
+                  when: when(a.last_error_at),
+                })
+              : t("said", { error: p.text(error.message, ids) ?? "" })}
+          </p>
+        )}
+        {c.kind === "broken" && (
+          <>
+            <p>{t("brokenFix")}</p>
+            {a.health?.why && (
+              <details class="account-details">
+                <summary>{t("details")}</summary>
+                <pre class="mono">{p.text(a.health.why, ids)}</pre>
+              </details>
+            )}
+          </>
+        )}
+        {configKeyFix && <p>{t("configFix")}</p>}
+      </div>
+      {(configKeyFix || showFix) && (
+        <div class="account-hero-actions">
+          {configKeyFix ? (
+            <a class="btn" data-part="button" data-variant="primary" href={configAddress("source", a.id)}>
+              {t("openSettingsFile")}
+            </a>
+          ) : fix?.href ? (
             <a class="btn" data-part="button" data-variant={fix.variant} href={fix.href}>
               {fix.label}
             </a>
-          ) : (
+          ) : fix ? (
             <Button
               variant={fix.variant}
               disabled={props.busy}
@@ -463,32 +543,117 @@ function Opening(props: {
             >
               {fix.label}
             </Button>
-          )}
+          ) : null}
         </div>
       )}
     </header>
   );
 }
 
+function AccountLimit(props: { limit: QuotaLimit; account: string; now: number }) {
+  const l = props.limit;
+  const thresholds = useThresholds();
+  if (isBalanceLimit(l)) {
+    const b = balanceLabel(l);
+    return (
+      <div class="account-balance">
+        <span class="account-limit-name">{b.title}</span>
+        <span class="account-balance-value">{b.value}</span>
+      </div>
+    );
+  }
+  const title = limitTitle(l);
+  const left = leftPercent(l);
+  const tone = left === undefined ? undefined : meterTone(left, thresholds);
+  const word = l.unlimited
+    ? t("noLimit")
+    : left === undefined
+      ? ""
+      : left === 0
+        ? t("usedUp")
+        : t("left", { percent: left });
+  const reset = resetLabel(l, props.now);
+  const pace = paceOf(l, props.now);
+  return (
+    <div class="account-limit" data-tone={tone}>
+      <div class="account-limit-head">
+        <span class="account-limit-name">{title}</span>
+        <span class="account-limit-right">
+          {word && <span class="account-limit-value">{word}</span>}
+          {reset &&
+            (reset.at ? (
+              <time class="account-limit-reset" dateTime={reset.at.toISOString()} title={fullTime(reset.at)}>
+                {reset.text}
+              </time>
+            ) : (
+              <span class="account-limit-reset">{reset.text}</span>
+            ))}
+        </span>
+      </div>
+      <div class="account-limit-bar">
+        {left !== undefined ? (
+          <Meter
+            mode="left"
+            percent={left}
+            label={t("gauge", { account: props.account, name: title })}
+            valueText={word}
+          />
+        ) : (
+          <span class="meter" data-mode="left" data-tone="none" aria-hidden="true" />
+        )}
+        {pace?.showTick && (
+          <span
+            class="account-pace-tick"
+            aria-hidden="true"
+            style={{ insetInlineStart: `${pace.evenLeft}%` }}
+          />
+        )}
+      </div>
+      {pace?.text && (
+        <p class="account-limit-pace" data-pace={pace.kind}>
+          {pace.text}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** Every limit the provider reports (but its manual resets), then the resets left and the end of the plan. */
-function LimitList(props: { w?: Windows; name: string; ids: readonly string[]; now: number }) {
+function LimitList(props: {
+  w?: Windows;
+  name: string;
+  provider?: string;
+  ids: readonly string[];
+  now: number;
+}) {
   const p = usePrivacy();
   const w = props.w;
   if (!w) return <p class="muted">{t("notRead")}</p>;
+  const noneText = props.provider ? t("notReported", { provider: props.provider }) : t("none");
+  const hasFoot = w.resets !== undefined || w.endsAt !== undefined;
   return (
     <div class="account-limits" data-part="limits" data-state={w.state}>
-      {w.state === "reading" && <p class="muted">{t("reading")}</p>}
-      {w.state === "none" && <p class="muted">{t("none")}</p>}
+      {w.state === "reading" && (
+        <div role="status" aria-busy="true">
+          <p class="muted">{t("reading")}</p>
+          <Placeholder rows={2} />
+        </div>
+      )}
+      {w.state === "none" && <p class="muted">{noneText}</p>}
       {w.state === "failed" && (
         <p class="muted" title={p.text(w.error, props.ids)}>
           {t("unavailable")}
         </p>
       )}
       {w.limits.map((l) => (
-        <LimitLine key={l.id} limit={l} account={props.name} now={props.now} long />
+        <AccountLimit key={l.id} limit={l} account={props.name} now={props.now} />
       ))}
-      {w.resets !== undefined && <p>{t("manualResets", { count: w.resets.toLocaleString() })}</p>}
-      {w.endsAt !== undefined && <p>{rich(t("subscriptionEnds"), { date: when(w.endsAt) })}</p>}
+      {hasFoot && (
+        <div class="account-limits-foot">
+          {w.resets !== undefined && <span>{t("manualResets", { count: w.resets.toLocaleString() })}</span>}
+          {w.endsAt !== undefined && <span>{rich(t("subscriptionEnds"), { date: when(w.endsAt) })}</span>}
+        </div>
+      )}
     </div>
   );
 }
@@ -537,7 +702,9 @@ function Week(props: { total: number; succeeded: number; models: UsageGroup[]; i
   const most = top[0]?.total_requests ?? 1;
   return (
     <>
-      <p>{t("weekLine", { count: props.total, percent })}</p>
+      <p class="account-week-summary">
+        <strong>{t("weekLine", { count: props.total, percent })}</strong>
+      </p>
       <ul class="account-bars" aria-label={t("byModel")}>
         {top.map((m) => (
           <li key={m.name} class="account-bar">
@@ -545,11 +712,9 @@ function Week(props: { total: number; succeeded: number; models: UsageGroup[]; i
               {p.text(m.name, props.ids)}
             </span>
             <span class="account-bar-count">{m.total_requests.toLocaleString()}</span>
-            <span
-              class="account-bar-fill"
-              aria-hidden="true"
-              style={{ width: `${(m.total_requests / most) * 100}%` }}
-            />
+            <span class="account-bar-track" aria-hidden="true">
+              <span class="account-bar-fill" style={{ width: `${(m.total_requests / most) * 100}%` }} />
+            </span>
           </li>
         ))}
       </ul>
@@ -570,7 +735,7 @@ function SignInAgain(props: { account: Account; onDone: () => void }) {
   const provider = providerName(a.extension);
   return (
     <section
-      class="account-section account-sign-in"
+      class="account-section card account-sign-in"
       data-part="account-sign-in"
       aria-labelledby="account-sign-in"
     >
@@ -639,47 +804,57 @@ function ChangeIt(props: {
   // Turning on is the opening's fix for an account that is off or closed: it is not offered twice.
   const on = !a.disabled && leftOut(a) !== "banned";
   return (
-    <section class="account-section account-change" aria-labelledby="account-change">
-      <h2 id="account-change">{t("change")}</h2>
-      {a.source === "config" ? (
-        <p>
-          {t("setInFile")} <a href={configAddress("source", a.id)}>{t("openSettingsFile")}</a>
-        </p>
-      ) : (
-        <div class="actions">
-          {/* Core refuses every change to an account it cannot read but its removal. */}
-          {!broken && (
-            <>
-              <Button disabled={act.busy} onClick={() => setDialog("rename")}>
-                {t("rename")}
-              </Button>
-              {on && (
-                <Button disabled={act.busy} onClick={() => act.run(() => api.setDisabled(a.id, true))}>
-                  {t("turnOff")}
+    <>
+      <section class="account-section card account-change" aria-labelledby="account-change">
+        <h2 id="account-change">{t("change")}</h2>
+        {a.source === "config" ? (
+          <p class="muted">
+            {t("setInFile")} <a href={configAddress("source", a.id)}>{t("openSettingsFile")}</a>
+          </p>
+        ) : (
+          <div class="account-change-actions">
+            {!broken && (
+              <>
+                <Button disabled={act.busy} onClick={() => setDialog("rename")}>
+                  {t("rename")}
                 </Button>
-              )}
-              <AccountEdit
-                account={a}
-                name={props.name}
-                onChanged={() => {
-                  props.onSaved(t("saved"));
-                  props.reload();
-                }}
-                disabled={act.busy}
-              />
-            </>
-          )}
-          <Button variant="danger" disabled={act.busy} onClick={() => setDialog("remove")}>
-            {t("remove")}
-          </Button>
-        </div>
-      )}
-      {act.error && <Notice tone="danger">{p.text(act.error, props.ids)}</Notice>}
+                {on && (
+                  <Button disabled={act.busy} onClick={() => act.run(() => api.setDisabled(a.id, true))}>
+                    {t("turnOff")}
+                  </Button>
+                )}
+                <AccountEdit
+                  account={a}
+                  name={props.name}
+                  onChanged={() => {
+                    props.onSaved(t("saved"));
+                    props.reload();
+                  }}
+                  disabled={act.busy}
+                />
+              </>
+            )}
+            <span class="account-change-remove">
+              <Button variant="danger" disabled={act.busy} onClick={() => setDialog("remove")}>
+                {t("remove")}
+              </Button>
+            </span>
+          </div>
+        )}
+        {act.error && <Notice tone="danger">{p.text(act.error, props.ids)}</Notice>}
+      </section>
       {!broken && (
-        <details class="account-more" data-part="account-more">
-          <summary>{t("more")}</summary>
-          <AccountSettings account={a} />
-          <AccountTools account={a} onChanged={props.reload} />
+        <details class="account-more card" data-part="account-more">
+          <summary>
+            <span class="account-more-chevron" aria-hidden="true">
+              <Icon name="chevron" size={14} />
+            </span>
+            {t("more")}
+          </summary>
+          <div class="account-more-body">
+            <AccountSettings account={a} />
+            <AccountTools account={a} onChanged={props.reload} />
+          </div>
         </details>
       )}
       {dialog === "rename" && (
@@ -717,7 +892,7 @@ function ChangeIt(props: {
           </div>
         </ConfigDialog>
       )}
-    </section>
+    </>
   );
 }
 

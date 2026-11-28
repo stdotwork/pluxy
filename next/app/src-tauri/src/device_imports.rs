@@ -1,16 +1,3 @@
-//! Cross-package imports and exports in this device's catalog (`../app-host/README.md`, "Calls
-//! between packages"). A package declares the operations of other packages it may call through
-//! the host (`imports`); a native tool declares which of its operations other packages may
-//! import, under an export contract (`exports`), and each operation's effect class.
-//!
-//! A native tool is enabled only when its required imports are enabled tools exporting them under
-//! a contract it accepts, and only when its imports do not lead back to it. A curated web package's
-//! imports need the person's native consent, bound to its release and to each target's release;
-//! an Unverified package never gets one. Each call is granted again here (`Catalog::main_grant`,
-//! `native_grant`, `page_grant`) from the records as they are then: the caller's import, the
-//! target's export and admitted record, and the consent for a web caller. The caller's identity
-//! comes from the host, never from the call.
-
 use super::*;
 
 /// Imports a package may declare.
@@ -133,6 +120,72 @@ pub struct Grant {
     /// The caller may pass secret references in the operation's secret fields: a native tool
     /// whose import allows it.
     pub passes_secrets: bool,
+}
+
+impl Grant {
+    /// What the native confirmation of a call of its operation says first, in plain words. The
+    /// first sentence is the app's own, from checked fields only: the add-on by its name and what
+    /// the call does by its effect (for a launch, the program the confirmation opened, program;
+    /// as `launch.program` and `launch.executable`). Then each secret it gets from the vault, by
+    /// its label (label, whether the tool gets the value itself); who asked, when that is not the
+    /// main window (chain, the requester first); that the add-on has full access to the user
+    /// account; and last, the operation's description, quoted as the add-on's own words, since its
+    /// manifest wrote it and nothing checks it against the effect. The exact call (its input,
+    /// chain, executor and launch) follows below it.
+    #[cfg(native_stack)]
+    pub fn headline(
+        &self,
+        secrets: &[(&str, bool)],
+        chain: &[crate::confirmation::Package],
+        program: Option<(&std::path::Path, Option<&std::path::Path>)>,
+    ) -> String {
+        use crate::confirmation::one_line;
+        let name = one_line(self.target.name());
+        let what = match (self.op.effect.as_str(), program) {
+            ("launch", Some((executable, Some(runs)))) => format!(
+                "start {} on this computer, in {}",
+                one_line(&runs.display().to_string()),
+                one_line(&executable.display().to_string())
+            ),
+            ("launch", Some((executable, None))) => format!(
+                "start {} on this computer",
+                one_line(&executable.display().to_string())
+            ),
+            ("launch", None) => "start a program on this computer".into(),
+            ("disclose", _) => "read content on this computer and show it".into(),
+            ("read", _) => "read from this computer".into(),
+            // write, and any other effect (every effect but an exact read asks, as a write does).
+            _ => "make changes on this computer".into(),
+        };
+        let mut s = format!("The {name} add-on will {what}.");
+        for (label, value) in secrets {
+            s.push_str(&format!(
+                "\nIt gets \"{}\" from this device's vault{}.",
+                one_line(label),
+                if *value {
+                    ""
+                } else {
+                    ", as a reference it can pass on only in this call"
+                }
+            ));
+        }
+        if self.op.effect == "launch" {
+            s.push_str("\nThe details below name its arguments and folder.");
+        }
+        if chain.first().map(|p| p.id.as_str()) != Some(super::admission::main_window().id.as_str())
+        {
+            let ids: Vec<String> = chain.iter().map(|p| one_line(&p.id)).collect();
+            s.push_str(&format!("\nAsked by: {}.", ids.join(" → ")));
+        }
+        // The app's own words all come before the add-on's, so a long description can push only
+        // its own end out of view, never the full-access line.
+        s.push_str(&format!("\n{}", crate::confirmation::text::FULL_ACCESS));
+        s.push_str(&format!(
+            "\n\nThe add-on says: \u{201c}{}\u{201d}",
+            one_line(&self.op.description)
+        ));
+        s
+    }
 }
 
 /// Why a call is not allowed: `permission` (the caller may not make it) or
