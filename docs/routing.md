@@ -106,7 +106,7 @@ The session comes from the first of these the request has: the `X-Claude-Code-Se
 `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`. A
 request with none is routed by strategy as usual. Bindings are kept per client key and model. When
 core runs from a `config.yaml` with CLIProxyAPI's key names, session affinity is off unless that
-file turns it on (see the [config reference](config.md)).
+file turns it on (see [config.yaml keys](config-yaml.md)).
 
 ### When a refused request moves to another account
 
