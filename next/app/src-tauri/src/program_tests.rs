@@ -1162,6 +1162,14 @@ fn an_unknown_outcome_is_reported_at_the_next_start_and_never_sent_again() {
 
     let e = h.call(ID, "crash", json!({}), None).unwrap_err();
     assert!(e.unknown && e.message.contains("outcome is unknown"), "{e}");
+    // What the window shows for it (the native swap check matches these words): no protocol code.
+    let shown = e.user_message();
+    assert!(
+        shown.contains("stopped before it answered crash")
+            && shown.contains("outcome is unknown")
+            && !shown.contains("extension_crashed"),
+        "{shown}"
+    );
     until("the crash", 5, || h.status(ID).pid.is_none());
     let unknown = h.status(ID).unknown;
     assert_eq!(unknown.len(), 1, "{unknown:?}");
