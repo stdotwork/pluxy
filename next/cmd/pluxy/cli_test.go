@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/core"
+	"github.com/stdotwork/pluxy/next/internal/server"
 	"github.com/stdotwork/pluxy/next/management"
 )
 
@@ -1444,4 +1445,115 @@ func TestOtherComputerLine(t *testing.T) {
 			t.Errorf("%s: otherComputerLine(%q, %v) =\n%q, want\n%q", c.name, c.listen, c.allow, got, c.want)
 		}
 	}
+}
+
+// Core's listening line prints only the URL (preserving the host family from the config when
+// unspecified, so older apps parsing everything after the prefix keep working), puts the plain
+// words on a line of their own only for an unspecified host, and uses 127.0.0.1 in the open line.
+func TestListeningAndOpenLines(t *testing.T) {
+	t.Run("listening line", func(t *testing.T) {
+		for _, c := range []struct {
+			name       string
+			scheme     string
+			configured string
+			bound      string
+			want       string
+		}{
+			{"unspecified IPv4 bound as IPv6 dual-stack", "http", "0.0.0.0:18417", "[::]:18417",
+				"listening on http://0.0.0.0:18417"},
+			{"unspecified IPv4 with port 0", "http", "0.0.0.0:0", "[::]:41234",
+				"listening on http://0.0.0.0:41234"},
+			{"empty host", "http", ":18417", "[::]:18417",
+				"listening on http://0.0.0.0:18417"},
+			{"unspecified IPv6", "http", "[::]:18417", "[::]:18417",
+				"listening on http://[::]:18417"},
+			{"unspecified IPv4 over https", "https", "0.0.0.0:8443", "[::]:8443",
+				"listening on https://0.0.0.0:8443"},
+			{"inherited unspecified IPv4 socket", "http", "", "0.0.0.0:18417",
+				"listening on http://0.0.0.0:18417"},
+			{"inherited unspecified IPv6 socket", "http", "", "[::]:18417",
+				"listening on http://[::]:18417"},
+			{"specific loopback IPv4", "http", "127.0.0.1:8317", "127.0.0.1:8317",
+				"listening on http://127.0.0.1:8317"},
+			{"specific loopback IPv6", "http", "[::1]:8317", "[::1]:8317",
+				"listening on http://[::1]:8317"},
+			{"specific LAN address", "http", "10.0.0.2:18417", "10.0.0.2:18417",
+				"listening on http://10.0.0.2:18417"},
+		} {
+			if got := listeningLine(c.scheme, c.configured, c.bound); got != c.want {
+				t.Errorf("%s: listeningLine(%q, %q, %q) =\n%q, want\n%q", c.name, c.scheme, c.configured, c.bound, got, c.want)
+			}
+		}
+	})
+
+	t.Run("every-address plain line", func(t *testing.T) {
+		for _, c := range []struct {
+			name   string
+			scheme string
+			bound  string
+			want   string
+		}{
+			{"unspecified IPv4", "http", "0.0.0.0:18417",
+				"that is every address of this computer; on this computer open http://127.0.0.1:18417"},
+			{"unspecified IPv6", "http", "[::]:18417",
+				"that is every address of this computer; on this computer open http://127.0.0.1:18417"},
+			{"empty host", "http", ":18417",
+				"that is every address of this computer; on this computer open http://127.0.0.1:18417"},
+			{"unspecified over https", "https", "[::]:8443",
+				"that is every address of this computer; on this computer open https://127.0.0.1:8443"},
+			{"specific loopback IPv4", "http", "127.0.0.1:8317", ""},
+			{"specific loopback IPv6", "http", "[::1]:8317", ""},
+			{"specific LAN address", "http", "10.0.0.2:18417", ""},
+		} {
+			if got := everyAddressLine(c.scheme, c.bound); got != c.want {
+				t.Errorf("%s: everyAddressLine(%q, %q) =\n%q, want\n%q", c.name, c.scheme, c.bound, got, c.want)
+			}
+		}
+	})
+
+	t.Run("extension pages line", func(t *testing.T) {
+		for _, c := range []struct {
+			name       string
+			configured string
+			bound      string
+			want       string
+		}{
+			{"unspecified IPv4", "0.0.0.0:0", "[::]:41235",
+				"extension pages on http://0.0.0.0:41235"},
+			{"unspecified IPv6", "[::]:0", "[::]:41235",
+				"extension pages on http://[::]:41235"},
+			{"specific loopback", "127.0.0.1:0", "127.0.0.1:41235",
+				"extension pages on http://127.0.0.1:41235"},
+		} {
+			if got := extensionPagesLine(c.configured, c.bound); got != c.want {
+				t.Errorf("%s: extensionPagesLine(%q, %q) =\n%q, want\n%q", c.name, c.configured, c.bound, got, c.want)
+			}
+		}
+	})
+
+	t.Run("open line", func(t *testing.T) {
+		for _, c := range []struct {
+			name       string
+			configured string
+			bound      string
+			tls        bool
+			wantURL    string
+		}{
+			{"unspecified IPv4 bound as [::]", "0.0.0.0:18417", "[::]:18417", false, "http://127.0.0.1:18417"},
+			{"unspecified IPv6", "[::]:18417", "[::]:18417", false, "http://127.0.0.1:18417"},
+			{"empty host", ":18417", "[::]:18417", false, "http://127.0.0.1:18417"},
+			{"specific IPv4", "10.0.0.2:18417", "10.0.0.2:18417", false, "http://10.0.0.2:18417"},
+			{"specific IPv6 loopback", "[::1]:18417", "[::1]:18417", false, "http://[::1]:18417"},
+		} {
+			local, err := server.LocalURL(c.bound, c.tls)
+			if err != nil {
+				t.Fatalf("%s: LocalURL(%q): %v", c.name, c.bound, err)
+			}
+			got := setupStartLine(true, local, "", c.configured)
+			want := "first-run setup is not finished. Next: open " + c.wantURL + "/panel/ in a browser and sign in with the management key, or run pluxy setup"
+			if got != want {
+				t.Errorf("%s: setupStartLine =\n%q, want\n%q", c.name, got, want)
+			}
+		}
+	})
 }
