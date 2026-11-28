@@ -172,12 +172,14 @@ Settings opens on **General** and groups its topics into **This device** (**Gene
     cooldown**, **Open Extensions**, or **Open the settings file** for a config-file account whose
     key was refused; exhausted accounts show no fix button). When an account cannot be read, the
     header explains how to replace or restore its file, offers a **Details** fold with core's error
-    when present, and omits every section below except **Change it**.
+    when present, and shows only **Change it** below it (and **Sign in again** when opened from its
+    address).
   - **Limits:** every limit reported by the provider, `Read at {time}` and **Refresh** once read
-    (limits are otherwise cached for 5 minutes, or until 30 seconds past a reset time). Windowed
-    limits show the limit name (**5-hour limit**, **Daily limit**, **Weekly limit**, **Monthly
-    limit**, or the provider's label), remaining share (`{percent}% left`, **Used up**, or **No
-    limit**), a full-width meter bar, reset time (`Resets {when} · in {duration}`, or **Reset
+    (otherwise a read is kept for 5 minutes, and read again once a reset it names has passed).
+    Windowed limits show the limit name (**5-hour limit**, **Daily limit**, **Weekly limit**,
+    **Monthly limit**, `{count}-day limit`, `{count}-hour limit` or `{count}-minute limit` for other
+    whole lengths, or the provider's label), remaining share (`{percent}% left`, **Used up**, or
+    **No limit**), a full-width meter bar, reset time (`Resets {when} · in {duration}`, or **Reset
     available** once passed), an even-pace tick on the bar for active finite windows, and a pace
     warning below the bar when spending runs ahead of even pace. Unwindowed USD credit balances show
     the provider's label (or **Credit balance**) and `{amount} left` without a bar. When reported,
@@ -217,8 +219,9 @@ Settings opens on **General** and groups its topics into **This device** (**Gene
     limits from core.
   - **Rename:** opens a dialog (`Rename {name}`) editing **Name** (up to 64 characters; blank clears
     it), with **Save** and **Cancel**.
-  - **Edit settings:** opens a dialog (`Edit {name}`) with a field for each account setting, each
-    labelled with its key: `prefix`, `proxy_url`, `priority`, `weight`, `disable_cooling`,
+  - **Edit settings:** opens a dialog (`Edit {name}`) with a field for each account setting,
+    labelled with its key (`request_retry` is **Credential request retries** and `model_alias` is
+    **Account model aliases**): `prefix`, `proxy_url`, `priority`, `weight`, `disable_cooling`,
     `websockets` (Codex accounts only), `request_retry` (**Inherit** or **Custom**),
     `max_concurrency`, `models`, `excluded_models`, `headers`, `model_alias` and `settings`.
     Redacted proxy credentials, headers and settings stay unchanged unless edited. **Save** saves;
