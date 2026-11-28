@@ -346,6 +346,55 @@ The Updates page shows this app's version and pluxy's, the newest on the chosen 
 `https://` address of a release feed, which asks in a confirmation window. **Check for updates** reads
 the feed. **Update now** appears only for a build with an update key; no build has one yet.
 
+## What the app does not do
+
+A few things are outside what the app does today, or work only in part:
+
+- **Other coding tools.** Only the eight tools listed under [The coding-tool pages](#the-coding-tool-pages)
+  have setup pages and add-ons (not Kimi Code, OpenClaw, ZCode, DeepSeek Harness, WorkBuddy,
+  Antigravity CLI, Copilot CLI or VSCode Copilot). Point any other tool at pluxy by hand
+  ([clients.md](clients.md)).
+- **Other usage parsers.** **Agent usage** reads only the five tools listed under
+  [Agent usage and Codex sessions](#agent-usage-and-codex-sessions) (not Copilot, Gemini CLI,
+  Antigravity, Kimi, ZCode or MCode).
+- **WSL setup.** Only the Claude Code add-on runs inside WSL distributions on Windows (and Windows
+  itself is not supported yet); the other seven tool add-ons have no WSL setup.
+- **Codex OAuth sign-in and catalog options.** Codex connects to pluxy with a client key only (no
+  OAuth sign-in or OpenAI provider-identity switch). The Codex model list changes only when you
+  press **Import models from pluxy**, and its editor omits `supports_parallel_tool_calls`, which
+  Codex no longer reads.
+- **Editing or deleting Codex sessions.** **Codex sessions** is read-only: it lists, views, exports
+  as JSONL and opens sessions, and does not sync historical sessions, repair index entries, edit
+  messages or delete session files.
+- **Hiding or filtering the tool list.** All eight coding tools appear on **Tools**; there is no
+  separate screen to hide or search that list.
+- **Prices and deeper usage analysis.** Home shows totals and the chart, Activity's **Requests** tab
+  lists requests and exports a spreadsheet, and Activity's **Usage** tab totals requests and tokens
+  over 24 hours, 7 days or 30 days by provider, model, account or key. Neither **Activity** nor
+  **Agent usage** estimates prices or costs, caps the usage record by disk size (retention is by
+  days via `usage.keep_days`), or runs deeper usage analysis.
+- **Model health sweep.** There is no one-click check across every model and account. Use **Test**
+  on an account's page to test one model at a time (each test spends one request).
+- **Thinking and Fast alias form.** There is no form for thinking or fast aliases. Use a thinking
+  suffix such as `gpt-5(high)`, a payload rule, or an account's model alias in **Config**
+  (**Settings file** tab; see [routing.md](routing.md)).
+- **Built-in reverse proxy or Allow-LAN switch.** The app runs no reverse proxy of its own and has
+  no single Allow-LAN toggle. To let other computers reach pluxy, set **Address pluxy listens on**
+  (for example `0.0.0.0:8317`) and turn on **Let other computers manage pluxy** in **Config**
+  (**Settings** tab, **Other computers**), then restart pluxy; configure TLS directly in
+  `config.json` ([config.md](config.md#tls)).
+- **Following the system proxy.** pluxy does not read the system or environment proxy for provider
+  requests. Set **Outbound proxy** in **Config** (**Settings** tab), `proxy_url` in `config.json`,
+  or the proxy field on an account's Edit form.
+- **Built-in update mirrors or core version downloads.** There is no built-in release feed or mirror
+  list. Use the core the build came with, a local **Release list**, or **Your own pluxy program** on
+  **Where pluxy runs**.
+- **MCP servers and agent skills.** The app does not manage MCP servers or agent skills; add-ons are
+  only pages and coding-tool programs.
+- **Browser picker, open-folder buttons, languages, custom window chrome.** Sign-in links can be
+  copied and opened in any browser you choose. There are no buttons to open pluxy's folders in a
+  file manager, no custom Windows title bar or window materials, and the app is in English only.
+
 ## Safe mode
 
 Start the app with `--safe-mode` (for example `next/app/local-build/start --safe-mode`) to pause every
