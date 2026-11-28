@@ -78,7 +78,7 @@
       },
       {
         "id": "apply",
-        "description": "Point Hermes Agent at pluxy's core: write a pluxy provider with the core's address, the client key, the chat completions transport and the chosen model into the previewed config file, and select it as the model provider with that model as the default, keeping everything else in it. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "description": "Point Hermes Agent at pluxy: write a pluxy provider with pluxy's address, the client key, the chat completions transport and the chosen model into the previewed config file, and select it as the model provider with that model as the default, keeping everything else in it. Saving replaces the file; an edit made in the same instant by another program may be lost.",
         "effect": "write",
         "secrets": {
           "key": "value"

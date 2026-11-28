@@ -1738,7 +1738,8 @@ fn native_swap(
             "Update native tool {id} from {from} to {to}; {from} serves until {to} is ready. {}",
             action.what
         );
-        if !ask_native(app, action, id)? {
+        let headline = swap.admitted().update_headline(&from);
+        if !ask_native(app, action, Some(headline), id)? {
             return Err("the update was cancelled".to_string());
         }
         swap.verify()?;
@@ -1782,16 +1783,25 @@ fn native_swap(
 /// for them, and waits for the outcome: true once they confirmed (its single-use token spent),
 /// false if they cancelled.
 #[cfg(native_stack)]
-fn ask_native(app: &AppHandle, what: confirmation::Action, id: &str) -> Result<bool, String> {
+fn ask_native(
+    app: &AppHandle,
+    what: confirmation::Action,
+    headline: Option<String>,
+    id: &str,
+) -> Result<bool, String> {
     let st = app.state::<App>();
     let action = {
         let mut c = st.confirmations.lock().unwrap();
-        let prepared = c.prepare_main(what)?;
+        let mut prepared = c.prepare_main(what)?;
+        if let Some(h) = headline {
+            prepared.set_headline(h);
+        }
         c.queue(prepared)?
     };
     confirmation::request(app, action.clone())?;
-    // The dialog's own handler leaves the outcome for native code; it expires after a minute.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(75);
+    // The dialog's own handler leaves the outcome for native code; it closes by itself, as
+    // cancelled, once it has been open `SHOWN_LIFETIME`.
+    let deadline = std::time::Instant::now() + confirmation::WAIT;
     let outcome = loop {
         if let Some(r) = st.confirmations.lock().unwrap().take_result(&action) {
             break r;
@@ -1866,7 +1876,7 @@ fn install_wsl(app: &AppHandle, id: &str, platform: &str) -> Result<device::View
     // Fetched and checked without holding the catalog.
     let c = device::stage_linux(&st.device_dirs, &roots, &target)?;
     let nothing = format!("nothing of {id}'s Linux build for {platform} was installed");
-    match ask_native(app, c.confirmation(), id) {
+    match ask_native(app, c.confirmation(), None, id) {
         Ok(true) => {}
         Ok(false) => return Err(format!("the install was cancelled; {nothing}")),
         Err(e) => return Err(format!("{e}; {nothing}")),
@@ -2041,7 +2051,12 @@ fn native_enable(app: &AppHandle, id: &str) -> Result<device::View, String> {
     // Its files are hashed without holding the catalog (`checked_unlocked`).
     let candidate =
         device::native_candidate_unlocked(&st.device, id, &trust::TrustStore::current())?;
-    match ask_native(app, candidate.confirmation(), id) {
+    match ask_native(
+        app,
+        candidate.confirmation(),
+        Some(candidate.enable_headline()),
+        id,
+    ) {
         Ok(true) => {}
         Ok(false) => return Err(format!("native enable cancelled; {id} stays disabled")),
         Err(e) => return Err(format!("{e}; {id} stays disabled")),
@@ -2166,8 +2181,9 @@ fn access_confirm(
         c.queue(p)?
     };
     confirmation::request(app, id.clone())?;
-    // The dialog expires after a minute; this waits a little longer for its answer.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(75);
+    // The dialog closes by itself once it has been open `SHOWN_LIFETIME`; this waits a little
+    // longer for its answer.
+    let deadline = std::time::Instant::now() + confirmation::WAIT;
     loop {
         let result = st.confirmations.lock().unwrap().take_result(&id);
         match result {
@@ -2974,9 +2990,10 @@ fn vault_secret_remove(webview: Webview, id: String) -> Result<(), String> {
     }
 }
 
-/// Asks core for a new client key for native tool client, after a native confirmation, and keeps
-/// it in the vault as label; gives its secret's ID, label and binding. The key itself never
-/// passes through the window.
+/// Asks core for a new client key for native tool client and keeps it in the vault as label, with
+/// no native confirmation: the window can already have core make a client key through its
+/// management calls, and the key reaches the tool only in a call the person confirms. Gives its
+/// secret's ID, label and binding. The key itself never passes through the window.
 #[tauri::command]
 async fn client_key_capture(
     webview: Webview,

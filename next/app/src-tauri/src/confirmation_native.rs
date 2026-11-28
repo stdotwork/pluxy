@@ -180,6 +180,115 @@ fn change_metadata(path: &Path) -> Result<(), String> {
     }
 }
 
+/// The notice with a long text, as an add-on's enable gave one (`notice`): it opens at a size a
+/// screen holds, with its Close button, which closes it.
+#[cfg(target_os = "linux")]
+fn notice_fits(app: &tauri::AppHandle) -> Result<(), String> {
+    use gtk::prelude::*;
+    let long = format!(
+        "Asked by: main window\nWhat: {}\nResult: confirmed",
+        "Turn on the fixture add-on, which reads and writes its settings file. ".repeat(40)
+    );
+    notice(app, long);
+    ui::wait_shown(app, text::NOTICE_TITLE)?;
+    std::thread::sleep(Duration::from_millis(300));
+    fn has_close(w: &gtk::Widget) -> bool {
+        if w.downcast_ref::<gtk::Button>()
+            .is_some_and(|b| b.label().as_deref() == Some(text::NOTICE_CLOSE))
+        {
+            return true;
+        }
+        w.downcast_ref::<gtk::Container>()
+            .is_some_and(|c| c.children().iter().any(has_close))
+    }
+    let (width, height, close) = crate::native_test::on_main(app, || {
+        gtk::Window::list_toplevels()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Window>().ok())
+            .find(|w| w.title().as_deref() == Some(text::NOTICE_TITLE) && w.is_visible())
+            .map(|w| {
+                let (width, height) = w.size();
+                (width, height, has_close(w.upcast_ref()))
+            })
+    })
+    .flatten()
+    .ok_or("no notice window")?;
+    require(
+        height <= 600 && width <= 900 && close,
+        &format!("the notice is {width}x{height}, close button {close}"),
+    )?;
+    ui::press(app, text::NOTICE_TITLE, Key::Access('c'))?;
+    wait_for("the notice to close", || {
+        (!ui::shown(app, text::NOTICE_TITLE)).then_some(())
+    })
+}
+
+/// A confirmation whose plain words are long, as an operation's description at its longest and
+/// more gives: it opens at a size a screen holds, with Confirm and Cancel in it, and its Cancel
+/// cancels it.
+#[cfg(target_os = "linux")]
+fn words_fit(app: &tauri::AppHandle, main: &Webview, a: &Action) -> Result<(), String> {
+    use gtk::prelude::*;
+    let mut p = prepare(app, a)?;
+    p.set_headline(format!(
+        "The fixture add-on will make changes on this computer.\n{}\n\nThe add-on says: \u{201c}{}\u{201d}",
+        text::FULL_ACCESS,
+        "Write the fixture's settings file, keeping a backup to undo it. ".repeat(60)
+    ));
+    let id = app
+        .state::<crate::App>()
+        .confirmations
+        .lock()
+        .unwrap()
+        .queue(p)?;
+    main.eval(format!("window.__TAURI_INTERNALS__.invoke('confirmation_request', {{action: {}}}).catch(e => console.error(e))", serde_json::json!(id))).map_err(|e| e.to_string())?;
+    ui::wait_shown(app, text::CONFIRM_TITLE)?;
+    std::thread::sleep(Duration::from_millis(300));
+    // The labels of the dialog's buttons that GTK has drawn inside the window.
+    fn buttons(w: &gtk::Widget, height: i32, out: &mut Vec<String>) {
+        if let Some(b) = w.downcast_ref::<gtk::Button>() {
+            let top = b
+                .translate_coordinates(&b.toplevel().unwrap(), 0, 0)
+                .map(|(_, y)| y)
+                .unwrap_or(i32::MAX);
+            if b.is_mapped() && top + b.allocated_height() <= height {
+                out.push(b.label().unwrap_or_default().to_string());
+            }
+        }
+        if let Some(c) = w.downcast_ref::<gtk::Container>() {
+            for child in c.children() {
+                buttons(&child, height, out);
+            }
+        }
+    }
+    let (width, height, shown) = crate::native_test::on_main(app, || {
+        gtk::Window::list_toplevels()
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Window>().ok())
+            .find(|w| w.title().as_deref() == Some(text::CONFIRM_TITLE) && w.is_visible())
+            .map(|w| {
+                let (width, height) = w.size();
+                let mut shown = Vec::new();
+                buttons(w.upcast_ref(), height, &mut shown);
+                (width, height, shown)
+            })
+    })
+    .flatten()
+    .ok_or("no confirmation window")?;
+    require(
+        height <= 700
+            && width <= 1000
+            && shown.iter().any(|l| l == text::CANCEL)
+            && shown.iter().any(|l| l == text::CONFIRM),
+        &format!("the confirmation with long words is {width}x{height}, buttons in it {shown:?}"),
+    )?;
+    ui::press(app, text::CONFIRM_TITLE, access(text::CANCEL))?;
+    require(
+        result(app, &id)?.is_none(),
+        "the cancel of the long confirmation issued a token",
+    )
+}
+
 pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!(
         "pluxy-native-confirm-{}",
@@ -321,6 +430,16 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         let id = ask(app, main, &a)?;
         let t = confirm(app, &id, true)?;
         consume(app, &t)?;
+        // The window's own request shows its outcome itself: no notice follows its answers.
+        std::thread::sleep(Duration::from_millis(500));
+        require(
+            !ui::shown(app, text::NOTICE_TITLE),
+            "a notice followed the answer to the window's own confirmation",
+        )?;
+        #[cfg(target_os = "linux")]
+        notice_fits(app)?;
+        #[cfg(target_os = "linux")]
+        words_fit(app, main, &a)?;
         let (remembered, t) = trusted_start(app, &a)?;
         require(remembered, "exact native gesture did not remember")?;
         require(
@@ -429,7 +548,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         )?;
         // Requester and Action on lines of their own, not joined by an escaped line break.
         require(
-            shown.contains("Requester: fixture/confirm\nAction: ") && !shown.contains("\\u000a"),
+            shown.contains("Asked by: fixture/confirm\nWhat: ") && !shown.contains("\\u000a"),
             &format!("notice does not hold real lines: {shown:?}"),
         )?;
         std::thread::sleep(Duration::from_millis(1100));
@@ -457,7 +576,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         consume(app, &token)?;
         crate::native_test::log(
             "confirmations",
-            serde_json::json!({"passed": true, "close_box": cfg!(not(target_os = "linux")), "checks": ["confirm", "cancel", "page-spoof", "exact-native-gesture", "different-chain", "metadata", "replacement", "revoke", "page-flood-notice", "press-waits-for-confirm"]}),
+            serde_json::json!({"passed": true, "close_box": cfg!(not(target_os = "linux")), "checks": ["confirm", "cancel", "page-spoof", "exact-native-gesture", "different-chain", "metadata", "replacement", "revoke", "quiet-own-answer", "notice-fits", "page-flood-notice", "press-waits-for-confirm"]}),
         );
         Ok(())
     })();

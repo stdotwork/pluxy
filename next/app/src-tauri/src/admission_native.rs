@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Manager, Webview};
 
 static CALLS: AtomicU64 = AtomicU64::new(0);
-const DIALOG: &str = "pluxy native confirmation";
+const DIALOG: &str = crate::confirmation::text::CONFIRM_TITLE;
 const FULL_ACCESS: &str = "full access to your user account";
 /// What the Add-ons page says of a coding-tool add-on before it is turned on.
 const RUNS_AS_YOU: &str = "Runs as you, with your permissions.";
@@ -426,6 +426,19 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     require(
         text.contains(FULL_ACCESS) && text.contains("pluxy/tool") && text.contains(&tool),
         format!("the native confirmation shows: {text}"),
+    )?;
+    // What will happen in plain words first, the exact record below it (on Linux under a
+    // Details heading; Windows and macOS show it in the scrolled area below the words). Each
+    // system's text lists the dialog's texts top down, so the words must open it.
+    let details = text.find(if cfg!(target_os = "linux") {
+        "\nDetails\n{"
+    } else {
+        "\n{"
+    });
+    require(
+        text.starts_with("Turn on the ")
+            && details.is_some_and(|at| text[..at].contains(FULL_ACCESS)),
+        format!("the native confirmation does not say first what it turns on: {text}"),
     )?;
     out["dialog"] = json!(text.lines().next().unwrap_or_default());
     press("alt+c")?;

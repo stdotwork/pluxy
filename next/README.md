@@ -14,7 +14,7 @@ The Go code is one module, `github.com/stdotwork/pluxy/next`. To use pluxy, star
 | --- | --- |
 | `cmd/pluxy` | The core program, and the `pluxy` command that manages it ([CLI](../docs/cli.md)). |
 | `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index; packs the desktop app's native tools with `-app-tools` ([Pack extensions](../docs/extensions.md#pack-extensions)). |
-| `cmd/pluxy-bench` | Measures the time and memory pluxy adds between a client and its upstream, against a mock upstream, and checks them against budgets in CI ([docs/perf.md](../docs/perf.md)). |
+| `cmd/pluxy-bench` | Measures the time and memory pluxy adds between a client and its upstream, against a mock upstream, and checks them against budgets in CI ([docs/design/perf.md](../docs/design/perf.md)). |
 | `protocol/` | The extension protocol: [README](protocol/README.md), [tutorial](protocol/TUTORIAL.md), wire types and framing. |
 | `llm/` | The internal model of a request and its streamed reply, shared by core and extensions. |
 | `sdk/` | Go SDK for writing extensions. |
@@ -75,4 +75,4 @@ fakes exist.
 - [Configuration](../docs/config.md), [Command line](../docs/cli.md),
   [Management API](../docs/management-api.md), [Translation](../docs/translation.md).
 - [Extension tutorial](protocol/TUTORIAL.md) and [protocol](protocol/README.md).
-- [Design](../docs/design.md).
+- [Design](../docs/design/design.md).

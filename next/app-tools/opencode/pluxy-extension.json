@@ -72,7 +72,7 @@
       },
       {
         "id": "apply",
-        "description": "Point OpenCode at pluxy's core: write the pluxy provider (the core's address, the client key and the listed models) and the default model into the previewed config file, keeping comments and everything else in it. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "description": "Point OpenCode at pluxy: write the pluxy provider (pluxy's address, the client key and the listed models) and the default model into the previewed config file, keeping comments and everything else in it. Saving replaces the file; an edit made in the same instant by another program may be lost.",
         "effect": "write",
         "input_schema": {
           "type": "object",
