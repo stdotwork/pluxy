@@ -78,16 +78,17 @@ test("a request for a model no account serves says what is served and leads to a
   await goTo(page, "Requests");
   const request = page.locator(".activity-request").filter({ hasText: ASKED }).first();
   await expect(request).toContainText("Model not served");
-  await request.getByRole("button").first().click();
-  await expect(request).toContainText(`No account serves ${ASKED}.`);
-  await expect(request).toContainText("These accounts serve:");
-  await expect(request).toContainText("add a model alias to an account");
-  await expect(request.getByRole("link", { name: "Tools", exact: true })).toHaveAttribute("href", "#/tools");
+  await request.getByRole("button", { expanded: false }).click();
+  const pane = page.locator('[data-part="detail"]');
+  await expect(pane).toContainText(`No account serves ${ASKED}.`);
+  await expect(pane).toContainText("These accounts serve:");
+  await expect(pane).toContainText("add a model alias to an account");
+  await expect(pane.getByRole("link", { name: "Tools", exact: true })).toHaveAttribute("href", "#/tools");
 
   // An account set in the settings file has no form to add an alias in: it leads to its page.
-  await expect(request.getByRole("link", { name: "Open alpha-1", exact: true })).toBeVisible();
+  await expect(pane.getByRole("link", { name: "Open alpha-1", exact: true })).toBeVisible();
   // The link leads to the account's form with a new alias row that already holds the name.
-  await request.getByRole("link", { name: `Add an alias on ${LOGIN}`, exact: true }).click();
+  await pane.getByRole("link", { name: `Add an alias on ${LOGIN}`, exact: true }).click();
   const form = page.getByRole("dialog", { name: /^Edit /, exact: false });
   const aliases = form.getByRole("group", { name: "Account model aliases", exact: true });
   await expect(aliases.getByLabel("Alias", { exact: true })).toHaveValue(ASKED);

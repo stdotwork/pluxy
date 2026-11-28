@@ -200,7 +200,7 @@ Remove the example keys from `client_keys` and run `pluxy reload`.
 {"error":{"code":"model_not_found","message":"no account serves model \"nonexistent-model\". pluxy serves: gpt-demo-large, gpt-demo-mini. Set the tool's model to one of them, or add a model alias to an account so that \"nonexistent-model\" goes to one of them.","pluxy":{"trace":"20261127123005-dab0474c06d38d37","tried":[],"left_out":[]},"type":"invalid_request_error"}}
 ```
 
-No enabled account serves that model name. `pluxy route nonexistent-model` shows the same: it fails with exit code 5 and prints:
+No enabled account serves that model name. `pluxy route nonexistent-model` finds the same, more briefly: it fails with exit code 5 and prints:
 
 ```text
 pluxy: no account serves nonexistent-model. See pluxy model list.
@@ -411,7 +411,7 @@ runs (`pluxy status`) and that the address in the browser is core's.
 
 ## The desktop app
 
-Problems with the desktop app are on the app page, `app.md`.
+Problems with the desktop app are on the [app page](app.md#troubleshooting).
 
 ## Finding out what happened
 

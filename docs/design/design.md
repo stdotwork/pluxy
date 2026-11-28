@@ -221,7 +221,8 @@ much alike; all three are meant to work well for agents too.
   interface here, and the resolved address in Tailscale's ranges), or over plain HTTP on a network
   the person says, in the native key window, that they trust. It also sets up coding tools on its
   own machine. Built, on Linux only (CI also builds and tests it on Windows and macOS, but the app
-  is not supported there yet). See `app.md` and, for how it works inside, `app-design.md`.
+  is not supported there yet). See [app.md](../app.md) and, for how it works inside,
+  [app-design.md](app-design.md).
 
 Setup should mostly detect, so a person clicks a few buttons instead of filling in forms, in all
 three surfaces. Built:

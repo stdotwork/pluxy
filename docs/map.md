@@ -104,7 +104,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 - **Tests**: `go test -count=1 -run TestParseConfig ./internal/server`,
   `go test -count=1 -run TestApplySettings ./internal/configdoc`, and
   `go test -count=1 -run TestWriteConfig ./internal/core`.
-- **Handbook**: `docs/config.md` ("Keys", "config.yaml with CLIProxyAPI key names", "Reloading").
+- **Handbook**: `docs/config.md` ("Keys", "Reloading") and `docs/config-yaml.md` ("config.yaml keys").
 
 ### Management API endpoint, CLI command, and panel page
 - **Entry**: request/reply types and Go client in `next/management/types.go` and
@@ -148,7 +148,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 ### Desktop app behaviour
 - **Entry (UI)**: `next/app/src/main.tsx` mounts the shared kit with `appHost`
   (`next/app/src/host.ts`), the first launch screen and the not-running pane
-  (`next/app/src/firstLaunch.tsx`, every word of them in `connectionCopy.ts`), the Where pluxy runs
+  (`next/app/src/firstLaunch.tsx`, most of their words in `connectionCopy.ts`), the Where pluxy runs
   page (`next/app/src/connection.tsx`), and the Updates, Add-ons and Launcher pages
   (`next/app/src/updates.tsx`, `next/app/src/devicePage.tsx`, `next/app/src/launcherPage.tsx`).
 - **Entry (Tauri Rust in `next/app/src-tauri/src`)**:
@@ -204,8 +204,8 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 ### Secret redaction
 - **Entry**: wire and error redaction in `next/protocol/redact.go` (`Redactor`, `NewRedactor`,
   `SecretParts`) and `next/protocol/redact_longest.go`; config document redaction in
-  `next/internal/configdoc/redact.go` (`Redactor`, `Redactor.Scrub`). Both share one secret-shape
-  table in `next/internal/secretshapes/shapes.go` (`Rows`, `URLRows`, `NumberRows`).
+  `next/internal/configdoc/redact.go` (`Redactor`, `Redactor.Scrub`). Their tests hold both to one
+  secret-shape table in `next/internal/secretshapes/shapes.go` (`Rows`, `URLRows`, `NumberRows`).
 - **Tests**: `go test -count=1 -run TestSecretShapes ./protocol ./internal/configdoc` and
   `go test -count=1 -run TestRedact ./protocol`.
 - **Handbook**: `next/protocol/README.md` ("Errors", "Upstream capture").

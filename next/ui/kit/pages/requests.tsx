@@ -3,28 +3,22 @@
 // on Refresh and when a filter changes, never on a timer, so a row being read does not move.
 
 import { useEffect, useRef, useState } from "preact/hooks";
-import { problem, type UsageEvent } from "../api";
-import {
-  accountHref,
-  keyName,
-  providerName,
-  RequestRow,
-  StaleNotice,
-  StatePane,
-  tryAgainWord,
-  useNaming,
-} from "../parts";
+import { type ClientKey, problem, type UsageEvent } from "../api";
+import { Icon } from "../icons";
+import { keyName, providerName, StaleNotice, StatePane, timeTaken, tryAgainWord, useNaming } from "../parts";
 import { usePrivacy } from "../privacy";
 import { useSave } from "../save";
 import type { PageDef } from "../shell";
+import { failureWord } from "../states";
 import { rich, strings } from "../strings";
-import { Button, Choices, Empty, Notice, PageHead, useKit, useLoad } from "../ui";
+import { Button, Choices, Empty, MasterDetail, Notice, PageHead, TableFrame, useKit, useLoad } from "../ui";
 import {
   accountValue,
   byDay,
   coreFilters,
   csvName,
   csvOf,
+  detourOf,
   type Filters,
   filtersOf,
   hasFilters,
@@ -38,8 +32,9 @@ import {
   useAddressQuery,
   whyOf,
 } from "./activity";
+import { FilterChip, FilterMenu, WordChip } from "./activityChips";
 import { RecordOff, recordOffReason } from "./activityParts";
-import { NoServeHelp } from "./requestNoServe";
+import { RequestPane } from "./requestPane";
 
 const t = strings("requests", {
   title: "Requests",
@@ -77,94 +72,22 @@ const t = strings("requests", {
   hidden: "Names are hidden on screen only. The saved file has them.",
   savedCapped: "Saved the newest {count} matching requests. pluxy keeps more.",
   saveFailed: "Could not read the requests to save. Try again.",
-  openAccount: "Open {account}",
-  openLog: "Open its log",
-  notTried: "pluxy did not try:",
-  order: "Order & fallback",
+  list: "Requests",
+  colTime: "Time",
+  colModel: "Model",
+  colAccount: "Account",
+  colKey: "Key",
+  colTokens: "Tokens",
+  colTaken: "Time taken",
+  colResult: "Result",
+  succeeded: "Succeeded",
+  provider: "Provider",
+  account: "Account",
+  model: "Model",
+  keyKind: "Key",
 });
 
 const SHOW = 50;
-
-/** One request as the open row says it: the story, then a next step for a failed request. */
-function Story(props: {
-  event: UsageEvent;
-  name: (account: string) => string;
-  idOf: (account: string) => string;
-  editable: (account: string) => boolean;
-}) {
-  const e = props.event;
-  const s = whyOf(e, props.name);
-  if (s.lines.length === 0 && !s.next && !s.reason) return null;
-  return (
-    <>
-      {s.lines.map((line) => (
-        <p key={line}>{line}</p>
-      ))}
-      {s.noServe && (
-        <NoServeHelp model={e.model} name={props.name} idOf={props.idOf} editable={props.editable} />
-      )}
-      {s.leftOut.length > 0 && (e.tried?.length ?? 0) > 0 && <p>{t("notTried")}</p>}
-      {s.leftOut.length > 0 && (
-        <ul class="request-left-out">
-          {s.leftOut.map((l, i) => (
-            <li key={i}>
-              {l.account}: {l.text}
-            </li>
-          ))}
-        </ul>
-      )}
-      {s.reason && (
-        <p class="request-reason">
-          {s.reason.text}
-          {s.reason.order && (
-            <>
-              {" "}
-              <a href="#/routing">{t("order")}</a>
-            </>
-          )}
-        </p>
-      )}
-      {s.next?.kind === "account" && (
-        <p class="request-next">
-          <a href={accountHref(props.idOf(s.next.account))}>
-            {t("openAccount", { account: props.name(s.next.account) })}
-          </a>
-        </p>
-      )}
-      {s.next?.kind === "log" && e.id && (
-        <p class="request-next">
-          <a href={`#/logs/${encodeURIComponent(e.id)}`}>{t("openLog")}</a>
-        </p>
-      )}
-    </>
-  );
-}
-
-function Pick(props: {
-  every: string;
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (value: string) => void;
-}) {
-  const known = props.options.some((o) => o.value === props.value);
-  const options =
-    props.value && !known ? [...props.options, { value: props.value, label: props.value }] : props.options;
-  return (
-    <select
-      data-slot="select-trigger"
-      aria-label={props.every}
-      value={props.value}
-      onChange={(e) => props.onChange(e.currentTarget.value)}
-    >
-      <option value="">{props.every}</option>
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  );
-}
 
 /**
  * The time of a request as the end of the list says it, so that it never names today's weekday
@@ -283,9 +206,7 @@ export function RequestsPage() {
   // A request opened from a link: scrolled into view, with focus on it.
   useEffect(() => {
     if (!list?.found || !trace) return;
-    const line = root.current?.querySelector<HTMLElement>(
-      `[data-trace="${CSS.escape(trace)}"] .request-line`,
-    );
+    const line = root.current?.querySelector<HTMLElement>(`[data-trace="${CSS.escape(trace)}"] .req-open`);
     line?.scrollIntoView?.({ block: "center" });
     line?.focus();
   }, [stamp]);
@@ -359,12 +280,26 @@ export function RequestsPage() {
   const keyOptions = (keys.data?.keys ?? [])
     .map((k) => ({ value: k.id, label: keyName(k.id, keys.data?.keys, undefined, p.id) ?? k.id }))
     .sort((a, b) => a.label.localeCompare(b.label));
-  const selects: { filter: Picked; every: string; options: { value: string; label: string }[] }[] = [
-    { filter: "provider", every: t("everyProvider"), options: providers },
-    { filter: "account", every: t("everyAccount"), options: accountOptions },
-    { filter: "model", every: t("everyModel"), options: models },
-    { filter: "key", every: t("everyKey"), options: keyOptions },
+  const selects: {
+    filter: Picked;
+    kind: string;
+    every: string;
+    options: { value: string; label: string }[];
+  }[] = [
+    { filter: "provider", kind: t("provider"), every: t("everyProvider"), options: providers },
+    { filter: "account", kind: t("account"), every: t("everyAccount"), options: accountOptions },
+    { filter: "model", kind: t("model"), every: t("everyModel"), options: models },
+    { filter: "key", kind: t("keyKind"), every: t("everyKey"), options: keyOptions },
   ];
+  const valueFor = (filter: Picked) =>
+    filter === "account" ? accountValue(filters.account, accounts.data?.accounts) : filters[filter];
+  const offered = selects
+    .filter((s) => s.options.length >= 2 || filters[s.filter] !== "")
+    .map((s) => ({ ...s, value: valueFor(s.filter) }));
+  const applied = offered.filter((s) => s.value !== "");
+  const nameOf = (s: (typeof offered)[number]) =>
+    s.options.find((o) => o.value === s.value)?.label ??
+    (s.filter === "provider" ? providerName(s.value) : s.value);
   const lost = (summary.data?.dropped ?? 0) + (summary.data?.write_errors ?? 0);
   const idOf = (account: string) =>
     accounts.data?.accounts.find((a) => a.id === account || a.public_id === account)?.id ?? account;
@@ -374,6 +309,50 @@ export function RequestsPage() {
   const last = shown?.rows[shown.rows.length - 1];
   const oldest = summary.data?.oldest ? Date.parse(summary.data.oldest) : Number.NaN;
   const usageOlder = !!last && !Number.isNaN(oldest) && oldest < Date.parse(last.timestamp);
+  const opened = shown?.rows.find((e) => e.seq === open);
+
+  const table = (rows: UsageEvent[]) => (
+    <TableFrame>
+      <table class="table requests-table" data-part="requests-table" aria-label={t("list")}>
+        <thead>
+          <tr>
+            <th scope="col">{t("colTime")}</th>
+            <th scope="col">{t("colModel")}</th>
+            <th scope="col">{t("colAccount")}</th>
+            <th scope="col" class="req-key">
+              {t("colKey")}
+            </th>
+            <th scope="col" class="num req-tokens">
+              {t("colTokens")}
+            </th>
+            <th scope="col" class="num req-taken">
+              {t("colTaken")}
+            </th>
+            <th scope="col">{t("colResult")}</th>
+          </tr>
+        </thead>
+        {byDay(rows).flatMap((d) => [
+          <tbody class="activity-day" key={`day-${d.day}`}>
+            <tr>
+              <th scope="colgroup" colSpan={7}>
+                <h2 class="activity-day-heading">{d.day}</h2>
+              </th>
+            </tr>
+          </tbody>,
+          ...d.events.map((e) => (
+            <RequestLine
+              key={e.seq}
+              event={e}
+              name={naming.byId}
+              keys={keys.data?.keys}
+              open={open === e.seq}
+              onToggle={(now) => setOpen(now ? e.seq : undefined)}
+            />
+          )),
+        ])}
+      </table>
+    </TableFrame>
+  );
 
   const body = () => {
     if (recordOff) return <RecordOff />;
@@ -423,51 +402,46 @@ export function RequestsPage() {
       <>
         {stale}
         {!shown.found && trace && <Notice tone="muted">{t("gone")}</Notice>}
-        {byDay(shown.rows).map((d) => (
-          <section class="activity-day" key={d.day} aria-label={d.day}>
-            <h2 class="activity-day-heading">{d.day}</h2>
-            {d.events.map((e) => {
-              const story = whyOf(e, naming.byId);
-              return (
-                <div class="activity-request" key={e.seq} data-trace={e.id}>
-                  <RequestRow
-                    event={e}
-                    name={naming.byId}
-                    keys={keys.data?.keys}
-                    note={story.note}
-                    story={
-                      open === e.seq ? (
-                        <Story event={e} name={naming.byId} idOf={idOf} editable={editable} />
-                      ) : undefined
-                    }
-                    trace={traceMode(e, requestLog)}
-                    open={open === e.seq}
-                    onToggle={(now) => setOpen(now ? e.seq : undefined)}
-                  />
-                </div>
-              );
-            })}
-          </section>
-        ))}
-        <p class="activity-end">
-          {shown.more ? (
-            <Button onClick={showOlder} busy={older}>
-              {t("showOlder")}
-            </Button>
-          ) : (
-            !hasFilters(filters) && (
-              <>
-                {t("end", { when: last ? endWhen(last.timestamp) : "" })}
-                {usageOlder && (
-                  <>
-                    {" "}
-                    <a href="#/activity/usage">{t("endUsage")}</a>
-                  </>
+        <MasterDetail
+          list={
+            <div class="activity-list">
+              {table(shown.rows)}
+              <p class="activity-end">
+                {shown.more ? (
+                  <Button onClick={showOlder} busy={older}>
+                    {t("showOlder")}
+                  </Button>
+                ) : (
+                  !hasFilters(filters) && (
+                    <>
+                      {t("end", { when: last ? endWhen(last.timestamp) : "" })}
+                      {usageOlder && (
+                        <>
+                          {" "}
+                          <a href="#/activity/usage">{t("endUsage")}</a>
+                        </>
+                      )}
+                    </>
+                  )
                 )}
-              </>
+              </p>
+            </div>
+          }
+          detail={
+            opened && (
+              <RequestPane
+                key={opened.seq}
+                event={opened}
+                name={naming.byId}
+                idOf={idOf}
+                editable={editable}
+                keys={keys.data?.keys}
+                trace={traceMode(opened, requestLog)}
+                onClose={() => setOpen(undefined)}
+              />
             )
-          )}
-        </p>
+          }
+        />
       </>
     );
   };
@@ -509,21 +483,18 @@ export function RequestsPage() {
             ]}
             onChange={(v) => setFilters({ ...filters, failed: v === "failed" })}
           />
-          {selects
-            .filter((s) => s.options.length >= 2 || filters[s.filter] !== "")
-            .map((s) => (
-              <Pick
-                key={s.filter}
-                every={s.every}
-                value={
-                  s.filter === "account"
-                    ? accountValue(filters.account, accounts.data?.accounts)
-                    : filters[s.filter]
-                }
-                options={s.options}
-                onChange={(value) => setFilters({ ...filters, [s.filter]: value })}
-              />
-            ))}
+          <FilterMenu
+            choices={offered}
+            onPick={(filter, value) => setFilters({ ...filters, [filter]: value })}
+          />
+          {applied.map((s) => (
+            <FilterChip
+              key={s.filter}
+              kind={s.kind}
+              name={nameOf(s)}
+              onRemove={() => setFilters({ ...filters, [s.filter]: "" })}
+            />
+          ))}
           {hasFilters(filters) && !(shown && shown.rows.length === 0) && (
             <Button variant="ghost" onClick={() => setFilters(NO_FILTERS)}>
               {t("clearFilters")}
@@ -533,6 +504,85 @@ export function RequestsPage() {
       )}
       {body()}
     </div>
+  );
+}
+
+function RequestLine(props: {
+  event: UsageEvent;
+  name: (account: string) => string;
+  keys?: ClientKey[];
+  open: boolean;
+  onToggle: (open: boolean) => void;
+}) {
+  const p = usePrivacy();
+  const e = props.event;
+  const account = e.account ? props.name(e.account) : undefined;
+  const model = p.text(e.model);
+  const key = keyName(e.key_id, props.keys, e.label, p.id);
+  const detour = detourOf(e);
+  const note = whyOf(e, props.name).note;
+  const when = new Date(e.timestamp);
+  const full = Number.isNaN(when.getTime()) ? e.timestamp : when.toLocaleString();
+  const clock = Number.isNaN(when.getTime())
+    ? e.timestamp
+    : when.toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      });
+  const total = e.tokens?.total_tokens;
+  return (
+    <tbody class="activity-request" data-trace={e.id}>
+      <tr
+        class="req-row"
+        data-part="request-row"
+        data-failed={e.failed ? "" : undefined}
+        data-open={props.open ? "" : undefined}
+        onClick={(ev) => {
+          if (ev.target instanceof Element && ev.target.closest("a, button")) return;
+          props.onToggle(!props.open);
+        }}
+      >
+        <td class="req-time-cell">
+          <button
+            type="button"
+            class="req-open"
+            aria-expanded={props.open}
+            onClick={() => props.onToggle(!props.open)}
+          >
+            <time class="req-time" dateTime={e.timestamp} title={full}>
+              {clock}
+            </time>
+          </button>
+        </td>
+        <td class="req-model" title={model}>
+          {model}
+        </td>
+        <td class="req-account" title={account}>
+          <div class="req-account-box">
+            <span class="req-account-name">{account}</span>
+            {detour && <WordChip title={note}>{detour}</WordChip>}
+          </div>
+        </td>
+        <td class="req-key" title={key}>
+          {key}
+        </td>
+        <td class="num req-tokens">{total === undefined ? "" : total.toLocaleString()}</td>
+        <td class="num req-taken">{timeTaken(e.latency_ms)}</td>
+        <td class="req-result-cell">
+          {e.failed ? (
+            <span class="req-result" data-result="failed">
+              <WordChip tone="danger">{failureWord(e)}</WordChip>
+            </span>
+          ) : (
+            <span class="req-result" data-result="ok">
+              <Icon name="check" label={t("succeeded")} />
+            </span>
+          )}
+        </td>
+      </tr>
+    </tbody>
   );
 }
 

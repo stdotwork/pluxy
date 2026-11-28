@@ -374,9 +374,6 @@ var (
 // as a file of another project's repository that a doc describes. Each has the reason.
 var pathSkips = map[string]string{
 	"extensions/panel/src/features/quota/": "the old repository's, at a recorded commit (next/corpus/README.md)",
-	// Other projects' files, which next/app-tools/README.md reads the settings of.
-	"docs/models.md": "Pi's", "docs/settings.md": "Pi's", "docs/packages.md": "Pi's", "docs/quickstart.md": "Pi's",
-	"docs/user-guide/26-config-reference.md": "Grok Build's",
 }
 
 // docsPaths checks Markdown links, and backticked paths that start in a folder of the

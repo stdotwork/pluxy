@@ -317,10 +317,9 @@ test("Requests: no request leads to a tool, filters with no match can be cleared
   const rows = page.locator('[data-page="usage"] [data-part="request-row"]');
   await expect(rows).toHaveCount(2);
 
-  // The copy button copies the ID and does not open or close the row.
   const row = rows.filter({ hasText: "fake-model" }).first();
   await row.getByRole("button", { expanded: false }).click();
-  const trace = row.locator('[data-part="trace-id"]');
+  const trace = page.locator('[data-part="detail"] [data-part="trace-id"]');
   await expect(trace).toContainText("trace-2");
   await trace.getByRole("button", { name: "Copy trace ID trace-2", exact: true }).click();
   await expect(trace.getByRole("button")).toHaveText("Copied");

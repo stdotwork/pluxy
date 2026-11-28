@@ -1,14 +1,3 @@
-//! The core that comes with the app (README "The app's own core"): a tagged core's signed release,
-//! checked when the app is packaged and pinned file by file by a manifest compiled into the app's
-//! program (`bundled_manifest.rs`). A build without one (a dev build) has no bundled core.
-//!
-//! When the app is packaged, `prepare` takes the release of the version the app names from a core
-//! source's index, checks it against its signed descriptor with the publisher key, as installing
-//! it from a core source would (`cores::unpack_release`), unpacks it and writes the manifest from
-//! the files it unpacked. The package carries those files beside the app (`place`); in managed
-//! mode the app copies them into its own cores (`cores::Store::install_bundled`), reading only the
-//! files the manifest lists, and runs the copy, never the files beside the app.
-
 use crate::bundled_manifest::{Entry, Manifest};
 use crate::cores::{self, PROGRAM};
 use std::path::{Path, PathBuf};
