@@ -36,7 +36,7 @@ func (c *Core) handleChains(m *server.Management) {
 			return
 		}
 		if c.isYAML() {
-			writeError(w, http.StatusConflict, "conflict", "a config.yaml cannot hold fallback chains, since it speaks today's core's names; they are kept in a JSON config")
+			writeError(w, http.StatusConflict, "conflict", "a config.yaml cannot hold fallback chains, since it uses CLIProxyAPI's key names; they are kept in pluxy's JSON config")
 			return
 		}
 		chains := maps.Clone(c.Config().Routing.Chains)

@@ -118,7 +118,7 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 
 	if !req.DryRun && c.isYAML() {
 		return management.ImportReport{}, &editError{http.StatusConflict, "conflict",
-			"core runs on a config.yaml, which it reads with today's core's names already; an import writes core's JSON config (pluxy init writes one)"}
+			"pluxy runs on a config.yaml, which it already reads with CLIProxyAPI's key names; an import writes pluxy's JSON config (pluxy init writes one)"}
 	}
 
 	// The config's part, applied to the file (or, in a dry run, to a copy that is only checked).
