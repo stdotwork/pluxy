@@ -31,7 +31,7 @@ import {
 import { AccountsStep, accountsSummary } from "./setupAccounts";
 import { CheckStep, checkSummary, type TestOutcome } from "./setupCheck";
 import { ImportLine } from "./setupImport";
-import { forgetLater, rememberLater } from "./setupLater";
+import { forgetLater, markLaterTested, rememberLater } from "./setupLater";
 import { ToolListView, type ToolsOptions, useMadeKeys, useToolsState } from "./tools";
 import { toolName } from "./tools.helpers";
 
@@ -344,7 +344,7 @@ export function SetupPage(props: { options?: SetupOptions }) {
     if (r.status === 401) return unauthorized();
     const why = problem(r);
     if (why !== undefined) return setFinishError(why.replace(/\.$/, ""));
-    if (later) rememberLater(host);
+    if (later && !(done[1] && done[2] && done[3])) rememberLater(host, done[3]);
     else forgetLater(host);
     options?.onFinish?.();
     location.hash = "#/";
@@ -471,7 +471,10 @@ export function SetupPage(props: { options?: SetupOptions }) {
         running={running}
         added={signedIn}
         outcome={outcome}
-        onOutcome={setOutcome}
+        onOutcome={(next) => {
+          setOutcome(next);
+          if (next?.kind === "passed") markLaterTested(host);
+        }}
         onAddAccount={() => go(1)}
         onAccountsChanged={accounts.reload}
         finishing={finishing}

@@ -24,37 +24,52 @@ const t = strings("setupLater", {
 });
 
 const PREF = "setup-later";
+const TESTED = " tested";
 
 /** The note's value: the pluxy it is about, so another pluxy's Home does not show it. */
 const about = (host: Host) => host.address ?? "this";
 
-export function rememberLater(host: Host) {
-  host.prefs.set(PREF, about(host));
+export function rememberLater(host: Host, tested = false) {
+  host.prefs.set(PREF, tested ? `${about(host)}${TESTED}` : about(host));
 }
 
 export function forgetLater(host: Host) {
   host.prefs.set(PREF, null);
 }
 
+/** Records a passed test on an existing Finish later note for this pluxy. */
+export function markLaterTested(host: Host) {
+  if (laterPending(host)) rememberLater(host, true);
+}
+
+/** Whether the person left setup with Finish later on this pluxy, and whether a test passed. */
+export function laterState(host: Host): { pending: boolean; tested: boolean } {
+  const raw = host.prefs.get(PREF);
+  const target = about(host);
+  if (raw === target) return { pending: true, tested: false };
+  if (raw === `${target}${TESTED}`) return { pending: true, tested: true };
+  return { pending: false, tested: false };
+}
+
 /** Whether the person left setup with Finish later on this pluxy, and has not hidden the card since. */
 export function laterPending(host: Host): boolean {
-  return host.prefs.get(PREF) === about(host);
+  return laterState(host).pending;
 }
 
 /**
  * Which of setup's steps are done, as Home can tell: an account that can take requests, a tool
- * that uses pluxy. Whether a test passed is not kept, so the third is never done here; finishing
- * through it takes the card away.
+ * that uses pluxy, and whether a test request passed (remembered in the same Finish later pref).
  */
 export function stepsDone(input: {
   accounts: Parameters<typeof canServe>[0][];
   running?: ReadonlySet<string>;
   setup?: Parameters<typeof connectedTools>[0];
+  tested?: boolean;
 }): [boolean, boolean, boolean] {
   return [
     input.accounts.some((a) => canServe(a, input.running)),
     connectedTools(input.setup).length > 0,
-    false,
+    input.tested === true,
   ];
 }
 
@@ -66,6 +81,7 @@ export function SetupLaterCard() {
   useEffect(() => {
     if (!pending) return;
     let live = true;
+    const tested = laterState(host).tested;
     Promise.all([api.setup(), api.accounts(), api.status()]).then(([setup, accounts, status]) => {
       if (!live) return;
       // A pluxy that cannot say (an older one, or none answering) gets no card.
@@ -75,15 +91,17 @@ export function SetupLaterCard() {
           accounts: accounts.body.accounts,
           running: runningExtensions(status.body),
           setup: setup.body,
+          tested,
         }),
       );
     });
     return () => {
       live = false;
     };
-  }, [pending, api]);
+  }, [pending, api, host]);
   if (!pending || !done) return null;
   const left = done.filter((d) => !d).length;
+  if (left === 0) return null;
   const titles = [t("step1"), t("step2"), t("step3")];
   return (
     <section class="card setup-later-card" data-part="setup-later" aria-labelledby="setup-later-title">

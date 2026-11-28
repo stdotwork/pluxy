@@ -824,6 +824,27 @@ test("every finish button sends POST /setup/done, tells the host, and goes Home"
   }
 });
 
+test("Finish later after a passed test remembers it when another step is left, and leaves no note when all three are done", async () => {
+  const partial = world({ accounts: [ACC] });
+  const m1 = await partial.mount(<SetupPage />);
+  await goTo(m1.root, 3);
+  await press(buttonIn(step(m1.root, 3), "Send a test request"));
+  await press(buttonIn(m1.root, "Finish later"));
+  expect(partial.prefs.get("setup-later")).toBe("http://127.0.0.1:8317 tested");
+  restoreDom();
+  Object.defineProperty(globalThis, "location", { configurable: true, value: place });
+
+  const allDone = world({
+    accounts: [ACC],
+    clients: [CONNECTED],
+    prefs: { "setup-later": "http://127.0.0.1:8317" },
+  });
+  const m2 = await allDone.mount(<SetupPage />);
+  await press(buttonIn(step(m2.root, 3), "Send a test request"));
+  await press(buttonIn(m2.root, "Finish later"));
+  expect(allDone.prefs.get("setup-later")).toBeUndefined();
+});
+
 test("a finish that fails stays, with why", async () => {
   let finished = 0;
   const w = world({

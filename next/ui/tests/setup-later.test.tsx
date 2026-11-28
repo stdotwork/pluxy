@@ -37,7 +37,7 @@ test("after Finish later: the three steps, which are done, how many are left, an
   expect(attribute(linkIn(card as never, "Continue setup"), "href")).toBe("#/setup");
 });
 
-test("a tool that uses pluxy counts; the test is never counted, so one step is left at least", async () => {
+test("a tool that uses pluxy counts; without a passed test recorded, Check it works is still left", async () => {
   const w = world({
     firstRun: false,
     prefs: { "setup-later": HERE },
@@ -46,6 +46,34 @@ test("a tool that uses pluxy counts; the test is never counted, so one step is l
   });
   const m = await w.mount(<SetupLaterCard />);
   expect(m.text()).toContain("1 step left.");
+});
+
+test("a passed test recorded on the note marks Check it works done, and hides the card once all three are done", async () => {
+  const partial = world({
+    firstRun: false,
+    prefs: { "setup-later": `${HERE} tested` },
+    accounts: [account("acc_00000001")],
+  });
+  const m = await partial.mount(<SetupLaterCard />);
+  const card = withPart(m.root, "setup-later")[0];
+  expect(card?.textContent).toContain("1 step left.");
+  expect(
+    all(card as never, "li").map((li) => [li.childNodes[1]?.textContent, attribute(li, "data-state")]),
+  ).toEqual([
+    ["Your AI accounts", "done"],
+    ["Your coding tool", "todo"],
+    ["Check it works", "done"],
+  ]);
+  restoreDom();
+
+  const complete = world({
+    firstRun: false,
+    prefs: { "setup-later": `${HERE} tested` },
+    accounts: [account("acc_00000001")],
+    clients: [client("claude-code", "Claude Code", { state: "configured" })],
+  });
+  const m2 = await complete.mount(<SetupLaterCard />);
+  expect(withPart(m2.root, "setup-later")).toHaveLength(0);
 });
 
 test("Hide takes the card and the note away", async () => {
