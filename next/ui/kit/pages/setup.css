@@ -270,11 +270,11 @@
     min-width: calc(var(--s) * 3);
     height: var(--px-shape-border);
     margin: 0 calc(var(--s) * 3);
-    background: var(--px-color-border);
+    background: color-mix(in srgb, var(--px-color-text) 52%, var(--px-color-chrome));
   }
 
   .setup-stepper > li[data-state="done"]:not(:last-child)::after {
-    background: color-mix(in srgb, var(--px-color-success) 55%, var(--px-color-border));
+    background: var(--px-color-success);
   }
 
   .setup-stepper button {

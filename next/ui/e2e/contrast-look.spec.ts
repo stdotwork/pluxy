@@ -206,5 +206,32 @@ for (const theme of THEMES) {
       expect(animation).toBe("none");
       expect(ratio).toBeGreaterThanOrEqual(GRAPHIC);
     });
+
+    test(`the Setup stepper connectors clear 3:1 against the focused ground: ${name}`, async ({ page }) => {
+      await open(page, theme, appearance);
+      await page.evaluate(() => {
+        const focus = document.createElement("div");
+        focus.id = "stepper-sample";
+        focus.className = "focus";
+        focus.innerHTML =
+          '<ol class="setup-stepper"><li data-state="done"><button type="button">1</button></li><li data-state="open"><button type="button">2</button></li><li data-state="todo"><button type="button">3</button></li></ol>';
+        document.querySelector("main")?.prepend(focus);
+      });
+      const results = await page.evaluate(`(() => {
+        ${rgbScript()}
+        const focus = document.querySelector("#stepper-sample");
+        const ground = bgOf(focus);
+        const out = [];
+        for (const li of focus.querySelectorAll(".setup-stepper > li:not(:last-child)")) {
+          const line = over(rgb(getComputedStyle(li, "::after").backgroundColor), ground);
+          out.push({ state: li.dataset.state, ratio: ratio(line, ground) });
+        }
+        return out;
+      })()`);
+      const list = results as { state: string; ratio: number }[];
+      expect(list).toHaveLength(2);
+      const low = list.filter((r) => r.ratio < GRAPHIC).map((r) => `${r.state}: ${r.ratio.toFixed(2)}:1`);
+      expect(low).toEqual([]);
+    });
   }
 }
