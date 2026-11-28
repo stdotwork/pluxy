@@ -18,7 +18,7 @@ from the accounts you already have. These pages say how to set it up, use it and
 - [Extensions](extensions.md): install, update, turn off and remove provider extensions and packages.
 - [Usage and logs](usage-and-logs.md): the usage record, log files, request logs and profiling pages.
 - [Web panel](panel.md): the panel core serves at `/panel/`.
-- `app.md`: the desktop app.
+- [Desktop app](app.md): the desktop app.
 - [Moving from CLIProxyAPI](moving-from-cpa.md): bring a CLIProxyAPI setup into pluxy.
 
 ## Reference
@@ -46,7 +46,7 @@ from the accounts you already have. These pages say how to set it up, use it and
 
 - [Design](design/design.md): why pluxy is built this way, and what core keeps apart from extensions.
 - [Plans](design/plans.md): confirmed plans that are not built yet.
-- `app-design.md`: how the desktop app works inside.
+- [Desktop app internals](design/app-design.md): how the desktop app works inside.
 - [Corpus](design/corpus.md): how the differential test corpus holds core to recorded replies.
 - [Performance](design/perf.md): the time and memory pluxy adds, and the budgets CI holds it to.
 

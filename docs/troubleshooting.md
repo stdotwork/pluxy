@@ -411,7 +411,7 @@ runs (`pluxy status`) and that the address in the browser is core's.
 
 ## The desktop app
 
-Problems with the desktop app are on the app page, `app.md`.
+Problems with the desktop app are on the [app page](app.md#troubleshooting).
 
 ## Finding out what happened
 

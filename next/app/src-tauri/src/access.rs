@@ -1,21 +1,3 @@
-//! Access: the broker that lets a web package on this device read files and folders the person
-//! chose for it (`../README.md`, "Access"). This module holds the approved signers and the
-//! grants, checks each read against them, and does the reads. The window's commands, the native
-//! file chooser and confirmation, and the page channel are in `lib.rs`; nothing here talks to a
-//! webview or GTK.
-//!
-//! A grant binds one declared resource of one package to what the person chose: the package's
-//! source, release digest and signer, the chosen path, the target it resolved to (a config
-//! manager's link is followed once, at review), the target's identity, and, for a link, the
-//! link's own identity and text. Each read checks all of these again. A changed link or target
-//! ends the grant until the person grants it again. Folder reads go through a `cap_std` folder
-//! handle opened on the granted folder, so no path, `..` or link leaves it. A file the document
-//! portal offers is granted for this session only. Revoking bumps a revision every read checks
-//! before it answers.
-//!
-//! This is cooperative: same-user processes can still change files between a check and a read,
-//! and hard links inside a granted folder disclose their files.
-
 use serde::{Deserialize, Serialize};
 
 #[cfg(unix)]
