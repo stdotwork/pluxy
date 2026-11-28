@@ -52,12 +52,14 @@ func TestRemovedLoginAccountBanEnds(t *testing.T) {
 	if h := accountHealth(t, base, "login-a"); h.State != mgmt.HealthBanned {
 		t.Fatalf("login-a after account_closed: %+v, want banned", h)
 	}
+	routingPath := filepath.Join(dir, "state", "routing.json")
+	waitBan(t, routingPath, "login-a")
 	if code := manage(t, base, http.MethodDelete, "/accounts/login-a", nil, nil); code != http.StatusNoContent {
 		t.Fatalf("DELETE login-a: %d, want 204", code)
 	}
 	stop()
 
-	assertNoBan(t, filepath.Join(dir, "state", "routing.json"), "login-a")
+	assertNoBan(t, routingPath, "login-a")
 }
 
 // A config account's ban is removed when the account leaves the config: after the reload and
@@ -89,6 +91,9 @@ func TestRemovedConfigAccountBanEnds(t *testing.T) {
 		t.Fatalf("config-a after account_closed: %+v, want banned", h)
 	}
 
+	routingPath := filepath.Join(dir, "state", "routing.json")
+	waitBan(t, routingPath, "config-a")
+
 	cfg["extension"].(map[string]any)["accounts"] = []any{}
 	writeConfig(t, path, cfg)
 	if code, s := reload(t, base); code != http.StatusOK || s.Active.Error != "" {
@@ -96,15 +101,13 @@ func TestRemovedConfigAccountBanEnds(t *testing.T) {
 	}
 	stop()
 
-	assertNoBan(t, filepath.Join(dir, "state", "routing.json"), "config-a")
+	assertNoBan(t, routingPath, "config-a")
 }
 
-// assertNoBan reads routing.json after core stopped and fails when it still holds a ban for id.
-func assertNoBan(t *testing.T, path, id string) {
-	t.Helper()
+func routingHasBan(path, id string) (bool, []byte, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		return false, nil, err
 	}
 	var doc struct {
 		Bans []struct {
@@ -112,11 +115,41 @@ func assertNoBan(t *testing.T, path, id string) {
 		} `json:"bans"`
 	}
 	if err := json.Unmarshal(b, &doc); err != nil {
-		t.Fatalf("%s: %v", path, err)
+		return false, b, err
 	}
 	for _, ban := range doc.Bans {
 		if ban.Account == id {
-			t.Fatalf("%s still holds a ban for %s: %s", path, id, b)
+			return true, b, nil
 		}
+	}
+	return false, b, nil
+}
+
+func waitBan(t *testing.T, path, id string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var lastBody []byte
+	var lastErr error
+	for {
+		has, b, err := routingHasBan(path, id)
+		if err == nil && has {
+			return
+		}
+		lastBody, lastErr = b, err
+		if time.Now().After(deadline) {
+			t.Fatalf("waiting for ban of %s in %s: last err=%v body=%s", id, path, lastErr, lastBody)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func assertNoBan(t *testing.T, path, id string) {
+	t.Helper()
+	has, b, err := routingHasBan(path, id)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if has {
+		t.Fatalf("%s still holds a ban for %s: %s", path, id, b)
 	}
 }
