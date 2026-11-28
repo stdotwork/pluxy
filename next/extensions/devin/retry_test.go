@@ -14,8 +14,6 @@ func status(code int) func(w http.ResponseWriter) {
 	return func(w http.ResponseWriter) { http.Error(w, "down", code) }
 }
 
-// Trading the sign-in code is retryable only when the request never reached Devin, or when Devin
-// rate limited it.
 func TestExchangeRetryOnlyWhenNotSent(t *testing.T) {
 	for _, c := range []struct {
 		name      string

@@ -9,7 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// checkSequence fails the test when the events break the extension protocol's ordering rules.
 func checkSequence(t *testing.T, rec *recorder) {
 	t.Helper()
 	var s llm.Sequence
@@ -20,7 +19,6 @@ func checkSequence(t *testing.T, rec *recorder) {
 	}
 }
 
-// callArgs returns each tool call's ID, name and arguments, in item order.
 func callArgs(rec *recorder) (ids, names, args []string) {
 	at := map[int]int{}
 	for _, ev := range rec.events {
@@ -45,9 +43,6 @@ func joined(rec *recorder, typ string) string {
 	return s
 }
 
-// A call that continues after another call started stays one call: by its ID, or as the call last
-// added to when the piece names none. A call whose name comes after its ID starts once both are
-// known, with the arguments that came before.
 func TestInterleavedToolCalls(t *testing.T) {
 	rec, err := relayFrames(devintest.ToolCall("call_a", "weather", `{"ci`), devintest.ToolCall("call_b", "time", `{"tz"`),
 		devintest.ToolCall("call_a", "", `ty":`), devintest.ToolCall("", "", `"Paris"}`), devintest.ToolCall("call_b", "", `:"UTC"}`),
@@ -68,8 +63,6 @@ func TestInterleavedToolCalls(t *testing.T) {
 	}
 }
 
-// A tool call that never gets its name cannot be passed on: the reply fails rather than
-// breaking the event rules.
 func TestNamelessToolCall(t *testing.T) {
 	rec, err := relayFrames(devintest.Text("Hi"), devintest.ToolCall("call_a", "", `{}`), devintest.End(""))
 	var e *llm.Error
@@ -79,7 +72,6 @@ func TestNamelessToolCall(t *testing.T) {
 	checkSequence(t, rec)
 }
 
-// A tool call's arguments that Devin sends as invalid JSON (field 4) are passed on, not dropped.
 func TestInvalidJSONArguments(t *testing.T) {
 	c := devintest.Bytes(devintest.Bytes(nil, 1, []byte("call_a")), 2, []byte("apply_patch"))
 	c = devintest.Bytes(c, 4, []byte("*** Begin Patch"))
@@ -93,7 +85,6 @@ func TestInvalidJSONArguments(t *testing.T) {
 	}
 }
 
-// A character split across frames reaches the client whole, in text and in reasoning.
 func TestSplitUTF8(t *testing.T) {
 	ch := []byte("甲")
 	rec, err := relayFrames(devintest.Frame(devintest.Bytes(nil, 9, ch[:1])), devintest.Frame(devintest.Bytes(nil, 9, ch[1:])),
@@ -112,8 +103,6 @@ func TestSplitUTF8(t *testing.T) {
 	}
 }
 
-// A signature that comes after the answer began still reaches the reasoning it signs, and a
-// signature with no reasoning text gets a reasoning item of its own.
 func TestLateSignature(t *testing.T) {
 	sig := func(s string) []byte { return devintest.Frame(devintest.Bytes(nil, 10, []byte(s))) }
 	opaque := func(rec *recorder) string {
@@ -146,7 +135,6 @@ func TestLateSignature(t *testing.T) {
 	}
 }
 
-// Reasoning after the answer began is a new reasoning item, after the text.
 func TestReasoningAfterText(t *testing.T) {
 	rec, err := relayFrames(devintest.Thinking("a"), devintest.Text("b"), devintest.Thinking("c"), devintest.End(""))
 	if err != nil {
@@ -164,8 +152,6 @@ func TestReasoningAfterText(t *testing.T) {
 	}
 }
 
-// A usage message counts as reported even when its counts are zero; Devin's protobuf leaves zero
-// counts out, so a count it leaves out is zero.
 func TestUsageReported(t *testing.T) {
 	rec, err := relayFrames(devintest.Text("Hi"), devintest.Frame(devintest.Bytes(nil, 7, nil)), devintest.End(""))
 	if err != nil {
