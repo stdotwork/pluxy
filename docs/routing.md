@@ -79,8 +79,8 @@ Reset times are rounded to the hour, so accounts whose windows end minutes apart
 turns. Accounts with no known reset come after those with one, and an account whose reading shows
 a full window comes last until that window resets. A blocked account is never picked, whatever its
 reset. Core reads every enabled account's usage for this every
-[`routing.quota_refresh_ms`](config.md) (30 minutes by default), in the background and never while
-a request waits; the first reading comes a minute after core starts. 0 turns these readings off:
+[`routing.quota_refresh_ms`](config.md) (30 minutes by default), in the background, so no request waits
+for it; the first reading comes a minute after core starts. 0 turns these readings off:
 accounts are then ranked only by the readings core takes when it checks a long block (see
 [Checks while an account is blocked](#checks-while-an-account-is-blocked)). Accounts whose provider
 gives no usage reading, such as API keys, have no reset to rank by.

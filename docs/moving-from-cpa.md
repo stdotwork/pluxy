@@ -88,7 +88,7 @@ Four things to know about the result:
 - **pluxy keeps its own address.** It goes on listening where it started. The **Changed** list
   shows the address CPA's file asked for and the `"listen"` line to put in `config.json` if you want
   it; restart pluxy after changing it.
-- **TLS is refused, in a dry run too.** A file with `server.tls.enable: true` fails with
+- **TLS is refused, in a dry run too.** A file with `server.tls.enable: true` fails, unless pluxy already runs with the same TLS settings, with
   `config: tls cannot change while core runs; restart core to apply it (a renewed certificate in the same files is read without a restart) (refused)`. Set the `tls` section (`enable`, `cert`, `key`) in pluxy's
   `config.json` yourself and restart pluxy, then import a copy of the file without its `tls`
   section.
@@ -202,7 +202,7 @@ From the auth folder, the `.json` files at its top of these types: `codex`, `cla
 - It keeps the file's label, priority, weight, prefix, excluded models, model aliases, proxy,
   headers, `disable-cooling` and `request-retry` settings, and whether the file was disabled.
 - A Codex file with a `siwc` section that holds a token (`access_token`, `access` or
-  `refresh_token`) also makes a second account, `<id>-siwc`, which is disabled unless the file says
+  `refresh_token`) also makes a second account, `<id>-siwc` (`<id>-siwc-2` and so on when another file imports as that ID), which is disabled unless the file says
   `use_siwc: true`.
 - A file whose `proxy_url` or `headers` pluxy cannot use goes under **Not brought**, whole.
 - A symbolic link, a subfolder and any file that is not a `.json` file are not read.
@@ -233,7 +233,7 @@ for every auth-file field [Auth files](config.md#auth-files), both in the config
 | Response compression, `commercial-mode`, discovery, `max-request-body-bytes` | Left to a reverse proxy, or switches for features pluxy does not have. Request bodies are capped at 24 MiB |
 | Settings pluxy does not support (the Codex `enable-apply-patch`, `optimize-multi-agent-v2` and stream bootstrap settings) | Named in the **Not brought** list as "not supported yet". A model's `force-mapping` and `openapi` are named the same way in the **Changed** row of the account |
 | A provider key with no `api-key`, a Codex key with no `base-url`, an `openai-compatibility` group with `disabled: true`, and `api-keys.meta` | They make no account. The import names each one |
-| `session-affinity-subagents`, `session-affinity-rebind-on`, `management.base-url`, `oauth.providers.devin` (only its `sensitive-words`), a key's `websockets` for xAI | No use here: a subagent stays on its session's account, there is no terminal UI, and xAI is served over HTTP. The import names each one |
+| `session-affinity-subagents`, `session-affinity-rebind-on`, `management.base-url`, `oauth.providers.devin` (its `sensitive-words`), a key's `websockets` for xAI | No use here: a subagent stays on its session's account, there is no terminal UI, and xAI is served over HTTP. The import names each one |
 | Environment variables and `.env` (`MANAGEMENT_PASSWORD`, `PGSTORE_*`, `GITSTORE_*`, `OBJECTSTORE_*`) | pluxy does not read them; the settings are in the config file |
 | `save-cooldown-status` | pluxy needs no switch: it saves the blocks it must keep in `state/routing.json` by itself |
 
