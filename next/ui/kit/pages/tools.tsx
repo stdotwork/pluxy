@@ -1,12 +1,3 @@
-// Tools: the coding tools pluxy found and whether each is connected, three steps to set one up with
-// a key made for it already in the text, the connection card with the address for any other program,
-// and the keys tools send, named, made and deleted here through a row menu. The panel and the desktop
-// app show this page; the app adds to it through ToolsOptions (a button for a row, rows pluxy does
-// not scan, the names it keeps for keys). ToolList is the coding tools alone, for the guided setup.
-//
-// A key's value is held in this page's memory only: never in prefs, storage or the address. It
-// goes when the person closes its notice, deletes the key or leaves the page.
-
 import type { ComponentChildren } from "preact";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import {
@@ -184,9 +175,6 @@ export interface ToolsOptions {
 /** What a host says around the list of tools: above it, and under it. */
 export type ToolNotes = (clients: SetupClient[]) => { above?: ComponentChildren; below?: ComponentChildren };
 
-// ---- tool marks ---------------------------------------------------------------------------------
-
-/** A coding tool's mark in a rounded tile, beside its name. */
 export function ToolMark(props: { id: string; name?: string; size?: "medium" | "large" }) {
   const mark = toolMarkKind(props.id, props.name);
   const size = props.size ?? "medium";
@@ -245,7 +233,6 @@ export function ToolMark(props: { id: string; name?: string; size?: "medium" | "
   );
 }
 
-/** Three horizontal dots for a row menu trigger. */
 function EllipsisIcon() {
   return (
     <svg viewBox="0 0 16 16" width={15} height={15} fill="currentColor" aria-hidden="true" focusable="false">
@@ -403,7 +390,6 @@ function CopyButton(props: { value: string }) {
   );
 }
 
-/** Skeleton rows in the final shape of the tools list, shown after a brief delay. */
 function ToolsSkeleton() {
   const shown = useShownAfter(BUSY_SHOWS_AFTER_MS);
   if (!shown) return null;
@@ -576,7 +562,6 @@ function Steps(props: {
   );
 }
 
-/** One coding tool row: mark, name and version, state badge and quiet path, and one action. */
 function ToolRowItem(props: {
   client: SetupClient;
   unchecked?: boolean;
@@ -748,7 +733,6 @@ export function ToolListView(
     onKeysChanged?: () => void;
     /** Show Refresh with the summary: for a list without a page header of its own. */
     refresh?: () => unknown;
-    /** Highlight the first tool needing an update as the view's filled action when no form is open. */
     highlightUpdate?: boolean;
   },
 ) {
@@ -872,7 +856,6 @@ export function ToolListView(
   );
 }
 
-/** The rows and the lines under them. */
 function ToolRows(props: {
   groups: ToolGroups;
   toolAction?: ToolsOptions["toolAction"];
@@ -1026,8 +1009,6 @@ export function ToolList(props: ToolListProps) {
   return <ToolListView {...props} state={state} made={made} refresh={refresh} />;
 }
 
-// ---- connection card & address -----------------------------------------------------------------
-
 function ConnectionSection(props: { state: ToolsState; keys?: ClientKey[]; remote: boolean }) {
   const { host } = useKit();
   const p = usePrivacy();
@@ -1146,7 +1127,6 @@ function NewKeyForm(props: { onMade: (key: MadeKey) => void; onCancel: () => voi
   );
 }
 
-/** One key: its name, masked value, use this week, and a row menu for Rename and Delete. */
 function KeyRow(props: {
   item: ClientKey;
   owners?: ReadonlyMap<string, string>;
@@ -1608,7 +1588,6 @@ export function ToolsPage(props: { options?: ToolsOptions }) {
     keys.reload();
     usage.reload();
   };
-  // One filled button per view: a tool that needs an update wins when the panel handles it, else New key.
   const clients = state.setup.data?.scanned_at
     ? groupTools(state.setup.data.found.clients, options?.extraTools)
     : undefined;

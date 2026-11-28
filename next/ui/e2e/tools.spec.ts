@@ -221,7 +221,6 @@ test("a key made by name can be renamed and deleted from its row menu; the last 
   // New key puts nothing in any tool's text.
   await row(page, "Claude Code").getByRole("button", { name: "Set up by hand", exact: true }).click();
   await expect(row(page, "Claude Code").locator("pre")).toContainText("<client-key>");
-  // Rename from the row menu.
   await openKeyMenu(made);
   await made.getByRole("menuitem", { name: "Rename", exact: true }).click();
   await made.getByLabel("Name", { exact: true }).fill("Nightly job");
@@ -230,7 +229,6 @@ test("a key made by name can be renamed and deleted from its row menu; the last 
   await expect(renamed).toBeVisible();
   const listed = await core.mgmt<{ keys: { label?: string }[] }>("GET", "/client-keys");
   expect(listed.body.keys.map((k) => k.label)).toContain("Nightly job");
-  // Delete from the row menu asks first, naming the key; Cancel leaves it.
   await openKeyMenu(renamed);
   await renamed.getByRole("menuitem", { name: "Delete", exact: true }).click();
   await expect(renamed).toContainText("Nightly job stops working until it gets a new key.");
@@ -303,7 +301,6 @@ test("opening a key menu does not cover the next key row or the last-key note", 
   expect((onlyMenuBox?.y ?? 0) + (onlyMenuBox?.height ?? 0)).toBeLessThanOrEqual((noteBox?.y ?? 0) + 1);
   await page.keyboard.press("Escape");
 
-  // With two keys, opening the first key's menu never paints over the second key row.
   await keys(page).getByRole("button", { name: "New key", exact: true }).click();
   await keys(page).getByLabel("Name", { exact: true }).fill("Second key");
   await keys(page).getByRole("button", { name: "Make key", exact: true }).click();
@@ -327,7 +324,6 @@ test("key row menu supports Arrow keys, closes when focus leaves, and Cancel ret
   await expect(row).toBeVisible();
   const trigger = row.locator('button[aria-haspopup="menu"]');
 
-  // Enter opens the menu on Rename; Arrow keys move between items; Escape returns to trigger.
   await trigger.focus();
   await page.keyboard.press("Enter");
   await expect(row.getByRole("menuitem", { name: "Rename", exact: true })).toBeFocused();
@@ -339,18 +335,15 @@ test("key row menu supports Arrow keys, closes when focus leaves, and Cancel ret
   await expect(row.getByRole("menu")).toHaveCount(0);
   await expect(trigger).toBeFocused();
 
-  // ArrowDown / ArrowUp open the menu from the trigger on the first / last item.
   await page.keyboard.press("ArrowDown");
   await expect(row.getByRole("menuitem", { name: "Rename", exact: true })).toBeFocused();
   await page.keyboard.press("Escape");
   await page.keyboard.press("ArrowUp");
   await expect(row.getByRole("menuitem", { name: "Delete", exact: true })).toBeFocused();
 
-  // Tabbing past the menu closes it.
   await page.keyboard.press("Tab");
   await expect(row.getByRole("menu")).toHaveCount(0);
 
-  // Cancel on Rename and Cancel on Delete confirm both return focus to the menu button.
   await trigger.focus();
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");

@@ -875,7 +875,6 @@ export function ToolTop(props: {
 
 // ---- sections and rows -------------------------------------------------------------------------
 
-/** A section of a tool's page in a card, with its name; subtitle sits under the name and aside at its end. */
 export function Section(props: {
   title: string;
   subtitle?: string;

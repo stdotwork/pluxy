@@ -1,5 +1,3 @@
-/* The Tools page: coding tools card with marks and Magpie-style two-line rows, client keys card with
-   a row menu, and the shared ConnectionCard in the side column. Tokens only (`--px-*`). */
 @layer kit {
   html[data-page="tools"] .content {
     padding-block: calc(var(--s) * 5) calc(var(--s) * 6);
@@ -35,8 +33,6 @@
     margin: 0;
   }
 
-  /* ---- cards on Tools ----------------------------------------------------------------------- */
-
   .tools .tools-list,
   .tools .tools-section.card {
     --under-card: var(--px-color-card);
@@ -50,7 +46,6 @@
     min-width: 0;
   }
 
-  /* Standalone ToolList (such as inside Setup) keeps a flush list without a second card frame. */
   .tools-list {
     display: grid;
     gap: 0;
@@ -124,7 +119,6 @@
     margin: 0;
   }
 
-  /* Under a stale notice, words keep their normal colours; only marks fade. */
   .tools-fade[data-stale] .tool-mark-tile {
     opacity: 0.6;
   }
@@ -134,8 +128,6 @@
     border-top: var(--px-shape-border) solid var(--px-color-border);
     color: var(--px-color-text-muted);
   }
-
-  /* ---- tool mark ---------------------------------------------------------------------------- */
 
   .tool-mark-tile {
     display: inline-grid;
@@ -206,8 +198,6 @@
     background: color-mix(in srgb, var(--px-color-chart-6) 16%, var(--px-color-surface));
     border-color: color-mix(in srgb, var(--px-color-chart-6) 36%, var(--px-color-border));
   }
-
-  /* ---- coding tool rows --------------------------------------------------------------------- */
 
   .tool-rows {
     border-top: var(--px-shape-border) solid var(--px-color-border);
@@ -330,8 +320,6 @@
     }
   }
 
-  /* ---- Other tools disclosure & footer ------------------------------------------------------ */
-
   .tools-other {
     border-top: var(--px-shape-border) solid var(--px-color-border);
   }
@@ -382,8 +370,6 @@
     border-radius: 0 0 var(--r-card) var(--r-card);
     font-size: var(--px-font-size-small);
   }
-
-  /* ---- skeleton rows ------------------------------------------------------------------------ */
 
   .tools-skeleton {
     display: grid;
@@ -440,8 +426,6 @@
     height: var(--px-size-control);
     border-radius: var(--px-shape-radius);
   }
-
-  /* ---- the steps under a row ---------------------------------------------------------------- */
 
   .tools-list .tool-more {
     padding: calc(var(--s) * 3.5);
@@ -539,8 +523,6 @@
     white-space: pre;
   }
 
-  /* ---- side column: ConnectionCard + reachability footer ------------------------------------ */
-
   .tools-connection {
     display: grid;
     border: var(--px-shape-border) solid var(--px-color-card-border);
@@ -558,7 +540,6 @@
     box-shadow: none;
   }
 
-  /* Already on Tools: hide the shared card's self-links to #/tools. */
   .tools-connection [data-part="connection-card"] .side-card-link,
   .tools-connection [data-part="connection-card"] .connection-label a {
     display: none;
@@ -620,8 +601,6 @@
   .tools-reach-dot[data-network="yes"] {
     background: var(--px-color-info);
   }
-
-  /* ---- keys card ---------------------------------------------------------------------------- */
 
   .tools-keys-banner {
     padding: calc(var(--s) * 3) calc(var(--s) * 3.5);
@@ -746,8 +725,6 @@
     white-space: nowrap;
   }
 
-  /* ---- key row menu ------------------------------------------------------------------------- */
-
   .tool-key-actions {
     display: flex;
     flex: none;
@@ -827,8 +804,6 @@
     opacity: 0.55;
     cursor: not-allowed;
   }
-
-  /* ---- inline confirm, rename & notes on a key row ------------------------------------------ */
 
   .tool-key-confirm,
   .tool-key-rename,

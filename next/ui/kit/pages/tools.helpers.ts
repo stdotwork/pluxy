@@ -20,7 +20,6 @@ const TOOL_NAMES: Readonly<Record<string, string>> = { codex: "Codex" };
 
 export const toolName = (client: Pick<SetupClient, "id" | "name">) => TOOL_NAMES[client.id] ?? client.name;
 
-/** How a coding tool's mark is drawn beside its name on Tools and on its own page. */
 export type ToolMarkKind =
   | { kind: "provider"; extension: string }
   | { kind: "opencode" }
@@ -34,7 +33,6 @@ const TOOL_PROVIDERS: Readonly<Record<string, string>> = {
   "grok-build": "pluxy/xai",
 };
 
-/** The mark for a coding tool: its provider's mark when it belongs to one, else a tool glyph or initial. */
 export function toolMarkKind(id: string, name?: string): ToolMarkKind {
   if (Object.hasOwn(TOOL_PROVIDERS, id)) {
     return { kind: "provider", extension: TOOL_PROVIDERS[id] as string };

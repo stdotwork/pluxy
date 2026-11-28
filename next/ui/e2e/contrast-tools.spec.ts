@@ -1,12 +1,10 @@
-// Tools' text stays readable (WCAG AA, 4.5:1) under a stale notice in every built-in theme, in
-// light and in dark: only the tool marks fade (opacity 0.6), never the words.
 import { expect, type Page, test } from "@playwright/test";
 import { measureContrast } from "./contrast";
 import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore({ firstRun: true });
 
-const THEMES = ["", "pluxy/terminal", "pluxy/paper"] as const; // "" is the default theme
+const THEMES = ["", "pluxy/terminal", "pluxy/paper"] as const;
 const APPEARANCES = ["light", "dark"] as const;
 const AA = 4.5;
 
@@ -36,7 +34,6 @@ for (const theme of THEMES) {
       await expect(stale).toBeVisible();
       await expect(page.locator(".tools-stale-wrap")).toBeVisible();
 
-      // Words stay at full opacity; only the tool mark fades to 0.6.
       expect(await stale.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
       expect(
         await stale
