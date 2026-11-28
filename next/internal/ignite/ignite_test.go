@@ -8,8 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// loc is the machine's local time in these tests: two hours east of UTC, so a test that read
-// the hours in UTC would fail.
 var loc = time.FixedZone("test", 2*60*60)
 
 func at(day, hour, min, sec int) time.Time { return time.Date(2026, 11, day, hour, min, sec, 0, loc) }
@@ -19,9 +17,6 @@ func i64(v int64) *int64    { return &v }
 func pf(v float64) *float64 { return &v }
 func bp(v bool) *bool       { return &v }
 
-// owner is the settings of the CPA setup this feature replaces: 07:00 to 22:00 with 30 minutes'
-// grace, 2 seconds after a reset, retries 5 minutes apart growing threefold, 3 failures pause, a
-// minute's hold.
 func owner() *Config {
 	return &Config{Enabled: true, StartHour: ip(7), EndHour: ip(22), EndGraceMS: i64(30 * 60 * 1000), GraceMS: i64(2000),
 		RetryMS: i64(300000), BackoffMultiplier: pf(3), MaxFailures: ip(3), HoldMS: i64(60000),
@@ -55,15 +50,12 @@ func TestInHours(t *testing.T) {
 			}
 		})
 	}
-	// Unset hours are 07:00 to 22:30.
 	var c Config
 	if got := c.InHours(at(10, 22, 30, 0)); !got.Equal(at(11, 7, 0, 0)) {
 		t.Fatalf("default hours: InHours(22:30) = %s, want 07:00 the next day", got)
 	}
 }
 
-// claudeReading is a Claude subscription's usage reading: the 5-hour and weekly windows, a model
-// family's weekly window, a feature's window and extra usage.
 func claudeReading(fiveReset int64, fiveUsed float64, weekUsed float64) *protocol.Quota {
 	week := at(14, 0, 0, 0).Unix()
 	return &protocol.Quota{Limits: []protocol.QuotaLimit{
@@ -106,12 +98,10 @@ func TestWindows(t *testing.T) {
 		if ws := Windows(l, now); len(ws) != 1 || ws[0].Running {
 			t.Fatalf("placeholder: windows = %+v", ws)
 		}
-		// One a request started 15 seconds ago runs, though nothing shows used yet.
 		l[0].ResetsAt = now.Add(5*time.Hour - 15*time.Second).Unix()
 		if ws := Windows(l, now); len(ws) != 1 || !ws[0].Running {
 			t.Fatalf("started: windows = %+v", ws)
 		}
-		// So does one with some use, whatever its reset.
 		l[0].ResetsAt, l[0].UsedPercent = now.Add(5*time.Hour).Unix(), pf(1)
 		if ws := Windows(l, now); len(ws) != 1 || !ws[0].Running {
 			t.Fatalf("used: windows = %+v", ws)
@@ -147,8 +137,6 @@ func TestWindows(t *testing.T) {
 	})
 }
 
-// run drives a planner for one account the way core does: at now, if the account is due, it
-// reads q and returns the windows Plan starts.
 func run(t *testing.T, p *Planner, q *protocol.Quota, h Health, now time.Time) []Fire {
 	t.Helper()
 	due := p.Due(now)
@@ -176,7 +164,6 @@ func TestPlanStartsWindowAfterItsReset(t *testing.T) {
 	if f := run(t, p, claudeReading(reset.Unix(), 40, 10), ok, now); len(f) != 0 {
 		t.Fatalf("a running window was started: %+v", f)
 	}
-	// The next reading comes 2 seconds (the grace) after the reset, and nothing before.
 	if got := p.Next(); !got.Equal(reset.Add(2 * time.Second)) {
 		t.Fatalf("next reading %s, want %s", got, reset.Add(2*time.Second))
 	}
@@ -187,7 +174,6 @@ func TestPlanStartsWindowAfterItsReset(t *testing.T) {
 	if len(v.Windows) != 1 || v.Windows[0].State != StateRunning || !v.Windows[0].Next.Equal(reset.Add(2*time.Second)) {
 		t.Fatalf("view = %+v", v)
 	}
-	// The window has reset: started at once.
 	now = reset.Add(2 * time.Second)
 	f := run(t, p, claudeReading(0, 0, 10), ok, now)
 	if len(f) != 1 || f[0].Window.ID != "five_hour" || f[0].Model != "" {
@@ -197,7 +183,6 @@ func TestPlanStartsWindowAfterItsReset(t *testing.T) {
 	if v := p.View("a"); v.Windows[0].State != StateStarting || v.Windows[0].Model != "claude-haiku-5-5" {
 		t.Fatalf("view after the request = %+v", v.Windows[0])
 	}
-	// Read again a hold later: the window runs.
 	if got := p.Next(); !got.Equal(now.Add(time.Minute)) {
 		t.Fatalf("next reading %s, want a minute on", got)
 	}
@@ -211,7 +196,6 @@ func TestPlanStartsWindowAfterItsReset(t *testing.T) {
 }
 
 func TestPlanWaitsForTheHours(t *testing.T) {
-	// A reset at 23:10, past 22:30: the window is started at 07:00 the next day.
 	now := at(10, 23, 10, 2)
 	p := newOwnerPlanner(now)
 	if f := run(t, p, claudeReading(0, 0, 10), ok, now); len(f) != 0 {
@@ -227,13 +211,10 @@ func TestPlanWaitsForTheHours(t *testing.T) {
 	if f := run(t, p, claudeReading(0, 0, 10), ok, at(11, 7, 0, 0)); len(f) != 1 {
 		t.Fatalf("not started at 07:00: %+v", f)
 	}
-	// In the end grace, 22:20, a reset is still started.
 	p = newOwnerPlanner(at(10, 22, 20, 0))
 	if f := run(t, p, claudeReading(0, 0, 10), ok, at(10, 22, 20, 0)); len(f) != 1 {
 		t.Fatalf("not started in the end grace: %+v", f)
 	}
-	// A running window that resets outside the hours is next read at its reset, and its next
-	// ignition shows as 07:00.
 	p = newOwnerPlanner(at(10, 20, 0, 0))
 	run(t, p, claudeReading(at(11, 1, 0, 0).Unix(), 50, 10), ok, at(10, 20, 0, 0))
 	if v := p.View("a").Windows[0]; !v.Next.Equal(at(11, 7, 0, 0)) {
@@ -258,13 +239,11 @@ func TestPlanRetriesWithBackoffThenPauses(t *testing.T) {
 		if v.State != StateWaiting || v.Failures != i+1 || v.Error != fail.Message {
 			t.Fatalf("after failure %d: view = %+v", i+1, v)
 		}
-		// A reading before the retry's wait ends starts nothing.
 		if f := p.Plan("a", claudeReading(0, 0, 10), ok, now.Add(wait-time.Second)); len(f) != 0 {
 			t.Fatalf("started during the wait: %+v", f)
 		}
 		now = now.Add(wait)
 	}
-	// The third failure pauses the window until 07:00 the next day.
 	if f := run(t, p, claudeReading(0, 0, 10), ok, now); len(f) != 1 {
 		t.Fatalf("third try: fires = %+v", f)
 	}
@@ -275,7 +254,6 @@ func TestPlanRetriesWithBackoffThenPauses(t *testing.T) {
 	if v := p.View("a").Windows[0]; v.State != StatePaused || !v.Next.Equal(at(11, 7, 0, 0)) {
 		t.Fatalf("paused: view = %+v", v)
 	}
-	// At 07:00 it tries again, with a fresh count.
 	if f := run(t, p, claudeReading(0, 0, 10), ok, at(11, 7, 0, 0)); len(f) != 1 {
 		t.Fatalf("not tried after the pause: %+v", f)
 	}
@@ -300,11 +278,9 @@ func TestPlanCountsAWindowThatDidNotStart(t *testing.T) {
 	p := newOwnerPlanner(now)
 	run(t, p, claudeReading(0, 0, 10), ok, now)
 	p.Done("a", "five_hour", "m", nil, now)
-	// A reading before the hold ends (another window's) says nothing yet.
 	if f := p.Plan("a", claudeReading(0, 0, 10), ok, now.Add(30*time.Second)); len(f) != 0 {
 		t.Fatalf("started again during the hold: %+v", f)
 	}
-	// A hold on, the window still does not run: a failure, retried 5 minutes on.
 	now = now.Add(time.Minute)
 	if f := run(t, p, claudeReading(0, 0, 10), ok, now); len(f) != 0 {
 		t.Fatalf("started again at once: %+v", f)
@@ -325,7 +301,6 @@ func TestPlanSkipsAccountsThatCannotServe(t *testing.T) {
 	if got := p.Next(); !got.Equal(until.Add(2 * time.Second)) {
 		t.Fatalf("next reading %s, want the block's end and the grace", got)
 	}
-	// With no end known (a ban), it is read again a retry's wait later.
 	p = newOwnerPlanner(now)
 	if f := run(t, p, claudeReading(0, 0, 10), Health{Why: "banned"}, now); len(f) != 0 {
 		t.Fatalf("started a banned account: %+v", f)
@@ -333,7 +308,6 @@ func TestPlanSkipsAccountsThatCannotServe(t *testing.T) {
 	if got := p.Next(); !got.Equal(now.Add(5 * time.Minute)) {
 		t.Fatalf("next reading %s, want 5 minutes on", got)
 	}
-	// A full weekly window: waits for its reset.
 	p = newOwnerPlanner(now)
 	if f := run(t, p, claudeReading(0, 0, 100), ok, now); len(f) != 0 {
 		t.Fatalf("started under a full weekly window: %+v", f)
@@ -341,7 +315,6 @@ func TestPlanSkipsAccountsThatCannotServe(t *testing.T) {
 	if got := p.Next(); !got.Equal(at(14, 7, 0, 0)) {
 		t.Fatalf("next reading %s, want 07:00 after the weekly reset (00:00 is outside the hours)", got)
 	}
-	// An account taken out of service (turned off, waiting for a login) is dropped.
 	p.Set(owner(), nil, now)
 	if d, v := p.Due(now.Add(48*time.Hour)), p.View("a"); len(d) != 0 || v != nil {
 		t.Fatalf("a dropped account: due %v, view %+v", d, v)
@@ -362,14 +335,12 @@ func TestPlanReadings(t *testing.T) {
 	if d := p.Due(now.Add(48 * time.Hour)); len(d) != 0 {
 		t.Fatalf("an account with no reading is read again: %v", d)
 	}
-	// A change of the settings reads every account at once.
 	c := owner()
 	c.StartHour = ip(6)
 	p.Set(c, []Ref{{ID: "a", Extension: "pluxy/claude"}}, now)
 	if d := p.Due(now); len(d) != 1 {
 		t.Fatalf("not read after a change of the settings: %v", d)
 	}
-	// The same settings again change nothing.
 	p.Plan("a", claudeReading(at(10, 14, 0, 0).Unix(), 10, 10), ok, now)
 	p.Set(c, []Ref{{ID: "a", Extension: "pluxy/claude"}}, now)
 	if d := p.Due(now); len(d) != 0 {
@@ -468,7 +439,6 @@ func TestChooseModel(t *testing.T) {
 }
 
 func TestSettingsChangeLiftsAPause(t *testing.T) {
-	// No model to choose pauses the window; setting one starts it at once, not the next morning.
 	now := at(10, 12, 0, 0)
 	p := newOwnerPlanner(now)
 	run(t, p, claudeReading(0, 0, 10), ok, now)
@@ -501,9 +471,7 @@ func TestInHoursAcrossDaylightSaving(t *testing.T) {
 		start, end int
 		now, want  time.Time
 	}{
-		// The day the clocks go back is 25 hours long: 0 to 23 is still not the whole day.
 		{"0 to 23, the night the clocks go back", 0, 23, time.Date(2026, 10, 31, 23, 30, 0, 0, ny), time.Date(2026, 11, 1, 0, 0, 0, 0, ny)},
-		// The day the clocks go forward is 23 hours long: 0 to 2 still holds 01:00 to 02:00.
 		{"0 to 2, the morning the clocks go forward", 0, 2, time.Date(2026, 3, 8, 1, 30, 0, 0, ny), time.Date(2026, 3, 8, 1, 30, 0, 0, ny)},
 		{"7 to 22, the day the clocks go back", 7, 22, time.Date(2026, 11, 1, 6, 30, 0, 0, ny), time.Date(2026, 11, 1, 7, 0, 0, 0, ny)},
 	} {

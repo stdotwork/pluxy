@@ -6,23 +6,12 @@ import (
 	"unicode"
 )
 
-// small are the words that mark a provider's small, cheap models, best first.
 var small = []string{"haiku", "luna", "flash-lite", "lite", "mini", "nano", "flash", "oss", "small"}
 
-// unfit are the words that start a part of the IDs of models a short text request does not suit or that cost more than it
-// needs: image and audio models, embeddings, reasoning variants, review models.
 var unfit = []string{"image", "audio", "tts", "embed", "thinking", "review", "realtime", "transcribe", "search"}
 
-// families are the words that tie a model to a group of models a usage window counts.
 var families = []string{"gemini", "claude", "gpt", "grok", "kimi", "llama"}
 
-// ChooseModel picks the model an ignition request names when the settings name none: among
-// models, the account's model IDs in the order it lists them, those a short text request suits,
-// and of a window that counts a group of models (counts, as the reading names them) only those of
-// the group's families (gemini, claude, gpt and the like). Of those it takes a small model: the
-// first word of small that one names decides, and among the models it names the newest (the
-// highest version, by the numbers in the ID). With no small model it takes the first that is
-// left, and "" when none is.
 func ChooseModel(models, counts []string) string {
 	var fam []string
 	for _, c := range counts {
@@ -57,9 +46,6 @@ func ChooseModel(models, counts []string) string {
 	return ""
 }
 
-// unfitModel reports whether model ID m (in lower case) has a part (split as names splits) that
-// starts with a word of unfit: text-embedding-3 and gpt-image-2 do, gemini-3-flash-preview does
-// not.
 func unfitModel(m string) bool {
 	for _, p := range strings.FieldsFunc(m, func(r rune) bool { return r == '-' || r == '.' || r == '_' || r == ' ' }) {
 		for _, w := range unfit {
@@ -71,9 +57,6 @@ func unfitModel(m string) bool {
 	return false
 }
 
-// names reports whether model ID m names word: as one of its parts (split at "-", ".", "_" and
-// spaces), or, for a word of two parts such as flash-lite, as those parts in a row; so gemini is
-// not a mini model.
 func names(m, word string) bool {
 	sep := func(r rune) bool { return r == '-' || r == '.' || r == '_' || r == ' ' }
 	parts, want := strings.FieldsFunc(strings.ToLower(m), sep), strings.FieldsFunc(word, sep)
@@ -94,9 +77,6 @@ func containsAny(s string, words []string) bool {
 	return false
 }
 
-// newer reports whether a names a later version than b: their runs of digits compared in turn as
-// numbers, a date-like run (6 digits or more) aside, so claude-haiku-5-5 is newer than
-// claude-haiku-4-5-20251001 and gpt-6-luna than gpt-5.6-luna.
 func newer(a, b string) bool {
 	x, y := version(a), version(b)
 	for i := 0; i < len(x) && i < len(y); i++ {

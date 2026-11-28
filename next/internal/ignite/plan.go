@@ -11,55 +11,35 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// readEvery is how long after a reading with nothing to wait for (no window to start) the
-// account is read again; a window that runs is read again once it resets, and one that waits
-// when its wait ends.
 const readEvery = time.Hour
 
-// Window states, as View shows them.
 const (
-	// StateRunning: the window runs; it is started again once it resets.
-	StateRunning = "running"
-	// StateWaiting: the window has reset and is started at Next: when the hours start, the
-	// account can serve again, a full window resets or a retry is due.
-	StateWaiting = "waiting"
-	// StateStarting: the request was sent; the next reading shows whether the window started.
+	StateRunning  = "running"
+	StateWaiting  = "waiting"
 	StateStarting = "starting"
-	// StatePaused: failures paused the window's ignition until Next, the next start of the hours.
-	StatePaused = "paused"
+	StatePaused   = "paused"
 )
 
-// Ref names an account ignition runs for.
 type Ref struct {
 	ID, Extension string
 }
 
-// Health is what Plan needs to know of an account's routing state: whether it can serve now, and
-// else until when it cannot (zero: not known).
 type Health struct {
 	OK    bool
 	Until time.Time
 	Why   string
 }
 
-// Fire is a window Plan says to start now, with the model the settings name for it ("" for a
-// small one the account serves).
 type Fire struct {
 	Window Window
 	Model  string
 }
 
-// Failure is why an ignition request failed. Hard is true for a failure retrying soon will not
-// mend, such as a refused key or a model the account does not have: it pauses the window at once.
 type Failure struct {
 	Message string
 	Hard    bool
 }
 
-// Planner keeps, for each account ignition runs for, when to read its usage next and the state
-// of each window it starts. Core reads the accounts Due names, passes each reading to Plan, sends
-// the requests Plan returns and passes each outcome to Done. Its methods take the time, so a test
-// drives it with a clock of its own; they are safe to call from several goroutines.
 type Planner struct {
 	mu       sync.Mutex
 	cfg      Config
@@ -68,30 +48,26 @@ type Planner struct {
 
 type plan struct {
 	ext     string
-	next    time.Time // when the account is read next; zero: never (it has no reading)
-	err     string    // why the last reading could not be made
+	next    time.Time
+	err     string
 	windows map[string]*windowState
 }
 
 type windowState struct {
 	state    string
-	next     time.Time // when the window is (or would be) started next
-	failures int       // failures in a row
-	retryAt  time.Time // no ignition before then: a retry's wait
-	paused   time.Time // no ignition before then: failures paused it
-	firedAt  time.Time // when a request that succeeded was sent, until a reading shows the window started
-	model    string    // the model of the last request
-	lastAt   time.Time // when the last request was sent
-	lastErr  string    // why the last request, or the window, failed; empty after a success
-	why      string    // what the window waits for
+	next     time.Time
+	failures int
+	retryAt  time.Time
+	paused   time.Time
+	firedAt  time.Time
+	model    string
+	lastAt   time.Time
+	lastErr  string
+	why      string
 }
 
-// NewPlanner returns a planner with no accounts.
 func NewPlanner() *Planner { return &Planner{accounts: map[string]*plan{}} }
 
-// Set makes cfg the settings and accounts (the accounts in service) the accounts ignition may
-// run for: those cfg turns on are kept or added, the others dropped. An added account is read at
-// now; when the settings changed, every account is read at now, so they apply at once.
 func (p *Planner) Set(cfg *Config, accounts []Ref, now time.Time) {
 	var c Config
 	if cfg != nil {
@@ -113,8 +89,6 @@ func (p *Planner) Set(cfg *Config, accounts []Ref, now time.Time) {
 			continue
 		}
 		if changed {
-			// New settings may mend what failed (a model set, say): failures, waits and pauses
-			// start over. A request still being checked stays so.
 			pl.next = now
 			for _, ws := range pl.windows {
 				ws.failures, ws.retryAt, ws.paused = 0, time.Time{}, time.Time{}
@@ -128,7 +102,6 @@ func (p *Planner) Set(cfg *Config, accounts []Ref, now time.Time) {
 	}
 }
 
-// Due returns the accounts to read at now, in ID order.
 func (p *Planner) Due(now time.Time) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -142,7 +115,6 @@ func (p *Planner) Due(now time.Time) []string {
 	return out
 }
 
-// Next returns when the planner next has an account to read; zero when it has none.
 func (p *Planner) Next() time.Time {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -155,8 +127,6 @@ func (p *Planner) Next() time.Time {
 	return t
 }
 
-// NoReading records that account id's provider has no usage reading (an API key, an extension
-// without the quota call): it is not read again until the settings or the accounts change.
 func (p *Planner) NoReading(id, why string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -165,8 +135,6 @@ func (p *Planner) NoReading(id, why string) {
 	}
 }
 
-// ReadFailed records that account id's usage could not be read: it is read again a retry's wait
-// later.
 func (p *Planner) ReadFailed(id, why string, now time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -175,12 +143,6 @@ func (p *Planner) ReadFailed(id, why string, now time.Time) {
 	}
 }
 
-// Plan decides, from a reading q of account id's usage taken at now and the account's health,
-// which of its windows to start now, and when to read it next. A window is started only when it
-// is not running (it has reset, or never started), within the hours, when the account can serve,
-// when no other window that covers the same requests is full, and when no retry's wait or pause
-// holds it. A window still not running a hold after an ignition that succeeded counts as a
-// failed ignition.
 func (p *Planner) Plan(id string, q *protocol.Quota, h Health, now time.Time) []Fire {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -209,7 +171,6 @@ func (p *Planner) Plan(id string, q *protocol.Quota, h Health, now time.Time) []
 			pl.windows[w.ID] = ws
 		}
 		if w.Running {
-			// Started, by an ignition or by a request: whatever failed before is over.
 			ws.failures, ws.retryAt, ws.paused, ws.firedAt, ws.lastErr = 0, time.Time{}, time.Time{}, time.Time{}, ""
 			ws.state, ws.why = StateRunning, ""
 			t := w.Reset.Add(c.grace())
@@ -257,7 +218,6 @@ func (p *Planner) Plan(id string, q *protocol.Quota, h Health, now time.Time) []
 			wake(t)
 			continue
 		}
-		// Sent now: starting from the moment it is sent, so no one reads it as waiting.
 		ws.state, ws.next, ws.why = StateStarting, time.Time{}, ""
 		fire = append(fire, Fire{Window: w, Model: c.Model(id, pl.ext, w.ID)})
 	}
@@ -267,19 +227,12 @@ func (p *Planner) Plan(id string, q *protocol.Quota, h Health, now time.Time) []
 		}
 	}
 	if next.IsZero() && len(fire) == 0 {
-		// Nothing to wait for: no window to start.
 		next = now.Add(readEvery)
 	}
-	// With every window started now, next stays zero until Done sets when to read again.
 	pl.next = next
 	return fire
 }
 
-// Done records the outcome of the ignition request of window w of account id, sent at now with
-// model; f is nil when it succeeded. After a success the window is read again a hold later, to
-// see that it started; after a failure, a retry's wait later, the wait growing by the multiplier
-// with each failure in a row; the failure that reaches the limit, or a hard one, pauses the
-// window until the next start of the hours.
 func (p *Planner) Done(id, w, model string, f *Failure, now time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -306,7 +259,6 @@ func (p *Planner) Done(id, w, model string, f *Failure, now time.Time) {
 	}
 }
 
-// fail counts a failed ignition of ws at now and returns when to read the window again.
 func (p *Planner) fail(ws *windowState, f Failure, now time.Time) time.Time {
 	c := &p.cfg
 	ws.failures++
@@ -323,32 +275,22 @@ func (p *Planner) fail(ws *windowState, f Failure, now time.Time) time.Time {
 	return ws.retryAt
 }
 
-// View is an account's ignition as the management API shows it.
 type View struct {
-	// Error is why the account's usage could not be read, or why it has no reading.
 	Error   string       `json:"error,omitempty"`
 	Windows []WindowView `json:"windows"`
 }
 
-// WindowView is one window's ignition.
 type WindowView struct {
-	ID    string `json:"id"`
-	State string `json:"state"`
-	// Next is when core starts the window next (when it waits, or once it resets); absent while
-	// a request it sent is being checked.
-	Next *time.Time `json:"next,omitempty"`
-	// Why says what the window waits for.
-	Why string `json:"why,omitempty"`
-	// Failures is the failed ignitions in a row.
-	Failures int `json:"failures,omitempty"`
-	// Last is when the last ignition request was sent, Model the model it named and Error why it
-	// failed (or why the window did not start after it).
-	Last  *time.Time `json:"last,omitempty"`
-	Model string     `json:"model,omitempty"`
-	Error string     `json:"error,omitempty"`
+	ID       string     `json:"id"`
+	State    string     `json:"state"`
+	Next     *time.Time `json:"next,omitempty"`
+	Why      string     `json:"why,omitempty"`
+	Failures int        `json:"failures,omitempty"`
+	Last     *time.Time `json:"last,omitempty"`
+	Model    string     `json:"model,omitempty"`
+	Error    string     `json:"error,omitempty"`
 }
 
-// View returns account id's ignition, or nil when ignition does not run for it.
 func (p *Planner) View(id string) *View {
 	p.mu.Lock()
 	defer p.mu.Unlock()
