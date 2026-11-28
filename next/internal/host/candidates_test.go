@@ -14,7 +14,6 @@ func TestCandidatesMinorGating(t *testing.T) {
 		t.Fatalf("protocol.Minor = %d, want >= %d", protocol.Minor, CandidatesMinor)
 	}
 
-	// Request downgrade below CandidatesMinor.
 	req := llm.Request{
 		Model:      "m",
 		DropPolicy: llm.DropReport,
@@ -28,32 +27,27 @@ func TestCandidatesMinorGating(t *testing.T) {
 	if len(lost) != 1 || lost[0].Kind != llm.LossDropped || lost[0].Path != "n" {
 		t.Errorf("lost = %+v, want dropped loss at n", lost)
 	}
-	// Original request must not be mutated.
 	if req.Options.CandidateCount != 3 {
 		t.Errorf("caller request mutated: CandidateCount = %d", req.Options.CandidateCount)
 	}
 
-	// Reject drop policy refuses before sending.
 	reqReject := req
 	reqReject.DropPolicy = llm.DropReject
 	if err := refuseCandidateCount("ext-old", CandidatesMinor-1, reqReject, lost); err == nil || err.Code != llm.CodeUnsupported || !reflect.DeepEqual(err.Dropped, []string{"n"}) {
 		t.Errorf("refuseCandidateCount = %+v, want unsupported naming [n]", err)
 	}
 
-	// At CandidatesMinor, request keeps CandidateCount with no losses.
 	gotNew, lostNew := downgradeCandidateCount(CandidatesMinor, "ext-new", req)
 	if gotNew.Options.CandidateCount != 3 || len(lostNew) != 0 {
 		t.Errorf("at minor %d: CandidateCount=%d lost=%+v", CandidatesMinor, gotNew.Options.CandidateCount, lostNew)
 	}
 
-	// Count 1 or 0 produces no downgrade loss.
 	reqOne := req
 	reqOne.Options.CandidateCount = 1
 	if _, l := downgradeCandidateCount(CandidatesMinor-1, "ext-old", reqOne); len(l) != 0 {
 		t.Errorf("count 1 produced losses: %+v", l)
 	}
 
-	// Reply downgrade: EventCandidate from an extension below CandidatesMinor is stripped.
 	ev := llm.Event{
 		Type:      llm.EventCandidate,
 		Candidate: &llm.CandidateEvent{Index: 1, Kind: llm.CandidateTextDelta, Delta: "hi"},

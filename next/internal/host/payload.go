@@ -10,8 +10,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
-// payloadMinor is the protocol minor version that adds payload rules, and payloadTurnMinor the
-// one that has a session turn apply them to its upstream message.
 const (
 	payloadMinor     = 14
 	payloadTurnMinor = 15
@@ -19,32 +17,20 @@ const (
 
 type payloadClientKey struct{}
 
-// payloadClient is what payload rules match of the client's request besides the call.
 type payloadClient struct {
 	model   string
 	headers http.Header
 }
 
-// WithPayloadClient returns ctx carrying the client's request for payload rules: the model it
-// asked for (before an alias or prefix is resolved, without a thinking suffix) and its headers.
-// Rules match the model of each call made with ctx and also this one, and their header
-// conditions match these headers. The generate, count_tokens, endpoint and session calls made
-// with ctx also fill in from them the account headers that copy a client header (upheader.Fill):
-// only the headers an account names that way leave core.
 func WithPayloadClient(ctx context.Context, model string, headers http.Header) context.Context {
 	return context.WithValue(ctx, payloadClientKey{}, payloadClient{model: model, headers: headers})
 }
 
-// clientHeaders returns the headers of the client's request ctx carries (WithPayloadClient), or
-// nil when it carries none.
 func clientHeaders(ctx context.Context) http.Header {
 	c, _ := ctx.Value(payloadClientKey{}).(payloadClient)
 	return c.headers
 }
 
-// Channel is the payload rules' protocol for an extension: the last part of its package ID
-// (pluxy/codex is codex), and openai for pluxy/openai-compatible, as today's core calls its
-// OpenAI-compatible providers.
 func Channel(id string) string {
 	if id == "pluxy/openai-compatible" {
 		return "openai"
@@ -52,8 +38,6 @@ func Channel(id string) string {
 	return id[strings.LastIndexByte(id, '/')+1:]
 }
 
-// FromProtocol is the payload rules' from-protocol for a request in a native format: today's
-// core's name for the client API it came in on; "" for none.
 func FromProtocol(format string) string {
 	switch format {
 	case llm.FormatOpenAIChat:
@@ -74,11 +58,6 @@ func FromProtocol(format string) string {
 	return ""
 }
 
-// payload returns the payload rules that apply to a call with req: the config's
-// (Options.Payload) that match the call's model, the client's (WithPayloadClient), the
-// extension's channel and the client's format and headers, each reduced to its body conditions
-// (payload.Select). It refuses the call when rules apply and the extension implements a protocol
-// older than minor, which would send the request without them.
 func (e *Extension) payload(ctx context.Context, req llm.Request, minor int) (*payload.Rules, *llm.Error) {
 	if e.opts.Payload == nil {
 		return nil, nil

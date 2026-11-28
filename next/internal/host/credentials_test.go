@@ -12,8 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// What the user entered never comes back in a login prompt, whichever field the extension
-// echoes it in.
 func TestLoginPromptIsRedacted(t *testing.T) {
 	const secret = "user-entered-secret-1234"
 	core, ext := net.Pipe()
@@ -36,8 +34,6 @@ func TestLoginPromptIsRedacted(t *testing.T) {
 	}
 }
 
-// Input for a login whose connection closed, or never opened, is reported as a closed
-// connection: the manager answers it as input to a login that has finished, not a failure.
 func TestSendToAnEndedLoginIsAClosedConnection(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -70,7 +66,6 @@ func jsonOf(v any) string {
 	return sb.String()
 }
 
-// Invalid extension settings fail at the protocol boundary, before storage sees them.
 func TestLoginGrantSettingsValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name, raw  string
@@ -88,7 +83,6 @@ func TestLoginGrantSettingsValidation(t *testing.T) {
 			defer core.Close()
 			defer ext.Close()
 			l := &LoginCall{ext: &Extension{manifest: &Manifest{ID: "test/x"}}, ctx: context.Background(), conn: core}
-			// Use the wire shape so the test also builds before settings validation exists.
 			go func() {
 				raw := map[string]any{"type": "login.done", "grant": map[string]any{"credential": map[string]string{"kind": "api_key", "api_key": "made-up-key"}, "settings": json.RawMessage(tc.raw)}}
 				protocol.WriteFrame(ext, raw)
@@ -110,9 +104,6 @@ func TestLoginGrantSettingsValidation(t *testing.T) {
 	}
 }
 
-// loginError returns the message a login's error shows after core removed what the user entered,
-// when the extension reports message after input was entered; secret names the inputs the login
-// marks secret.
 func loginError(t *testing.T, input map[string]string, secret []string, message string) string {
 	t.Helper()
 	core, ext := net.Pipe()
@@ -131,8 +122,6 @@ func loginError(t *testing.T, input map[string]string, secret []string, message 
 	return r.Error.Message
 }
 
-// A base URL a person typed shows in an error, whose words are no secret, while what it holds that
-// is one stays out, and so does everything else the user entered.
 func TestLoginErrorShowsTheTypedAddress(t *testing.T) {
 	const key = "mock-wrong-key-mock-wrong-key-mock-wrong-key"
 	secret := []string{"api_key"}
@@ -196,8 +185,6 @@ func TestLoginErrorShowsTheTypedAddress(t *testing.T) {
 	})
 }
 
-// An address whose user info Go reads as part of its host or path is not a plain address, and an
-// address that hides its query in other characters is not either: both stay secret whole.
 func TestLoginErrorKeepsAnAddressWithHiddenSecretsWhole(t *testing.T) {
 	cases := []struct{ name, input, secret string }{
 		{"password after a slash", "http://localhost:41234/Hunter2@gw.invalid/v1", "Hunter2"},
@@ -218,8 +205,6 @@ func TestLoginErrorKeepsAnAddressWithHiddenSecretsWhole(t *testing.T) {
 	}
 }
 
-// A user name shorter than 8 bytes alone is no secret of its own, so its letters stay in the error's
-// words; its password and "user:password" are.
 func TestLoginErrorShortUserName(t *testing.T) {
 	in := map[string]string{"base_url": "https://a:Pw9xQ2@gateway.invalid/v1"}
 	got := loginError(t, in, nil, `could not reach the model list: Get "https://a:Pw9xQ2@gateway.invalid/v1/models": Pw9xQ2 a:Pw9xQ2`)
@@ -230,15 +215,12 @@ func TestLoginErrorShortUserName(t *testing.T) {
 	if got := loginError(t, in, nil, "who username8 asked"); strings.Contains(got, "username8") {
 		t.Errorf("an 8-byte user name shows: %q", got)
 	}
-	// The user info as written is removed too, however it is escaped.
 	in = map[string]string{"base_url": "https://sam:hunter%32xyz@gateway.invalid/v1"}
 	if got := loginError(t, in, nil, "Get https://sam:hunter%32xyz@gateway.invalid/v1 and hunter2xyz"); strings.Contains(got, "hunter") {
 		t.Errorf("got %q", got)
 	}
 }
 
-// What core records of an account's proxy and headers counts whole, a plain address too: a proxy
-// password can be one.
 func TestLoginPromptHidesAProxyPasswordThatIsAnAddress(t *testing.T) {
 	const secret = "https://vault.invalid/XXsecretXX"
 	core, ext := net.Pipe()
@@ -258,8 +240,6 @@ func TestLoginPromptHidesAProxyPasswordThatIsAnAddress(t *testing.T) {
 	}
 }
 
-// A user name with no password counts only from 8 bytes, as written or decoded: a one-letter name
-// leaves the words of an error alone.
 func TestLoginErrorUserNameWithoutPassword(t *testing.T) {
 	for _, addr := range []string{"http://a@gw.test/v1", "http://%61@gw.test/v1", "http://a:@gw.test/v1"} {
 		got := loginError(t, map[string]string{"base_url": addr}, nil, "could not reach the address "+addr)

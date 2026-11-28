@@ -9,7 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// An extension below CandidatesMinor gets the same-format body it got before the minor.
 func TestCandidateCountDowngradeKeepsSameFormatBody(t *testing.T) {
 	chat := func(extra string) string {
 		return `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]` + extra + `}`
@@ -62,7 +61,6 @@ func TestCandidateCountDowngradeKeepsSameFormatBody(t *testing.T) {
 	}
 }
 
-// An older extension's encoder for another format still reports the count as dropped.
 func TestCandidateCountDowngradeStillReportedAcrossFormats(t *testing.T) {
 	req, err := openaichat.ParseRequest([]byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"n":3}`))
 	if err != nil {

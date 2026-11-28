@@ -10,8 +10,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// bufferedStream returns a Stream that has taken response.start from a pipe whose other end wrote
-// response.start and finish in one write, so the finish is in the stream's read-ahead buffer.
 func bufferedStream(t *testing.T, ctx context.Context) *Stream {
 	t.Helper()
 	ours, theirs := net.Pipe()
@@ -30,9 +28,6 @@ func bufferedStream(t *testing.T, ctx context.Context) *Stream {
 	return s
 }
 
-// A call whose context ends after response.start gets cancelled, though the extension's finish
-// frame had already arrived in the reader's buffer: the connection a read of it would have failed
-// on is closed.
 func TestBufferedFrameAfterCancelIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := bufferedStream(t, ctx)
@@ -43,8 +38,6 @@ func TestBufferedFrameAfterCancelIsCancelled(t *testing.T) {
 	}
 }
 
-// After Close, Next does not deliver a frame that was already buffered: it ends as a read of the
-// closed connection does, with the extension ending the call without finishing it.
 func TestBufferedFrameAfterCloseIsNotDelivered(t *testing.T) {
 	s := bufferedStream(t, context.Background())
 	s.Close()

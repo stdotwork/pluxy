@@ -8,15 +8,8 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// toolResultPartsMinor is the protocol minor version that adds a tool result's parts
-// (llm.Item.Content on a tool_result) and its error flag (llm.Item.IsError).
 const toolResultPartsMinor = 25
 
-// downgradeToolResults returns req as an extension that implements protocol minor version minor
-// can take it. Before toolResultPartsMinor each tool result keeps its text, in Output, and loses
-// its parts and error flag, returned as dropped losses: an extension that cannot read them would
-// leave them out without saying so. req's own items are left as they are; a changed request gets
-// its own copy of them.
 func downgradeToolResults(minor int, id string, req llm.Request) (llm.Request, []llm.Loss) {
 	if minor >= toolResultPartsMinor {
 		return req, nil
@@ -36,7 +29,6 @@ func downgradeToolResults(minor int, id string, req llm.Request) (llm.Request, [
 			path = it.Origin.Path
 		}
 		for k, p := range it.Content {
-			// A text part's text is in Output; only fields of its own are lost with it.
 			if p.Type == llm.PartText && (p.Origin == nil || len(p.Origin.Raw) == 0) {
 				continue
 			}
@@ -57,8 +49,6 @@ func downgradeToolResults(minor int, id string, req llm.Request) (llm.Request, [
 	return req, losses
 }
 
-// refuseDowngrade returns the error for a request whose tool results lost parts on the way to an
-// extension before toolResultPartsMinor, when its drop policy is reject; otherwise nil.
 func refuseDowngrade(id string, minor int, req llm.Request, lost []llm.Loss) *llm.Error {
 	if req.DropPolicy != llm.DropReject || len(lost) == 0 {
 		return nil
@@ -72,9 +62,6 @@ func refuseDowngrade(id string, minor int, req llm.Request, lost []llm.Loss) *ll
 			id, minor, toolResultPartsMinor, strings.Join(paths, ", "))}
 }
 
-// withLosses adds lost to the translation report of a response.start event, as losses of the
-// extension's own translation. A report that says passthrough describes the body the extension
-// sent, not what core left out of the request before it, so core's losses are kept either way.
 func withLosses(ev llm.Event, lost []llm.Loss) llm.Event {
 	if len(lost) == 0 || ev.Type != llm.EventResponseStart {
 		return ev

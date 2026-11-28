@@ -14,14 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// watchFake is an extension without the SDK that reports protocol minor version minor and acts
-// on a call's or turn's model:
-//
-//	"silent" sends nothing until the connection closes
-//	"stall"  sends response.start, then nothing until the connection closes
-//	"alive"  sends response.start, then an alive frame every 50ms for 600ms, then finish
-//	"slow"   sends response.start and a text delta "alive=<the call's alive>", then nothing for
-//	         600ms, then finish
 func watchFake(minor int) {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
@@ -90,14 +82,12 @@ func watchFake(minor int) {
 					answer(conn, turn)
 				}
 			}
-			// Wait for core to close the connection.
 			var b [1]byte
 			_, _ = conn.Read(b[:])
 		}()
 	}
 }
 
-// shortWatchdog makes the watchdog wait about 200ms past 1ms limits for the test.
 func shortWatchdog(t *testing.T) Options {
 	t.Helper()
 	old := watchdogGrace
@@ -117,7 +107,6 @@ func startWatchFake(t *testing.T, minor int, opts Options) *Extension {
 	return ext
 }
 
-// drain reads a stream to its terminal event, failing the test if that takes longer than d.
 func drain(t *testing.T, next func() llm.Event, d time.Duration) (llm.Event, time.Duration) {
 	t.Helper()
 	begin := time.Now()
@@ -139,9 +128,6 @@ func drain(t *testing.T, next func() llm.Event, d time.Duration) (llm.Event, tim
 	}
 }
 
-// For an extension that reports protocol 0.23, core ends a call that sends nothing for the
-// limits plus the grace with extension_timeout: retry-safe before response.start, not after;
-// and it logs a line naming the code and the account.
 func TestWatchdogEndsSilentCall(t *testing.T) {
 	opts := shortWatchdog(t)
 	ext := startWatchFake(t, AliveMinor, opts)
@@ -167,7 +153,6 @@ func TestWatchdogEndsSilentCall(t *testing.T) {
 	}
 }
 
-// Alive frames keep a quiet call open past the watchdog's limit, and never reach the caller.
 func TestWatchdogAliveKeepsCallOpen(t *testing.T) {
 	ext := startWatchFake(t, AliveMinor, shortWatchdog(t))
 	s := ext.Generate(context.Background(), protocol.Account{ID: "a"}, llm.Request{Model: "alive", Stream: true})
@@ -188,8 +173,6 @@ func TestWatchdogAliveKeepsCallOpen(t *testing.T) {
 	}
 }
 
-// An extension below protocol 0.23 is not told it may send alive frames and gets no watchdog;
-// one that reports 0.23 is told. With the idle limit turned off, there is no watchdog either.
 func TestWatchdogOnlyForAliveExtensions(t *testing.T) {
 	for _, tc := range []struct {
 		minor int
@@ -226,8 +209,6 @@ func TestWatchdogOnlyForAliveExtensions(t *testing.T) {
 	}
 }
 
-// The watchdog covers session turns too: a turn whose alive frames keep coming finishes; a
-// silent turn ends with extension_timeout and the session with it.
 func TestWatchdogSessionTurn(t *testing.T) {
 	ext := startWatchFake(t, AliveMinor, shortWatchdog(t))
 	account := protocol.Account{ID: "acct-s"}
@@ -255,10 +236,6 @@ func TestWatchdogSessionTurn(t *testing.T) {
 	}
 }
 
-// The watchdog waits as long as the SDK may still wait on the upstream, and a minute more. Nothing
-// reaches core before the upstream's headers, so a streamed call may be silent for the header limit
-// as well as the idle limit; a request that is not streamed may run to its total limit too. With a
-// limit the SDK waits on turned off (0), core cannot tell a quiet call from a stuck one: no watchdog.
 func TestWatchdogLimit(t *testing.T) {
 	ms := func(v int64) *int64 { return &v }
 	tm := func(header, idle, total int64) *protocol.Timeouts {

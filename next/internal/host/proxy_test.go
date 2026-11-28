@@ -21,10 +21,8 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
-// echoProxy is an extension that writes the proxy each call carries to stderr and fails the
-// call with an error that holds it; with headers, also their values.
 func echoProxy() {
-	_ = sdk.Upstream(&http.Transport{}) // an extension that sends through a proxy wraps its clients
+	_ = sdk.Upstream(&http.Transport{})
 	err := sdk.Serve(sdk.Extension{
 		ID:      "hosttest/echo-proxy",
 		Version: "0.0.0",
@@ -48,8 +46,6 @@ func echoProxy() {
 
 const testProxyPassword = "proxy-pass-Secret-31"
 
-// A call carries the account's own proxy, else core's global one, and none for direct; the
-// proxy's user name and password never come back in the call's error or the extension's log.
 func TestCallCarriesProxyWithoutLeakingItsPassword(t *testing.T) {
 	global := "socks5://user:" + testProxyPassword + "@127.0.0.1:1080"
 	log := &syncBuffer{}
@@ -76,8 +72,6 @@ func TestCallCarriesProxyWithoutLeakingItsPassword(t *testing.T) {
 	}
 }
 
-// An extension older than protocol 0.11 cannot use a proxy, so a call that has one is refused
-// before it reaches it, as unsupported for the account; a direct account still reaches it.
 func TestOldExtensionGetsNoProxiedCall(t *testing.T) {
 	ext, err := Start(filepath.Join(fakePackage(t, "session-bad-frame"), ManifestFile), Options{Log: &syncBuffer{},
 		ProxyURL: func() string { return "http://127.0.0.1:3128" }})
@@ -91,7 +85,6 @@ func TestOldExtensionGetsNoProxiedCall(t *testing.T) {
 	if ev.Type != llm.EventError || ev.Error.Code != llm.CodeUnsupported || ev.Error.Scope != llm.ScopeCredential || !ev.Error.Retryable {
 		t.Fatalf("event %+v, want a retryable unsupported error for the account", ev)
 	}
-	// The fake extension hangs up on a generate call: a direct one reaches it.
 	s = ext.Generate(context.Background(), protocol.Account{ID: "a", ProxyURL: "none"}, llm.Request{Model: "m"})
 	ev = s.Next()
 	s.Close()
@@ -100,9 +93,6 @@ func TestOldExtensionGetsNoProxiedCall(t *testing.T) {
 	}
 }
 
-// echoSecrets fails every call with an error that holds ordinary words around the forms the proxy's
-// user name and password take (written, decoded, in the Basic header, alone) and writes the same
-// text to stderr.
 func echoSecrets() {
 	_ = sdk.Upstream(&http.Transport{})
 	err := sdk.Serve(sdk.Extension{
@@ -134,12 +124,6 @@ func echoSecrets() {
 	}
 }
 
-// A proxy's user name and password are removed from a call's replies and the extension's log as a
-// whole and in every form the extension may write them in, but a short password or user name is
-// not removed on its own: it would also scrub "password", "bypass", "reverse proxy" and the number
-// 1. A user name with no password is removed on its own only from 8 bytes; its Basic login is
-// always removed. The reply, an error, also loses a word that shares 4 characters with a secret
-// of 8 to 31 bytes (protocol.RemovePieces), which the extension's log line keeps.
 func TestProxySecretRedaction(t *testing.T) {
 	const keep = `keep: password bypass reverse proxy {"n": 1}`
 	for _, c := range []struct{ name, proxy, want string }{
@@ -171,7 +155,7 @@ func TestProxySecretRedaction(t *testing.T) {
 			ev := s.Next()
 			s.Close()
 			reply := c.want
-			if c.name == "long password" { // "Long-Proxy-Secret-7" shares "roxy" with "proxy"
+			if c.name == "long password" {
 				reply = strings.Replace(c.want, "reverse proxy", "reverse [redacted]", 1)
 			}
 			if ev.Type != llm.EventError || ev.Error.Message != reply {
@@ -182,7 +166,6 @@ func TestProxySecretRedaction(t *testing.T) {
 	}
 }
 
-// refreshOddReply answers a refresh with a frame whose type holds the proxy's password.
 func refreshOddReply() {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
@@ -216,8 +199,6 @@ func refreshOddReply() {
 	}
 }
 
-// The error for a refresh the extension answers with an unexpected frame has the proxy's
-// password removed, as the error frame of a refresh has.
 func TestRefreshUnexpectedReplyHidesProxyPassword(t *testing.T) {
 	const pass = "Refresh-Proxy-Secret-42"
 	ext, err := Start(filepath.Join(fakePackage(t, "refresh-odd-reply"), ManifestFile), Options{Log: &syncBuffer{}})
@@ -236,9 +217,6 @@ func TestRefreshUnexpectedReplyHidesProxyPassword(t *testing.T) {
 	}
 }
 
-// The credential kept for an account's proxy and header secrets has its own place: an account whose
-// ID is that account's ID and " proxy" or " upstream" does not push out those secrets or lose its
-// own replaced one.
 func TestHeldOutboundDoesNotCollideWithAccountID(t *testing.T) {
 	const (
 		pass   = "Held-Proxy-Secret-9"
@@ -264,8 +242,6 @@ func TestHeldOutboundDoesNotCollideWithAccountID(t *testing.T) {
 
 const testHeaderSecret = "header-Secret-value-47"
 
-// A call carries the account's headers; the value of one about authentication never comes back
-// in the call's error or the extension's log, and another's does.
 func TestCallCarriesHeadersWithoutLeakingSecrets(t *testing.T) {
 	log := &syncBuffer{}
 	ext, err := Start(filepath.Join(fakePackage(t, "echo-proxy"), ManifestFile), Options{Log: log})
@@ -285,10 +261,6 @@ func TestCallCarriesHeadersWithoutLeakingSecrets(t *testing.T) {
 	}
 }
 
-// A call made for a client's request (WithPayloadClient) fills in the account's headers that copy
-// a client header: the named ones only, a copy the client did not send left out, and a copied
-// value under a secret name removed from what the call sends back. A call made for no client
-// request sends only the values written.
 func TestCallFillsCopiedHeaders(t *testing.T) {
 	const session = "client-session-value-58"
 	ext, err := Start(filepath.Join(fakePackage(t, "echo-proxy"), ManifestFile), Options{Log: &syncBuffer{}})
@@ -320,8 +292,6 @@ func TestCallFillsCopiedHeaders(t *testing.T) {
 	}
 }
 
-// A secret header whose value is short ("1") is removed from a reply only next to its name
-// (here "Name=value"): its value alone would also scrub every other 1 in the reply.
 func TestShortSecretHeaderValueRemovedNextToItsName(t *testing.T) {
 	ext, err := Start(filepath.Join(fakePackage(t, "echo-proxy"), ManifestFile), Options{Log: &syncBuffer{}})
 	if err != nil {
@@ -343,8 +313,6 @@ func TestShortSecretHeaderValueRemovedNextToItsName(t *testing.T) {
 	}
 }
 
-// An extension older than protocol 0.12 cannot send an account's headers, so a call that has
-// some is refused before it reaches it, as unsupported for the account.
 func TestOldExtensionGetsNoCallWithHeaders(t *testing.T) {
 	ext, err := Start(filepath.Join(fakePackage(t, "session-bad-frame"), ManifestFile), Options{Log: &syncBuffer{}})
 	if err != nil {
@@ -358,7 +326,6 @@ func TestOldExtensionGetsNoCallWithHeaders(t *testing.T) {
 		!strings.Contains(ev.Error.Message, "headers") || strings.Contains(ev.Error.Message, testHeaderSecret) {
 		t.Fatalf("event %+v, want a retryable unsupported error for the account that names headers", ev)
 	}
-	// The fake extension hangs up on a generate call: one without headers reaches it.
 	s = ext.Generate(context.Background(), protocol.Account{ID: "a"}, llm.Request{Model: "m"})
 	ev = s.Next()
 	s.Close()
@@ -367,24 +334,15 @@ func TestOldExtensionGetsNoCallWithHeaders(t *testing.T) {
 	}
 }
 
-// testRules are payload rules of which some match the call in TestCallCarriesMatchingPayloadRules.
 var testRules = &payload.Rules{Override: []payload.Rule{
-	// The requested model, before its alias was resolved.
 	{Models: []payload.Model{{Name: "alias-*"}}, Params: map[string]any{"a": 1}},
-	// The upstream model, the extension's channel, the client's format and headers; the body
-	// condition is left for the extension.
 	{Models: []payload.Model{{Name: "m", Protocol: "echo-proxy", FromProtocol: "openai", Headers: map[string]string{"X-Tier": "go*"}, Exist: []string{"tools"}}},
 		Params: map[string]any{"b": 1}},
-	// Another channel.
 	{Models: []payload.Model{{Name: "m", Protocol: "codex"}}, Params: map[string]any{"c": 1}},
-	// The requested model with its thinking suffix, as the client wrote it.
 	{Models: []payload.Model{{Name: "alias-x(high)"}}, Params: map[string]any{"d": 1}},
-	// Another client format.
 	{Models: []payload.Model{{Name: "m", FromProtocol: "claude"}}, Params: map[string]any{"e": 1}},
 }}
 
-// A call carries the payload rules that match it, each model reduced to its body conditions,
-// and none of the client's headers.
 func TestCallCarriesMatchingPayloadRules(t *testing.T) {
 	ext, err := Start(filepath.Join(fakePackage(t, "echo-proxy"), ManifestFile), Options{Log: &syncBuffer{},
 		Payload: func() *payload.Rules { return testRules }})
@@ -401,7 +359,6 @@ func TestCallCarriesMatchingPayloadRules(t *testing.T) {
 	if ev.Type != llm.EventError || ev.Error.Message != want {
 		t.Errorf("event %+v, want the error %q", ev, want)
 	}
-	// Without the client's request only the upstream model matches, and rule b needs the header.
 	s = ext.Generate(context.Background(), protocol.Account{ID: "p"}, llm.Request{Model: "m"})
 	ev = s.Next()
 	s.Close()
@@ -410,8 +367,6 @@ func TestCallCarriesMatchingPayloadRules(t *testing.T) {
 	}
 }
 
-// An extension older than protocol 0.14 cannot apply payload rules, so a call that rules match
-// is refused before it reaches it, as unsupported for the account; another call reaches it.
 func TestOldExtensionGetsNoCallWithPayloadRules(t *testing.T) {
 	rules := &payload.Rules{Filter: []payload.FilterRule{{Models: []payload.Model{{Name: "m"}}, Params: []string{"x"}}}}
 	ext, err := Start(filepath.Join(fakePackage(t, "session-bad-frame"), ManifestFile), Options{Log: &syncBuffer{},
@@ -427,7 +382,6 @@ func TestOldExtensionGetsNoCallWithPayloadRules(t *testing.T) {
 		!strings.Contains(ev.Error.Message, "payload rules") {
 		t.Fatalf("event %+v, want a retryable unsupported error for the account that names payload rules", ev)
 	}
-	// The fake extension hangs up on a generate call: one that no rule matches reaches it.
 	s = ext.Generate(context.Background(), protocol.Account{ID: "a"}, llm.Request{Model: "other"})
 	ev = s.Next()
 	s.Close()
@@ -444,15 +398,12 @@ func TestResolveTimeouts(t *testing.T) {
 		opts: Options{Timeouts: func() *protocol.Timeouts { return global }},
 	}
 
-	// Account overrides header_ms to 0 (off), inherits idle_ms (2000) from global, and total_ms
-	// (600000) from protocol defaults.
 	acct := protocol.Account{ID: "a", Timeouts: &protocol.Timeouts{HeaderMS: ms(0)}}
 	e.resolveTimeouts(&acct)
 	if acct.Timeouts == nil || *acct.Timeouts.HeaderMS != 0 || *acct.Timeouts.IdleMS != 2000 || *acct.Timeouts.TotalMS != defaultTotalTimeoutMS {
 		t.Fatalf("resolved = %+v, want header=0 idle=2000 total=%d", acct.Timeouts, defaultTotalTimeoutMS)
 	}
 
-	// Older extensions (< minor 22) do not receive Timeouts.
 	old := &Extension{
 		info: protocol.Info{ProtocolMinor: timeoutsMinor - 1},
 		opts: Options{Timeouts: func() *protocol.Timeouts { return global }},

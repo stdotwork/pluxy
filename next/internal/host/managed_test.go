@@ -50,8 +50,6 @@ func generateOnce(g *Managed) llm.Event {
 	return s.Next()
 }
 
-// A generation that starts again after an idle stop runs the code it was prepared with: files
-// changed in place since then are refused, not run under the old generation.
 func TestManagedRestartRunsOnlyItsOwnCode(t *testing.T) {
 	g, dir := prepareFake(t, "serve", 20*time.Millisecond)
 	waitState(t, g, StateIdle)
@@ -69,8 +67,6 @@ func TestManagedRestartRunsOnlyItsOwnCode(t *testing.T) {
 	}
 }
 
-// Once a generation drains, it takes no new leases, so a late request moves to the newer one
-// instead of being cut when the drain ends.
 func TestManagedDrainTakesNoNewLeases(t *testing.T) {
 	g, _ := prepareFake(t, "serve", 0)
 	if !g.Acquire() {
@@ -84,7 +80,6 @@ func TestManagedDrainTakesNoNewLeases(t *testing.T) {
 	g.Release()
 }
 
-// Requests that arrive together at an idle generation all wait for one start.
 func TestManagedConcurrentLazyStarts(t *testing.T) {
 	g, _ := prepareFake(t, "serve", 20*time.Millisecond)
 	waitState(t, g, StateIdle)
@@ -109,12 +104,10 @@ func TestManagedConcurrentLazyStarts(t *testing.T) {
 	}
 }
 
-// Stop returns only once every program of the generation has exited, including one an idle
-// stop is still stopping.
 func TestManagedStopWaitsForIdleStop(t *testing.T) {
 	g, _ := prepareFake(t, "slow-exit", 20*time.Millisecond)
 	pid := g.Status().PID
-	waitState(t, g, StateIdle) // the program is asked to stop and takes 500ms to exit
+	waitState(t, g, StateIdle)
 	g.Stop()
 	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
 		t.Errorf("process %d still exists after Stop returned (signal 0: %v)", pid, err)

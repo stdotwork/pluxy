@@ -16,9 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// toolResultEcho is an extension that reports protocol minor version minor and answers a
-// generate call or a session turn with the request's items and options in response.start's raw,
-// and a translation report with one loss of its own.
 func toolResultEcho(minor int, passthrough bool) {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
@@ -66,8 +63,6 @@ func toolResultEcho(minor int, passthrough bool) {
 	}
 }
 
-// richResult is a request whose tool result holds an image beside its text and says the tool
-// failed, as core reads one from a Messages client.
 func richResult(policy string) llm.Request {
 	return llm.Request{Model: "m", DropPolicy: policy, Items: []llm.Item{
 		{Type: llm.ItemTypeToolCall, CallID: "c1", Name: "shot", Arguments: "{}"},
@@ -80,8 +75,6 @@ func richResult(policy string) llm.Request {
 	}}
 }
 
-// nextWithin returns next's event, failing the test if it takes longer than 10 seconds, the way
-// the conformance kit fails instead of waiting: a stream that never ends is a bug, not a wait.
 func nextWithin(t *testing.T, what string, next func() llm.Event) llm.Event {
 	t.Helper()
 	ch := make(chan llm.Event, 1)
@@ -95,10 +88,6 @@ func nextWithin(t *testing.T, what string, next func() llm.Event) llm.Event {
 	}
 }
 
-// An extension before protocol minor 25 gets a tool result's text alone, and the reply's
-// translation report lists the image and the error flag as dropped beside the extension's own
-// losses; under the reject drop policy the request is refused before it is sent. From minor 25
-// the extension gets the whole result. Generate calls and session turns alike.
 func TestToolResultPartsDowngrade(t *testing.T) {
 	ctx := context.Background()
 	acct := protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-1"}}
@@ -119,10 +108,6 @@ func TestToolResultPartsDowngrade(t *testing.T) {
 			t.Fatalf("OpenSession: %+v", e)
 		}
 		defer sess.Close()
-		// first returns a call's first event, having read it to its end, and fails the test if
-		// an event does not come within 10 seconds: the fake extension answers one session
-		// turn only, so a change that lets a tool result's parts through leaves the second
-		// turn unanswered, and the test must fail there rather than hang.
 		first := func(name string, next func() llm.Event, close func()) llm.Event {
 			defer close()
 			ev := nextWithin(t, name, next)
@@ -181,9 +166,6 @@ func TestToolResultPartsDowngrade(t *testing.T) {
 	}
 }
 
-// A translation that says the client's body went upstream unchanged says nothing about what core
-// left out of it first: a tool result's parts and error flag that core dropped before sending are
-// reported as lost, beside the extension's own losses.
 func TestPassthroughKeepsCoreLosses(t *testing.T) {
 	ctx := context.Background()
 	acct := protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-1"}}

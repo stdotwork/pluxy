@@ -35,7 +35,6 @@ func TestWebSearchDowngrade(t *testing.T) {
 		},
 	}
 
-	// Below minor 29: web_search becomes native with its Origin unchanged.
 	got28 := downgradeWebSearch(28, req)
 	if len(got28.Tools) != 2 {
 		t.Fatalf("minor 28: len(Tools) = %d, want 2", len(got28.Tools))
@@ -52,12 +51,10 @@ func TestWebSearchDowngrade(t *testing.T) {
 	if got28.Tools[1].Name != "get_weather" {
 		t.Errorf("minor 28: Tools[1] changed: %+v", got28.Tools[1])
 	}
-	// Original req must not be mutated.
 	if req.Tools[0].Type != llm.ToolWebSearch {
 		t.Errorf("original req was mutated: Tools[0].Type = %q", req.Tools[0].Type)
 	}
 
-	// At minor 29: unchanged.
 	got29 := downgradeWebSearch(29, req)
 	if !reflect.DeepEqual(got29, req) {
 		t.Errorf("minor 29: req changed: got %+v, want %+v", got29, req)
@@ -77,7 +74,6 @@ func TestWebSearchDowngradeChatOptions(t *testing.T) {
 	if len(got.Tools) != 0 {
 		t.Fatalf("minor 28: len(Tools) = %d, want 0 (tools: %+v)", len(got.Tools), got.Tools)
 	}
-	// Must not mutate the caller's Origin.
 	if got.Origin == origPtr {
 		t.Errorf("minor 28: mutated caller Origin pointer")
 	}
@@ -91,7 +87,6 @@ func TestWebSearchDowngradeChatOptions(t *testing.T) {
 	if len(losses) != 0 {
 		t.Errorf("unexpected losses: %+v", losses)
 	}
-	// Must match what base 45439babf produces: web_search_options at top level, no tools array.
 	want := `{"messages":[{"role":"user","content":"hi"}],"model":"gpt-5-search-api","seed":42,"stream":false,"web_search_options":{"search_context_size":"low"}}`
 	if string(body) != want {
 		t.Errorf("encoded body:\ngot:  %s\nwant: %s", body, want)

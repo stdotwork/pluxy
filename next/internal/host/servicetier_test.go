@@ -13,18 +13,12 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// tierRequest is a request whose service tier and verbosity come from a Messages client's fast
-// speed and a Responses client's text.verbosity.
 func tierRequest(source, policy string) llm.Request {
 	return llm.Request{Model: "m", DropPolicy: policy, Native: &llm.Native{Format: source},
 		Items:   []llm.Item{{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "hi"}}}},
 		Options: llm.Options{ServiceTier: llm.ServiceTierPriority, Verbosity: "low"}}
 }
 
-// An extension before protocol minor 28 gets no service tier and no verbosity, and the reply's
-// translation report lists each as dropped, at the field the client wrote it in, beside the
-// extension's own losses; under the reject drop policy the request is refused before it is sent.
-// From minor 28 the extension gets both. Generate calls and session turns alike.
 func TestServiceTierDowngrade(t *testing.T) {
 	ctx := context.Background()
 	acct := protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-1"}}
@@ -48,8 +42,6 @@ func TestServiceTierDowngrade(t *testing.T) {
 			t.Fatalf("OpenSession: %+v", e)
 		}
 		defer sess.Close()
-		// first returns a call's first event, having read it to its end, and fails the test if an
-		// event does not come within 10 seconds: the fake extension answers one session turn only.
 		first := func(name string, next func() llm.Event, close func()) llm.Event {
 			defer close()
 			ev := nextWithin(t, name, next)
@@ -108,7 +100,6 @@ func TestServiceTierDowngrade(t *testing.T) {
 	}
 }
 
-// A request with neither gives an extension before minor 28 nothing to report.
 func TestServiceTierDowngradeNeither(t *testing.T) {
 	req := tierRequest(llm.FormatOpenAIChat, llm.DropReject)
 	req.Options = llm.Options{}

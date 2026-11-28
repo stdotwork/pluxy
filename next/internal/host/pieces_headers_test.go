@@ -7,11 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// TestPiecesRateLimitHeaders checks what core's piece removal does to rate-limit header values
-// on an error reply and on a response.start: a plain time or duration (llm.PlainRateLimitValue)
-// stays whole whatever the key shares with it, and any other value, an integer, text, a time with
-// a fraction or a duration with a long number, loses a piece of the key. A value a piece took anything from is not a valid rate-limit value any more, so the
-// server drops it.
 func TestPiecesRateLimitHeaders(t *testing.T) {
 	for _, tc := range []struct {
 		name, key, header, value string
@@ -36,7 +31,6 @@ func TestPiecesRateLimitHeaders(t *testing.T) {
 		check := func(where, got string) {
 			t.Helper()
 			if tc.want == "" {
-				// A value that lost a piece, or was never removable, must not be a valid one.
 				if llm.ValidRateLimitHeaderValue(got) {
 					t.Errorf("%s: %s header = %q, want it dropped as invalid", tc.name, where, got)
 				}

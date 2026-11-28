@@ -23,24 +23,16 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// pieceKey is a made-up API key; an upstream that refuses it echoes its first 16 characters.
 const pieceKey = "sk-hp-Ab3Cd5Ef7Gh9Ij1Kl3Mn5Op7Qr9"
 
 var pieceEcho = pieceKey[:16] + "..."
 
-// refusePieces returns the error an upstream that refuses key would make: its message and raw
-// body echo the key's first 16 characters.
 func refusePieces(key string) error {
 	msg := "invalid x-api-key: " + key[:16] + "..."
 	raw, _ := json.Marshal(map[string]any{"error": map[string]any{"type": "authentication_error", "message": msg}})
 	return &llm.Error{Code: llm.CodeAuth, Scope: llm.ScopeCredential, Message: msg, Raw: raw}
 }
 
-// echoPieces is an extension that refuses every call with refusePieces of the account's key, or
-// for a login, of the key entered. A generate call or a session's turn first sends one request to
-// the account's "base_url" setting, through sdk.Upstream, so that the call captures the reply; a
-// generate call on an account whose settings have "finish" finishes instead. A session opens on
-// the account "open-session" only, and its turns are refused.
 func echoPieces() {
 	err := sdk.Serve(sdk.Extension{
 		ID:      "hosttest/echo-pieces",
@@ -71,7 +63,7 @@ func echoPieces() {
 			Inputs: []protocol.LoginInput{{Name: "api_key", Label: "API key", Secret: true}, {Name: "region", Label: "Region"}}}},
 		Login: func(_ context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*protocol.Grant, error) {
 			e := refusePieces(call.Input["api_key"]).(*llm.Error)
-			e.Message += " for " + call.Input["region"][3:] // the redactor takes the region whole
+			e.Message += " for " + call.Input["region"][3:]
 			return nil, e
 		},
 		Check: func(_ context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
@@ -98,8 +90,6 @@ func echoPieces() {
 	}
 }
 
-// askUpstream sends one request to account a's "base_url" setting, if it has one, through
-// sdk.Upstream, and reads the reply.
 func askUpstream(ctx context.Context, a protocol.Account) error {
 	var st struct {
 		BaseURL string `json:"base_url"`
@@ -131,8 +121,6 @@ func (refusingSession) Turn(ctx context.Context, call sdk.Call, _ *sdk.Stream) e
 func (refusingSession) Interrupt(json.RawMessage) {}
 func (refusingSession) Close()                    {}
 
-// wantNoPiece fails t when e is not the refusal with the echoed piece of pieceKey replaced, in
-// its message and its raw body.
 func wantNoPiece(t *testing.T, what string, e *llm.Error) {
 	t.Helper()
 	if e == nil {
@@ -148,10 +136,6 @@ func wantNoPiece(t *testing.T, what string, e *llm.Error) {
 	}
 }
 
-// Every call on an account whose upstream refuses its key, echoing a piece of it, returns the
-// error without the piece: generate, count_tokens, endpoint, check, quota, models, refresh,
-// opening a session, a session's turn, and a login, whose error loses the piece of the key the
-// user entered but keeps the region, an input the login does not mark secret.
 func TestErrorPiecesRemovedFromCalls(t *testing.T) {
 	ext, err := Start(filepath.Join(fakePackage(t, "echo-pieces"), ManifestFile), Options{Log: &syncBuffer{}})
 	if err != nil {
@@ -202,10 +186,6 @@ func TestErrorPiecesRemovedFromCalls(t *testing.T) {
 	})
 }
 
-// core takes an account's settings secrets for pieces from its own rules (Options.SettingsSecrets):
-// a URL setting counts by its user name, password and secret query values, such as a sig, a
-// token_url is no secret, so an error keeps "https", "oauth" and "token", and neither is
-// turnkey_mode, which protocol.SecretName would take for one for holding "key".
 func TestAccountPiecesUseCoreSettingsRules(t *testing.T) {
 	e := &Extension{opts: Options{SettingsSecrets: configdoc.SettingsSecrets}}
 	settings := []byte(`{"token_url":"https://auth.example.com/oauth/token","base_url":"https://gw.example.com/v1?sig=Sg5Tb2Nq8Vc1Xz&model=m","turnkey_mode":"standard-ordering"}`)
@@ -216,16 +196,12 @@ func TestAccountPiecesUseCoreSettingsRules(t *testing.T) {
 	}
 }
 
-// A call's capture loses the pieces of the account's key from the body of an upstream reply with
-// an error status, and from a 200 reply's body when the call or session turn ended in an error (a
-// stream that ends in an error event); a call that succeeded keeps its reply's body as it came,
-// words that share 4 characters with the key included.
 func TestErrorPiecesRemovedFromCapture(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		status  int
-		session bool // the call is a session's turn
-		finish  bool // the call succeeds
+		session bool
+		finish  bool
 		body    string
 		want    string
 	}{
@@ -285,9 +261,6 @@ func TestErrorPiecesRemovedFromCapture(t *testing.T) {
 	}
 }
 
-// An error event loses the pieces of the secrets in its message and in each string of its raw
-// data, escaped or not, and keeps everything else; an event that is not an error, and an error
-// that holds no piece, are kept as they are.
 func TestPiecesEvent(t *testing.T) {
 	p := pieces{"Ab3Cd5Ef7Gh9Ij1K"}
 	raw := json.RawMessage(`{"error": {"message": "bad key sk-Ab3Cd5Ef...", "hint": "key \u0041b3C\u0064 given", "n": 401}, "type": "error"}`)
@@ -299,7 +272,6 @@ func TestPiecesEvent(t *testing.T) {
 	}
 	keep := []llm.Event{
 		{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeAuth, Message: "bad key Ab3 given, try again", Raw: json.RawMessage(`{"m":"Ab3 Cd5 Ef7"}`)}},
-		// An object key is a name, not upstream text.
 		{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeAuth, Message: "bad", Raw: json.RawMessage(`{"Ab3Cd5Ef" : "Ab3", "list": ["Ab3"]}`)}},
 		{Type: llm.EventTextDelta, Delta: "Ab3Cd5Ef7Gh9 is a word here"},
 	}
@@ -314,7 +286,6 @@ func TestPiecesEvent(t *testing.T) {
 	}
 }
 
-// Raw data that is not valid JSON is cleaned as text and comes back as a JSON string.
 func TestPiecesRawNotJSON(t *testing.T) {
 	got := pieces{"Ab3Cd5Ef7Gh9Ij1K"}.raw(json.RawMessage(`bad key Ab3Cd5Ef`))
 	if string(got) != `"bad key [redacted]"` {
@@ -322,8 +293,6 @@ func TestPiecesRawNotJSON(t *testing.T) {
 	}
 }
 
-// A capture loses the pieces from an error reply's body, start and end, and its size counts
-// what is left; a successful reply's body and the request are kept, unless the call failed.
 func TestPiecesDiagnostic(t *testing.T) {
 	p := pieces{"Ab3Cd5Ef7Gh9Ij1K"}
 	body := protocol.CapturedBody{Body: "bad key Ab3Cd5Ef", BodyEnd: "Ij1K end", BodySize: 100}
@@ -337,7 +306,6 @@ func TestPiecesDiagnostic(t *testing.T) {
 	if got := out.Upstream[0].Response.CapturedBody; got != cleaned {
 		t.Errorf("error reply body %+v, want %+v", got, cleaned)
 	}
-	// A call that failed loses the pieces from every reply's body, its request's kept.
 	failed := p.diagnostic(d, true)
 	if failed.Upstream[0].Response.CapturedBody != cleaned || failed.Upstream[1].Response.CapturedBody != cleaned ||
 		failed.Upstream[1].Request.CapturedBody != body {
@@ -353,7 +321,6 @@ func TestPiecesDiagnostic(t *testing.T) {
 	}
 }
 
-// add keeps each secret once, in the order first seen.
 func TestPiecesAdd(t *testing.T) {
 	got := pieces{"a1", "b2"}.add(pieces{"b2", "c3"})
 	if !slices.Equal(got, pieces{"a1", "b2", "c3"}) {
@@ -361,8 +328,6 @@ func TestPiecesAdd(t *testing.T) {
 	}
 }
 
-// A call that sends many captures before it ends holds two, the first and the others joined into
-// one, and the request log's count of exchanges stays right.
 func TestHeldCaptureKeepsFirstAndLast(t *testing.T) {
 	var h heldCapture
 	for i := range 5 {
@@ -390,8 +355,6 @@ func TestHeldCaptureKeepsFirstAndLast(t *testing.T) {
 	}
 }
 
-// pipeStream returns a Stream that reads the frames written to the returned end, capturing into
-// got, for a call on an account whose secrets are p.
 func pipeStream(t *testing.T, p pieces, got *[]protocol.Diagnostic, mu *sync.Mutex) (*Stream, net.Conn) {
 	t.Helper()
 	ours, theirs := net.Pipe()
@@ -401,8 +364,6 @@ func pipeStream(t *testing.T, p pieces, got *[]protocol.Diagnostic, mu *sync.Mut
 	return s, theirs
 }
 
-// An extension that sends several diagnostic frames and then an error has at most two captures
-// logged, each 200 reply in them without the pieces of the account's secrets.
 func TestManyCapturesCleanedOnError(t *testing.T) {
 	var mu sync.Mutex
 	var got []protocol.Diagnostic
@@ -440,8 +401,6 @@ func TestManyCapturesCleanedOnError(t *testing.T) {
 	}
 }
 
-// Close on another goroutine just after Next has read the call's terminal event reads nothing
-// Next writes unguarded (go test -race).
 func TestStreamCloseWhileNextEnds(t *testing.T) {
 	var mu sync.Mutex
 	var got []protocol.Diagnostic
@@ -454,12 +413,10 @@ func TestStreamCloseWhileNextEnds(t *testing.T) {
 	d := protocol.Diagnostic{Upstream: []protocol.UpstreamExchange{{Request: protocol.UpstreamRequest{URL: "https://up.example/"}}}}
 	_ = protocol.WriteFrame(ext, protocol.Reply{Event: llm.Event{Type: protocol.TypeDiagnostic}, Diagnostic: &d})
 	_ = protocol.WriteFrame(ext, protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeAuth, Message: "refused"}}})
-	s.Close() // as a client that goes away would, while Next ends the call
+	s.Close()
 	<-done
 }
 
-// As TestStreamCloseWhileNextEnds, for a session's turn: Close reads whether the turn ended while
-// Next ends it, and the turn's capture is taken once.
 func TestSessionTurnCloseWhileNextEnds(t *testing.T) {
 	ours, theirs := net.Pipe()
 	defer theirs.Close()

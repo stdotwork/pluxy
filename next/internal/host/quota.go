@@ -11,19 +11,12 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// featureMinor is the protocol minor version that adds a quota limit's feature.
 const featureMinor = 19
 
-// ReportsQuota reports whether an extension that described itself with info reads its accounts'
-// quota: it implements minor version 5 or later and lists the quota operation.
 func ReportsQuota(info protocol.Info) bool {
 	return info.ProtocolMinor >= 5 && slices.Contains(info.Operations, protocol.OpQuota)
 }
 
-// Quota runs a quota call: what account's plan allows and how much of it is used. Every string
-// of the account's credential and every secret in its settings is removed from the reply, as
-// from every other reply. A limit's feature counts only from an extension that implements minor
-// version 18 or later.
 func (e *Extension) Quota(ctx context.Context, account protocol.Account) (*protocol.Quota, *llm.Error) {
 	proxy, perr := e.outbound(&account, nil)
 	if perr != nil {
@@ -81,9 +74,6 @@ func (e *Extension) Quota(ctx context.Context, account protocol.Account) (*proto
 	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a quota call", e.manifest.ID, redact.String(r.Type))}
 }
 
-// Quota runs a quota call, starting the program first if it is idle. The caller holds a lease
-// for the call. An extension that does not report quota (ReportsQuota) gets no call: the reply
-// is an unsupported error.
 func (g *Managed) Quota(ctx context.Context, account protocol.Account) (*protocol.Quota, *llm.Error) {
 	if !ReportsQuota(g.Info()) {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("extension %s does not report quota", g.Info().ID), Scope: llm.ScopeRequest}

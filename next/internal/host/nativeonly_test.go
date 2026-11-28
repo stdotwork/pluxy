@@ -15,7 +15,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// nativeOnlyFrame is what the fake extension saw of a call frame.
 type nativeOnlyFrame struct {
 	NativeOnly bool `json:"native_only"`
 	Items      int  `json:"items"`
@@ -24,9 +23,6 @@ type nativeOnlyFrame struct {
 	Native     bool `json:"native"`
 }
 
-// nativeOnlyExtension answers describe with the given minor and native_parser, and
-// every generate and count_tokens call with an internal error whose message is the JSON of what
-// the call frame held.
 func nativeOnlyExtension(minor, parser int) {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
@@ -71,7 +67,6 @@ func nativeOnlyExtension(minor, parser int) {
 	}
 }
 
-// nativeOnlyBody has items, a tool and an origin once parsed.
 const nativeOnlyBody = `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}],"user":"u"}`
 
 func nativeOnlyRequest(t *testing.T, parsed bool) llm.Request {
@@ -89,16 +84,13 @@ func nativeOnlyRequest(t *testing.T, parsed bool) llm.Request {
 	return req
 }
 
-// Core leaves a generate request's items, tools and origin out of the frame only for an
-// extension at minor 27 or later whose native_parser is core's, and only when the request's native
-// body is the one it was parsed from; count_tokens always gets the full request.
 func TestNativeOnlyFrame(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		mode   string
 		parsed bool
 		count  bool
-		want   bool // native-only
+		want   bool
 	}{
 		{"minor 27 parses native", "native-only-27-parses", true, false, true},
 		{"minor 26 parses native", "native-only-26-parses", true, false, false},

@@ -7,17 +7,8 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// codeExecutionMinor is the protocol minor version that adds the canonical code execution tool
-// (llm.ToolCodeExecution) and its forced tool choice (llm.ToolChoiceCodeExecution).
 const codeExecutionMinor = 30
 
-// downgradeCodeExecution returns req as an extension that implements protocol minor version minor
-// can take it. Before codeExecutionMinor, every ToolCodeExecution becomes a ToolNative with its
-// Origin unchanged, and a ToolChoiceCodeExecution returns to its pre-0.30 representation: for
-// OpenAI Responses, ToolChoice is cleared and {"type":"code_interpreter"} is restored into
-// req.Origin.Raw under "tool_choice"; for other formats (such as Anthropic Messages), Mode becomes
-// ToolChoiceTool with Name preserved (defaulting to "code_execution"). req's own Tools slice,
-// ToolChoice and Origin are never mutated.
 func downgradeCodeExecution(minor int, req llm.Request) llm.Request {
 	if minor >= codeExecutionMinor {
 		return req

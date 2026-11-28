@@ -26,7 +26,6 @@ func TestCodeExecutionDowngradeTools(t *testing.T) {
 		},
 	}
 
-	// Below minor 30: code_execution becomes ToolNative with its Origin unchanged.
 	got29 := downgradeCodeExecution(29, req)
 	if len(got29.Tools) != 2 {
 		t.Fatalf("minor 29: len(Tools) = %d, want 2", len(got29.Tools))
@@ -40,12 +39,10 @@ func TestCodeExecutionDowngradeTools(t *testing.T) {
 	if got29.Tools[1].Name != "get_weather" {
 		t.Errorf("minor 29: Tools[1] changed: %+v", got29.Tools[1])
 	}
-	// Original req must not be mutated.
 	if req.Tools[0].Type != llm.ToolCodeExecution {
 		t.Errorf("original req mutated: Tools[0].Type = %q", req.Tools[0].Type)
 	}
 
-	// At minor 30: unchanged.
 	got30 := downgradeCodeExecution(30, req)
 	if !reflect.DeepEqual(got30, req) {
 		t.Errorf("minor 30: req changed: got %+v, want %+v", got30, req)
@@ -71,7 +68,6 @@ func TestCodeExecutionDowngradeResponsesTopLevelToolChoice(t *testing.T) {
 	if got.Tools[0].Type != llm.ToolNative {
 		t.Errorf("minor 29: Tools[0].Type = %q, want native", got.Tools[0].Type)
 	}
-	// Caller's Origin must not be mutated.
 	if got.Origin == origPtr {
 		t.Errorf("minor 29: mutated caller Origin pointer")
 	}
@@ -90,7 +86,6 @@ func TestCodeExecutionDowngradeResponsesTopLevelToolChoice(t *testing.T) {
 		t.Errorf("encoded body:\ngot:  %s\nwant: %s", body, want)
 	}
 
-	// Also when req.Origin has no kept fields (empty Raw).
 	rawBare := []byte(`{"model":"gpt-5.4","input":"compute 2+2","tools":[{"type":"code_interpreter","container":{"type":"auto"}}],"tool_choice":{"type":"code_interpreter"}}`)
 	reqBare, err := openairesponses.ParseRequest(rawBare)
 	if err != nil {

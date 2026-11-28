@@ -9,16 +9,8 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// CandidatesMinor is the protocol minor version that adds multi-candidate requests
-// (llm.Options.CandidateCount) and candidate reply events (llm.EventCandidate and
-// llm.Event.Candidate).
 const CandidatesMinor = 35
 
-// downgradeCandidateCount returns req as an extension that implements protocol minor version
-// minor can take it. Before CandidatesMinor the count goes back into the fields the client's
-// format keeps for the extension, where it was before this minor: a same-format body still
-// carries it, and an encoder for another format reports it as dropped. A count that cannot be put
-// back is left out and returned as a dropped loss at the field the client wrote it in.
 func downgradeCandidateCount(minor int, id string, req llm.Request) (llm.Request, []llm.Loss) {
 	n := req.Options.CandidateCount
 	if minor >= CandidatesMinor || n == 0 {
@@ -37,8 +29,6 @@ func downgradeCandidateCount(minor int, id string, req llm.Request) (llm.Request
 	return req, []llm.Loss{{Kind: llm.LossDropped, Path: path, Detail: detail}}
 }
 
-// originWithCandidateCount returns a copy of o whose kept fields hold the count n as the client's
-// format writes it: n in Chat Completions, generationConfig.candidateCount in GenerateContent.
 func originWithCandidateCount(o *llm.Origin, n int) (*llm.Origin, bool) {
 	if o == nil {
 		return nil, false
@@ -74,8 +64,6 @@ func originWithCandidateCount(o *llm.Origin, n int) (*llm.Origin, bool) {
 	return &out, true
 }
 
-// refuseCandidateCount returns the error for a request whose candidate count was left out on the
-// way to an extension before CandidatesMinor, when its drop policy is reject; otherwise nil.
 func refuseCandidateCount(id string, minor int, req llm.Request, lost []llm.Loss) *llm.Error {
 	if req.DropPolicy != llm.DropReject || len(lost) == 0 {
 		return nil

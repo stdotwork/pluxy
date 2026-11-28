@@ -9,22 +9,14 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// ListsModels reports whether an extension that described itself with info lists its accounts'
-// models: it implements minor version 3 or later and lists the models operation.
 func ListsModels(info protocol.Info) bool {
 	return info.ProtocolMinor >= 3 && slices.Contains(info.Operations, protocol.OpModels)
 }
 
-// CapabilitiesMinor is the protocol minor version that adds a model's capabilities: core ignores
-// the capabilities of an extension that implements an earlier one.
 const CapabilitiesMinor = 24
 
-// MaxListedModels bounds how many models one models call may return; more is a protocol error.
 const MaxListedModels = 10000
 
-// Models runs a models call: the models account serves. Every string of the account's
-// credential and every secret in its settings is removed from the reply, as from every other
-// reply.
 func (e *Extension) Models(ctx context.Context, account protocol.Account) (*protocol.ModelList, *llm.Error) {
 	proxy, perr := e.outbound(&account, nil)
 	if perr != nil {
@@ -91,9 +83,6 @@ func redactModel(r *protocol.Redactor, m protocol.Model) protocol.Model {
 	return m
 }
 
-// Models runs a models call, starting the program first if it is idle. The caller holds a lease
-// for the call. An extension that does not list models (ListsModels) gets no call: the reply is
-// an empty list.
 func (g *Managed) Models(ctx context.Context, account protocol.Account) (*protocol.ModelList, *llm.Error) {
 	if !ListsModels(g.Info()) {
 		return &protocol.ModelList{}, nil

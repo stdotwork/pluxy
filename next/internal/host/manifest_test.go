@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// writePackage writes a package folder with a manifest made of base plus extra, a program and the
-// ui files given, and returns the manifest's path.
 func writePackage(t *testing.T, extra map[string]any, ui map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -113,7 +111,6 @@ func TestFingerprintCoversPageFiles(t *testing.T) {
 	if before == after {
 		t.Fatal("changing a page file left the fingerprint as it was")
 	}
-	// A file renamed with the same contents changes it too.
 	if err := os.Rename(filepath.Join(filepath.Dir(path), "ui", "js", "app.js"), filepath.Join(filepath.Dir(path), "ui", "js", "other.js")); err != nil {
 		t.Fatal(err)
 	}

@@ -8,8 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// An extension that does not list the endpoint operation at minor version 7 or later answers an
-// endpoint call at once, unsupported about the account and retryable, so routing moves on.
 func TestEndpointNotServed(t *testing.T) {
 	req := llm.Request{Model: "m", Native: &llm.Native{Format: llm.FormatOpenAIResponsesCompact}}
 	for _, info := range []protocol.Info{
@@ -30,8 +28,6 @@ func TestEndpointNotServed(t *testing.T) {
 	}
 }
 
-// An extension below protocol minor 36 is skipped with a retryable credential-scoped unsupported
-// error for Gemini embedding endpoint formats.
 func TestEndpointGeminiEmbeddingsMinorGate(t *testing.T) {
 	for _, format := range []string{llm.FormatGeminiEmbedContent, llm.FormatGeminiBatchEmbedContents} {
 		t.Run(format, func(t *testing.T) {

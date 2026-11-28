@@ -9,9 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Each kind of input value adds its secrets to the login's pieces: a secret input holding a JSON
-// object (its settings' secrets), any other secret input (a credential's), and a plain input that
-// is a URL (its secret query values).
 func TestAddSecretsKeepsEveryBranch(t *testing.T) {
 	const (
 		settingsSecret = "settings-secret-value-1"
@@ -59,7 +56,6 @@ func TestAddSecretsKeepsEveryBranch(t *testing.T) {
 	})
 }
 
-// BenchmarkAddSecretsManyFields is a login body of many small URL fields.
 func BenchmarkAddSecretsManyFields(b *testing.B) {
 	input := make(map[string]string, 34000)
 	for i := 1; i <= 34000; i++ {

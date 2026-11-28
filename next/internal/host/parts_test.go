@@ -16,10 +16,8 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// echoParts is an extension that fails each call with the text of its account's "echo" setting,
-// as an upstream's error might quote one part of a secret.
 func echoParts() {
-	_ = sdk.Upstream(&http.Transport{}) // an extension that sends an account's headers wraps its clients
+	_ = sdk.Upstream(&http.Transport{})
 	err := sdk.Serve(sdk.Extension{
 		ID:      "hosttest/echo-parts",
 		Version: "0.0.0",
@@ -36,16 +34,8 @@ func echoParts() {
 	}
 }
 
-// partsJWT is a made-up HS256 JWT in the shape of a Devin session token's secret part.
 const partsJWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJob3N0LXBhcnRzIn0.aG9zdC1wYXJ0cy1zaWduYXR1cmU"
 
-// A secret stored or configured as a whole is removed also where the upstream echoes only its
-// secret part: a credential's token behind a public prefix (Devin, Meta), the token of an
-// account's Authorization header, Basic's base64 text and password, a cookie's value, and the
-// token of an Authorization header in the account's settings. The words around it stay, but for
-// a word that shares 4 characters with the secret, which the error loses too
-// (protocol.RemovePieces): these made-up secrets hold the words "device", "token", "password" and
-// "csrf".
 func TestSecretPartsRemovedFromCalls(t *testing.T) {
 	basic := base64.StdEncoding.EncodeToString([]byte("gw-user:gw-password-123"))
 	ext, err := Start(filepath.Join(fakePackage(t, "echo-parts"), ManifestFile), Options{Log: &syncBuffer{}, SettingsSecrets: configdoc.SettingsSecrets})

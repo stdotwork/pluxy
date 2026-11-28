@@ -30,8 +30,6 @@ func redactedRequestBody(r *protocol.Redactor, b protocol.CapturedBody) protocol
 	return d.Upstream[0].Request.CapturedBody
 }
 
-// A body the extension captured whole is still whole once a credential in it is replaced by the
-// shorter "[redacted]": nothing in it was cut, so nothing may be said to be.
 func TestRedactDiagnosticBodyThatFits(t *testing.T) {
 	const secret = "sk-fake-credential-value-0123456789abcdef"
 	body := "token=" + secret + " visible"
@@ -44,8 +42,6 @@ func TestRedactDiagnosticBodyThatFits(t *testing.T) {
 	}
 }
 
-// A body the extension cut keeps the count of what was cut between its pieces, whatever
-// redaction does to the length of the pieces.
 func TestRedactDiagnosticBodyThatWasCut(t *testing.T) {
 	const secret = "sk-fake-credential-value-0123456789abcdef"
 	head, end := "start "+secret+" middle", "tail "+secret+" end"
@@ -60,12 +56,9 @@ func TestRedactDiagnosticBodyThatWasCut(t *testing.T) {
 	}
 }
 
-// A secret cut in two by the cut of a body is not left in part beside the cut, however it is
-// punctuated: the redaction cannot recognise a part of it.
 func TestRedactDiagnosticSecretAtTheCut(t *testing.T) {
 	const secret = "alpha!bravo!charlie"
 	const cutOut = 1000
-	// The cut falls inside the secret: the head ends with its start, the tail begins with its end.
 	head, end := `{"padding":"`+strings.Repeat("x", 50)+`","k":"alpha!bra`, `vo!charlie","z":1}`
 	got := redactedRequestBody(captureRedactor(secret), protocol.CapturedBody{Body: head, BodyEnd: end,
 		BodySize: int64(len(head) + len(end) + cutOut)})
@@ -75,20 +68,15 @@ func TestRedactDiagnosticSecretAtTheCut(t *testing.T) {
 	if !strings.HasPrefix(got.Body, `{"padding":"xxx`) || !strings.HasSuffix(got.BodyEnd, `","z":1}`) {
 		t.Errorf("more than the secret's parts was removed: %q ... %q", got.Body, got.BodyEnd)
 	}
-	// What was removed counts as left out: 9 bytes of "alpha!bra" and 10 of "vo!charlie".
 	if left := got.BodySize - int64(len(got.Body)+len(got.BodyEnd)); left != cutOut+9+10 {
 		t.Errorf("%d bytes left out, want %d", left, cutOut+9+10)
 	}
-	// Text that merely ends like the start of the secret in fewer than 4 bytes is kept.
 	got = redactedRequestBody(captureRedactor(secret), protocol.CapturedBody{Body: "ends with alp", BodyEnd: "ie starts", BodySize: 5000})
 	if got.Body != "ends with alp" || got.BodyEnd != "ie starts" {
 		t.Errorf("a short run was removed: %+v", got)
 	}
 }
 
-// A body sent as a start and an end with nothing between them (body_size no more than the two
-// together, or absent) is one text: the request log writes the two joined. A secret cut between
-// them is removed as from the whole body.
 func TestRedactDiagnosticSecretBetweenAdjacentPieces(t *testing.T) {
 	const secret = "sk-fake-credential-value-0123456789abcdef"
 	head, end := "start sk-fake-credential", "-value-0123456789abcdef end"
@@ -103,9 +91,6 @@ func TestRedactDiagnosticSecretBetweenAdjacentPieces(t *testing.T) {
 	}
 }
 
-// A body whose start and end lie side by side is redacted as one text also where the start makes
-// the redaction give up and replace it whole: the rest of a secret cut between them is removed,
-// also when it is the secret's base64 and the body ends with it.
 func TestRedactDiagnosticAdjacentPiecesAfterCollapse(t *testing.T) {
 	const secret = "sk-body-key-0123456789"
 	key64 := base64.RawStdEncoding.EncodeToString([]byte(secret))
@@ -121,9 +106,6 @@ func TestRedactDiagnosticAdjacentPiecesAfterCollapse(t *testing.T) {
 	}
 }
 
-// A body whose start and end lie side by side is redacted as one text also where the start ends
-// with a secret spelled with an escape whose last character starts another secret: no part of the
-// second secret, cut between them, is logged.
 func TestRedactDiagnosticAdjacentPiecesAfterEscapeFallback(t *testing.T) {
 	r := protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "my-api-keys"},
 		&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "3x-other-secret"})
@@ -134,8 +116,6 @@ func TestRedactDiagnosticAdjacentPiecesAfterEscapeFallback(t *testing.T) {
 	}
 }
 
-// A start and an end with nothing left out between them, each as long as the request log keeps,
-// still fit what it keeps once redacted, so it logs them whole rather than report a gap.
 func TestRedactDiagnosticAdjacentPiecesFitTheLog(t *testing.T) {
 	const secret = "sk-fake-credential-value-0123456789abcdef"
 	head := strings.Repeat("a", protocol.CapturedHead-len("word sk-")) + "word sk-"
@@ -158,8 +138,6 @@ func TestRedactDiagnosticKeepsHeadersLeftOut(t *testing.T) {
 	}
 }
 
-// captureSettings sends one request upstream, to its settings' base_url, with the secret in its
-// settings' api_key in the URL's path, a header and the body, and fails the call.
 func captureSettings() {
 	err := sdk.Serve(sdk.Extension{
 		ID:      "hosttest/capture-settings",
@@ -189,8 +167,6 @@ func captureSettings() {
 	}
 }
 
-// The upstream exchanges a call captures have the secrets in the account's settings removed, as
-// its replies have: in the URL, the headers and the bodies the extension sent and got back.
 func TestCaptureHoldsNoSettingsSecret(t *testing.T) {
 	const secret = "fake-settings-capture-0123456789"
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -226,12 +202,6 @@ func TestCaptureHoldsNoSettingsSecret(t *testing.T) {
 	}
 }
 
-// captureStop sends one GET to its settings' base_url with the path /<mode> and reads the
-// response body as mode says: "cut" reads its first MiB, as extensions read an error body; "stop"
-// reads its first settings.read bytes and closes it; "error" and "whole" read it to its end,
-// which for "error" is a broken connection. It fails the call, but for "whole", which finishes
-// it: a failed call's capture also loses every piece of the account's secrets (pieces), which
-// would hide what "whole" checks.
 func captureStop() {
 	err := sdk.Serve(sdk.Extension{
 		ID:      "hosttest/capture-stop",
@@ -274,22 +244,17 @@ func captureStop() {
 	}
 }
 
-// A captured response body whose read stopped inside the call's credential keeps no start of it
-// at its end, however the read stopped: at an extension's 1 MiB cut, on a broken connection, or
-// where the extension stopped reading. The redaction cannot recognise a credential's start, so
-// core leaves it out where the read stopped. A body read to its end is kept as it was, even where
-// its last bytes look like the credential's start.
 func TestCaptureStoppedReadKeepsNoCredentialStart(t *testing.T) {
 	const secret = "Zq7-stop-credential-0123456789abcdef"
 	const mark = "MARK Bearer "
 	pad := func(n int) string { return strings.Repeat("x", n) }
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/cut": // the first MiB ends 10 bytes into the credential
+		case "/cut":
 			io.WriteString(w, pad(1<<20-10-len(mark))+mark+secret+pad(1<<20))
-		case "/stop": // the extension reads 5000+len(mark)+10 bytes
+		case "/stop":
 			io.WriteString(w, pad(5000)+mark+secret+pad(5000))
-		case "/error": // the connection breaks 10 bytes into the credential
+		case "/error":
 			conn, buf, err := w.(http.Hijacker).Hijack()
 			if err != nil {
 				return
@@ -298,7 +263,7 @@ func TestCaptureStoppedReadKeepsNoCredentialStart(t *testing.T) {
 			fmt.Fprintf(buf, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", len(body)+5000, body)
 			buf.Flush()
 			conn.Close()
-		case "/whole": // read to its end, which looks like the credential's start
+		case "/whole":
 			io.WriteString(w, pad(5000)+mark+secret[:10])
 		}
 	}))
@@ -341,7 +306,6 @@ func TestCaptureStoppedReadKeepsNoCredentialStart(t *testing.T) {
 			if i := strings.Index(got, secret[:4]); i >= 0 {
 				t.Errorf("the body keeps the credential's start where its read stopped: %q", got[max(0, i-len(mark)):])
 			}
-			// What could be part of the credential goes, and only that: the text before it stays.
 			if !strings.HasSuffix(got, mark) {
 				t.Errorf("the body does not end where the credential's start was: it ends %q, want it to end %q",
 					got[max(0, len(got)-40):], mark)

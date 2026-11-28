@@ -15,51 +15,25 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// States of a managed extension generation.
 const (
-	// StateStarting: the program is starting and has not finished its handshake.
-	StateStarting = "starting"
-	// StateActive: the program runs and takes calls.
-	StateActive = "active"
-	// StateIdle: the program was not needed for a while and was stopped; the next call starts it.
-	StateIdle = "idle"
-	// StateCrashed: the program exited on its own or failed to start; it is restarted after a
-	// backoff.
-	StateCrashed = "crashed"
-	// StateQuarantined: the program crashed too often in a row and is not restarted until a
-	// config reload prepares a new generation.
+	StateStarting    = "starting"
+	StateActive      = "active"
+	StateIdle        = "idle"
+	StateCrashed     = "crashed"
 	StateQuarantined = "quarantined"
-	// StateDraining: a newer generation took over; this one finishes the requests that started
-	// on it, until its drain deadline.
-	StateDraining = "draining"
-	// StateStopped: the generation is finished and takes no calls.
-	StateStopped = "stopped"
+	StateDraining    = "draining"
+	StateStopped     = "stopped"
 )
 
-// Policy says how a managed extension is run. Zero durations mean "never" where noted.
 type Policy struct {
-	// IdleStop stops the program after it has had no request for this long; the next request
-	// starts it again. 0 keeps it running.
-	IdleStop time.Duration
-	// DrainTimeout bounds how long a replaced generation waits for its requests to finish
-	// before its program is stopped.
-	DrainTimeout time.Duration
-	// RestartBackoff is the wait before the first restart after a crash; it doubles with each
-	// crash in a row, up to RestartBackoffMax.
+	IdleStop          time.Duration
+	DrainTimeout      time.Duration
 	RestartBackoff    time.Duration
 	RestartBackoffMax time.Duration
-	// QuarantineAfter is how many crashes in a row quarantine the extension.
-	QuarantineAfter int
-	// StableAfter: a program that ran this long before it crashed starts a new count of
-	// crashes in a row.
-	StableAfter time.Duration
+	QuarantineAfter   int
+	StableAfter       time.Duration
 }
 
-// DefaultPolicy is the policy for fields the config leaves out.
-//
-// Restarts: 1s doubling to 1 minute, quarantine after 5 crashes in a row, a run of 10 minutes
-// resets the count. Draining waits up to 10 minutes, long enough for a long model reply.
-// Idle stop after 10 minutes without requests.
 func DefaultPolicy() Policy {
 	return Policy{
 		IdleStop:          10 * time.Minute,
@@ -71,16 +45,11 @@ func DefaultPolicy() Policy {
 	}
 }
 
-// Fingerprint identifies an extension generation's code: a digest of its manifest, of the
-// program it runs on this platform and of every file in its ui folder (with their names). Two
-// configs naming the same manifest with the same fingerprint can share one running generation.
 func Fingerprint(manifestPath string) (string, error) {
 	fp, _, err := fingerprint(manifestPath)
 	return fp, err
 }
 
-// fingerprint returns the Fingerprint and the SHA-256 of each ui file (lower-case hex), by its
-// slash-separated path in the ui folder, read in the same pass.
 func fingerprint(manifestPath string) (string, map[string]string, error) {
 	m, err := LoadManifest(manifestPath)
 	if err != nil {
@@ -117,21 +86,12 @@ func fingerprint(manifestPath string) (string, map[string]string, error) {
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), files, nil
 }
 
-// Managed is one generation of an extension: one manifest and program, run while it is needed.
-// It starts the program on demand, stops it when idle, restarts it with backoff when it
-// crashes, quarantines it when it keeps crashing, and drains it when a newer generation takes
-// over.
-//
-// Callers hold a lease (Acquire, Release) for the whole of each request that may call the
-// extension; Generate, Login and Refresh must only be called while holding one. A lease keeps a
-// replaced generation from finishing its drain; only running calls keep the program from its
-// idle stop, so a request may hold leases on several extensions and use one.
 type Managed struct {
 	path        string
 	fingerprint string
-	uiFiles     map[string]string // SHA-256 of each ui file, as fingerprint read them
+	uiFiles     map[string]string
 	manifest    *Manifest
-	info        protocol.Info // from the first handshake
+	info        protocol.Info
 	generation  uint64
 	opts        Options
 	logf        func(format string, args ...any)
@@ -140,27 +100,24 @@ type Managed struct {
 	policy    Policy
 	ext       *Extension
 	state     string
-	starting  chan struct{} // closed when the start in progress ends
-	leases    int           // held by requests (Acquire)
-	calls     int           // calls running on the program (Generate until its stream closes, Login, Refresh)
+	starting  chan struct{}
+	leases    int
+	calls     int
 	idleSeq   uint64
 	idle      *time.Timer
 	restart   *time.Timer
-	crashes   int // in a row
+	crashes   int
 	restarts  int
 	lastErr   string
 	retryAt   time.Time
 	startedAt time.Time
 	draining  bool
-	drained   chan struct{} // closed when a draining generation has no leases left
+	drained   chan struct{}
 	retired   bool
-	stopping  map[*Extension]bool // programs asked to stop that may not have exited yet
-	sessions  map[*Session]bool   // open sessions, each holding a lease and a call
+	stopping  map[*Extension]bool
+	sessions  map[*Session]bool
 }
 
-// Prepare starts a new generation of the extension at manifestPath and waits for its handshake,
-// so a config that names a broken extension is refused before it is published. generation
-// labels it in status and logs.
 func Prepare(manifestPath string, generation uint64, policy Policy, opts Options) (*Managed, error) {
 	fp, files, err := fingerprint(manifestPath)
 	if err != nil {
@@ -183,31 +140,22 @@ func Prepare(manifestPath string, generation uint64, policy Policy, opts Options
 	return g, nil
 }
 
-// Path returns the manifest path the generation was prepared from.
 func (g *Managed) Path() string { return g.path }
 
-// Fingerprint returns the generation's fingerprint (see Fingerprint).
 func (g *Managed) Fingerprint() string { return g.fingerprint }
 
-// Manifest returns the generation's manifest.
 func (g *Managed) Manifest() *Manifest { return g.manifest }
 
-// UIFiles returns the SHA-256 (lower-case hex) of each file in the generation's ui folder as
-// it was when the generation was prepared, by slash-separated path. Only these, unchanged, may
-// be served.
 func (g *Managed) UIFiles() map[string]string { return g.uiFiles }
 
-// Info returns what the program said about itself in its first handshake.
 func (g *Managed) Info() protocol.Info { return g.info }
 
-// State returns the generation's state.
 func (g *Managed) State() string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.state
 }
 
-// SetPolicy changes the policy of a running generation.
 func (g *Managed) SetPolicy(p Policy) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -215,8 +163,6 @@ func (g *Managed) SetPolicy(p Policy) {
 	g.armIdle()
 }
 
-// Acquire takes a lease for one request. It returns false once a newer generation has taken
-// over (the generation drains or has stopped); the caller then uses the newer one.
 func (g *Managed) Acquire() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -227,7 +173,6 @@ func (g *Managed) Acquire() bool {
 	return true
 }
 
-// Release returns a lease taken by Acquire.
 func (g *Managed) Release() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -238,12 +183,10 @@ func (g *Managed) Release() {
 	}
 }
 
-// beginCall counts a call from before its program is started, so an idle stop cannot take the
-// program away under it; the returned func ends the call once.
 func (g *Managed) beginCall() func() {
 	g.mu.Lock()
 	g.calls++
-	g.idleSeq++ // cancels a pending idle stop
+	g.idleSeq++
 	g.mu.Unlock()
 	var once sync.Once
 	return func() {
@@ -256,8 +199,6 @@ func (g *Managed) beginCall() func() {
 	}
 }
 
-// Generate starts a generate call, starting the program first if it is idle. The call runs
-// until its stream is closed.
 func (g *Managed) Generate(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
 	end := g.beginCall()
 	ext, e := g.ensure(ctx)
@@ -272,8 +213,6 @@ func (g *Managed) Generate(ctx context.Context, account protocol.Account, req ll
 	return s
 }
 
-// CountTokens starts a count_tokens call, as Generate does a generate call. An extension that
-// does not count tokens answers at once, without its program being started.
 func (g *Managed) CountTokens(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
 	if !CountsTokens(g.info) {
 		return cannotCount(g.manifest.ID)
@@ -291,8 +230,6 @@ func (g *Managed) CountTokens(ctx context.Context, account protocol.Account, req
 	return s
 }
 
-// Endpoint starts an endpoint call, as Generate does a generate call. An extension that serves
-// no endpoints answers at once, without its program being started.
 func (g *Managed) Endpoint(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
 	if !ServesEndpoints(g.info) {
 		return servesNoEndpoints(g.manifest.ID, req)
@@ -310,9 +247,6 @@ func (g *Managed) Endpoint(ctx context.Context, account protocol.Account, req ll
 	return s
 }
 
-// OpenSession opens a session on account, starting the program first if it is idle. The
-// session holds a lease and counts as a running call until it is closed, so the program is not
-// stopped for idleness under it and a drain waits for it; a drain closes it once no turn runs.
 func (g *Managed) OpenSession(ctx context.Context, account protocol.Account, info protocol.SessionInfo) (*Session, *llm.Error) {
 	if !HoldsSessions(g.info) {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Message: fmt.Sprintf("extension %s holds no sessions", g.manifest.ID)}
@@ -356,8 +290,6 @@ func (g *Managed) OpenSession(ctx context.Context, account protocol.Account, inf
 	return s, nil
 }
 
-// Login starts a login call, starting the program first if it is idle. The caller holds a
-// lease until the call is closed.
 func (g *Managed) Login(ctx context.Context, account protocol.Account, login protocol.Login) *LoginCall {
 	end := g.beginCall()
 	ext, e := g.ensure(ctx)
@@ -372,8 +304,6 @@ func (g *Managed) Login(ctx context.Context, account protocol.Account, login pro
 	return l
 }
 
-// Refresh runs a refresh call, starting the program first if it is idle. The caller holds a
-// lease for the call.
 func (g *Managed) Refresh(ctx context.Context, account protocol.Account) (*protocol.Credential, *llm.Error) {
 	defer g.beginCall()()
 	ext, e := g.ensure(ctx)
@@ -388,7 +318,6 @@ func (g *Managed) unavailable(msg string, args ...any) *llm.Error {
 		Message: fmt.Sprintf("extension %s %s: ", g.manifest.ID, g.manifest.Version) + fmt.Sprintf(msg, args...)}
 }
 
-// ensure returns the running program, starting it when it is idle or its restart is due.
 func (g *Managed) ensure(ctx context.Context) (*Extension, *llm.Error) {
 	for {
 		g.mu.Lock()
@@ -420,7 +349,6 @@ func (g *Managed) ensure(ctx context.Context) (*Extension, *llm.Error) {
 			g.mu.Unlock()
 			return nil, e
 		}
-		// Idle, or crashed with its restart due: start it here.
 		restart := g.state == StateCrashed
 		g.mu.Unlock()
 		if !g.start(restart) {
@@ -432,9 +360,6 @@ func (g *Managed) ensure(ctx context.Context) (*Extension, *llm.Error) {
 	}
 }
 
-// start starts the program unless a start is already running or none is needed. It reports
-// whether the program runs afterwards. A draining generation may still start, for a request
-// that began on it while its program was idle.
 func (g *Managed) start(restart bool) bool {
 	g.mu.Lock()
 	if g.ext != nil {
@@ -442,7 +367,6 @@ func (g *Managed) start(restart bool) bool {
 		return true
 	}
 	if ch := g.starting; ch != nil {
-		// Another caller is starting it: wait for that start's result.
 		g.mu.Unlock()
 		<-ch
 		g.mu.Lock()
@@ -461,8 +385,6 @@ func (g *Managed) start(restart bool) bool {
 	g.starting, g.state = ch, StateStarting
 	g.mu.Unlock()
 
-	// The generation runs the code it was prepared with, or nothing: files changed in place
-	// belong to the next reload's generation.
 	var ext *Extension
 	fp, err := Fingerprint(g.path)
 	if err == nil && fp != g.fingerprint {
@@ -474,7 +396,6 @@ func (g *Managed) start(restart bool) bool {
 
 	g.mu.Lock()
 	if err == nil && g.retired {
-		// Stopped for good while starting: Stop waits on ch until this program has exited.
 		g.mu.Unlock()
 		ext.Stop()
 		g.mu.Lock()
@@ -493,7 +414,6 @@ func (g *Managed) start(restart bool) bool {
 	return true
 }
 
-// running records a started program. g.mu is held.
 func (g *Managed) running(ext *Extension, restart bool) {
 	g.ext, g.state, g.startedAt = ext, StateActive, time.Now()
 	if g.draining {
@@ -509,8 +429,6 @@ func (g *Managed) running(ext *Extension, restart bool) {
 	g.armIdle()
 }
 
-// exited handles the program's exit. An exit core asked for (idle stop, drain, shutdown) has
-// already cleared g.ext; any other exit is a crash.
 func (g *Managed) exited(ext *Extension) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -525,8 +443,6 @@ func (g *Managed) exited(ext *Extension) {
 	g.crashed(reason, time.Since(g.startedAt))
 }
 
-// crashed records a crash or failed start, then schedules a restart or quarantines the
-// generation. ran is how long the program ran. g.mu is held.
 func (g *Managed) crashed(reason string, ran time.Duration) {
 	if ran >= g.policy.StableAfter {
 		g.crashes = 0
@@ -554,7 +470,6 @@ func (g *Managed) crashed(reason string, ran time.Duration) {
 	g.restart = time.AfterFunc(backoff, func() { g.start(true) })
 }
 
-// armIdle schedules an idle stop when the program runs with no lease. g.mu is held.
 func (g *Managed) armIdle() {
 	g.idleSeq++
 	if g.idle != nil {
@@ -586,9 +501,6 @@ func (g *Managed) idleStop(seq uint64) {
 	g.mu.Unlock()
 }
 
-// Drain takes the generation out of service. It returns at once, with the generation marked
-// draining and taking no new leases; in the background it waits until the requests holding
-// leases end, or until the policy's drain timeout, then stops the program and calls done.
 func (g *Managed) Drain(done func()) {
 	g.mu.Lock()
 	if g.retired || g.draining {
@@ -616,9 +528,6 @@ func (g *Managed) Drain(done func()) {
 	}
 	timeout, leases := g.policy.DrainTimeout, g.leases
 	g.mu.Unlock()
-	// A session's state lives in this program, so it cannot move to the new one: close each
-	// once its running turn ends. A turn that continues it then fails, and one that continues
-	// nothing opens a session on the new generation.
 	for _, s := range sessions {
 		s.CloseWhenIdle()
 	}
@@ -643,8 +552,6 @@ func (g *Managed) Drain(done func()) {
 	}()
 }
 
-// Stop stops the generation for good, without waiting for its requests, and returns once its
-// programs have exited, including one an idle stop or another Stop is still stopping.
 func (g *Managed) Stop() {
 	g.mu.Lock()
 	g.retired, g.draining = true, true
@@ -667,14 +574,13 @@ func (g *Managed) Stop() {
 	starting := g.starting
 	g.mu.Unlock()
 	for _, e := range exts {
-		e.Stop() // safe from several goroutines: each returns once the program has exited
+		e.Stop()
 	}
 	if starting != nil {
-		<-starting // start sees retired and stops what it started before it closes this
+		<-starting
 	}
 }
 
-// Status is what management shows about a generation.
 type Status struct {
 	ID             string `json:"id"`
 	Version        string `json:"version"`
@@ -687,7 +593,6 @@ type Status struct {
 	ActiveRequests int    `json:"active_requests"`
 }
 
-// Status returns the generation's status.
 func (g *Managed) Status() Status {
 	g.mu.Lock()
 	defer g.mu.Unlock()

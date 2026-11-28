@@ -22,11 +22,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
-// fakeSession is the session the "session" fake extension holds. Each turn's reply has the ID
-// "turn-<n>", n counting the session's turns, so a test sees its turns share one session. A
-// turn for model "wait" waits for an interrupt and finishes with the interrupt's message as its
-// raw reason; one for model "payload" finishes with a message after sdk.ApplyPayload as its raw
-// reason. The account "no-session" takes no sessions.
 type fakeSession struct {
 	turns      int
 	interrupts chan json.RawMessage
@@ -45,7 +40,6 @@ func (f *fakeSession) Turn(ctx context.Context, call sdk.Call, out *sdk.Stream) 
 		return err
 	}
 	if call.Request.Model == "payload" {
-		// The upstream message a turn would send: the call's payload rules apply to it.
 		b := sdk.ApplyPayload(ctx, []byte(`{"model":"payload","tools":[{"name":"apply_patch","n":1},{"name":"apply_patch","n":2}]}`))
 		return out.Finish(llm.Finish{Reason: llm.FinishStop, RawReason: string(b)}, nil)
 	}
@@ -81,7 +75,6 @@ func openSession(t *testing.T, g *Managed, account string) *Session {
 	return s
 }
 
-// turnEvents runs a turn to its end and returns its events.
 func turnEvents(s *Session, ctx context.Context, account, model string) []llm.Event {
 	t := s.Turn(ctx, protocol.Account{ID: account}, llm.Request{Model: model})
 	defer t.Close()
@@ -104,7 +97,6 @@ func waitClosed(t *testing.T, c <-chan struct{}, what string) {
 	}
 }
 
-// Turns on a session reach the same session in the extension, one after another.
 func TestSessionTurnsShareOneSession(t *testing.T) {
 	g, _ := prepareFake(t, "session", 0)
 	s := openSession(t, g, "a")
@@ -124,8 +116,6 @@ func TestSessionTurnsShareOneSession(t *testing.T) {
 	waitClosed(t, s.Done(), "the session's end")
 }
 
-// An extension without the session operation, and one that refuses the account, answer with
-// unsupported on the credential: core then serves the account without a session.
 func TestSessionRefused(t *testing.T) {
 	for _, c := range []struct{ mode, account string }{{"serve", "a"}, {"session", "no-session"}} {
 		g, _ := prepareFake(t, c.mode, 0)
@@ -136,7 +126,6 @@ func TestSessionRefused(t *testing.T) {
 	}
 }
 
-// A turn for another account is refused without ending the session.
 func TestSessionTurnForAnotherAccount(t *testing.T) {
 	g, _ := prepareFake(t, "session", 0)
 	s := openSession(t, g, "a")
@@ -148,8 +137,6 @@ func TestSessionTurnForAnotherAccount(t *testing.T) {
 	}
 }
 
-// An interrupt reaches the running turn in the extension as the client sent it; the session
-// then takes the next turn.
 func TestSessionInterrupt(t *testing.T) {
 	g, _ := prepareFake(t, "session", 0)
 	s := openSession(t, g, "a")
@@ -168,7 +155,6 @@ func TestSessionInterrupt(t *testing.T) {
 	}
 }
 
-// Cancelling a running turn ends the session.
 func TestSessionCancelledTurnEndsSession(t *testing.T) {
 	g, _ := prepareFake(t, "session", 0)
 	s := openSession(t, g, "a")
@@ -188,8 +174,6 @@ func TestSessionCancelledTurnEndsSession(t *testing.T) {
 	}
 }
 
-// A draining generation closes its idle sessions at once and a busy one when its turn ends,
-// opens no new ones, and finishes draining once they are closed.
 func TestDrainClosesSessions(t *testing.T) {
 	g, _ := prepareFake(t, "session", 0)
 	idle := openSession(t, g, "a")
@@ -216,10 +200,6 @@ func TestDrainClosesSessions(t *testing.T) {
 	waitClosed(t, drained, "the drain")
 }
 
-// sessionBadFrame is an extension that holds sessions without the SDK, reports protocol minor
-// version minor, and answers every turn, and every other call on an account with a credential or
-// settings, with an event of an unknown type that holds the account's API key and settings; it
-// hangs up on any other call.
 func sessionBadFrame(minor int) {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
@@ -260,8 +240,6 @@ func sessionBadFrame(minor int) {
 				_ = protocol.WriteFrame(conn, leak(turn.Account))
 				_, _ = io.Copy(io.Discard, conn)
 			case protocol.OpLogin:
-				// A login with method "identity" ends with a grant whose identity has a field named
-				// after what the user entered and the account's settings, with no value.
 				if call.Login != nil && call.Login.Method == "identity" && call.Account != nil {
 					_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginDone}, Grant: &protocol.Grant{
 						Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-gr-0123"},
@@ -272,7 +250,6 @@ func sessionBadFrame(minor int) {
 				_ = protocol.WriteFrame(conn, leak(call.Account))
 				_, _ = io.Copy(io.Discard, conn)
 			default:
-				// An account with nothing to leak is hung up on.
 				if a := call.Account; a != nil && (a.Credential != nil || len(a.Settings) > 0) {
 					_ = protocol.WriteFrame(conn, leak(call.Account))
 					_, _ = io.Copy(io.Discard, conn)
@@ -282,8 +259,6 @@ func sessionBadFrame(minor int) {
 	}
 }
 
-// Every other call whose reply breaks the protocol with a frame holding the account's credential
-// and the secret in its settings gets a protocol error without either in it.
 func TestProtocolErrorsAreRedacted(t *testing.T) {
 	ext, err := Start(filepath.Join(fakePackage(t, "session-bad-frame"), ManifestFile), Options{Log: io.Discard, SettingsSecrets: configdoc.SettingsSecrets})
 	if err != nil {
@@ -317,8 +292,6 @@ func TestProtocolErrorsAreRedacted(t *testing.T) {
 	}
 }
 
-// A secret with a control byte in it is removed from a protocol error that quotes it, whether
-// core quotes it (a check's reply type) or the event sequence check does (a generate's).
 func TestProtocolErrorsQuoteNoControlByteSecret(t *testing.T) {
 	ext, err := Start(filepath.Join(fakePackage(t, "session-bad-frame"), ManifestFile), Options{Log: io.Discard, SettingsSecrets: configdoc.SettingsSecrets})
 	if err != nil {
@@ -339,8 +312,6 @@ func TestProtocolErrorsQuoteNoControlByteSecret(t *testing.T) {
 	}
 }
 
-// A grant whose identity is refused is reported without what the user entered, the account's
-// settings secrets or the grant's own credential, even when the identity names them.
 func TestLoginIdentityErrorIsRedacted(t *testing.T) {
 	ext, err := Start(filepath.Join(fakePackage(t, "session-bad-frame"), ManifestFile), Options{Log: io.Discard, SettingsSecrets: configdoc.SettingsSecrets})
 	if err != nil {
@@ -362,8 +333,6 @@ func TestLoginIdentityErrorIsRedacted(t *testing.T) {
 	}
 }
 
-// An extension that breaks the protocol with a frame holding the account's credential and the
-// secret in its settings gets a protocol error without either in it.
 func TestSessionProtocolErrorIsRedacted(t *testing.T) {
 	g, _ := prepareFake(t, "session-bad-frame", 0)
 	const key, setting = "sk-session-leak-test-0123456789", "sk-session-setting-0123456789"
@@ -385,8 +354,6 @@ func TestSessionProtocolErrorIsRedacted(t *testing.T) {
 	}
 }
 
-// payloadTurnRules is a rule set for model on a fake extension's channel (the last part of its
-// extension ID, which is its mode).
 func payloadTurnRules(model, channel string) *payload.Rules {
 	models := []payload.Model{{Name: model, Protocol: channel}}
 	return &payload.Rules{
@@ -395,11 +362,6 @@ func payloadTurnRules(model, channel string) *payload.Rules {
 	}
 }
 
-// A session turn carries the payload rules that match it, and the SDK applies them to the message
-// the extension sends upstream (sdk.ApplyPayload); a turn that no rule matches gets none, and
-// rules for another model change nothing. Of two apply_patch tools the filter removes only the
-// first, as in the old engine's oracle case "example filter codex flat tools, two patches: first
-// only", so the second tool stays only if the rules were applied once.
 func TestSessionTurnAppliesPayloadRules(t *testing.T) {
 	const message = `{"model":"payload","tools":[{"name":"apply_patch","n":1},{"name":"apply_patch","n":2}]}`
 	const changed = `{"model":"payload","service_tier":"priority","tools":[{"name":"apply_patch","n":2}]}`
@@ -442,9 +404,6 @@ func TestSessionTurnAppliesPayloadRules(t *testing.T) {
 	}
 }
 
-// An extension older than protocol 0.15 cannot apply payload rules to a session turn (0.14 only
-// to a call's HTTP requests), so a turn that rules match is refused before it reaches it, as
-// unsupported for the account, and the session stays open; a turn no rule matches reaches it.
 func TestOldExtensionGetsNoSessionTurnWithPayloadRules(t *testing.T) {
 	for _, mode := range []string{"session-bad-frame", "session-bad-frame-14"} {
 		t.Run(mode, func(t *testing.T) {
@@ -471,8 +430,6 @@ func TestOldExtensionGetsNoSessionTurnWithPayloadRules(t *testing.T) {
 			if s.Ended() {
 				t.Error("the refused turn ended the session")
 			}
-			// The fake extension answers any turn with an unknown frame: one that no rule
-			// matches reaches it.
 			turn = s.Turn(context.Background(), account, llm.Request{Model: "other"})
 			ev = turn.Next()
 			turn.Close()

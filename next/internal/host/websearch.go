@@ -6,15 +6,8 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// webSearchMinor is the protocol minor version that adds the canonical web search tool
-// (llm.ToolWebSearch and llm.Tool.WebSearch).
 const webSearchMinor = 29
 
-// downgradeWebSearch returns req as an extension that implements protocol minor version minor
-// can take it. Before webSearchMinor, every ToolWebSearch becomes a ToolNative with its Origin
-// unchanged, except an OpenAI Chat web_search_options tool, which is removed from Tools and
-// restored into req.Origin.Raw under "web_search_options" as extensions below 0.29 received it.
-// req's own Tools slice and Origin are never mutated.
 func downgradeWebSearch(minor int, req llm.Request) llm.Request {
 	if minor >= webSearchMinor {
 		return req

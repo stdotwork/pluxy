@@ -11,13 +11,10 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// proxyMinor is the protocol minor version that adds an account's proxy_url.
 const proxyMinor = 11
 
-// headersMinor is the protocol minor version that adds an account's headers.
 const headersMinor = 12
 
-// timeoutsMinor is the protocol minor version that adds an account's timeouts.
 const timeoutsMinor = 22
 
 const (
@@ -26,16 +23,6 @@ const (
 	defaultTotalTimeoutMS  int64 = 600_000
 )
 
-// outbound turns account.ProxyURL, the account's own proxy_url setting, into the proxy the call
-// carries: that setting, else Options.ProxyURL; none for direct or none. It fills in the account's
-// headers that copy a header from the client's request from client, the headers of the request
-// the call serves, or leaves them out when client is nil (upheader.Fill). It refuses the call
-// when it needs a proxy or headers and the extension predates them, which would send it without.
-// The proxy's user name and password and the account's secret header values then count as a
-// credential the extension holds, so its output is logged without them; the returned credential
-// holds them, and the secret values copied from client, for the call's own redaction. The copied
-// values are the client's own and change from request to request, so they are not held past the
-// call.
 func (e *Extension) outbound(account *protocol.Account, client http.Header) (*protocol.Credential, *llm.Error) {
 	global := ""
 	if e.opts.ProxyURL != nil {
@@ -64,14 +51,11 @@ func (e *Extension) outbound(account *protocol.Account, client http.Header) (*pr
 	return call.credential(), nil
 }
 
-// outboundForms are the forms of an account's proxy secret and secret header values that are
-// removed from text, as proxyurl.Password and upheader.Forms return them.
 type outboundForms struct {
 	Proxy   []string `json:"proxy,omitempty"`
 	Headers []string `json:"headers,omitempty"`
 }
 
-// credential returns d as a credential, or nil when it holds no form.
 func (d outboundForms) credential() *protocol.Credential {
 	if len(d.Proxy) == 0 && len(d.Headers) == 0 {
 		return nil
@@ -80,7 +64,6 @@ func (d outboundForms) credential() *protocol.Credential {
 	return &protocol.Credential{Kind: "upstream", Data: data}
 }
 
-// outboundSecrets returns the forms that c, a credential outbound returned, holds, by name.
 func outboundSecrets(c *protocol.Credential) map[string]string {
 	var d outboundForms
 	_ = json.Unmarshal(c.Data, &d)
@@ -94,8 +77,6 @@ func outboundSecrets(c *protocol.Credential) map[string]string {
 	return out
 }
 
-// resolveTimeouts resolves account.Timeouts against Options.Timeouts and the defaults (60s
-// header, 5m idle, 10m total). Extensions older than minor 22 do not receive the field.
 func (e *Extension) resolveTimeouts(account *protocol.Account) {
 	if e.info.ProtocolMinor < timeoutsMinor {
 		account.Timeouts = nil

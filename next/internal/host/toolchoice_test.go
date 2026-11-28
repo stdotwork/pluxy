@@ -17,9 +17,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// toolChoiceEcho is an extension that reports protocol minor version minor and answers a generate
-// call or a session turn with the request's tool choice in response.start's raw, and a translation
-// report with one loss of its own.
 func toolChoiceEcho(minor int) {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
@@ -67,8 +64,6 @@ func toolChoiceEcho(minor int) {
 	}
 }
 
-// allowedChoice is a request whose tool choice names the tools the model may call, as core reads
-// one from a Chat client: two function tools the list names, one it does not, and a hosted tool.
 func allowedChoice(policy string) llm.Request {
 	return llm.Request{Model: "m", DropPolicy: policy, Items: []llm.Item{
 		{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "Weather in Oslo?"}}},
@@ -82,11 +77,6 @@ func allowedChoice(policy string) llm.Request {
 	}}}
 }
 
-// An extension before protocol minor 26 has no allowed list, so core carries the narrowing the way
-// a format without one does: the request keeps its choice's mode and only the function tools the
-// list names, and the reply's translation report lists nothing for it. From minor 26 the extension
-// gets the list and every tool. Generate calls and session turns alike, and neither the caller's
-// choice nor its tools change.
 func TestAllowedToolsDowngrade(t *testing.T) {
 	ctx := context.Background()
 	acct := protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-1"}}
@@ -102,10 +92,6 @@ func TestAllowedToolsDowngrade(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer ext.Stop()
-		// first returns a call's first event, having read it to its end, and fails the test if
-		// an event does not come within 10 seconds: a turn the request would be refused on
-		// leaves the fake extension waiting, and the test must fail there rather than hang.
-		// The fake extension answers one session turn, so each turn below opens a session.
 		first := func(name string, next func() llm.Event, close func()) llm.Event {
 			defer close()
 			ev := nextWithin(t, name, next)
@@ -179,10 +165,6 @@ func TestAllowedToolsDowngrade(t *testing.T) {
 	}
 }
 
-// An allowed list the request defines no tool for cannot be carried to an extension before minor
-// 26 by narrowing, and sending it whole would let the model call any tool: the request is refused
-// before it is sent, whichever its drop policy. From minor 26 the list goes to the extension, which
-// checks the names itself.
 func TestAllowedToolsDowngradeNoTool(t *testing.T) {
 	ctx := context.Background()
 	acct := protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-1"}}

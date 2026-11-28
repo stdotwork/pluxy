@@ -29,20 +29,14 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// The test binary doubles as the fake extensions below. Core clears an extension's environment,
-// so the fake reads its behaviour from the extension ID core passes it.
 func TestMain(m *testing.M) {
 	if mode, ok := strings.CutPrefix(os.Getenv(protocol.EnvExtensionID), "hosttest/"); ok {
 		fakeExtension(mode)
-		syscall.Exit(0) // not os.Exit: under -race that sleeps a second first, which each test would wait out
+		syscall.Exit(0) // not os.Exit: under -race that sleeps a second first
 	}
 	os.Exit(m.Run())
 }
 
-// exitWhenStdinCloses makes a fake extension that does not use the SDK follow the protocol's
-// shutdown rule: core closes its stdin to ask it to stop, and it exits. Without it, Stop waits out
-// the whole StopTimeout and kills the fake. It exits with syscall.Exit: under -race, os.Exit(0)
-// sleeps a second first (the race runtime's atexit_sleep_ms), which each test would wait out.
 func exitWhenStdinCloses() {
 	go func() {
 		_, _ = io.Copy(io.Discard, os.Stdin)
@@ -50,8 +44,6 @@ func exitWhenStdinCloses() {
 	}()
 }
 
-// fakeExtension misbehaves during startup. It writes its process ID to the file "pid" in its
-// working folder (the package folder) so the test can check it was reaped.
 func fakeExtension(mode string) {
 	if m, ok := strings.CutPrefix(mode, "tool-result-passthrough-"); ok {
 		minor, _ := strconv.Atoi(m)
@@ -139,8 +131,6 @@ func fakeExtension(mode string) {
 		return
 	}
 	if rest, ok := strings.CutPrefix(mode, "native-only-"); ok {
-		// native-only-<minor>[-parses|-skew]: describes that minor, with core's native_parser
-		// (parses) or another one (skew).
 		minor, parses, _ := strings.Cut(rest, "-")
 		n, _ := strconv.Atoi(minor)
 		parser := 0
@@ -157,16 +147,14 @@ func fakeExtension(mode string) {
 		echoPieces()
 		return
 	}
-	if mode != "sleep-child" { // the child shares its parent's folder
+	if mode != "sleep-child" {
 		_ = os.WriteFile("pid", []byte(strconv.Itoa(os.Getpid())), 0o644)
 		_ = os.WriteFile("env", []byte(strings.Join(os.Environ(), "\n")), 0o644)
 	}
 	switch mode {
 	case "close-stdout":
-		// Close stdout without a handshake and stay alive.
 		os.Stdout.Close()
 	case "endless-line":
-		// A handshake line that never ends.
 		chunk := []byte(strings.Repeat("x", 64<<10))
 		for {
 			if _, err := os.Stdout.Write(chunk); err != nil {
@@ -174,7 +162,6 @@ func fakeExtension(mode string) {
 			}
 		}
 	case "no-describe":
-		// Handshake, then never answer describe. The file "handshook" says the line is written.
 		socket := os.Getenv(protocol.EnvSocket)
 		ln, err := net.Listen("unix", socket)
 		if err != nil {
@@ -192,8 +179,6 @@ func fakeExtension(mode string) {
 			}
 		}()
 	case "serve", "slow-exit", "session":
-		// A working extension; slow-exit takes half a second to exit once asked to stop;
-		// session also holds sessions (fakeSession).
 		ext := sdk.Extension{ID: os.Getenv(protocol.EnvExtensionID), Version: "0.0.0",
 			Generate: func(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 				if err := out.Start(llm.ResponseInfo{ID: "r", Model: call.Request.Model}); err != nil {
@@ -203,7 +188,7 @@ func fakeExtension(mode string) {
 			}}
 		if mode == "session" {
 			ext.Session = openFakeSession
-			_ = sdk.Upstream(&http.Transport{}) // a turn with payload rules needs a wrapped client
+			_ = sdk.Upstream(&http.Transport{})
 		}
 		err := sdk.Serve(ext)
 		if mode == "slow-exit" {
@@ -212,9 +197,8 @@ func fakeExtension(mode string) {
 		if err != nil {
 			os.Exit(1)
 		}
-		syscall.Exit(0) // see TestMain
+		syscall.Exit(0)
 	case "child-holds-stderr":
-		// Start a child that keeps our stderr open after we are killed, then stay silent.
 		self, _ := os.Executable()
 		child := exec.Command(self)
 		child.Env = []string{protocol.EnvExtensionID + "=hosttest/sleep-child"}
@@ -228,10 +212,8 @@ func fakeExtension(mode string) {
 }
 
 func TestStartFailuresStayUnderTheDeadline(t *testing.T) {
-	t.Parallel() // each case has its own package folder and process
+	t.Parallel()
 	const startTimeout = 2 * time.Second
-	// Killing a failed start and collecting its exit takes milliseconds, or up to waitDelay when
-	// a child of the extension holds its output open. The rest is slack for a loaded machine.
 	budget := startTimeout + waitDelay + 2*time.Second
 	for _, tc := range []struct {
 		mode    string
@@ -255,7 +237,6 @@ func TestStartFailuresStayUnderTheDeadline(t *testing.T) {
 			done := make(chan result, 1)
 			start := time.Now()
 			go func() {
-				// A long stop timeout: a failed start must not wait for a graceful stop.
 				ext, err := Start(filepath.Join(dir, ManifestFile), Options{StartTimeout: startTimeout, StopTimeout: 30 * time.Second, Log: io.Discard})
 				done <- result{ext, err}
 			}()
@@ -284,11 +265,9 @@ func TestStartFailuresStayUnderTheDeadline(t *testing.T) {
 	}
 }
 
-// A start that passes its limit says how long starting the program took, whether the handshake
-// was readable and, on Linux, what the program was doing, read before it is killed.
 func TestStartLimitErrorSaysWhereTheStartWas(t *testing.T) {
 	const startTimeout = 500 * time.Millisecond
-	dir := fakePackage(t, "silent") // writes its pid, then sleeps without a handshake
+	dir := fakePackage(t, "silent")
 	_, err := Start(filepath.Join(dir, ManifestFile), Options{StartTimeout: startTimeout, Log: io.Discard})
 	if err == nil {
 		t.Fatal("Start succeeded, want an error")
@@ -308,7 +287,6 @@ func TestStartLimitErrorSaysWhereTheStartWas(t *testing.T) {
 	}
 	want := []string{"handshake: not read"}
 	if runtime.GOOS == "linux" {
-		// The program sleeps in time.Sleep, so it was sleeping (S) and waiting in the kernel.
 		want = []string{"; handshake: not read, no bytes waiting in its stdout;", "; process state S;", "; wchan "}
 	}
 	for _, w := range want {
@@ -323,11 +301,6 @@ func TestStartLimitErrorSaysWhereTheStartWas(t *testing.T) {
 	}
 }
 
-// A handshake that is readable only once the limit has passed fails the start with the start
-// limit's error, whichever of the handshake and the limit core sees first; it is not accepted, and
-// describe does not fail on its own with a timeout. Core is held up between starting the program
-// and waiting for the handshake until both are ready, as a stalled start in CI was, so each run
-// is a coin toss between the two; a dozen runs see both.
 func TestLateHandshakeFailsWithTheStartLimitError(t *testing.T) {
 	t.Parallel()
 	const startTimeout = 300 * time.Millisecond
@@ -358,9 +331,6 @@ func TestLateHandshakeFailsWithTheStartLimitError(t *testing.T) {
 	}
 }
 
-// A program that is slow to start (on Windows, a new program scanned before it runs took over 10s
-// in CI) still gets the whole limit for its handshake and describe: the limit counts from the
-// program running.
 func TestStartLimitCountsFromTheProgramRunning(t *testing.T) {
 	t.Parallel()
 	const startTimeout = 2 * time.Second
@@ -373,7 +343,6 @@ func TestStartLimitCountsFromTheProgramRunning(t *testing.T) {
 	ext.Stop()
 }
 
-// fakePackage writes a package folder whose program is this test binary.
 func fakePackage(t *testing.T, mode string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -418,18 +387,11 @@ func killFromFile(path string) {
 	}
 }
 
-// echoCredential is an extension that writes the credentials it gets to stderr and stdout, as a
-// careless provider's debug output would. A generate call without a credential writes the access
-// token its last refresh returned. A call on an account with settings also writes them with the
-// settings the account's first and previous calls had, as calls still running with them would;
-// and every call on
-// such an account fails with an error that quotes its settings, as an unreachable upstream's
-// error quotes a URL from them.
 func echoCredential() {
 	var mu sync.Mutex
 	var refreshed string
-	before := map[string]string{} // the settings of each account's previous generate call
-	first := map[string]string{}  // and of its first
+	before := map[string]string{}
+	first := map[string]string{}
 	quote := func(a protocol.Account) error {
 		if len(a.Settings) == 0 {
 			return nil
@@ -494,9 +456,6 @@ func echoCredential() {
 	}
 }
 
-// What an extension writes to stderr and stdout is logged without the credentials core gave it
-// or got back from it, including one a refresh replaced, and without the secrets in the
-// accounts' settings, including those of every settings since changed.
 func TestExtensionOutputIsRedacted(t *testing.T) {
 	const (
 		apiKey     = "sk-log-secret-1234"
@@ -521,8 +480,6 @@ func TestExtensionOutputIsRedacted(t *testing.T) {
 		log.waitFor(t, "stderr done "+a.ID, "stdout done "+a.ID)
 	}
 	generate(protocol.Account{ID: "key", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: apiKey}})
-	// Each later call's output quotes the settings earlier calls had: the third, the first's,
-	// two changes back.
 	generate(protocol.Account{ID: "set", Settings: json.RawMessage(`{"base_url":"https://up.example/v1?token=` + urlToken + `"}`)})
 	generate(protocol.Account{ID: "set", Settings: json.RawMessage(`{"base_url":"https://up.example/v1","api_key":"` + settingKey + `"}`)})
 	generate(protocol.Account{ID: "set", Settings: json.RawMessage(`{"password":"` + password + `"}`)})
@@ -552,8 +509,6 @@ func TestExtensionOutputIsRedacted(t *testing.T) {
 	}
 }
 
-// A settings secret shorter than 8 bytes is left in what a call sends back: removing every
-// occurrence of a short string would mangle unrelated text. One of 8 bytes or more is removed.
 func TestShortSettingsSecretIsLeftInText(t *testing.T) {
 	ext, err := Start(filepath.Join(fakePackage(t, "echo-credential"), ManifestFile), Options{Log: io.Discard, SettingsSecrets: configdoc.SettingsSecrets})
 	if err != nil {
@@ -567,8 +522,6 @@ func TestShortSettingsSecretIsLeftInText(t *testing.T) {
 	}
 }
 
-// Every call's error has the secrets in the account's settings removed, as well as its
-// credential: here a URL with a query and a value under a key named like a secret.
 func TestCallErrorsHoldNoSettingsSecret(t *testing.T) {
 	ext, err := Start(filepath.Join(fakePackage(t, "echo-credential"), ManifestFile), Options{Log: io.Discard, SettingsSecrets: configdoc.SettingsSecrets})
 	if err != nil {
@@ -601,13 +554,9 @@ func TestCallErrorsHoldNoSettingsSecret(t *testing.T) {
 	}
 }
 
-// mintCredential is an extension whose refresh and login write the credential they make to stderr
-// before returning it, as a careless provider's debug output would. After the line it writes
-// mintFiller bytes more, which a pipe of the usual 64 KiB cannot hold: the write returns only once
-// core has read past the line, so core has the line before the result is sent. Where a pipe holds
-// more (1 MiB, on a Linux kernel with 64 KiB pages), the order is not forced and the test below
-// can pass without the hold; TestFreshCredentialInOutputBeforeItsResult forces it in process.
-// This one goes through a real program's stderr.
+// mintFiller bytes, which a pipe of the usual 64 KiB cannot hold: the write returns only once core
+// has read past the line. Where a pipe holds more (1 MiB, on a Linux kernel with 64 KiB pages),
+// the order is not forced.
 func mintCredential() {
 	mint := func(op string) *protocol.Credential {
 		c := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "fresh-" + op + "-access-1234", RefreshToken: "fresh-" + op + "-refresh-1234"}
@@ -635,12 +584,8 @@ func mintCredential() {
 	}
 }
 
-// mintFiller is more than a pipe of the usual size holds, and less than maxHeldOutput.
 const mintFiller = 512 << 10
 
-// A credential an extension makes in a refresh or a login and writes to its output before it
-// returns it is logged without it: core has the line before the result, and still does not log
-// it in clear.
 func TestFreshCredentialIsNotLoggedBeforeItsResult(t *testing.T) {
 	for _, op := range []string{"refresh", "login"} {
 		t.Run(op, func(t *testing.T) {
@@ -685,15 +630,12 @@ func TestFreshCredentialIsNotLoggedBeforeItsResult(t *testing.T) {
 	}
 }
 
-// A line too long to log is left out rather than logged in parts: a credential split between
-// two parts would not be recognised by the redaction.
 func TestLongOutputLineIsNotSplit(t *testing.T) {
 	const secret = "sk-split-secret-1234"
 	var out bytes.Buffer
 	h := &held{}
 	h.add("x", &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: secret})
 	l := &lineLogger{out: &output{w: &out, held: h}, prefix: "[x] "}
-	// The first write passes the limit in the middle of the credential.
 	half := len(secret) / 2
 	for _, chunk := range []string{strings.Repeat("a", maxLogLine) + secret[:half], secret[half:] + "b\nshort " + secret + "\n"} {
 		if _, err := l.Write([]byte(chunk)); err != nil {
@@ -707,7 +649,6 @@ func TestLongOutputLineIsNotSplit(t *testing.T) {
 	if want := "[x] short [redacted]\n"; !strings.HasSuffix(got, want) || strings.Count(got, "\n") != 2 {
 		t.Errorf("log = %.200q..., want a note for the long line, then %q", got, want)
 	}
-	// A long line that ends within one write is left out too.
 	out.Reset()
 	if _, err := l.Write([]byte(strings.Repeat("x", maxLogLine+1) + "\n")); err != nil {
 		t.Fatal(err)
@@ -717,8 +658,6 @@ func TestLongOutputLineIsNotSplit(t *testing.T) {
 	}
 }
 
-// Core clears an extension's environment, except for the variable that lets tests move an
-// extension's login hosts, and only when core itself holds it.
 func TestStartPassesOnlyTheTestLoginHostsVariable(t *testing.T) {
 	t.Setenv("PLUXY_HOSTTEST_OTHER", "leaks")
 	for _, tc := range []struct {
@@ -795,8 +734,6 @@ func accountClosedExtension(minor int) {
 	}
 }
 
-// Core acts on account_closed only from an extension whose describe reports minor 20 or later;
-// from an older extension it is downgraded to permission.
 func TestAccountClosedRequiresProtocolMinor20(t *testing.T) {
 	for _, c := range []struct {
 		mode string
@@ -887,7 +824,6 @@ func modelsFrom(minor int) {
 	}
 }
 
-// ModelList.From is kept only when the extension reports protocol minor 18 or later.
 func TestModelsFromMinorVersionGating(t *testing.T) {
 	for _, tc := range []struct {
 		mode string

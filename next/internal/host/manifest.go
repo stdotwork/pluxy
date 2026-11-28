@@ -1,5 +1,3 @@
-// Package host is core's side of the extension protocol: it reads a manifest, starts the
-// extension program, does the handshake and runs calls.
 package host
 
 import (
@@ -18,10 +16,8 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/extconfig"
 )
 
-// ManifestFile is the manifest's file name inside a package folder.
 const ManifestFile = "pluxy-extension.json"
 
-// Manifest is a provider package manifest (version 0), optionally with app contributions (1).
 type Manifest struct {
 	ManifestVersion int               `json:"manifest_version"`
 	ID              string            `json:"id"`
@@ -29,31 +25,25 @@ type Manifest struct {
 	Protocol        []int             `json:"protocol"`
 	Programs        map[string]string `json:"programs"`
 	UI              *UI               `json:"ui,omitempty"`
-	// Config is the schema of the extension's settings, if any.
-	Config *ConfigSection `json:"config,omitempty"`
-	// App belongs to the desktop host. Core never executes or serves it.
-	App json.RawMessage `json:"app,omitempty"`
+	Config          *ConfigSection    `json:"config,omitempty"`
+	App             json.RawMessage   `json:"app,omitempty"`
 
 	dir string
 }
 
-// UIVersion is the version of the extension pages contract core serves.
 const UIVersion = 0
 
-// Permissions a package's pages may declare.
 const (
 	PermConfigRead  = "config.read"
 	PermConfigWrite = "config.write"
 )
 
-// Limits of a package's ui folder.
 const (
 	maxUIFiles = 1000
 	maxUIBytes = 32 << 20
 	maxPages   = 20
 )
 
-// UI is the ui part of a manifest.
 type UI struct {
 	Version     int      `json:"version"`
 	Dir         string   `json:"dir"`
@@ -61,7 +51,6 @@ type UI struct {
 	Pages       []Page   `json:"pages"`
 }
 
-// Page is one extension page.
 type Page struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -69,7 +58,6 @@ type Page struct {
 	Path  string `json:"path"`
 }
 
-// ConfigSection is the config part of a manifest.
 type ConfigSection struct {
 	Version int             `json:"version"`
 	Schema  json.RawMessage `json:"schema"`
@@ -77,10 +65,8 @@ type ConfigSection struct {
 	schema *extconfig.Schema
 }
 
-// ConfigVersion is the version of the settings schema format core reads.
 const ConfigVersion = 0
 
-// Settings returns the parsed settings schema, or nil when the extension has none.
 func (m *Manifest) Settings() *extconfig.Schema {
 	if m.Config == nil {
 		return nil
@@ -88,7 +74,6 @@ func (m *Manifest) Settings() *extconfig.Schema {
 	return m.Config.schema
 }
 
-// UIDir returns the absolute path of the package's ui folder, or "" when it has no pages.
 func (m *Manifest) UIDir() string {
 	if m.UI == nil {
 		return ""
@@ -137,13 +122,10 @@ var (
 	versionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$`)
 )
 
-// ValidID reports whether id is a publisher-qualified extension ID, publisher/name.
 func ValidID(id string) bool { return idPattern.MatchString(id) }
 
-// ValidVersion reports whether v may be a package version: it names a folder.
 func ValidVersion(v string) bool { return versionPattern.MatchString(v) }
 
-// LoadManifest reads and validates the manifest at path.
 func LoadManifest(path string) (*Manifest, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -220,9 +202,6 @@ func (c *ConfigSection) validate() error {
 	return nil
 }
 
-// uiFiles returns every file in the ui folder, by its slash-separated path inside it, in order.
-// The folder may hold only regular files and folders, within the limits; each page's file must
-// be there.
 func (m *Manifest) uiFiles() ([]string, error) {
 	dir := m.UIDir()
 	if dir == "" {
@@ -266,7 +245,6 @@ func (m *Manifest) uiFiles() ([]string, error) {
 	return names, nil
 }
 
-// Program returns the absolute path of the program for this platform.
 func (m *Manifest) Program() (string, error) {
 	platform := runtime.GOOS + "/" + runtime.GOARCH
 	prog, ok := m.Programs[platform]

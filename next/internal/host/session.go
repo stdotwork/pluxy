@@ -15,30 +15,26 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// HoldsSessions reports whether an extension that described itself with info holds sessions: it
-// implements minor version 1 or later and lists the session operation.
 func HoldsSessions(info protocol.Info) bool {
 	return info.ProtocolMinor >= 1 && slices.Contains(info.Operations, protocol.OpSession)
 }
 
-// Session is an open session on an extension: one connection that carries turns, one at a time,
-// on one account (see Sessions in the protocol README). Closing it ends the session.
 type Session struct {
 	ext       *Extension
 	conn      net.Conn
 	accountID string
 
-	frames  chan sessionFrame // the reader's next frame; unbuffered, so a slow turn slows the extension
-	done    chan struct{}     // closed when the reader has stopped: the connection has ended
-	closing chan struct{}     // closed by Close
+	frames  chan sessionFrame
+	done    chan struct{}
+	closing chan struct{}
 
-	writeMu sync.Mutex // turn and interrupt frames
+	writeMu sync.Mutex
 
 	mu         sync.Mutex
-	creds      []*protocol.Credential // every credential and settings' secrets the session has carried, for redaction
-	pieces     pieces                 // the secrets of every account version the session has carried (pieces)
-	running    bool                   // a turn has been sent and its terminal event not read
-	closeAfter bool                   // close once the running turn ends
+	creds      []*protocol.Credential
+	pieces     pieces
+	running    bool
+	closeAfter bool
 	closed     bool
 	onClose    []func()
 }
@@ -47,10 +43,6 @@ type sessionFrame struct {
 	reply protocol.Reply
 }
 
-// OpenSession opens a session of the given kind on account. ctx bounds only the opening; the
-// session lasts until it is closed. An extension that holds no sessions, or refuses this one,
-// returns an error event's payload: code unsupported with scope credential means the account
-// takes no sessions.
 func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, info protocol.SessionInfo) (*Session, *llm.Error) {
 	if !HoldsSessions(e.info) {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Message: fmt.Sprintf("extension %s holds no sessions", e.manifest.ID)}
@@ -100,7 +92,6 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		return nil, e.protocolError(fmt.Sprintf("a session call was answered with %q", protocol.NewRedactor(creds...).String(reply.Type)))
 	}
 	if !stop() {
-		// ctx ended just as the session opened; its conn is closed.
 		return nil, &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
 	}
 	s := &Session{ext: e, conn: conn, accountID: account.ID, pieces: e.accountPieces(account), frames: make(chan sessionFrame), done: make(chan struct{}), closing: make(chan struct{})}
@@ -117,8 +108,6 @@ func (e *Extension) protocolError(what string) *llm.Error {
 	return &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %s", e.manifest.ID, what)}
 }
 
-// redacted removes credentials and settings secrets from an error core builds from what the
-// extension sent, such as a protocol error that quotes a frame's type.
 func redacted(r *protocol.Redactor, e *llm.Error) *llm.Error {
 	e.Message = r.String(e.Message)
 	return e
@@ -129,8 +118,6 @@ func (e *Extension) sessionReadError(ctx context.Context, redact *protocol.Redac
 	return s.readError(err)
 }
 
-// read hands every frame of the connection to the running turn, one at a time. When the
-// connection ends, the session is over.
 func (s *Session) read() {
 	defer close(s.done)
 	defer s.Close()
@@ -147,14 +134,10 @@ func (s *Session) read() {
 	}
 }
 
-// AccountID returns the account the session belongs to.
 func (s *Session) AccountID() string { return s.accountID }
 
-// Done is closed when the session has ended: core closed it, or the extension closed the
-// connection or stopped.
 func (s *Session) Done() <-chan struct{} { return s.done }
 
-// Ended reports whether the session has ended or is being closed.
 func (s *Session) Ended() bool {
 	s.mu.Lock()
 	closed := s.closed
@@ -170,12 +153,8 @@ func (s *Session) Ended() bool {
 	}
 }
 
-// Turn sends one turn and returns its reply. The account must be the session's; its credential
-// may be newer than the one the session opened with. Cancelling ctx, or closing the stream
-// before its terminal event, cancels the turn, which ends the session.
 func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Request) *SessionStream {
 	t := &SessionStream{s: s, ctx: ctx, capture: capture(ctx, s.ext.info), account: account.ID}
-	// A turn refused here was never sent: closing its stream leaves the session alone.
 	refuse := func(e *llm.Error) *SessionStream {
 		t.ended = true
 		t.fail(e)
@@ -240,8 +219,6 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	t.pieces = slices.Clone(s.pieces)
 	s.mu.Unlock()
 
-	// A frame the extension sent between turns breaks the protocol; the connection ending
-	// between turns ends the session.
 	select {
 	case f := <-s.frames:
 		s.Close()
@@ -256,7 +233,6 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	s.writeMu.Unlock()
 	if err != nil {
 		if errors.Is(err, protocol.ErrFrameTooLarge) {
-			// Nothing was written: the session can take the next turn.
 			t.end()
 			t.fail(&llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusRequestEntityTooLarge, Scope: llm.ScopeRequest,
 				Message: "request is too large to pass to the provider extension"})
@@ -268,8 +244,6 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	return t
 }
 
-// Interrupt passes the client's control message for the running turn to the extension. It
-// does nothing when no turn runs.
 func (s *Session) Interrupt(raw []byte) {
 	s.mu.Lock()
 	running := s.running && !s.closed
@@ -284,7 +258,6 @@ func (s *Session) Interrupt(raw []byte) {
 	}
 }
 
-// CloseWhenIdle closes the session now if no turn runs, else once the running turn ends.
 func (s *Session) CloseWhenIdle() {
 	s.mu.Lock()
 	if s.running {
@@ -296,7 +269,6 @@ func (s *Session) CloseWhenIdle() {
 	s.Close()
 }
 
-// OnClose runs f once the session is closed (at once if it is already closed).
 func (s *Session) OnClose(f func()) {
 	s.mu.Lock()
 	if !s.closed {
@@ -308,8 +280,6 @@ func (s *Session) OnClose(f func()) {
 	f()
 }
 
-// Close ends the session: the extension sees its connection close, cancels a running turn and
-// closes its upstream connection.
 func (s *Session) Close() {
 	s.mu.Lock()
 	if s.closed {
@@ -327,33 +297,25 @@ func (s *Session) Close() {
 	}
 }
 
-// SessionStream is the reply to one turn. Next returns events until and including exactly one
-// terminal event, then keeps returning it.
 type SessionStream struct {
-	s      *Session
-	ctx    context.Context
-	redact *protocol.Redactor
-	pieces pieces
-	held   heldCapture // the turn's capture until the turn ends (see Stream)
-	seq    llm.Sequence
-	stop   func() bool
-	final  *llm.Event
-	// ended says the turn is over on the session (end). Close may read it on another goroutine
-	// while Next ends the turn, so mu guards it.
-	mu    sync.Mutex
-	ended bool
-	// capture receives the turn's diagnostic frames; nil when the turn is not captured.
+	s       *Session
+	ctx     context.Context
+	redact  *protocol.Redactor
+	pieces  pieces
+	held    heldCapture
+	seq     llm.Sequence
+	stop    func() bool
+	final   *llm.Event
+	mu      sync.Mutex
+	ended   bool
 	capture CaptureFunc
 	account string
-	// watch, started, alives and lost are as for Stream.
 	watch   time.Duration
 	started bool
 	alives  atomic.Int64
 	lost    []llm.Loss
 }
 
-// Alives returns how many alive frames the extension has sent on the turn so far. It may be
-// called while Next runs.
 func (t *SessionStream) Alives() int { return int(t.alives.Load()) }
 
 func (t *SessionStream) fail(e *llm.Error) {
@@ -361,7 +323,6 @@ func (t *SessionStream) fail(e *llm.Error) {
 	t.final = &ev
 }
 
-// end marks the turn over on the session, which can then take the next one.
 func (t *SessionStream) end() {
 	t.mu.Lock()
 	if t.ended {
@@ -387,7 +348,6 @@ func (t *SessionStream) end() {
 	}
 }
 
-// Next returns the next event of the turn.
 func (t *SessionStream) Next() llm.Event {
 	if t.final != nil {
 		return *t.final
@@ -413,13 +373,10 @@ func (t *SessionStream) Next() llm.Event {
 		select {
 		case f = <-s.frames:
 		case <-s.done:
-			// The connection ended before the turn's terminal event: core cancelled the turn, or
-			// the extension closed the connection or stopped.
 			t.end()
 			t.fail((&Stream{ctx: t.ctx, ext: s.ext}).readError(net.ErrClosed))
 			return *t.final
 		case <-timeout:
-			// Closing the session cancels the turn in the extension.
 			s.Close()
 			t.end()
 			t.fail(s.ext.timedOut(t.account, t.watch, t.started))
@@ -456,7 +413,6 @@ func (t *SessionStream) Next() llm.Event {
 	return ev
 }
 
-// Close ends the turn; if it had not finished, that cancels it and ends the session.
 func (t *SessionStream) Close() {
 	t.mu.Lock()
 	ended := t.ended

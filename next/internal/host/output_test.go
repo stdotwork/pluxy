@@ -17,8 +17,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// The notes logged when held output passes maxHeldOutput, and when more than maxReplaced
-// credentials are replaced while it is held.
 var wantSizeNote = fmt.Sprintf("[x] (the output held while a refresh or login runs passed its limit of %d bytes, counting %d for each line besides its text; the rest of the held output is left out until it ends)\n", maxHeldOutput, heldLineCost)
 var wantOverflowNote = fmt.Sprintf("[x] (more than %d credentials were replaced while a refresh or login runs; all of the held output is left out until it ends)\n", maxReplaced)
 
@@ -26,9 +24,6 @@ func apiKey(key string) *protocol.Credential {
 	return &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key}
 }
 
-// While refresh or login calls run, every output line waits until the last of them ends and is
-// then logged redacted with what the calls returned; past maxHeldOutput, lines are left out with
-// notes, never logged before then.
 func TestOutputIsHeldWhileACredentialIsMade(t *testing.T) {
 	var log bytes.Buffer
 	h := &held{}
@@ -39,7 +34,7 @@ func TestOutputIsHeldWhileACredentialIsMade(t *testing.T) {
 	o.line("[x] stdout] ", "no call's line")
 	h.add("a", apiKey("sk-first-1234"))
 	first()
-	first() // a second release changes nothing
+	first()
 	o.line("[x] ", "second made sk-second-1234")
 	if got, want := log.String(), "[x] before\n"; got != want {
 		t.Fatalf("while a call still runs, log = %q, want %q", got, want)
@@ -54,7 +49,7 @@ func TestOutputIsHeldWhileACredentialIsMade(t *testing.T) {
 
 	log.Reset()
 	release := o.hold()
-	big := strings.Repeat("b", maxHeldOutput/2-heldLineCost) // two fill the limit exactly
+	big := strings.Repeat("b", maxHeldOutput/2-heldLineCost)
 	for _, l := range []string{big, big, "over sk-third-1234", "over again"} {
 		o.line("[x] ", l)
 	}
@@ -68,8 +63,6 @@ func TestOutputIsHeldWhileACredentialIsMade(t *testing.T) {
 	}
 }
 
-// Each held line counts against the limit beyond its text, so empty lines can't grow the queue
-// without bound.
 func TestHeldEmptyLinesAreBounded(t *testing.T) {
 	var log bytes.Buffer
 	o := &output{w: &log, held: &held{}, prefix: "[x] "}
@@ -90,17 +83,14 @@ func TestHeldEmptyLinesAreBounded(t *testing.T) {
 	}
 }
 
-// Once a line has been left out, the rest of the hold's lines are left out too, also a short one
-// that would still fit: logging it would put it out of order, after the note that says the rest
-// is left out.
 func TestHeldOutputDropsTheRestAfterTheLimit(t *testing.T) {
 	var log bytes.Buffer
 	o := &output{w: &log, held: &held{}, prefix: "[x] "}
 	release := o.hold()
-	big := strings.Repeat("b", maxHeldOutput-heldLineCost-100) // leaves 100 of the limit
+	big := strings.Repeat("b", maxHeldOutput-heldLineCost-100)
 	o.line("[x] ", big)
-	o.line("[x] ", strings.Repeat("c", 200)) // does not fit
-	o.line("[x] ", "small")                  // would fit
+	o.line("[x] ", strings.Repeat("c", 200))
+	o.line("[x] ", "small")
 	release()
 	note := wantSizeNote
 	if got, want := log.String(), note+"[x] "+big+"\n[x] (2 lines of output left out)\n"; got != want {
@@ -108,10 +98,6 @@ func TestHeldOutputDropsTheRestAfterTheLimit(t *testing.T) {
 	}
 }
 
-// A credential stays known while lines that may hold it are held, even when newer ones replace
-// it: here a refresh's credential, printed while a long login holds the output, which two more
-// refreshes of the same account replace before the login ends. The account's credential from
-// before the hold, printed during it, stays known too.
 func TestHeldOutputKeepsReplacedCredentials(t *testing.T) {
 	var log bytes.Buffer
 	h := &held{}
@@ -131,27 +117,23 @@ func TestHeldOutputKeepsReplacedCredentials(t *testing.T) {
 	if got, want := log.String(), "[x] using [redacted]\n[x] minted [redacted]\n"; got != want {
 		t.Errorf("log = %q, want %q", got, want)
 	}
-	// Once nothing is held, only the latest two are kept, as before.
 	o.line("[x] ", "sk-cred0-1234 sk-cred1-1234 sk-cred2-1234 sk-cred3-1234")
 	if got, want := log.String(), "[x] using [redacted]\n[x] minted [redacted]\n[x] sk-cred0-1234 sk-cred1-1234 [redacted] [redacted]\n"; got != want {
 		t.Errorf("after the hold, log = %q, want %q", got, want)
 	}
 }
 
-// While output is held, at most maxReplaced replaced credentials are kept. Past that, they are no
-// longer kept, and the held lines, which may hold one of them, are left out with a note, as are
-// those that come later in the hold; none is logged in clear.
 func TestHeldOutputPastMaxReplacedIsLeftOut(t *testing.T) {
 	var log bytes.Buffer
 	h := &held{}
 	o := &output{w: &log, held: h, prefix: "[x] "}
 	release := o.hold()
 	renew := renewer(h)
-	renew(0, 20+maxReplaced) // exactly maxReplaced replaced
+	renew(0, 20+maxReplaced)
 	if n := len(h.replaced); n != maxReplaced || h.overflow {
 		t.Fatalf("%d replaced kept (overflow %v), want %d kept", n, h.overflow, maxReplaced)
 	}
-	o.line("[x] ", "minted "+renewedKey(0)) // replaced long ago, still known
+	o.line("[x] ", "minted "+renewedKey(0))
 	renew(20+maxReplaced, 21+maxReplaced)
 	if n := len(h.replaced); n != 0 || !h.overflow {
 		t.Fatalf("past the limit, %d replaced kept (overflow %v), want none and overflow", n, h.overflow)
@@ -168,8 +150,6 @@ func TestHeldOutputPastMaxReplacedIsLeftOut(t *testing.T) {
 
 func renewedKey(i int) string { return fmt.Sprintf("sk-renewed-%04d", i) }
 
-// renewer returns a function that renews ten accounts in turn with keys from to to: past each
-// account's first two, each renewal replaces one.
 func renewer(h *held) func(from, to int) {
 	return func(from, to int) {
 		for i := from; i < to; i++ {
@@ -178,7 +158,6 @@ func renewer(h *held) func(from, to int) {
 	}
 }
 
-// Lines held when renewals pass maxReplaced, with no line after, are left out when the hold ends.
 func TestHeldLinesPastMaxReplacedAreLeftOutAtRelease(t *testing.T) {
 	var log bytes.Buffer
 	h := &held{}
@@ -194,8 +173,6 @@ func TestHeldLinesPastMaxReplacedAreLeftOutAtRelease(t *testing.T) {
 	}
 }
 
-// When the size limit leaves out the last lines and then renewals pass maxReplaced, the lines held
-// before are left out too, and a note says so: the size limit's note says only the rest is.
 func TestHeldLinesPastBothLimitsNameTheCap(t *testing.T) {
 	var log bytes.Buffer
 	h := &held{}
@@ -210,7 +187,6 @@ func TestHeldLinesPastBothLimitsNameTheCap(t *testing.T) {
 	}
 }
 
-// renewingWriter is a log that renews one more account on its first Write.
 type renewingWriter struct {
 	bytes.Buffer
 	renew func()
@@ -224,8 +200,6 @@ func (w *renewingWriter) Write(p []byte) (int, error) {
 	return w.Buffer.Write(p)
 }
 
-// The held lines are written with the credentials known when the hold ends, even when a renewal
-// while they are written passes maxReplaced and drops the replaced ones.
 func TestHeldLinesAreRedactedWithOneRedactor(t *testing.T) {
 	h := &held{}
 	renew := renewer(h)
@@ -236,7 +210,7 @@ func TestHeldLinesAreRedactedWithOneRedactor(t *testing.T) {
 	}}
 	o := &output{w: log, held: h, prefix: "[x] "}
 	release := o.hold()
-	renew(0, 20+maxReplaced) // exactly maxReplaced replaced: renewedKey(0) is known only as replaced
+	renew(0, 20+maxReplaced)
 	o.line("[x] ", "first")
 	o.line("[x] ", "minted "+renewedKey(0))
 	release()
@@ -248,9 +222,6 @@ func TestHeldLinesAreRedactedWithOneRedactor(t *testing.T) {
 	}
 }
 
-// inProcess returns an Extension whose socket is served in this process by serve, which gets the
-// call's connection and the program's stderr as core reads it, so a test can put a line in the
-// output at an exact point of a call.
 func inProcess(t *testing.T, log io.Writer, serve func(conn net.Conn, stderr io.Writer)) *Extension {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "pluxy-out-") // short: a socket path is limited
@@ -276,9 +247,6 @@ func inProcess(t *testing.T, log io.Writer, serve func(conn net.Conn, stderr io.
 	return e
 }
 
-// The credential a refresh or login makes, in a line core has before the call's result, is
-// logged without it. The line enters core's output path in process before the result is sent,
-// so the order holds whatever the platform's pipes hold.
 func TestFreshCredentialInOutputBeforeItsResult(t *testing.T) {
 	for _, op := range []string{"refresh", "login"} {
 		t.Run(op, func(t *testing.T) {
@@ -323,15 +291,10 @@ func TestFreshCredentialInOutputBeforeItsResult(t *testing.T) {
 	}
 }
 
-// gatedConn is a call connection that hands over a whole frame, all but its last byte at once and
-// the last only once gate is closed. The test's Close, run while Read waits for gate, stands in for
-// a Close in the window after ReadFrame has returned a login.done frame and before Next has
-// recorded its grant (held.add), which a real connection gives no way to stop in. Close does not
-// end Read here, as it would on a real connection, so that Next still gets the frame.
 type gatedConn struct {
 	net.Conn
 	data   []byte
-	almost chan struct{} // closed when only the last byte is left
+	almost chan struct{}
 	gate   chan struct{}
 }
 
@@ -352,8 +315,6 @@ func (c *gatedConn) Read(p []byte) (int, error) {
 
 func (c *gatedConn) Close() error { return nil }
 
-// A login closed on another goroutine while Next reads its grant keeps the output held until Next
-// has recorded the grant, so a line holding it is logged without it.
 func TestLoginClosedWhileNextReadsItsGrant(t *testing.T) {
 	const token = "fresh-close-race-1234"
 	log := &syncBuffer{}
@@ -380,7 +341,6 @@ func TestLoginClosedWhileNextReadsItsGrant(t *testing.T) {
 	}
 }
 
-// syncBuffer is a log both of an extension's output streams write to.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -398,8 +358,6 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// waitFor waits until the log holds every line in lines: the output streams are read on their
-// own, so a line can arrive after the call that wrote it has finished.
 func (b *syncBuffer) waitFor(t *testing.T, lines ...string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

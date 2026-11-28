@@ -6,7 +6,6 @@ import (
 	"unsafe"
 )
 
-// unreadBytes returns how many bytes wait unread in the pipe f, and whether it could tell.
 func unreadBytes(f *os.File) (int, bool) {
 	rc, err := f.SyscallConn()
 	if err != nil {

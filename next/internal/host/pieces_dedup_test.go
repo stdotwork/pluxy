@@ -50,9 +50,8 @@ func TestAccountSecretsWithDedupOrder(t *testing.T) {
 		Credential: &protocol.Credential{
 			APIKey:       "fake-cred-key-0001",
 			AccessToken:  "fake-cred-tok-0002",
-			RefreshToken: "fake-cred-key-0001", // duplicate of APIKey
+			RefreshToken: "fake-cred-key-0001",
 		},
-		// Single header so map iteration order is deterministic.
 		Headers: map[string]string{
 			"X-Api-Key": "fake-hdr-key-0003",
 		},
@@ -61,12 +60,12 @@ func TestAccountSecretsWithDedupOrder(t *testing.T) {
 	settings := []string{
 		"",
 		"short",
-		"fake-cred-key-0001", // overlaps with credential
-		"fake-hdr-key-0003",  // overlaps with header
-		"fake-set-val-0004",  // new
-		"fake-set-val-0004",  // duplicate
-		"fake-set-val-0005",  // new
-		"fakeproxyuser",      // overlaps with proxy user
+		"fake-cred-key-0001",
+		"fake-hdr-key-0003",
+		"fake-set-val-0004",
+		"fake-set-val-0004",
+		"fake-set-val-0005",
+		"fakeproxyuser",
 		"https://example.invalid/cb?token=fake-url-tok-0006&code=fake-set-val-0005",
 		"https://example.invalid/cb?token=fake-url-tok-0006",
 	}

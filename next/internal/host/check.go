@@ -9,14 +9,10 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// ChecksAccounts reports whether an extension that described itself with info checks its
-// accounts: it implements minor version 4 or later and lists the check operation.
 func ChecksAccounts(info protocol.Info) bool {
 	return info.ProtocolMinor >= 4 && slices.Contains(info.Operations, protocol.OpCheck)
 }
 
-// Check runs a check call: whether account works. Every string of the account's credential and
-// every secret in its settings is removed from the reply, as from every other reply.
 func (e *Extension) Check(ctx context.Context, account protocol.Account) (*protocol.CheckResult, *llm.Error) {
 	proxy, perr := e.outbound(&account, nil)
 	if perr != nil {
@@ -47,9 +43,6 @@ func (e *Extension) Check(ctx context.Context, account protocol.Account) (*proto
 	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a check call", e.manifest.ID, redact.String(r.Type))}
 }
 
-// Check runs a check call, starting the program first if it is idle. The caller holds a lease
-// for the call. An extension that does not check accounts (ChecksAccounts) gets no call: the
-// reply is code unsupported.
 func (g *Managed) Check(ctx context.Context, account protocol.Account) (*protocol.CheckResult, *llm.Error) {
 	if !ChecksAccounts(g.Info()) {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("extension %s does not check accounts", g.Info().ID)}
