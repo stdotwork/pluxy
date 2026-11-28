@@ -1,5 +1,5 @@
 import type { ComponentChildren } from "preact";
-import { useEffect, useId, useRef, useState } from "preact/hooks";
+import { useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { Icon } from "../icons";
 import { strings } from "../strings";
 
@@ -54,7 +54,7 @@ export function FilterMenu<K extends string>(props: {
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     const away = (e: PointerEvent) => {
       if (e.target instanceof Node && !root.current?.contains(e.target)) setOpen(false);
