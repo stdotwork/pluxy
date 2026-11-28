@@ -146,10 +146,10 @@ All of this is built.
   why routing chose each request's account and which accounts were tried on a fallback. Planned:
   the cost of each request.
 
-Details: [routing](routing.md) (accounts, routing, fallback chains, window ignition),
-[config](config.md) (every setting and [reloads](config.md#reloading)),
-[packages](extensions.md), [usage](usage-and-logs.md) and the
-[management API](management-api.md).
+Details: [routing](../routing.md) (accounts, routing, fallback chains, window ignition),
+[config](../config.md) (every setting and [reloads](../config.md#reloading)),
+[packages](../extensions.md), [usage](../usage-and-logs.md) and the
+[management API](../management-api.md).
 
 ## The extension model
 
@@ -200,9 +200,9 @@ Not planned: pluxy will not ship or verify extensions that make other clients po
 or that rewrite words in a request to get past a provider's content filter. Others may build such
 extensions; the extension model does not stop them.
 
-Contracts: the [extension protocol](../next/protocol/README.md) (manifest, registry, handshake,
-calls, versioning) and its [tutorial](../next/protocol/TUTORIAL.md). Installing and managing
-packages: [extensions.md](extensions.md).
+Contracts: the [extension protocol](../../next/protocol/README.md) (manifest, registry, handshake,
+calls, versioning) and its [tutorial](../../next/protocol/TUTORIAL.md). Installing and managing
+packages: [extensions.md](../extensions.md).
 
 ## Three ways to use pluxy
 
@@ -211,10 +211,10 @@ much alike; all three are meant to work well for agents too.
 
 - **The `pluxy` command** comes with core and is mainly for agents and for debugging. Built: a
   command for each management call, `--json` to print the API's reply as it is, and exit codes
-  that say what happened (unreachable, refused, not found, and so on). See [cli.md](cli.md).
+  that say what happened (unreachable, refused, not found, and so on). See [cli.md](../cli.md).
 - **The web panel** is for a core that runs on a machine without a screen or in a container. It
   controls core and the machine core runs on. Built: core serves it at `/panel/`, from inside its
-  own program. See [panel.md](panel.md).
+  own program. See [panel.md](../panel.md).
 - **The desktop app** runs anywhere. It either runs a core on its own machine and manages it, as
   EasyCLIProxyAPI did, or connects to a core that is already running, on the same machine or on
   another one over HTTPS, over plain HTTP that Tailscale carries from this computer (a Tailscale
@@ -301,8 +301,8 @@ Tailscale's [state path for a user](https://github.com/tailscale/tailscale/blob/
 Ollama's [FAQ](https://github.com/ollama/ollama/blob/main/docs/faq.mdx); T3 Code's
 [background service](https://github.com/pingdotgg/t3code/blob/main/docs/user/background-service.md);
 the GitHub CLI's [environment](https://cli.github.com/manual/gh_help_environment); Go's
-[`os` package](https://pkg.go.dev/os). Details: [pluxy's home](config.md#pluxys-home) and
-[setup](setup.md#where-pluxy-keeps-its-files).
+[`os` package](https://pkg.go.dev/os). Details: [pluxy's home](../config.md#pluxys-home) and
+[setup](../setup.md#where-pluxy-keeps-its-files).
 
 ## The UI kit and themes
 
@@ -327,10 +327,10 @@ Themes reach far into the UI, within limits that keep it safe:
 pluxy bundles three themes (`pluxy/default`, `pluxy/terminal` and `pluxy/paper`), follows the
 system's light or dark setting by default, and keeps added themes in core's `state/` folder, so
 the panel and the app connected to one core show the same ones. Contract:
-[themes](../next/ui/themes/README.md).
+[themes](../../next/ui/themes/README.md).
 
 **Extension pages** are shown in a sandboxed frame from a separate site: another host name, not
 just another port, because a browser sends a host's cookies to every port. A page talks to the
 panel only through a message channel, can only read and write its own extension's settings, and
 never receives the management key. Settings are forms the panel draws from the extension's
-schema. Contract: [extension pages](../next/ui/extension-pages/README.md).
+schema. Contract: [extension pages](../../next/ui/extension-pages/README.md).

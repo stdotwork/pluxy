@@ -31,9 +31,9 @@ for common changes before searching the tree.
 command or flag, a `PLUXY_` variable, a relative link, a repo path or a quick-start command that
 does not exist, or when shipped code reads a `PLUXY_` variable no doc names. Change the doc, or the
 code if the doc is right; the test's allowlists may only shrink.
-Confirmed plans, decisions and major tradeoffs are written up in `docs/`: why pluxy is built the
-way it is in `docs/design.md`, the confirmed plans not built yet in `docs/plans.md`, and what the
-corpus compares pluxy with in `docs/corpus.md`.
+Confirmed plans, decisions and major tradeoffs are written up in `docs/design/`: why pluxy is built
+the way it is in `docs/design/design.md`, the confirmed plans not built yet in
+`docs/design/plans.md`, and what the corpus compares pluxy with in `docs/design/corpus.md`.
 
 ## Build and test
 

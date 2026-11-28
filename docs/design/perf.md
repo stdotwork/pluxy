@@ -247,7 +247,7 @@ describes the rule (`next/protocol/README.md`, "Native-only calls").
 
 `go run ./cmd/pluxy-bench -check` runs `stream-pass`, `stream-translate`, `nonstream-pass` and
 `agents` (8 s) three times and fails when a median passes its budget. The budgets are constants in
-[`next/cmd/pluxy-bench/budget.go`](../next/cmd/pluxy-bench/budget.go), each with the CI runs it
+[`next/cmd/pluxy-bench/budget.go`](../../next/cmd/pluxy-bench/budget.go), each with the CI runs it
 came from. CI runs the check in `next-ci.yml`'s `bench` job.
 
 Time budgets are ratios of the proxy to the direct path in the same run, so the mock's own

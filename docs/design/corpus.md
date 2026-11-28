@@ -4,7 +4,7 @@ pluxy is meant to replace CLIProxyAPI without the coding tools pointed at it not
 The differential test corpus in `next/corpus` checks that: it sends pluxy the same requests that
 CLIProxyAPI was once sent, and compares what pluxy does with what CLIProxyAPI did. This page
 explains what the corpus compares and the bar it sets. How to run it and how to add a case is in
-[`next/corpus/README.md`](../next/corpus/README.md).
+[`next/corpus/README.md`](../../next/corpus/README.md).
 
 ## What a case compares
 
@@ -38,7 +38,7 @@ difference fails its case, and the test changes each value of pluxy's reply in t
 the case still passes, so an exception cannot hide a difference it was not written for.
 
 The bar covers what pluxy keeps. A CLIProxyAPI setting that pluxy leaves out is listed with its
-reason in [What each setting does](config.md#what-each-setting-does).
+reason in [What each setting does](../config.md#what-each-setting-does).
 
 ## The recorded replies
 
@@ -52,4 +52,4 @@ The recordings cannot be made again, so they are never edited or regenerated: th
 regression check. A new case reuses the recording of an existing case whose request and scripted
 upstream replies are the same. A behaviour CLIProxyAPI never had has nothing to compare with, so it
 is pinned in a Go test beside the code instead. The steps are in
-[Adding cases](../next/corpus/README.md#adding-cases).
+[Adding cases](../../next/corpus/README.md#adding-cases).

@@ -5,7 +5,7 @@ to pluxy, whose provider points at a fake upstream server. The fake upstream rec
 it gets and answers with scripted replies. The runner then compares what pluxy did (the reply the
 client got and the requests that reached the upstream) with what CLIProxyAPI did for the same case,
 which the case file holds as `recorded_old_core`. Why the corpus exists and the bar it sets are in
-[docs/corpus.md](../../docs/corpus.md).
+[docs/design/corpus.md](../../docs/design/corpus.md).
 
 pluxy must match the recording except where a case lists an **exception**. Each exception gives a
 reason, so every difference is on the record.
