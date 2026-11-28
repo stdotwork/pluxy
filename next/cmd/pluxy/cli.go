@@ -1506,7 +1506,7 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		if cmd.words == "client show" && len(pos) == 0 {
 			fmt.Fprintln(stderr, "tools:")
 			for _, id := range core.ClientSnippetTools {
-				snip, _ := core.ClientSnippetFor(id, "", "")
+				snip, _ := core.ClientSnippetFor(id, "", "", "")
 				fmt.Fprintf(stderr, "  %-12s %s\n", id, snip.Name)
 			}
 		}

@@ -4,6 +4,8 @@
 // - bin/claude, a stand-in Claude Code that prints `2.4.1 (Claude Code)` when asked its version,
 //   as panelcore -first-run's does; bin/ goes first on the app's PATH, which its core inherits,
 //   so core's setup scan finds it;
+// - home/.claude/.credentials.json, a Claude Code sign-in (never read, only seen to exist), so the
+//   scan suggests the Claude pick: an installed Claude Code alone does not;
 // - a curated registry offering pluxy/claude-code, the Claude Code page's package, signed by a key
 //   made here, with the test trust profile naming it: so the app's Setup page offers to install it
 //   for Claude Code's row (agentPages.ts rowAction), and the check installs and turns it on. It
@@ -30,6 +32,8 @@ export function buildFirstRunFixtures(root: string, home: string): FirstRun {
   const bin = join(root, "bin");
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, "claude"), "#!/bin/sh\necho '2.4.1 (Claude Code)'\n", { mode: 0o755 });
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(join(home, ".claude", ".credentials.json"), '{"claudeAiOauth":"opaque"}', { mode: 0o600 });
 
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const placeholder = join(root, "placeholder");

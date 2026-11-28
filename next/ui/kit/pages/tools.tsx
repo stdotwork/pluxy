@@ -75,6 +75,10 @@ const t = strings("tools", {
   makeFirst: "Make the key first, or replace {placeholder} with a key you have.",
   model: "Replace {placeholder} with a model your accounts serve:",
   models: "Models your tools can ask for",
+  modelLabel: "Model {tool} starts with",
+  modelWhy:
+    "{tool} asks for a model of its own unless it is told which one, and your accounts may not serve that one. Pick a model your accounts serve.",
+  noModels: "pluxy serves no models yet, so the text below has {placeholder} where a model goes.",
   step3: "Start {tool} again so it reads the new settings.",
   copy: "Copy",
   copied: "Copied",
@@ -289,7 +293,15 @@ function Steps(props: { client: SetupClient; made: MadeKeys; onKeysChanged?: () 
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
   const tool = toolName(props.client);
-  const paste = useLoad(() => api.clientPaste(props.client.id));
+  // The model the person picked; until they pick, the text names pluxy's best match.
+  const [model, setModel] = useState<string>();
+  const paste = useLoad(() => api.clientPaste(props.client.id, undefined, model));
+  const askedFor = useRef(model);
+  useEffect(() => {
+    if (askedFor.current === model) return;
+    askedFor.current = model;
+    paste.reload();
+  }, [model, paste.reload]);
   // Keys that already carry the tool's name: made here before, so Make key would add another.
   const keys = useLoad(api.clientKeys);
   const earlier = (keys.data?.keys ?? []).filter((k) => k.label?.trim() === tool).length;
@@ -347,6 +359,33 @@ function Steps(props: { client: SetupClient; made: MadeKeys; onKeysChanged?: () 
         )}
       </li>
       <li>
+        {(data.models?.length ?? 0) > 0 ? (
+          <label class="field" data-part="field">
+            <span class="label">{t("modelLabel", { tool })}</span>
+            <select
+              data-slot="select-trigger"
+              value={data.model ?? ""}
+              onChange={(e) => setModel(e.currentTarget.value)}
+            >
+              {data.model && !data.models?.includes(data.model) && (
+                <option value={data.model}>{data.model}</option>
+              )}
+              {data.models?.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+            <span class="muted">{t("modelWhy", { tool })}</span>
+          </label>
+        ) : (
+          // A pluxy that does not send the list (older) is not one that serves nothing.
+          data.models && (
+            <p class="muted">
+              {rich(t("noModels"), { placeholder: <span class="mono">{MODEL_PLACEHOLDER}</span> })}
+            </p>
+          )
+        )}
         {data.files.map((file) => {
           const text = withKey(file.content, data.key, key?.value);
           return (

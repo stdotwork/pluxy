@@ -509,7 +509,7 @@ test("an account page's Refresh reads its limits from core again, though GET /ac
 
 test("failureWord names every code core sends, from a code alone and from a request", () => {
   const words: Record<string, string> = {
-    not_found: "No such model",
+    not_found: "Model not served",
     quota: "Limit used up",
     rate_limit: "Rate limited",
     auth: "Sign-in refused",

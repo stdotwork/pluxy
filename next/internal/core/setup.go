@@ -427,9 +427,14 @@ func (c *Core) handleSetup(m *server.Management) {
 	})
 	m.Handle("GET /setup/clients/{id}/paste", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		if _, ok := ClientSnippetFor(id, "", ""); !ok {
+		if _, ok := ClientSnippetFor(id, "", "", ""); !ok {
 			writeError(w, http.StatusNotFound, "not_found",
 				fmt.Sprintf("no settings to paste for client tool %q (supported: %s)", id, strings.Join(ClientSnippetTools, ", ")))
+			return
+		}
+		model, err := checkClientModel(r.URL.Query().Get("model"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
 		key := "<client-key>"
@@ -458,8 +463,21 @@ func (c *Core) handleSetup(m *server.Management) {
 				return
 			}
 		}
-		snip, _ := ClientSnippetFor(id, baseURL, key)
-		reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: baseURL, Key: key, Note: snip.Note}
+		// The models pluxy serves, for the person to pick from; the tool starts with the one they
+		// picked, else the best match among them.
+		s, release := c.acquire()
+		served := s.Router.ServedModels(r.Context())
+		release()
+		names := make([]string, len(served))
+		for i, m := range served {
+			names[i] = m.ID
+		}
+		if model == "" {
+			model = SuggestClientModel(id, names)
+		}
+		snip, _ := ClientSnippetFor(id, baseURL, key, model)
+		reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: baseURL, Key: key, Note: snip.Note,
+			Model: model, Models: names}
 		for _, f := range snip.Files {
 			reply.Files = append(reply.Files, management.ClientPasteFile{Path: f.Path, Content: f.Content})
 		}
@@ -542,6 +560,10 @@ func buildSetupPicks(regs []management.Registry, installed packages.State, found
 // setupSuggestions says which pick each find points to, and why: a client tool installed on
 // the machine (by its SetupClient ID) or a sign-in found there (by its provider). A pick is
 // suggested by its first row that holds.
+//
+// A provider pick (an account kind: Claude, Codex) needs a sign-in: an installed CLI does not say
+// the person has that subscription, and the panel and the app tick a suggested pick for them. A
+// client pick (a tool's setup package) is suggested by the tool being installed.
 var setupSuggestions = []struct {
 	pick, client, signIn, because string
 	// setsUp marks a pick that writes the client tool's config: not suggested while that
@@ -549,11 +571,9 @@ var setupSuggestions = []struct {
 	setsUp bool
 }{
 	{pick: "pluxy/claude", client: "claude-code", signIn: "pluxy/claude", because: "Claude Code is installed and signed in on this computer"},
-	{pick: "pluxy/claude", client: "claude-code", because: "Claude Code is installed on this computer"},
 	{pick: "pluxy/claude", signIn: "pluxy/claude", because: "Claude Code is signed in on this computer"},
 	{pick: "pluxy/claude-code", client: "claude-code", because: "Claude Code is installed on this computer", setsUp: true},
 	{pick: "pluxy/codex", client: "codex", signIn: "pluxy/codex", because: "Codex CLI is installed and Codex is signed in on this computer"},
-	{pick: "pluxy/codex", client: "codex", because: "Codex CLI is installed on this computer"},
 	{pick: "pluxy/codex", signIn: "pluxy/codex", because: "Codex is signed in on this computer"},
 	{pick: "pluxy/codex-setup", client: "codex", because: "Codex CLI is installed on this computer", setsUp: true},
 	{pick: "pluxy/opencode", client: "opencode", because: "OpenCode is installed on this computer", setsUp: true},
