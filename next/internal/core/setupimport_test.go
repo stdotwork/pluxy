@@ -757,6 +757,38 @@ func TestSetupImportRefusals(t *testing.T) {
 	}
 }
 
+func TestSetupImportRefusesYAMLCore(t *testing.T) {
+	setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	const yamlCfg = "server:\n  host: 127.0.0.1\n  port: 8317\naccess:\n  api-keys: [fake-client-key-1]\nmanagement:\n  secret-key: fake-mgmt-key\n"
+	writeTestFile(t, cfgPath, yamlCfg)
+	cpa := t.TempDir()
+	cpaCfg := filepath.Join(cpa, "config.yaml")
+	writeTestFile(t, cpaCfg, "api-keys: [fake-cpa-client-key]\n")
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+
+	code, rep, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: cpaCfg, DryRun: true})
+	if code != http.StatusOK || !rep.DryRun {
+		t.Fatalf("dry run on yaml core: %d %s", code, body)
+	}
+
+	code, _, body = importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: cpaCfg})
+	var reply management.ErrorBody
+	const want = "pluxy runs on a config.yaml, which it already reads with CLIProxyAPI's key names; an import writes pluxy's JSON config (pluxy init writes one)"
+	if err := json.Unmarshal([]byte(body), &reply); err != nil || code != http.StatusConflict ||
+		reply.Error.Code != "conflict" || reply.Error.Message != want {
+		t.Errorf("import on yaml core: %d %s, want 409 conflict %q", code, body, want)
+	}
+	if after, err := os.ReadFile(cfgPath); err != nil || string(after) != yamlCfg {
+		t.Errorf("config.yaml changed after refused import: err=%v content=%q", err, after)
+	}
+}
+
 func mapsEqual(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false

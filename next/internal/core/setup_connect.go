@@ -381,9 +381,8 @@ func (t *toolFile) undoFolder() {
 
 // ---- connect and disconnect --------------------------------------------------------------------
 
-// canonicalTool is tool's SetupClient ID, refusing a tool core does not connect.
 func canonicalTool(tool string) (string, management.SetupClient, error) {
-	id, ok := clientSnippetNames[strings.ToLower(strings.TrimSpace(tool))]
+	id, ok := clientSnippetID(tool)
 	if !ok || !connectable(id) {
 		return "", management.SetupClient{}, &editError{http.StatusNotFound, "not_found",
 			fmt.Sprintf("pluxy cannot connect %q itself (it can connect: %s)", tool, strings.Join(connectableTools(), ", "))}
