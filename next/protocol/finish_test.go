@@ -16,7 +16,6 @@ func TestFitFinishKeepsWhatFits(t *testing.T) {
 }
 
 func TestFitFinishLeavesRunsOutBeforeSources(t *testing.T) {
-	// A body that fills the frame but for 2 MiB: 3 MiB of runs do not fit and 1 MiB of sources do.
 	ev := llm.Event{Type: llm.EventFinish, Raw: []byte(strings.Repeat("x", MaxFrame-FrameHeadroom-2<<20)),
 		Sources:        llm.Sources{{URL: "https://s.example/1", Title: strings.Repeat("t", 1<<20)}},
 		CodeExecutions: llm.CodeExecutions{{Code: strings.Repeat("c", 3<<20)}}}
@@ -36,12 +35,10 @@ func TestFitFinishLeavesRunsOutBeforeSources(t *testing.T) {
 }
 
 func TestFitFinishNamesWhatItLeftOutAndNothingElse(t *testing.T) {
-	// A body that fills the frame, beside no runs and no sources: there is nothing to leave out.
 	ev := llm.Event{Type: llm.EventFinish, Raw: []byte(strings.Repeat("x", MaxFrame-FrameHeadroom+1<<20))}
 	if loss, cut := FitFinish(&ev); cut {
 		t.Errorf("loss %+v for a reply with no runs and no sources", loss)
 	}
-	// Runs alone: the sources, which fit once the runs are gone, are not named.
 	ev = llm.Event{Type: llm.EventFinish, Raw: []byte(strings.Repeat("x", MaxFrame-FrameHeadroom-1<<20)),
 		CodeExecutions: llm.CodeExecutions{{Code: strings.Repeat("c", 2<<20)}}}
 	loss, cut := FitFinish(&ev)

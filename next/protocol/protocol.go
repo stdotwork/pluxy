@@ -1,5 +1,4 @@
-// Package protocol holds the wire types and framing of the pluxy extension protocol. The
-// protocol itself is described in docs/protocol.md.
+// Package protocol holds the wire types and framing of the pluxy extension protocol.
 package protocol
 
 import (
@@ -26,33 +25,7 @@ const Version = 0
 
 // Minor is the minor version this package implements within Version. An extension reports it in
 // describe (Info.ProtocolMinor); core uses what a minor version adds only with an extension that
-// reports it. Minor 1 adds sessions; minor 2 adds token counting and the request's thinking
-// suffix; minor 3 adds model listing; minor 4 adds account checks; minor 5 adds quota and the
-// identity of a login's grant; minor 6 adds an error's quota window; minor 7 adds endpoint calls;
-// minor 8 adds the request's caller; minor 9 adds a login grant's account settings;
-// minor 10 adds the subscription's end time to quota; minor 11 adds the account's proxy_url;
-// minor 12 adds the account's headers; minor 13 adds upstream capture (Call.Capture and the
-// diagnostic frame); minor 14 adds payload rules (Call.Payload); minor 15 has a session turn
-// carry them too; minor 16 adds an error's dropped (llm.Error.Dropped); minor 17 adds a
-// captured body's BodyStopped; minor 18 adds ModelList.From; minor 19 adds a quota limit's
-// Feature; minor 20 adds llm.CodeAccountClosed; minor 21 adds what a package is (title, summary,
-// kind) to the manifest and registry index, and changes no call; minor 22 adds the account's
-// timeouts (Account.Timeouts); minor 23 adds alive frames (Call.Alive and TypeAlive); minor 24
-// adds model capabilities (Model.Capabilities); minor 25 adds a tool result's parts and error
-// flag (llm.Item.Content and llm.Item.IsError on a tool_result); minor 26 adds a tool choice's
-// allowed tool list (llm.ToolChoice.Allowed); minor 27 adds native-only generate calls
-// (Info.NativeParser and Call.NativeOnly); minor 28 adds the request's service tier and
-// verbosity (llm.Options.ServiceTier and llm.Options.Verbosity); minor 29 adds the canonical
-// web search tool (llm.ToolWebSearch and llm.Tool.WebSearch); minor 30 adds the canonical code
-// execution tool and its forced tool choice (llm.ToolCodeExecution and
-// llm.ToolChoiceCodeExecution); minor 31 adds canonical web search citations on message item.end
-// and search sources on finish (llm.Event.Citations and llm.Event.Sources); minor 32 adds
-// canonical code execution results on finish (llm.Event.CodeExecutions); minor 33 adds
-// canonical output media events (llm.EventMedia and llm.Event.Media); minor 34 adds upstream
-// rate-limit response headers on response.start and error (llm.ResponseInfo.Headers and
-// llm.Error.Headers); minor 35 adds multi-candidate request counts and candidate reply events
-// (llm.Options.CandidateCount, llm.EventCandidate and llm.Event.Candidate); minor 36 adds Gemini
-// embedding endpoint formats (llm.FormatGeminiEmbedContent and llm.FormatGeminiBatchEmbedContents).
+// reports it.
 const Minor = 36
 
 // MaxFrame is the largest frame either side may send.
@@ -70,10 +43,8 @@ const (
 // when it is set; an extension honours such settings only when it holds it (sdk.TestLoginHost).
 const EnvTestLoginHosts = "PLUXY_TEST_LOGIN_HOSTS"
 
-// HandshakeMarker starts the handshake line.
 const HandshakeMarker = "pluxy"
 
-// Operations.
 const (
 	OpDescribe = "describe"
 	OpGenerate = "generate"
@@ -97,7 +68,6 @@ const (
 	OpEndpoint = "endpoint"
 )
 
-// Frame types that are not events.
 const (
 	TypeCall           = "call"
 	TypeDescribeResult = "describe.result"
@@ -117,12 +87,9 @@ const (
 	// TypeSessionInterrupt is a frame core sends on a session while a turn runs: the client's
 	// control message for the running turn, in Raw.
 	TypeSessionInterrupt = "session.interrupt"
-	// TypeModelsResult answers a models call.
-	TypeModelsResult = "models.result"
-	// TypeCheckResult answers a check call for an account that works.
-	TypeCheckResult = "check.result"
-	// TypeQuotaResult answers a quota call.
-	TypeQuotaResult = "quota.result"
+	TypeModelsResult     = "models.result"
+	TypeCheckResult      = "check.result"
+	TypeQuotaResult      = "quota.result"
 	// TypeDiagnostic is a frame an extension sends before a captured call's terminal event: its
 	// upstream exchanges (minor version 13). It is not an event.
 	TypeDiagnostic = "diagnostic"
@@ -139,25 +106,21 @@ const (
 	SessionOpenAIResponses = llm.FormatOpenAIResponses
 )
 
-// SessionInfo says what kind of session a session call opens.
 type SessionInfo struct {
 	Format string `json:"format"`
 }
 
-// Call is the first frame core sends on a connection. For every op but login it is the only
-// one; a login call may be followed by login.input frames.
+// Call is the first frame core sends on a connection.
 type Call struct {
 	Type    string       `json:"type"`
 	ID      string       `json:"id"`
 	Op      string       `json:"op"`
 	Account *Account     `json:"account,omitempty"`
 	Request *llm.Request `json:"request,omitempty"`
-	// Login is what a login call asks for.
-	Login *Login `json:"login,omitempty"`
+	Login   *Login       `json:"login,omitempty"`
 	// Input is what the user entered, in a login.input frame.
-	Input map[string]string `json:"input,omitempty"`
-	// Session is what a session call opens.
-	Session *SessionInfo `json:"session,omitempty"`
+	Input   map[string]string `json:"input,omitempty"`
+	Session *SessionInfo      `json:"session,omitempty"`
 	// Raw is the client's control message, in a session.interrupt frame.
 	Raw json.RawMessage `json:"raw,omitempty"`
 	// Capture asks a generate, count_tokens or endpoint call, or a session.turn, to report its
@@ -180,7 +143,6 @@ type Call struct {
 	NativeOnly bool `json:"native_only,omitempty"`
 }
 
-// Login is the subject of a login call.
 type Login struct {
 	// Method is one of the login methods the extension's describe lists.
 	Method string `json:"method"`
@@ -189,7 +151,6 @@ type Login struct {
 	Input map[string]string `json:"input,omitempty"`
 }
 
-// Account is the account a call runs under.
 type Account struct {
 	ID         string          `json:"id"`
 	Settings   json.RawMessage `json:"settings,omitempty"`
@@ -297,7 +258,6 @@ type Info struct {
 	LoginMethods []LoginMethod `json:"login_methods,omitempty"`
 }
 
-// Login method kinds.
 const (
 	// LoginAPIKey: the user enters a key; the extension checks it and returns a credential.
 	LoginAPIKey = "api_key"
@@ -309,35 +269,29 @@ const (
 	LoginDevice = "device"
 )
 
-// LoginMethod is one way to log in.
 type LoginMethod struct {
 	// Method names it in a login call. Kind says how it works; an extension with two browser
 	// logins (say, two account types) gives them different methods of the same kind.
-	Method string `json:"method"`
-	Kind   string `json:"kind"`
-	Label  string `json:"label,omitempty"`
-	// Inputs are what the user enters when starting the login.
+	Method string       `json:"method"`
+	Kind   string       `json:"kind"`
+	Label  string       `json:"label,omitempty"`
 	Inputs []LoginInput `json:"inputs,omitempty"`
 }
 
-// LoginInput is one value the user enters.
 type LoginInput struct {
 	Name  string `json:"name"`
 	Label string `json:"label,omitempty"`
 	// Secret marks a value that must be hidden as it is typed and never shown again.
-	Secret bool `json:"secret,omitempty"`
-	// Optional marks a value the user may leave empty.
+	Secret   bool `json:"secret,omitempty"`
 	Optional bool `json:"optional,omitempty"`
 }
 
-// Prompt kinds.
 const (
 	PromptBrowser = "browser"
 	PromptDevice  = "device"
 	PromptInput   = "input"
 )
 
-// Prompt is what a login asks the user to do.
 type Prompt struct {
 	// Kind is browser (open URL), device (open VerificationURI and enter UserCode) or input
 	// (enter Inputs).
@@ -371,15 +325,13 @@ type Grant struct {
 	Identity map[string]string `json:"identity,omitempty"`
 }
 
-// Bounds on a grant's Identity.
 const (
 	MaxIdentityFields = 16
 	MaxIdentityKey    = 64
 	MaxIdentityValue  = 512
 )
 
-// MaxGrantSettings bounds a login grant's encoded settings object to 8 KiB, the same
-// budget as the maximum total identity value bytes (16 fields of 512 bytes).
+// MaxGrantSettings bounds a login grant's encoded settings object to 8 KiB.
 const MaxGrantSettings = MaxIdentityFields * MaxIdentityValue
 
 // ModelList sources (ModelList.From, minor version 18; ModelListFromCatalogue is core's
@@ -390,7 +342,6 @@ const (
 	ModelListFromExtension = "extension"
 )
 
-// ModelList is the result of a models call: the models an account serves.
 type ModelList struct {
 	// Models are the account's models, by the names its upstream knows them by. Empty when the
 	// extension has no list for the account (it serves whatever model a client names).
@@ -403,8 +354,7 @@ type ModelList struct {
 	From string `json:"from,omitempty"`
 }
 
-// Model is one model an account serves, with what model lists show about it. Only ID is
-// required; every other field is shown where a client's model list has a place for it.
+// Only ID is required; every other field is shown where a client's model list has a place for it.
 type Model struct {
 	// ID is the model's name upstream, as requests name it.
 	ID string `json:"id"`
@@ -435,7 +385,6 @@ type Model struct {
 	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
 }
 
-// ModelCapabilities is what a model supports and when it was deprecated (minor version 24).
 type ModelCapabilities struct {
 	Tools            bool     `json:"tools"`
 	StructuredOutput bool     `json:"structured_output"`
@@ -447,35 +396,27 @@ type ModelCapabilities struct {
 	DeprecatedAt int64 `json:"deprecated_at,omitempty"`
 }
 
-// CheckResult is the result of a check call for an account that works.
 type CheckResult struct {
 	// Detail says what was checked, for people. Not secret.
 	Detail string `json:"detail,omitempty"`
 }
 
-// Quota is the result of a quota call: what an account's plan allows and how much of it is used,
-// as the provider reports it.
 type Quota struct {
-	// Plan names the account's plan for people, as the provider names it.
 	Plan string `json:"plan,omitempty"`
 	// PlanEndsAt is when the subscription ends, in Unix seconds; zero means unknown (0.10).
-	PlanEndsAt int64 `json:"plan_ends_at,omitempty"`
-	// Limits are the plan's limits: usage windows, allowances and balances.
-	Limits []QuotaLimit `json:"limits"`
+	PlanEndsAt int64        `json:"plan_ends_at,omitempty"`
+	Limits     []QuotaLimit `json:"limits"`
 	// Raw holds the provider's replies the quota was read from, as one JSON object, for what
 	// Limits has no place for.
 	Raw json.RawMessage `json:"raw,omitempty"`
 }
 
-// MaxQuotaLimits bounds how many limits one quota call may return.
 const MaxQuotaLimits = 1000
 
-// QuotaLimit is one limit of an account's plan, such as a 5-hour usage window or a credit
-// balance. Every amount is optional: a provider reports a share used, amounts, or both.
+// Every amount is optional: a provider reports a share used, amounts, or both.
 type QuotaLimit struct {
 	// ID names the limit within the extension, stable across calls (for example "five_hour").
-	ID string `json:"id"`
-	// Label names it for people (for example "5-hour limit").
+	ID    string `json:"id"`
 	Label string `json:"label,omitempty"`
 	// UsedPercent is the share of the limit used, from 0 to 100.
 	UsedPercent *float64 `json:"used_percent,omitempty"`
@@ -484,12 +425,10 @@ type QuotaLimit struct {
 	Limit     *float64 `json:"limit,omitempty"`
 	Remaining *float64 `json:"remaining,omitempty"`
 	// Unit is what the amounts count, for example "requests", "tokens", "credits" or "usd".
-	Unit string `json:"unit,omitempty"`
-	// Unlimited is true when the limit does not run out.
-	Unlimited bool `json:"unlimited,omitempty"`
+	Unit      string `json:"unit,omitempty"`
+	Unlimited bool   `json:"unlimited,omitempty"`
 	// ResetsAt is when the limit resets, in Unix seconds.
-	ResetsAt int64 `json:"resets_at,omitempty"`
-	// WindowSeconds is the length of the limit's usage window.
+	ResetsAt      int64 `json:"resets_at,omitempty"`
 	WindowSeconds int64 `json:"window_seconds,omitempty"`
 	// Models are the models the limit applies to, when not all of the account's.
 	Models []string `json:"models,omitempty"`
@@ -505,12 +444,10 @@ type QuotaLimit struct {
 type Diagnostic struct {
 	// Upstream holds the call's exchanges in the order their requests were sent: at most
 	// MaxDiagnosticExchanges, the first and the last when the call made more.
-	Upstream []UpstreamExchange `json:"upstream,omitempty"`
-	// UpstreamLeftOut counts the exchanges left out between them.
-	UpstreamLeftOut int `json:"upstream_left_out,omitempty"`
+	Upstream        []UpstreamExchange `json:"upstream,omitempty"`
+	UpstreamLeftOut int                `json:"upstream_left_out,omitempty"`
 }
 
-// MaxDiagnosticExchanges is how many exchanges a diagnostic frame holds at most.
 const MaxDiagnosticExchanges = 2
 
 // Bounds on a captured body: one longer than CapturedHead+CapturedEnd bytes keeps its first
@@ -525,7 +462,6 @@ const (
 // order; one that does not fit is left out and counted in HeadersLeftOut.
 const CapturedHeaderBytes = 16 << 10
 
-// UpstreamExchange is one upstream request and what came back.
 type UpstreamExchange struct {
 	Request UpstreamRequest `json:"request"`
 	// Response is absent when none came; Error then says why.
@@ -533,31 +469,26 @@ type UpstreamExchange struct {
 	Error    string            `json:"error,omitempty"`
 }
 
-// UpstreamRequest is an upstream request as it was sent.
 type UpstreamRequest struct {
 	// TimeMs is when it was sent, in Unix milliseconds.
 	TimeMs int64  `json:"time_ms,omitempty"`
 	Method string `json:"method"`
 	// URL is the whole URL, without user name and password, secret query values redacted.
-	URL     string              `json:"url"`
-	Headers map[string][]string `json:"headers,omitempty"`
-	// HeadersLeftOut counts the header lines left out of Headers (CapturedHeaderBytes).
-	HeadersLeftOut int `json:"headers_left_out,omitempty"`
+	URL            string              `json:"url"`
+	Headers        map[string][]string `json:"headers,omitempty"`
+	HeadersLeftOut int                 `json:"headers_left_out,omitempty"`
 	CapturedBody
 }
 
-// UpstreamResponse is what an upstream request got back.
 type UpstreamResponse struct {
 	// TimeMs is when its headers arrived, in Unix milliseconds.
-	TimeMs  int64               `json:"time_ms,omitempty"`
-	Status  int                 `json:"status"`
-	Headers map[string][]string `json:"headers,omitempty"`
-	// HeadersLeftOut counts the header lines left out of Headers (CapturedHeaderBytes).
-	HeadersLeftOut int `json:"headers_left_out,omitempty"`
+	TimeMs         int64               `json:"time_ms,omitempty"`
+	Status         int                 `json:"status"`
+	Headers        map[string][]string `json:"headers,omitempty"`
+	HeadersLeftOut int                 `json:"headers_left_out,omitempty"`
 	CapturedBody
 }
 
-// CapturedBody is a body as text, bounded to its start and its end.
 type CapturedBody struct {
 	// Body is all of the body, or its first CapturedHead bytes when it is longer than
 	// CapturedHead+CapturedEnd.
@@ -603,7 +534,6 @@ func WriteFrame(w io.Writer, v any) error {
 			}
 		}
 	}
-	// The header goes first in the same buffer, so the frame is encoded once and not copied.
 	var buf bytes.Buffer
 	buf.Write(make([]byte, 4))
 	b, err := encodeFrame(&buf, v)
@@ -619,28 +549,20 @@ func WriteFrame(w io.Writer, v any) error {
 	return err
 }
 
-// encodeFrame appends v's JSON to buf, which holds the frame's header, and returns buf's bytes.
 func encodeFrame(buf *bytes.Buffer, v any) ([]byte, error) {
 	enc := json.NewEncoder(buf)
-	// No HTML escaping: it would turn each "<", ">" and "&" in the request or reply into six
-	// bytes, and the frame goes to a program, not a web page.
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
 	b := buf.Bytes()
-	return b[:len(b)-1], nil // Encode ends the value with a newline
+	return b[:len(b)-1], nil
 }
 
-// spliceMin is the size of a native body from which a call frame is written around it, not through
-// the encoder: below it the encoder's own pass over the body costs less than the extra bookkeeping.
 const spliceMin = 4 << 10
 
-// maxPooled is the largest buffer writeSplicedCall keeps for the next frame.
 const maxPooled = 4 << 20
 
-// spliceMark stands in for a call's native body while the rest of the call is encoded. It is a
-// JSON string, made at random for each process, so no frame holds it by chance.
 var spliceMark = []byte(`"` + rand.Text() + `"`)
 
 var framePool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
@@ -657,19 +579,11 @@ func putBuffer(b *bytes.Buffer) {
 	}
 }
 
-// writeSplicedCall writes the call frame of c, a call that carries a large native body, with the
-// bytes WriteFrame's encoder writes for it: the call is encoded with a mark in place of the body,
-// and the body, valid and with its whitespace outside strings removed (what the encoder does to a
-// json.RawMessage), takes the mark's place. The encoder otherwise walks the whole body twice
-// (to check it, then to compact it) with its general scanner, byte by byte. done is false, with
-// nothing written, for a call it leaves to the encoder, which is any call this cannot encode; a
-// frame over MaxFrame is done, with ErrFrameTooLarge.
 func writeSplicedCall(w io.Writer, c *Call) (done bool, err error) {
 	if c.Request == nil || c.Request.Native == nil || len(c.Request.Native.Body) < spliceMin {
 		return false, nil
 	}
 	body := c.Request.Native.Body
-	// Encode a copy of the call whose body is the mark.
 	call, req, native := *c, *c.Request, *c.Request.Native
 	native.Body = spliceMark
 	req.Native = &native
@@ -725,20 +639,15 @@ func ReadFrame(r io.Reader, v any) error {
 		return fmt.Errorf("protocol: truncated frame: %w", err)
 	}
 	if c, ok := v.(*Call); ok && c != nil && len(body) >= spliceMin {
-		// Checks the frame once and sets the call's native body as a slice of it (the frame is
-		// this call's alone), where json.Unmarshal checks it, then walks it again to decode it
-		// and copies the body. The result and the error are json.Unmarshal's.
 		return jsonscan.StdError(jsonscan.Unmarshal(body, c))
 	}
 	return json.Unmarshal(body, v)
 }
 
-// HandshakeLine returns the line an extension prints once it listens.
 func HandshakeLine(version int, socket string) string {
 	return fmt.Sprintf("%s|%d|unix|%s\n", HandshakeMarker, version, socket)
 }
 
-// ParseHandshake parses a handshake line (without its newline).
 func ParseHandshake(line string) (version int, network, address string, err error) {
 	parts := strings.SplitN(strings.TrimRight(line, "\r\n"), "|", 4)
 	if len(parts) != 4 || parts[0] != HandshakeMarker {
@@ -754,7 +663,6 @@ func ParseHandshake(line string) (version int, network, address string, err erro
 	return version, parts[2], parts[3], nil
 }
 
-// ParseVersions parses PLUXY_PROTOCOL_VERSIONS.
 func ParseVersions(s string) ([]int, error) {
 	var out []int
 	for _, f := range strings.Split(s, ",") {
