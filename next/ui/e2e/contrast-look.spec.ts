@@ -280,6 +280,8 @@ for (const theme of THEMES) {
         for (const n of [1, 2, 3, 4, 5, 6]) {
           const bar = document.createElement("span");
           bar.dataset.series = String(n);
+          // Only these probes are measured: the samples also hold marks that carry a series.
+          bar.dataset.probe = "series";
           bar.style.display = "inline-block";
           bar.style.width = "12px";
           bar.style.height = "12px";
@@ -312,7 +314,7 @@ for (const theme of THEMES) {
         out.push({ what: "input border on the card", ratio: ratio(edge, ground), min: 3, inputs: true });
         out.push({ what: "input border on its fill", ratio: ratio(edge, fill), min: 3, inputs: true });
         // Chart series on a card and on the page.
-        for (const bar of document.querySelectorAll("#look-samples [data-series]")) {
+        for (const bar of document.querySelectorAll('#look-samples [data-probe="series"]')) {
           const under = bgOf(bar.parentElement);
           const colour = over(rgb(getComputedStyle(bar).backgroundColor), under);
           const where = "onPage" in bar.dataset ? "the page" : "the card";
