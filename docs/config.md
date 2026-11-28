@@ -8,6 +8,20 @@ Most settings can also be changed in the web panel, the desktop app and the
 [`pluxy` command](cli.md), which write this file for you. Provider-specific account settings are
 in [providers.md](providers.md); how requests pick accounts is in [routing.md](routing.md).
 
+- [Where the config is](#where-the-config-is), [Format](#format) and [Reloading](#reloading)
+- [Top level](#top-level): `listen`, `client_keys`, `client_key_labels`, `management_key`, `management_allow_remote`, `credentials_dir`, `drop_policy`, `token_count_estimate`, `trusted_proxies`, `proxy_url`, `payload`
+- [`routing`](#routing): `strategy`, `max_attempts`, `max_accounts`, `max_wait_ms`, `request_retry`, `disable_cooling`, `transient_error_cooldown_ms`, `session_affinity`, `force_model_prefix`, `quota_response_mode`, `explain`, `timeouts`, `chains`, `quota_refresh_ms`, `ignition`
+- [Extensions](#extensions): `extension`, `extensions` (`manifest`, `accounts`, `idle_stop_ms`, `drain_timeout_ms`, `restart.*`, `model_alias`, `excluded_models`)
+- [Accounts](#accounts): `id`, `credential`, `settings`, `models`, `excluded_models`, `model_alias`, `prefix`, `priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `endpoint`, `proxy_url`, `headers`, `timeouts`
+- [`packages`](#packages): `dir`, `registries`
+- [`extension_pages`](#extension_pages): `listen`, `url`
+- [`cors`](#cors): `allowed_origins`
+- [`tls`](#tls): `enable`, `cert`, `key`
+- [`usage`](#usage): `enabled`, `max_events`, `max_age_ms`, `keep_days`
+- [`logs`](#logs): `to_file`, `max_total_size_mb`, `request_log`, `error_logs_max_files`
+- [`pprof`](#pprof): `enable`, `addr`
+- [Environment variables](#environment-variables): `PLUXY_HOME`, `PLUXY_URL`, `PLUXY_MANAGEMENT_KEY`, `PLUXY_INIT_PORT`, `PLUXY_TEST_LOGIN_HOSTS`
+
 ## Where the config is
 
 ### pluxy's home
