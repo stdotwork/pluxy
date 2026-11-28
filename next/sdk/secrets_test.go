@@ -9,9 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// An account's secrets are those of its credential, its secret headers, its proxy and its
-// settings, each by its secret part where it has a public prefix, scheme or name; plain header
-// and settings values, a short cookie value and the public words are not among them.
 func TestAccountSecrets(t *testing.T) {
 	const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhY2NvdW50In0.c2VjcmV0cy10ZXN0"
 	settings, _ := json.Marshal(map[string]any{
@@ -39,7 +36,6 @@ func TestAccountSecrets(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("AccountSecrets = %q\nwant %q", got, want)
 	}
-	// What an upstream echoes of them, in pieces too short for the 24-character rule, goes.
 	for in, want := range map[string]string{
 		"gateway rejected key Gw5Rt8Yu1Io4 (cut)":                "gateway rejected key [redacted] (cut)",
 		"proxy rejected credentials for u3Rf6Tg9: p8Ik1Ol4":      "proxy rejected credentials for [redacted]: [redacted]",
@@ -53,9 +49,6 @@ func TestAccountSecrets(t *testing.T) {
 	}
 }
 
-// A header or cookie whose parts are all under 8 bytes counts whole (at a cost: words that
-// share 4 characters with it, "Bearer" and "theme" among them, are replaced too), where the
-// credential's own value adds its short inner value, without the public prefix.
 func TestAccountSecretsShortParts(t *testing.T) {
 	a := protocol.Account{
 		Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "devin-session-token$short"},
@@ -76,10 +69,6 @@ func TestAccountSecretsShortParts(t *testing.T) {
 	}
 }
 
-// A cookie value that holds another cookie's value is a secret of its own, not a wrapper of the
-// other: the pieces of both go. A wrapper is Basic's decoded "user:password", when its password is
-// a part too, or a part split again (a header line's "Bearer <token>"): its user name, scheme or
-// prefix is not a piece.
 func TestAccountSecretsPartsHoldingParts(t *testing.T) {
 	basic := base64.StdEncoding.EncodeToString([]byte("ops@gw.example:gw-password-123"))
 	settings, _ := json.Marshal(map[string]string{"api_key": "X-Gateway: Bearer gw-token-0123456789"})
@@ -106,10 +95,6 @@ func TestAccountSecretsPartsHoldingParts(t *testing.T) {
 	}
 }
 
-// Wrappers are left out before the parts are measured: a credential written as a header line
-// around a short token adds the token; a header or setting around a token of 1 to 3 bytes has no
-// kept part of 8 bytes, so it counts whole, public words and all. Basic with an empty password
-// has its secret in the user name, as a key sent as Basic's user name does, so that counts.
 func TestAccountSecretsWrappersOfShortParts(t *testing.T) {
 	settings, _ := json.Marshal(map[string]string{"api_key": "X-Gateway: Bearer s12"})
 	basic := base64.StdEncoding.EncodeToString([]byte("ops@gw.example:"))

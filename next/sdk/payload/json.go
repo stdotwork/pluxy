@@ -9,11 +9,6 @@ import (
 	"strconv"
 )
 
-// The body is edited as bytes: a write cuts the old value's span out and puts the new text in,
-// so everything it does not name keeps its bytes (key order, spacing, number formatting). The
-// functions here assume valid JSON whose root is an object or an array; Apply checks that once.
-
-// maxPad bounds the nulls a write may add to reach an array index.
 const maxPad = 1 << 24
 
 var (
@@ -29,7 +24,6 @@ func skipSpace(b []byte, i int) int {
 	return i
 }
 
-// stringEnd returns the index after the string that starts at b[i], or -1.
 func stringEnd(b []byte, i int) int {
 	for j := i + 1; j < len(b); j++ {
 		switch b[j] {
@@ -42,7 +36,6 @@ func stringEnd(b []byte, i int) int {
 	return -1
 }
 
-// valueEnd returns the index after the value that starts at b[i], or -1.
 func valueEnd(b []byte, i int) int {
 	if i >= len(b) {
 		return -1
@@ -84,8 +77,6 @@ func valueEnd(b []byte, i int) int {
 	return j
 }
 
-// nextMember reads the object member that starts at or after b[j]: its key span ks..ke (quotes
-// included) and the start of its value.
 func nextMember(b []byte, j int) (ks, ke, vs int, ok bool) {
 	ks = skipSpace(b, j)
 	if ks >= len(b) || b[ks] != '"' {
@@ -104,7 +95,6 @@ func nextMember(b []byte, j int) (ks, ke, vs int, ok bool) {
 	return ks, ke, vs, true
 }
 
-// keyIs reports whether the key at b[ks:ke] (quotes included) is key once unescaped.
 func keyIs(b []byte, ks, ke int, key string) bool {
 	raw := b[ks+1 : ke-1]
 	if bytes.IndexByte(raw, '\\') < 0 {
@@ -114,9 +104,6 @@ func keyIs(b []byte, ks, ke int, key string) bool {
 	return json.Unmarshal(b[ks:ke], &s) == nil && s == key
 }
 
-// findKey looks for key directly inside the object at b[i]. It returns the value span when
-// found. Otherwise closeIdx is the index of the closing brace, or -1 when the object is
-// malformed, and empty reports whether the object has no members.
 func findKey(b []byte, i int, key string) (vs, ve, closeIdx int, empty bool) {
 	j := i + 1
 	empty = true
@@ -149,15 +136,13 @@ func findKey(b []byte, i int, key string) (vs, ve, closeIdx int, empty bool) {
 }
 
 type arrayScan struct {
-	n      int // elements seen: all of them unless the target was found
-	vs, ve int // span of the target element
-	close  int // index of ']'
+	n      int
+	vs, ve int
+	close  int
 	found  bool
 	bad    bool
 }
 
-// scanArray walks the array at b[i], stopping at element idx when it exists. A large idx counts
-// every element.
 func scanArray(b []byte, i, idx int) (a arrayScan) {
 	j := skipSpace(b, i+1)
 	if j < len(b) && b[j] == ']' {
@@ -203,7 +188,6 @@ func isDigits(s string) bool {
 	return true
 }
 
-// arrayIndex reads an all-digit path component, capping what does not fit an int.
 func arrayIndex(s string) (int, bool) {
 	if !isDigits(s) {
 		return 0, false
@@ -218,7 +202,6 @@ func arrayIndex(s string) (int, bool) {
 	return n, true
 }
 
-// child returns the span of the member or element c of the container at b[i], or -1.
 func child(b []byte, i int, c string) (vs, ve int) {
 	switch b[i] {
 	case '{':
@@ -234,16 +217,13 @@ func child(b []byte, i int, c string) (vs, ve int) {
 	return -1, -1
 }
 
-// value is a value found in a document: its raw text.
 type value struct {
 	raw []byte
 	ok  bool
 }
 
-// null reports whether the value is JSON null.
 func (v value) null() bool { return string(v.raw) == "null" }
 
-// lookup finds the value at the plain path comps. A path through a scalar finds nothing.
 func lookup(b []byte, comps []string) value {
 	i := skipSpace(b, 0)
 	if i >= len(b) || len(comps) == 0 {
@@ -266,7 +246,6 @@ func lookup(b []byte, comps []string) value {
 	return value{raw: b[i:e], ok: true}
 }
 
-// elements returns the raw elements of the array raw.
 func elements(raw []byte) [][]byte {
 	var out [][]byte
 	j := skipSpace(raw, 1)
@@ -296,9 +275,6 @@ func splice(b []byte, lo, hi int, ins ...[]byte) []byte {
 	return append(out, b[hi:]...)
 }
 
-// quote writes s as a JSON string the way sjson does: printable ASCII without a quote or a
-// backslash goes in as it is (so `<`, `>` and `&` stay unescaped), and any other string goes
-// through encoding/json.
 func quote(s string) []byte {
 	plain := true
 	for i := 0; i < len(s); i++ {
@@ -310,12 +286,10 @@ func quote(s string) []byte {
 	if plain {
 		return append(append([]byte{'"'}, s...), '"')
 	}
-	out, _ := json.Marshal(s) // a string always encodes
+	out, _ := json.Marshal(s)
 	return out
 }
 
-// build returns the text that goes before and after a value to create the missing components:
-// an all-digit component makes an array padded with nulls up to it, any other an object.
 func build(comps []string) (pre, post []byte, err error) {
 	var closers []byte
 	for _, c := range comps {
@@ -339,9 +313,6 @@ func build(comps []string) (pre, post []byte, err error) {
 	return pre, closers, nil
 }
 
-// setValue sets the value at comps to the raw JSON val, creating what is missing. It writes the
-// way sjson does: a new object member goes before the closing brace, and an array grown past
-// its end is rewritten without whitespace and padded with nulls.
 func setValue(b []byte, comps []string, val []byte) ([]byte, error) {
 	i := skipSpace(b, 0)
 	root := true
@@ -423,9 +394,6 @@ func setValue(b []byte, comps []string, val []byte) ([]byte, error) {
 	}
 }
 
-// deleteValue removes the value at comps, with sjson's handling of commas: a later member goes
-// together with the comma before it, a first one with the comma after it. It reports whether
-// the value existed.
 func deleteValue(b []byte, comps []string) ([]byte, bool) {
 	i := skipSpace(b, 0)
 	for ; len(comps) > 1; comps = comps[1:] {
@@ -482,8 +450,6 @@ func deleteValue(b []byte, comps []string) ([]byte, bool) {
 	}
 }
 
-// encodeValue returns the JSON text of a configured value: strings are written by quote, numbers
-// without an exponent, and anything else through encoding/json.
 func encodeValue(v any) ([]byte, error) {
 	switch v := v.(type) {
 	case string:

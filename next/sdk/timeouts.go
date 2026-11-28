@@ -15,7 +15,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Default upstream timeout limits.
 const (
 	DefaultHeaderTimeout = 60 * time.Second
 	DefaultIdleTimeout   = 5 * time.Minute
@@ -67,10 +66,8 @@ func (e *timeoutError) Error() string {
 	}
 }
 
-// Timeout implements net.Error.
 func (e *timeoutError) Timeout() bool { return true }
 
-// Temporary implements net.Error.
 func (e *timeoutError) Temporary() bool { return true }
 
 // Retryable reports whether err from an upstream HTTP request happened before the upstream could
@@ -85,7 +82,6 @@ func Retryable(err error) bool {
 	return errors.As(err, &te) && te.retryable
 }
 
-// hasTimeouts reports whether the upstream call carries configured or operation-default timeouts.
 func hasTimeouts(info Info) bool {
 	if info.Timeouts != nil {
 		return true
@@ -135,7 +131,6 @@ func isStreamedRequest(req *http.Request, info Info) bool {
 	if strings.Contains(strings.ToLower(req.Header.Get("Accept")), "text/event-stream") {
 		return true
 	}
-	// devin always uses Connect streaming (application/connect+proto) even when the client asked for no stream.
 	if strings.HasPrefix(strings.ToLower(req.Header.Get("Content-Type")), "application/connect+proto") {
 		return true
 	}

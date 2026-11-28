@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-// burst sends n requests at once through client to url, each held by the server until all n
-// have arrived (so n connections are in use), and reads every body to its end.
 func burst(t *testing.T, client *http.Client, url string, n int, gate *sync.WaitGroup) {
 	t.Helper()
 	gate.Add(n)
@@ -34,8 +32,6 @@ func burst(t *testing.T, client *http.Client, url string, n int, gate *sync.Wait
 	done.Wait()
 }
 
-// connsAfterBursts returns how many connections the server accepted in a first burst of n
-// concurrent requests and in a second one after it, through Upstream(base).
 func connsAfterBursts(t *testing.T, base *http.Transport, n int) (first, second int64) {
 	t.Helper()
 	var accepted atomic.Int64
@@ -60,8 +56,6 @@ func connsAfterBursts(t *testing.T, base *http.Transport, n int) (first, second 
 	return first, accepted.Load() - first
 }
 
-// A burst of concurrent requests to one upstream leaves its connections idle, up to
-// MaxIdleConns, for the next burst to reuse: net/http alone would keep 2 per host.
 func TestUpstreamKeepsIdleConnectionsPerHost(t *testing.T) {
 	const n = 8
 	first, second := connsAfterBursts(t, &http.Transport{MaxIdleConns: 100}, n)
@@ -73,7 +67,6 @@ func TestUpstreamKeepsIdleConnectionsPerHost(t *testing.T) {
 	}
 }
 
-// A base that sets its own per-host limit keeps it.
 func TestUpstreamKeepsExplicitIdleConnsPerHost(t *testing.T) {
 	const n = 8
 	first, second := connsAfterBursts(t, &http.Transport{MaxIdleConns: 100, MaxIdleConnsPerHost: 3}, n)
@@ -82,7 +75,6 @@ func TestUpstreamKeepsExplicitIdleConnsPerHost(t *testing.T) {
 	}
 }
 
-// A base with no MaxIdleConns keeps net/http's per-host default.
 func TestUpstreamLeavesUnlimitedIdleConnsAlone(t *testing.T) {
 	base := &http.Transport{}
 	Upstream(base)

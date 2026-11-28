@@ -11,9 +11,6 @@ import (
 	"testing"
 )
 
-// Keep production provider traffic behind the SDK seam, including login and WebSocket
-// handshakes, in the extensions and in the examples extension authors copy. Fake providers and
-// test-only clients deliberately need no wrapper.
 func TestExtensionUpstreamClients(t *testing.T) {
 	files, clients := 0, 0
 	for _, root := range []string{filepath.Join("..", "extensions"), filepath.Join("..", "examples")} {
@@ -26,8 +23,6 @@ func TestExtensionUpstreamClients(t *testing.T) {
 	t.Logf("checked %d production files and %d clients", files, clients)
 }
 
-// checkUpstreamClients reports each http client under root that is not wrapped in sdk.Upstream,
-// and returns how many files and clients it checked.
 func checkUpstreamClients(t *testing.T, root string) (files, clients int) {
 	t.Helper()
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
@@ -76,7 +71,6 @@ func checkUpstreamClients(t *testing.T, root string) (files, clients int) {
 			call, ok := expr.(*ast.CallExpr)
 			return ok && selector(call.Fun, "github.com/stdotwork/pluxy/next/sdk", "Upstream") && len(call.Args) == 1
 		}
-		// The shared default may only be referenced to clone it inside sdk.Upstream.
 		clonedDefaults := map[ast.Node]bool{}
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)

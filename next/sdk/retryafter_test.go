@@ -39,7 +39,6 @@ func TestRetryAfter(t *testing.T) {
 			t.Errorf("%s: RetryAfter(%q) = %d, want %d", tc.name, tc.value, got, tc.want)
 		}
 	}
-	// Dates have whole-second precision: a now part-way through a second rounds the wait down.
 	if got := RetryAfter(date(10*time.Second), now.Add(500*time.Millisecond)); got != 9500 {
 		t.Errorf("date measured from a fractional now = %d, want 9500", got)
 	}

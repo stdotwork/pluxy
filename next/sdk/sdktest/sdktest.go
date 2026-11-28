@@ -1,7 +1,3 @@
-// Package sdktest holds the test helpers that provider extensions' tests share: a refused
-// connection, a server that hangs up, an assertion on the *llm.Error a call returned, and the
-// checks that a login error's text is bounded and free of token-like strings. It imports
-// testing, so only test files use it.
 package sdktest
 
 import (
@@ -16,7 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// WantError fails the test unless err is an *llm.Error with the given code and retryable flag.
 func WantError(t testing.TB, err error, code string, retryable bool) {
 	t.Helper()
 	var e *llm.Error
@@ -28,8 +23,6 @@ func WantError(t testing.TB, err error, code string, retryable bool) {
 	}
 }
 
-// ClosedURL returns the address of a port nothing listens on: port 1 on loopback, which no test
-// server can be given, unlike a just-closed ephemeral port that the next httptest server may reuse.
 func ClosedURL(t testing.TB) string {
 	t.Helper()
 	const addr = "127.0.0.1:1"
@@ -40,7 +33,6 @@ func ClosedURL(t testing.TB) string {
 	return "http://" + addr
 }
 
-// HangUp closes the connection of the request being answered without a reply.
 func HangUp(w http.ResponseWriter) {
 	c, _, err := w.(http.Hijacker).Hijack()
 	if err == nil {
@@ -48,8 +40,6 @@ func HangUp(w http.ResponseWriter) {
 	}
 }
 
-// LoginServer is a server whose every reply is answer. It returns the server's URL and closes
-// the server when the test ends.
 func LoginServer(t testing.TB, answer func(w http.ResponseWriter)) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w) }))
@@ -57,20 +47,13 @@ func LoginServer(t testing.TB, answer func(w http.ResponseWriter)) string {
 	return srv.URL
 }
 
-// The provider's error text reaches the client before an account has a credential, when core
-// cannot redact what a hostile or careless login server echoes: it must be bounded and free of
-// token-like strings, and the OAuth error code kept.
 const (
 	HostileJWT  = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLWJ5dGVz"
 	HostileCode = "invalid_request"
 )
 
-// HostileText is login-server text a careless provider might echo: a token-like string, then a
-// long run of filler.
 func HostileText() string { return "rejected " + HostileJWT + " " + strings.Repeat("filler ", 500) }
 
-// CheckLoginError fails the test unless err is an *llm.Error whose message is bounded and carries
-// no token-like string, and, when wantCode, still names HostileCode. what says which case it is.
 func CheckLoginError(t testing.TB, what string, err error, wantCode bool) {
 	t.Helper()
 	var e *llm.Error

@@ -10,9 +10,7 @@ import (
 // TrackSend lets an extension tell, after an HTTP request failed, whether the request may have
 // reached the server. It returns a copy of req and a function. Send the copy; after Do returns
 // an error, call the function: false means nothing of the request was written to the connection,
-// so the provider cannot have seen it and sending it again is safe. This is the test a login or
-// refresh call uses to decide whether its error is retryable (protocol README, "Errors in login
-// and refresh calls"). req itself is not changed.
+// so the provider cannot have seen it and sending it again is safe. req itself is not changed.
 //
 // A request counts as sent as soon as writing its headers began. That is on purpose: it errs
 // toward "sent", which makes the error not retryable. HTTP/2 encodes the headers before it writes
@@ -23,12 +21,7 @@ import (
 //
 // Through a client whose transport is wrapped in Upstream, the request goes through a copy of the
 // transport made for it alone, with keep-alives off: it dials its own connection, which no other
-// request uses and which is closed once the request failed or its response body is closed. A
-// server may close a kept-alive connection while it is idle, and a request written to it before
-// the client sees the close fails after it was written, so it would count as sent though the
-// server never read it. On its own connection the answer matches what the server got; the cost
-// is one more connection and TLS handshake per request. Through any other transport the request
-// may still go out on such a connection.
+// request uses and which is closed once the request failed or its response body is closed.
 //
 // A trace that is already on req's context keeps working: both traces are called.
 func TrackSend(req *http.Request) (*http.Request, func() bool) {
@@ -50,8 +43,6 @@ func TrackSendContext(ctx context.Context) (context.Context, func() bool) {
 	return context.WithValue(httptrace.WithClientTrace(ctx, trace), newConnKey{}, true), sent.Load
 }
 
-// newConnKey marks the context of a tracked request: Upstream sends it through a transport made
-// for it alone.
 type newConnKey struct{}
 
 func wantsNewConn(ctx context.Context) bool {

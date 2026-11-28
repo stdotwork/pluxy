@@ -33,7 +33,6 @@ func TestLoginText(t *testing.T) {
 	}
 }
 
-// Upstream error text is cleaned as login text is, and may run longer.
 func TestUpstreamText(t *testing.T) {
 	for in, want := range map[string]string{
 		"service overloaded, try again later":                   "service overloaded, try again later",
@@ -45,12 +44,10 @@ func TestUpstreamText(t *testing.T) {
 			t.Errorf("UpstreamText(%q) = %q, want %q", in, got, want)
 		}
 	}
-	text := strings.Repeat("word ", 150) // 749 characters, more than login text keeps
+	text := strings.Repeat("word ", 150)
 	if got := UpstreamText(text); got != strings.TrimSpace(text) {
 		t.Errorf("a 749-character text was changed: %d characters", len([]rune(got)))
 	}
-	// 2099 characters are cut to the first 1000 and an ellipsis; so are 2099 characters of 2800
-	// bytes, which a cap counted in bytes would cut at 750 characters.
 	if got, want := UpstreamText(strings.Repeat("ab ", 700)), strings.Repeat("ab ", 333)+"a…"; got != want {
 		t.Errorf("a 2099-character text became %d characters ending %q, want %d", len([]rune(got)), got[max(0, len(got)-8):], len([]rune(want)))
 	}
@@ -59,16 +56,14 @@ func TestUpstreamText(t *testing.T) {
 	}
 }
 
-// A secret the caller passes is removed in pieces: every run of token characters that holds 4 or
-// more consecutive characters of it (8 or more for one of 32 bytes or more), and only those.
 func TestUpstreamTextSecretPieces(t *testing.T) {
 	const secret = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2lnbmF0dXJl"
 	for in, want := range map[string]string{
 		"token was eyJhbGciOiJIUzI":              "token was [redacted]",
 		"bad credential c2lnbmF0 given":          "bad credential [redacted] given",
-		"bad credential c2lnbmF given":           "bad credential c2lnbmF given", // 7 characters of a 49-byte secret: not a piece
-		"joined F0dXJl-devin-ses":                "joined F0dXJl-devin-ses",      // 6 characters of it: not a piece
-		"joined bmF0dXJl-devin-ses":              "joined [redacted]",            // 8 characters of it
+		"bad credential c2lnbmF given":           "bad credential c2lnbmF given",
+		"joined F0dXJl-devin-ses":                "joined F0dXJl-devin-ses",
+		"joined bmF0dXJl-devin-ses":              "joined [redacted]",
 		"invalid session token, try again later": "invalid session token, try again later",
 	} {
 		if got := UpstreamText(in, secret); got != want {
@@ -98,9 +93,6 @@ func TestLoginCode(t *testing.T) {
 	}
 }
 
-// A piece of a secret written with escapes between its characters (JSON's \/ and \uXXXX,
-// percent-encoding, nested) is replaced as written plain is; so is a run whose decoded text holds
-// 24 or more token characters. Other escaped text stays. Expected values are worked out by hand.
 func TestUpstreamTextEscapedPieces(t *testing.T) {
 	const secret = "tok/ab/cd/ef/0123456789"
 	for in, want := range map[string]string{
@@ -108,7 +100,7 @@ func TestUpstreamTextEscapedPieces(t *testing.T) {
 		"bad key tok%2Fab%2Fcd%2Fef given":          "bad key [redacted] given",
 		"bad key tok%252Fab%252Fcd given":           "bad key [redacted] given",
 		`bad key \u0074\u006f\u006b\u002f given`:    "bad key [redacted] given",
-		`bad key 0\\\/12\\\/3 given`:                `bad key 0\\\/12\\\/3 given`, // decodes to 0/12/3: no 4 characters of it
+		`bad key 0\\\/12\\\/3 given`:                `bad key 0\\\/12\\\/3 given`,
 		"path%20with%20spaces and a \\/ slash":      "path%20with%20spaces and a \\/ slash",
 		"refused abcdefgh%2Fijklmnop%2Fqrstuvwx%2F": "refused [redacted]",
 	} {
@@ -116,14 +108,11 @@ func TestUpstreamTextEscapedPieces(t *testing.T) {
 			t.Errorf("UpstreamText(%q) = %q, want %q", in, got, want)
 		}
 	}
-	// Without a secret, the long run is still found behind its escapes.
 	if got := UpstreamText(`token a1b2c3d4\/e5f6g7h8\/i9j0k1l2\/m3`); got != "token [redacted]" {
 		t.Errorf("an escaped 30-character run became %q", got)
 	}
 }
 
-// The values of fields named token and session_token are replaced, as other secret fields' are;
-// a word that only holds "token" stays.
 func TestUpstreamTextTokenFields(t *testing.T) {
 	for in, want := range map[string]string{
 		"bad session_token=zzz-short-1 given": "bad session_token=[redacted] given",

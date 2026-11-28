@@ -17,8 +17,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// The tests' alive clock is the real one until a test fakes it. It is set before any test runs,
-// so no goroutine a test leaves behind reads the variable while it changes.
 var (
 	aliveFake   atomic.Bool
 	aliveOffset atomic.Int64
@@ -34,7 +32,6 @@ func init() {
 	}
 }
 
-// fakeAliveClock stops the SDK's alive clock for one test; advance moves it on.
 func fakeAliveClock(t *testing.T) (advance func(time.Duration)) {
 	t.Helper()
 	aliveOffset.Store(0)
@@ -43,7 +40,6 @@ func fakeAliveClock(t *testing.T) (advance func(time.Duration)) {
 	return func(d time.Duration) { aliveOffset.Add(int64(d)) }
 }
 
-// frameWriter records the type of each frame written to it.
 type frameWriter struct {
 	mu    sync.Mutex
 	types []string
@@ -72,9 +68,6 @@ func (w *frameWriter) count(typ string) int {
 	return n
 }
 
-// An alive frame goes out when upstream bytes arrive and the stream has written nothing for
-// aliveAfter, counted from the call's start or its last frame; never on a call that did not ask
-// for them, and never after the terminal event.
 func TestAliveTimer(t *testing.T) {
 	advance := fakeAliveClock(t)
 	w := &frameWriter{}
@@ -99,7 +92,6 @@ func TestAliveTimer(t *testing.T) {
 		t.Fatalf("%d alive frames half the interval after the last, want still 1", n)
 	}
 
-	// An event written restarts the count.
 	if err := s.Start(llm.ResponseInfo{ID: "r"}); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +106,6 @@ func TestAliveTimer(t *testing.T) {
 		t.Fatalf("%d alive frames the interval after an event, want 2", n)
 	}
 
-	// Nothing after the terminal event.
 	if err := s.Finish(llm.Finish{Reason: llm.FinishStop}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +115,6 @@ func TestAliveTimer(t *testing.T) {
 		t.Fatalf("%d alive frames after finish, want still 2", n)
 	}
 
-	// A stream whose call did not ask for alive frames sends none.
 	w2 := &frameWriter{}
 	s2 := &Stream{w: w2}
 	sink.set(s2)
@@ -135,9 +125,6 @@ func TestAliveTimer(t *testing.T) {
 	}
 }
 
-// Through Serve and sdk.Upstream: an upstream that sends bytes the handler passes nothing on
-// for gets alive frames sent to core on a call with alive set, and none on one without; the
-// frames arrive before the reply's terminal event.
 func TestAliveFromUpstreamBytes(t *testing.T) {
 	advance := fakeAliveClock(t)
 	next := make(chan struct{})
@@ -221,8 +208,6 @@ func TestAliveFromUpstreamBytes(t *testing.T) {
 	}
 }
 
-// A response with no body keeps http.NoBody under the alive layer, which the capture and timeout
-// layers read as "nothing to read"; its headers still count as bytes that arrived.
 func TestAliveLeavesNoBodyAlone(t *testing.T) {
 	advance := fakeAliveClock(t)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -268,14 +253,8 @@ func TestAliveLeavesNoBodyAlone(t *testing.T) {
 	}
 }
 
-// A session's turn sends alive frames when bytes arrive on the session's upstream connection, which
-// the extension opened before the turn and which is an upgraded (WebSocket-style) connection whose
-// body is read and written. Only a turn whose call asked for them gets frames.
 func TestAliveOnSessionTurns(t *testing.T) {
 	advance := fakeAliveClock(t)
-	// Each upstream connection's own signal channel: a session that has ended may still have its
-	// handler in the select below, and a signal given to it would leave the newer turn waiting for
-	// a byte that never comes.
 	conns := make(chan chan struct{}, 1)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, rw, err := w.(http.Hijacker).Hijack()
@@ -287,7 +266,7 @@ func TestAliveOnSessionTurns(t *testing.T) {
 		rw.Flush()
 		next := make(chan struct{})
 		conns <- next
-		gone := make(chan struct{}) // the hijacked request's context never ends: watch the connection
+		gone := make(chan struct{})
 		go func() {
 			_, _ = io.Copy(io.Discard, rw)
 			close(gone)
@@ -375,7 +354,6 @@ func TestAliveOnSessionTurns(t *testing.T) {
 	}
 }
 
-// upgradedSession is a session over an upstream connection, which it closes with the session.
 type upgradedSession struct {
 	body io.Closer
 	turn func(context.Context, Call, *Stream) error

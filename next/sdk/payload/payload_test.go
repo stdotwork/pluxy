@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// testdata/cases.json holds rules, inputs and bodies together with what the old core's payload
-// engine returned for them (the "old" field). testdata/oldengine_gen.go.txt says how it was made.
 type oldCase struct {
 	Name  string `json:"name"`
 	Rules Rules  `json:"rules"`
@@ -45,9 +43,6 @@ func loadCases(t *testing.T) []oldCase {
 	return cases
 }
 
-// deliberateDifferences lists the cases where Apply is meant to differ from the old engine, keyed
-// by case name. testdata/cases.json keeps the old engine's output for them; the test holds Apply
-// to the body given here instead.
 var deliberateDifferences = map[string]struct{ want, reason string }{
 	"filter blank path under a root removes the root": {
 		`{"request":{"a":1},"b":2}`,
@@ -59,8 +54,6 @@ var deliberateDifferences = map[string]struct{ want, reason string }{
 	},
 }
 
-// Apply returns, byte for byte, what the old engine returned for the same rules and inputs,
-// except for the cases in deliberateDifferences.
 func TestApplyMatchesOldEngine(t *testing.T) {
 	cases := loadCases(t)
 	known := map[string]bool{}
@@ -108,9 +101,6 @@ func TestApplyMatchesOldEngine(t *testing.T) {
 	}
 }
 
-// Select, sent as JSON (the call frame's form), and Apply with Selected and nothing else about
-// the call give what the old engine returned (but for deliberateDifferences): core matches the
-// call, the extension only the body.
 func TestSelectThenApplyMatchesOldEngine(t *testing.T) {
 	selected := 0
 	for _, c := range loadCases(t) {
@@ -154,7 +144,6 @@ func TestSelectThenApplyMatchesOldEngine(t *testing.T) {
 	}
 }
 
-// Select keeps only the models that match the call, without what core alone can check.
 func TestSelectKeepsBodyConditionsOnly(t *testing.T) {
 	r := &Rules{Override: []Rule{
 		{Models: []Model{{Name: "gpt-*", Protocol: "codex", Headers: map[string]string{"X-Tier": "gold"}, Exist: []string{"tools"}},
@@ -197,7 +186,7 @@ func TestValidateRefuses(t *testing.T) {
 	cases := []struct {
 		name  string
 		rules *Rules
-		want  string // a part of the message; empty means accepted
+		want  string
 	}{
 		{"dotted keys", params("a.b.c"), ""},
 		{"index", params("a.0.b"), ""},
@@ -269,7 +258,6 @@ func TestValidateRefuses(t *testing.T) {
 	}
 }
 
-// Validate names every problem, not only the first.
 func TestValidateListsEveryProblem(t *testing.T) {
 	r := &Rules{
 		Default:     []Rule{{Models: []Model{{Name: "x"}}, Params: map[string]any{"a*": 1}}},
@@ -290,8 +278,6 @@ func TestValidateListsEveryProblem(t *testing.T) {
 	}
 }
 
-// A path Validate refuses, or a raw value that is not JSON, that reaches Apply anyway is skipped:
-// the body stays valid JSON.
 func TestApplySkipsWhatValidateRefuses(t *testing.T) {
 	r := &Rules{
 		Override:    []Rule{{Models: []Model{{Name: "*"}}, Params: map[string]any{"a.*": 1, "l.-1": 2, "x.#(b>1)": 3}}},
@@ -323,8 +309,6 @@ func TestApplyEdges(t *testing.T) {
 	}
 }
 
-// A blank param path is refused by Validate and skipped by Apply: with a Root it must not name
-// the root itself, which would replace or delete the whole wrapped request.
 func TestApplySkipsBlankParamPaths(t *testing.T) {
 	models := []Model{{Name: "*"}}
 	for _, blank := range []string{"", "  ", "\t"} {
@@ -345,9 +329,6 @@ func TestApplySkipsBlankParamPaths(t *testing.T) {
 			}
 		}
 	}
-	// Each list on its own, for each blank spelling, with the root present and absent: a default
-	// that still named the root would skip its write when the root exists, and an override or a
-	// default that still named the root would create it when it does not.
 	bodies := []string{`{"request":{"model":"m"},"other":1}`, `{"other":1}`}
 	for _, blank := range []string{"", "  ", "\t"} {
 		lists := map[string]*Rules{
@@ -368,7 +349,6 @@ func TestApplySkipsBlankParamPaths(t *testing.T) {
 			}
 		}
 	}
-	// A path that is not blank keeps working under the same root.
 	r := &Rules{Override: []Rule{{Models: models, Params: map[string]any{"": 1, "x": 2}}}}
 	got, _ := Apply(r, []byte(`{"request":{"model":"m"}}`), Input{Model: "m", Root: "request"})
 	if want := `{"request":{"model":"m","x":2}}`; string(got) != want {
@@ -382,7 +362,6 @@ func TestMatchPattern(t *testing.T) {
 		pattern, s string
 		want       bool
 	}{
-		// A `*` in the pattern is always a wildcard, also when the value has a `*` there.
 		{"*", "*/*", true},
 		{"*", "*", true},
 		{"a*", "a*b", true},
@@ -390,7 +369,6 @@ func TestMatchPattern(t *testing.T) {
 		{"*/*", "*/*", true},
 		{"a*", "*a", false},
 		{"*b", "a*", false},
-		// The usual glob cases.
 		{"gpt-*", "gpt-5", true},
 		{"gpt-*", "gpt-", true},
 		{"gpt-*", "gp", false},
@@ -408,7 +386,6 @@ func TestMatchPattern(t *testing.T) {
 		{"exact", "exacts", false},
 		{"exact", "exac", false},
 		{"EXACT", "exact", false},
-		// The prefix and the suffix may not share characters.
 		{"ab*ab", "ab", false},
 		{"ab*ab", "aba", false},
 		{"ab*ab", "abab", true},
@@ -416,20 +393,16 @@ func TestMatchPattern(t *testing.T) {
 		{"a*a", "aa", true},
 		{"*a*a*", "a", false},
 		{"*a*a*", "aa", true},
-		// Segments are found in order, each after the one before.
 		{"*ab*ba*", "abba", true},
 		{"*ab*ab*", "aab", false},
 		{"*ab*ab*", "xabxab", true},
-		// Both sides are trimmed, and an empty pattern matches nothing.
 		{" gpt-* ", "  gpt-5 ", true},
 		{"", "", false},
 		{"  ", "x", false},
 		{"", "x", false},
-		// Multi-byte characters stand for themselves.
 		{"é*", "éa", true},
 		{"*é", "aé", true},
 		{"*é", "ae", false},
-		// A long pattern against a long value.
 		{"*" + long(2000, "a") + "b", long(4000, "a"), false},
 		{"*" + long(2000, "a") + "b*", long(4000, "a"), false},
 		{"*" + long(2000, "a") + "b", long(4000, "a") + "b", true},
@@ -442,8 +415,6 @@ func TestMatchPattern(t *testing.T) {
 	}
 }
 
-// A client header can be as long as the server allows and the pattern comes from the config, so
-// matching must stay about as fast as reading both. The backtracking matcher took seconds here.
 func TestMatchPatternLongInputs(t *testing.T) {
 	const k, n = 50000, 100000
 	pat := "*" + strings.Repeat("a", k) + "b"
@@ -462,8 +433,6 @@ func TestMatchPatternLongInputs(t *testing.T) {
 	}
 }
 
-// The upstream model, the requested model and its base are all tried against the rule's name
-// exactly: a name that differs only in case is another name.
 func TestModelNamesAreComparedExactly(t *testing.T) {
 	rules := func(name string) *Rules {
 		return &Rules{Override: []Rule{{Models: []Model{{Name: name}}, Params: map[string]any{"x": 1}}}}
@@ -508,8 +477,6 @@ func TestArrayIndexOverflow(t *testing.T) {
 	}
 }
 
-// A rule path with an index that does not fit an int is skipped by Apply, in every list and in
-// the conditions, without panicking, and the body is untouched.
 func TestApplySkipsOverflowingIndex(t *testing.T) {
 	const path = "items.99999999999999999999"
 	models := []Model{{Name: "*"}}
@@ -524,7 +491,6 @@ func TestApplySkipsOverflowingIndex(t *testing.T) {
 		body := []byte(`{"items":[1,2,3]}`)
 		got, changed := Apply(r, body, Input{Model: "m"})
 		if name == "exist" {
-			// The path names nothing, so not-exist holds and the rule applies.
 			if want := `{"items":[1,2,3],"z":1}`; string(got) != want {
 				t.Errorf("%s: got %s, want %s", name, got, want)
 			}
@@ -536,7 +502,6 @@ func TestApplySkipsOverflowingIndex(t *testing.T) {
 	}
 }
 
-// A lookup that reports a value always returns its text, so callers may read raw[0].
 func TestLookupFoundHasText(t *testing.T) {
 	bodies := []string{
 		`{"a":1,"b":{"c":[1,{"d":null},"x",[],{}],"":2},"e":"","f":""}`,
@@ -566,8 +531,6 @@ func TestLookupFoundHasText(t *testing.T) {
 	}
 }
 
-// A raw value given as the JSON text `null` is valid JSON: it is written as null, as the old
-// engine does (a Go nil, from a null in the config, is the one refused).
 func TestRawNullText(t *testing.T) {
 	for _, text := range []string{"null", " null "} {
 		r := &Rules{
@@ -578,7 +541,7 @@ func TestRawNullText(t *testing.T) {
 			t.Errorf("%q: Validate refused: %v", text, err)
 		}
 		got, _ := Apply(r, []byte(`{"a":1}`), Input{Model: "m"})
-		if want := `{"a":` + text + `,"b":` + text + `}`; string(got) != want { // raw text is written as it is
+		if want := `{"a":` + text + `,"b":` + text + `}`; string(got) != want {
 			t.Errorf("%q: got %s, want %s", text, got, want)
 		}
 	}

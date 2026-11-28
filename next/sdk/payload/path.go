@@ -8,29 +8,18 @@ import (
 	"unicode"
 )
 
-// A rule path is a list of dotted parts. A part is a key, an array index (all digits) or a
-// query `#(...)` that picks the first matching element of the array before it, or every
-// matching element with `#(...)#`. These are the parts the old rule paths use; the rest of
-// their gjson/sjson syntax (wildcards, `|`, `@`, `-1` to append, `#` counts, multipaths) is
-// refused by Validate.
-//
-// A key may hold a dot written as `\.`; that is the only escape. A query is one or more terms
-// joined by `&&` and `||` (`&&` binds tighter), each `key==value` or `key!=value`, where key is
-// a dotted path of plain keys and value is a JSON string, number, `true` or `false`.
-
 type part struct {
 	key   string
-	query [][]term // groups joined by ||; each group is terms joined by &&. nil for a key.
-	all   bool     // `#(...)#`: every match, not the first
+	query [][]term
+	all   bool
 }
 
 type term struct {
 	path  []string
-	equal bool // == (true) or != (false)
+	equal bool
 	val   string
 }
 
-// parsePath reads a rule path. The error says what is outside the supported syntax.
 func parsePath(path string) ([]part, error) {
 	if path == "" {
 		return nil, fmt.Errorf("the path is empty")
@@ -52,11 +41,10 @@ func parsePath(path string) ([]part, error) {
 		if next >= len(path) {
 			return parts, nil
 		}
-		i = next + 1 // the dot
+		i = next + 1
 	}
 }
 
-// parseKeyPart reads a key or index that starts at path[i] and ends at an unescaped dot.
 func parseKeyPart(path string, i int) (part, int, error) {
 	var key []byte
 	j := i
@@ -94,7 +82,6 @@ func parseKeyPart(path string, i int) (part, int, error) {
 	return part{key: k}, j, nil
 }
 
-// parseQueryPart reads `#(...)` or `#(...)#` that starts at path[i].
 func parseQueryPart(path string, i int) (part, int, error) {
 	closeIdx := queryClose(path, i)
 	if closeIdx < 0 {
@@ -116,7 +103,6 @@ func parseQueryPart(path string, i int) (part, int, error) {
 	return part{query: groups, all: all}, next, nil
 }
 
-// queryClose returns the index of the parenthesis that closes the `#(` at path[i], or -1.
 func queryClose(path string, i int) int {
 	depth := 1
 	var quote byte
@@ -142,7 +128,6 @@ func queryClose(path string, i int) int {
 	return -1
 }
 
-// splitLogical splits query at op, outside quotes.
 func splitLogical(query, op string) []string {
 	var out []string
 	start := 0
@@ -223,7 +208,6 @@ func parseTerm(s string) (term, error) {
 	return t, nil
 }
 
-// matches reports whether the array element item satisfies the query, as gjson's `#(...)` does.
 func (p part) matches(item []byte) bool {
 	for _, group := range p.query {
 		ok := true
@@ -240,9 +224,6 @@ func (p part) matches(item []byte) bool {
 	return false
 }
 
-// matches compares the value at the term's path with the term's value the way gjson does: a
-// string compares as text, a number as a number (the value is read as one, and as 0 when it is
-// not), true and false as the words, and null, objects and arrays never match.
 func (t term) matches(item []byte) bool {
 	v := lookup(item, t.path)
 	if !v.ok {

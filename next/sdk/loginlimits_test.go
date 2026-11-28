@@ -19,7 +19,7 @@ func TestBoundSeconds(t *testing.T) {
 		{3601, time.Hour, time.Hour},
 		{math.MaxInt64, time.Hour, time.Hour},
 		{math.MinInt64, time.Hour, 0},
-		{9_300_000_000, time.Hour, time.Hour}, // times time.Second this wraps int64
+		{9_300_000_000, time.Hour, time.Hour},
 	} {
 		if got := BoundSeconds(tc.secs, tc.max); got != tc.want {
 			t.Errorf("BoundSeconds(%d, %s) = %s, want %s", tc.secs, tc.max, got, tc.want)
