@@ -85,7 +85,7 @@ func TestRotateAndTrim(t *testing.T) {
 	if err := l.Configure(true, 0); err != nil {
 		t.Fatal(err)
 	}
-	line := strings.Repeat("x", 1<<20) // about 1 MiB per write
+	line := strings.Repeat("x", 1<<20)
 	for range 25 {
 		c.t = c.t.Add(time.Second)
 		fmt.Fprintln(l, line)
@@ -100,7 +100,6 @@ func TestRotateAndTrim(t *testing.T) {
 			t.Fatalf("%s is %d bytes, over %d", n, info.Size(), MaxFileSize)
 		}
 	}
-	// A request log, older than everything, goes first under a cap; main.log never goes.
 	old := filepath.Join(l.Dir(), "v1-chat-completions-old.log")
 	os.WriteFile(old, []byte("old"), 0o600)
 	os.Chtimes(old, c.t.Add(-time.Hour), c.t.Add(-time.Hour))
@@ -125,7 +124,6 @@ func TestReadPagesAndTails(t *testing.T) {
 		c.t = start.Add(time.Duration(i) * time.Second)
 		fmt.Fprintf(l, "pluxy: line %d\n", i)
 	}
-	// Rotate by hand partway, so lines span two files.
 	l.mu.Lock()
 	l.rotate()
 	l.mu.Unlock()
@@ -174,10 +172,8 @@ func TestReadPagesAndTails(t *testing.T) {
 	}
 }
 
-// A reader that pages forward with Latest never misses a line: not one written in the same
-// millisecond as the newest line it read, and not one a limit cut off from a write's other lines.
 func TestPagingForwardLosesNothing(t *testing.T) {
-	l, c := newFiles(t) // the clock never moves, so every write is in the same millisecond
+	l, c := newFiles(t)
 	l.Configure(true, 0)
 	fmt.Fprint(l, "pluxy: first\n")
 	r, _ := l.Read(0, 10)
@@ -193,20 +189,18 @@ func TestPagingForwardLosesNothing(t *testing.T) {
 		t.Fatalf("latest %v did not move past %v", next.Latest, r.Latest)
 	}
 
-	// A clock that goes back does not put a line before the one read.
 	c.t = c.t.Add(-time.Hour)
 	fmt.Fprint(l, "pluxy: third\n")
 	if back, _ := l.Read(next.Latest, 10); back.Count != 1 || !strings.HasSuffix(back.Lines[0], "third") {
 		t.Fatalf("a line written after the clock went back: %v", back.Lines)
 	}
 
-	// One write's lines share a time: a limit that ends inside them returns the rest too.
 	l2, _ := newFiles(t)
 	l2.Configure(true, 0)
 	fmt.Fprint(l2, "pluxy: a\nb\nc\n")
 	fmt.Fprint(l2, "pluxy: d\n")
 	var got []string
-	after := 1.0 // before every line; 0 would read the newest line only
+	after := 1.0
 	for range 10 {
 		page, _ := l2.Read(after, 1)
 		if page.Count == 0 {
@@ -222,10 +216,8 @@ func TestPagingForwardLosesNothing(t *testing.T) {
 	}
 }
 
-// Rotations in the same millisecond keep every file, read back in order; a link at main.log is
-// refused; one write never makes a file larger than the limit.
 func TestRotationEdges(t *testing.T) {
-	l, _ := newFiles(t) // the clock never moves
+	l, _ := newFiles(t)
 	l.Configure(true, 0)
 	for i := range 3 {
 		fmt.Fprintf(l, "pluxy: file %d\n", i)
@@ -296,7 +288,6 @@ func TestClearReportsUnremovableRotatedFile(t *testing.T) {
 		if name != bad {
 			return
 		}
-		// Replace the regular file with a non-empty directory so os.Remove fails even as root.
 		p := filepath.Join(dir, name)
 		_ = os.Remove(p)
 		_ = os.Mkdir(p, 0o700)
@@ -380,7 +371,6 @@ func TestClearEmptiesMainWhenHandleNilAndRotationStillWorks(t *testing.T) {
 	}
 	fmt.Fprint(l, "pluxy: line before failed rotation\n")
 
-	// Simulate a failed rotation that left l.f nil while l.on is true and main.log still has lines.
 	l.mu.Lock()
 	_ = l.f.Close()
 	l.f = nil
@@ -401,7 +391,6 @@ func TestClearEmptiesMainWhenHandleNilAndRotationStillWorks(t *testing.T) {
 		t.Fatalf("tracked size = %d, want 0", size)
 	}
 
-	// Missing main.log while l.f is nil is not a failure: Clear opens a new, empty one.
 	l.mu.Lock()
 	_ = l.f.Close()
 	l.f = nil
@@ -420,7 +409,6 @@ func TestClearEmptiesMainWhenHandleNilAndRotationStillWorks(t *testing.T) {
 		t.Fatalf("tracked size after missing main.log = %d, want 0", size)
 	}
 
-	// Reopen, write a small line (must not immediately rotate), then write past MaxFileSize to rotate.
 	if err := l.Configure(true, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +447,6 @@ func TestClearReportsUnemptiableMainWhenHandleNil(t *testing.T) {
 	l.f = nil
 	l.mu.Unlock()
 
-	// Replace main.log with a directory so emptying it fails even as root.
 	mainPath := filepath.Join(l.Dir(), Main)
 	if err := os.Remove(mainPath); err != nil {
 		t.Fatal(err)

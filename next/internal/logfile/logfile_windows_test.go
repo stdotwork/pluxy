@@ -11,10 +11,6 @@ import (
 	pt "github.com/stdotwork/pluxy/next/internal/private/privatetest"
 )
 
-// The logs folder, main.log and a rotated file each have a protected access list that lets in
-// only this user and SYSTEM. A logs folder that already exists, open to Everyone, is made private
-// when logging to file is turned on, and a main.log already in it then holds only the entries it
-// inherits from it.
 func TestFilesWindowsAccessList(t *testing.T) {
 	l, _ := newFiles(t)
 	if err := l.Configure(true, 0); err != nil {
@@ -52,8 +48,6 @@ func TestFilesWindowsAccessList(t *testing.T) {
 	pt.CheckInherited(t, "main.log already in the folder", left, false)
 }
 
-// A main.log another account owns (put there before the folder was private) is refused, not
-// written to: that account could read it.
 func TestFilesWindowsRefusesAMainLogAnotherAccountOwns(t *testing.T) {
 	l, _ := newFiles(t)
 	if err := os.MkdirAll(l.Dir(), 0o700); err != nil {
@@ -75,8 +69,6 @@ func TestFilesWindowsRefusesAMainLogAnotherAccountOwns(t *testing.T) {
 	}
 }
 
-// A logs folder another account owns is refused, as the credentials folder is: logging to file
-// stays off with an error naming the owner, and nothing is written.
 func TestFilesWindowsRefusesAFolderAnotherAccountOwns(t *testing.T) {
 	l, _ := newFiles(t)
 	if err := os.MkdirAll(l.Dir(), 0o700); err != nil {
@@ -95,8 +87,6 @@ func TestFilesWindowsRefusesAFolderAnotherAccountOwns(t *testing.T) {
 	}
 }
 
-// A main.log removed between its making and its opening is made private again, not made with
-// the folder's list by the opening.
 func TestFilesWindowsMakesARemovedMainLogPrivateAgain(t *testing.T) {
 	l, _ := newFiles(t)
 	removed := false
@@ -119,9 +109,6 @@ func TestFilesWindowsMakesARemovedMainLogPrivateAgain(t *testing.T) {
 	pt.CheckPrivate(t, "main.log made again", filepath.Join(l.Dir(), Main), false)
 }
 
-// A logs folder swapped for a link (here a junction) to another folder while main.log is
-// rotated is not renamed through: the other folder's main.log stays as it was, and logging to
-// file stops.
 func TestFilesWindowsRotationRefusesAFolderSwappedForALink(t *testing.T) {
 	l, _ := newFiles(t)
 	if err := l.Configure(true, 0); err != nil {
