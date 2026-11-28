@@ -12,7 +12,7 @@ For Claude Code and Codex on the computer pluxy runs on, pluxy can write the set
 `pluxy client connect claude-code` (or `codex`, with optional `--model <name>`), or **Connect** on
 the panel's **Tools** page and in step 2 of its guided setup. It makes a client key for the tool,
 sets the lines below in the tool's file with the best-matching model pluxy serves (or the model you
-picked in **Set up by hand** or `--model`; when pluxy serves no model yet, it writes no placeholder
+picked in **Set up by hand** or `--model`; when pluxy serves no chat model yet, it writes no placeholder
 and keeps whatever model the file already had), keeps the rest of the file, and keeps a copy of the
 file as it was. `pluxy client disconnect <tool>`, or **Disconnect**, puts it back; when the file
 changed since, Disconnect keeps those changes and takes back only the settings Connect wrote that

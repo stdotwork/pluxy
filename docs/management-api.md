@@ -386,14 +386,15 @@ Oh My Pi.
 ### Connect and disconnect a coding tool
 
 `POST /setup/clients/{tool}/connect` points the tool, on core's machine, at core: core writes into the
-tool's settings file what `GET /setup/clients/{tool}/paste` shows, with core's own address, a client
-key made for the tool, and the model the tool starts with, and keeps the file as it was.
+tool's settings file the settings `GET /setup/clients/{tool}/paste` shows, with core's own address, a
+client key made for the tool, and the model the tool starts with (the model settings left out when
+there is no model to name, below), and keeps the file as it was.
 
 - An optional JSON body takes `label` (names the key made for the tool, as `POST /client-keys` does;
   default: the tool's name) and `model` (checked like `paste`'s: trimmed, at most 240 characters of
   valid UTF-8, no control characters, else 400 `invalid_request`). Without `model`, core picks the
-  best match among the models it serves; when core serves none, it writes no placeholder and leaves
-  any existing model setting alone.
+  best match among the models it serves; when core serves no chat model, it writes no placeholder
+  and leaves any existing model setting alone.
 - Only `claude-code` (`~/.claude/settings.json`) and `codex` (`~/.codex/config.toml`), in the home
   folder of the user core runs as. Every other setting in the file stays as written; Claude Code's
   `ANTHROPIC_API_KEY` and the pluxy provider's `env_key` and `requires_openai_auth` in Codex's config
@@ -416,7 +417,7 @@ The reply to connect and disconnect: `client` (the tool as `found.clients` lists
 `files` (`path` from the home folder, and `change`: `created`, `changed` or `unchanged` for a connect;
 `restored`, `merged`, `removed` or `unchanged` for a disconnect), `key` (a connect's: the client key
 the tool sends, `id`, `masked` and `label`, never its value), `key_made`, `key_removed` and `model` (a
-connect's: the model written for the tool to start with; left out when core served no model and none
+connect's: the model written for the tool to start with; left out when core served no chat model and none
 was asked for, and on disconnect). Core keeps each connect's record, the files as they were among it,
 in `state/tools/<id>.json`, readable by core's user alone, and logs which files it changed, never a
 key.

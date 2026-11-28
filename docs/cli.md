@@ -271,7 +271,7 @@ when core refuses the file.
 
 | Flag | What it does |
 | --- | --- |
-| `--model <name>` | Model the tool starts with, one from `pluxy model list` (at most 240 characters, no control characters). Default: the best match among the models core serves; when core serves none, no placeholder is written and any existing model setting stays as it is. |
+| `--model <name>` | Model the tool starts with, one from `pluxy model list` (at most 240 characters, no control characters). Default: the best match among the models core serves; when core serves no chat model, no placeholder is written and any existing model setting stays as it is. |
 
 ```bash
 pluxy client connect claude-code

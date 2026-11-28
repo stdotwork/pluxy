@@ -144,7 +144,7 @@ func runClientConnect(x *invocation, verb string) error {
 			x.printf("Connected %s. Start it again so it reads the new settings.\n", name)
 			x.printf("pluxy keeps the file as it was: pluxy client disconnect %s puts it back.\n", x.cell(r.Client.ID))
 			if r.Model == "" {
-				x.eprintf("pluxy serves no models yet, so %s's model was left as it was. Connect again after adding an account, or pass --model <name>.\n", x.errCell(cmpOr(r.Client.Name, r.Client.ID)))
+				x.eprintf("pluxy serves no chat model yet, so %s's model was left as it was. Connect again after adding an account that serves one, or pass --model <name>.\n", x.errCell(cmpOr(r.Client.Name, r.Client.ID)))
 			}
 			return
 		}
