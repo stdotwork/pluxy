@@ -2,6 +2,6 @@
   "theme_version": 0,
   "id": "pluxy/default",
   "name": "Default",
-  "description": "Warm paper light and charcoal dark in IBM Plex, with the navigation at the side.",
+  "description": "Zinc neutrals and one blue, in Inter, with the page on a panel inset from the window.",
   "appearance": "both"
 }

@@ -22,32 +22,44 @@
     color: var(--px-color-ok);
   }
 
-  /* The plan by ink weight only, never colour: no tier is filled, so a plan never outweighs a
-     condition mark. Themes may colour [data-plan-tier]. */
+  /* The plan as a pill with one of four finishes by its tier: a warm metal (top), a cool metal
+     (high), an outline (mid) and plain text (free). The finishes are the plan-* colour tokens and
+     never a state colour, so a plan does not read as a condition. */
   .plan-pill {
     display: inline-flex;
     align-items: center;
-    padding: 0 calc(var(--s) * 1.5);
+    padding: 0 calc(var(--s) * 2);
     border: var(--px-shape-border) solid transparent;
-    border-radius: var(--px-shape-radius);
+    border-radius: 999px;
     color: var(--px-color-text);
     font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-medium);
     line-height: 1.5;
     white-space: nowrap;
   }
 
   .plan-pill[data-plan-tier="top"] {
-    border-color: var(--px-color-text);
-    font-weight: 500;
+    border-color: var(--px-color-plan-top-border);
+    background: var(--px-color-plan-top);
+    color: var(--px-color-plan-top-text);
+  }
+
+  .plan-pill[data-plan-tier="high"] {
+    border-color: var(--px-color-plan-high-border);
+    background: var(--px-color-plan-high);
+    color: var(--px-color-plan-high-text);
   }
 
   .plan-pill[data-plan-tier="mid"] {
-    border-color: var(--px-color-text-muted);
+    border-color: var(--px-color-plan-mid-border);
+    background: transparent;
+    color: var(--px-color-plan-mid-text);
   }
 
   .plan-pill[data-plan-tier="free"] {
     padding-inline: 0;
-    color: var(--px-color-text-muted);
+    border-color: transparent;
+    color: var(--px-color-plan-free-text);
   }
 
   /* ---- limits ------------------------------------------------------------------------------- */
@@ -74,34 +86,45 @@
     gap: calc(var(--s) * 1.5);
   }
 
-  .limit-name,
-  .limit-reset {
+  .limit-name {
     color: var(--px-color-text-muted);
   }
 
-  /* A gauge of what is left: full is plenty. */
+  .limit-reset {
+    color: var(--px-color-secondary-label);
+  }
+
+  /* A gauge of what is left: full is plenty. A pill on a track, its fill by the share left. */
   .meter[data-mode="left"] {
     display: inline-block;
     flex: none;
     width: calc(var(--s) * 10);
     height: calc(var(--s) * 1.5);
     overflow: hidden;
-    border-radius: var(--px-shape-radius);
+    border-radius: 999px;
     background: var(--px-color-meter-track);
   }
 
   .meter[data-mode="left"] > span {
     display: block;
     height: 100%;
+    border-radius: 999px;
     background: var(--px-color-meter-fill);
   }
 
   .meter[data-mode="left"][data-tone="warn"] > span {
-    background: var(--px-color-warn);
+    background: var(--px-color-meter-mid);
   }
 
   .meter[data-mode="left"][data-tone="danger"] > span {
-    background: var(--px-color-danger);
+    background: var(--px-color-meter-low);
+  }
+
+  /* A limit that was not read: hatched, with no fill to mislead. */
+  .meter[data-mode="left"][data-tone="none"] {
+    background:
+      repeating-linear-gradient(135deg, var(--px-color-meter-unknown) 0 2px, transparent 2px 5px),
+      var(--px-color-meter-track);
   }
 
   /* ---- AccountRow --------------------------------------------------------------------------- */
@@ -617,7 +640,7 @@
   .state-pane-details pre {
     margin: calc(var(--s) * 2) 0 0;
     padding: calc(var(--s) * 2);
-    border-radius: var(--px-shape-radius);
+    border-radius: var(--r-small);
     background: var(--px-color-code-bg);
     color: var(--px-color-code-text);
     white-space: pre-wrap;
@@ -646,7 +669,7 @@
     content: "";
     width: 40%;
     height: calc(var(--s) * 2);
-    border-radius: var(--px-shape-radius);
+    border-radius: var(--r-chip);
     background: var(--px-color-surface-raised);
   }
 
@@ -659,5 +682,21 @@
     flex-wrap: wrap;
     align-items: center;
     gap: calc(var(--s) * 2);
+  }
+
+  /* ---- inside a card ------------------------------------------------------------------------ */
+
+  /* A card has its own border and room inside it (a box by default), so the parts it holds take
+     that room instead of adding their own beside it, and the last setting leaves the card's edge
+     as the line under it. */
+  .card .setting-grid,
+  .card .setting-error,
+  .card .state-pane {
+    padding-inline: 0;
+  }
+
+  .card .config-rows > .setting-row:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
   }
 }

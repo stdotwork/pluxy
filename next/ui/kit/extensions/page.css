@@ -8,7 +8,7 @@
     width: 100%;
     height: max(16rem, calc(100vh - var(--stick) - var(--s) * 14));
     border: var(--px-shape-border) solid var(--px-color-border);
-    border-radius: var(--px-shape-radius);
+    border-radius: var(--r-card);
     background: var(--px-color-surface);
   }
 }

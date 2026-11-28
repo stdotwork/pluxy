@@ -137,7 +137,7 @@
     max-width: 100%;
     overflow: auto;
     border: var(--px-shape-border) solid var(--px-color-border);
-    border-radius: var(--px-shape-radius);
+    border-radius: var(--r-card);
     color: var(--px-color-code-text);
     background: var(--px-color-code-bg);
     font-family: var(--px-font-mono);

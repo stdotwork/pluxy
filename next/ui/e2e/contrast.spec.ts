@@ -19,7 +19,7 @@ test.beforeAll(async () => {
 
 const THEMES = ["", "pluxy/terminal", "pluxy/paper"] as const; // "" is the default theme
 const APPEARANCES = ["light", "dark"] as const;
-const TONES = ["ok", "warn", "danger", "muted"] as const;
+const TONES = ["ok", "warn", "danger", "muted", "info", "update"] as const;
 // The surfaces a badge sits on: the page, a card or table, a raised or selected row.
 const SURFACES = ["bg", "surface", "surface-raised", "selected"] as const;
 const AA = 4.5;
