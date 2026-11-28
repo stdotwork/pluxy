@@ -162,7 +162,7 @@ breakdown by model, account or key, which is what the Usage tab is for.
 ## Themes reach every page
 
 A theme can restyle and rearrange every page, not only recolour it. So every new page follows
-these rules (the [theme contract](../next/ui/themes/README.md) has the details):
+these rules (the [theme contract](themes.md) has the details):
 
 - Every list uses the kit's list, so a theme's `list` layout option (`table` or `cards`) applies,
   and every list with details uses the kit's master and detail view.

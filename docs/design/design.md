@@ -200,8 +200,8 @@ Not planned: pluxy will not ship or verify extensions that make other clients po
 or that rewrite words in a request to get past a provider's content filter. Others may build such
 extensions; the extension model does not stop them.
 
-Contracts: the [extension protocol](../../next/protocol/README.md) (manifest, registry, handshake,
-calls, versioning) and its [tutorial](../../next/protocol/TUTORIAL.md). Installing and managing
+Contracts: the [extension protocol](../protocol.md) (manifest, registry, handshake,
+calls, versioning) and its [tutorial](../extension-tutorial.md). Installing and managing
 packages: [extensions.md](../extensions.md).
 
 ## Three ways to use pluxy
@@ -328,10 +328,10 @@ Themes reach far into the UI, within limits that keep it safe:
 pluxy bundles three themes (`pluxy/default`, `pluxy/terminal` and `pluxy/paper`), follows the
 system's light or dark setting by default, and keeps added themes in core's `state/` folder, so
 the panel and the app connected to one core show the same ones. Contract:
-[themes](../../next/ui/themes/README.md).
+[themes](../themes.md).
 
 **Extension pages** are shown in a sandboxed frame from a separate site: another host name, not
 just another port, because a browser sends a host's cookies to every port. A page talks to the
 panel only through a message channel, can only read and write its own extension's settings, and
 never receives the management key. Settings are forms the panel draws from the extension's
-schema. Contract: [extension pages](../../next/ui/extension-pages/README.md).
+schema. Contract: [extension pages](../extension-pages.md).

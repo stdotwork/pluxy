@@ -1,9 +1,3 @@
-//! pluxy/usage-omp: the usage hub's parser of Oh My Pi's session files (`../README.md`). It reads the
-//! session files under `~/.omp/agent/sessions` and `~/.omp/sessions` (the hub's `roots` name others),
-//! read-only, and sends the hub only token counts per hour and model: never a prompt, a message, a
-//! title, a folder or a key. The format and its rules are in `pluxy-pi-sessions`, which the Pi parser
-//! shares.
-
 use pluxy_pi_sessions::scan_call;
 use pluxy_program::{run, Call, Error, Handler};
 use serde_json::Value;

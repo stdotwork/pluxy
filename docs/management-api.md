@@ -103,7 +103,7 @@ JSON object named in its row; `204` means an empty reply.
 | --- | --- |
 | `GET /status` | Core's live state: `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision`, `hash` and `at`; `extensions`, one entry per running generation with `id`, `version`, `generation`, `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `crashes_in_a_row`, `last_error` and `active_requests`; `safe_mode`; `first_run`; `version`, `commit` and `built` (the build, as `pluxy -version` prints it); and `management_api` |
 | `POST /reload` | Reloads the config file now. 200 with the status when the new revision is active; 422 with the status when it was refused (`desired.error` says why), and the active revision stays |
-| `GET /ui` | The pages of the running extensions and where they are served; see [extension pages](../next/ui/extension-pages/README.md#how-core-serves-pages) |
+| `GET /ui` | The pages of the running extensions and where they are served; see [extension pages](extension-pages.md#how-core-serves-pages) |
 | `GET /extensions/{id}/config` | An extension's settings: the schema its manifest declares and their values. 404 `not_found` when the extension declares none or is not running |
 | `PATCH /extensions/{id}/config` | `{"values": {...}}`: changes those settings and replies as `GET` does. 422 `invalid_config` when a value fails the schema |
 

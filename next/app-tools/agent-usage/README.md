@@ -3,11 +3,11 @@
 The usage hub: the one store of agents' token usage on this computer and the desktop app's Agent
 usage page. It is an optional native tool. It reads no agent's files itself: usage parsers, each a
 package of its own, read them and send the hub their rows through the host's
-[jobs](../../app/app-host/README.md#jobs). The hub keeps the rows in its own SQLite store and answers
+[jobs](../../../docs/app-packages.md#jobs). The hub keeps the rows in its own SQLite store and answers
 the page.
 
 This page is the reference for the hub's operations, its store, and **schemas 1 and 2**, the
-versioned ingest API parsers are built on. The parsers are in [`../README.md`](../README.md#usage-parsers)
+versioned ingest API parsers are built on. The parsers are in [docs/app-tools.md](../../../docs/app-tools.md#usage-parsers)
 and the library they share is `pluxy-usage` ([`../lib/usage`](../lib/usage)).
 
 ## Operations

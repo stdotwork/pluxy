@@ -2,7 +2,7 @@
 
 In this tutorial you make a page-only web package, install it in the desktop app and see its page,
 then write the manifest of a native tool. The rules behind each step are in the
-[app package contract](README.md).
+[app package contract](app-packages.md).
 
 You need the desktop app on Linux: installing a package from a file works only there.
 
@@ -54,7 +54,7 @@ calls answer `unavailable`. To ask for a file later, add
 `"resources":[{"id":"notes","kind":"file","operations":["read"]}]` inside `app`. Declaring it grants
 nothing: a grant needs a release signed by its publisher and listed in a registry (a package
 installed from a file never gets one), the person's approval of the signer and a native
-confirmation ([Access for web packages](README.md#access-for-web-packages)).
+confirmation ([Access for web packages](app-packages.md#access-for-web-packages)).
 
 ## Describe a native tool
 
@@ -90,13 +90,13 @@ program, but you can install it only through such a registry.
    native tool. A native tool cannot declare `resources`.
 
 2. Put the program at `bin/example-tool`. It must be a native executable, not a script, and speak
-   the [app program contract](README.md#app-program-contract-v0): send hello, answer describe with
+   the [app program contract](app-packages.md#app-program-contract-v0): send hello, answer describe with
    exactly the manifest's operations and state version, then answer calls. The Rust library
-   [`lib/program`](../../app-tools/README.md#libprogram) implements the program side.
+   [`lib/program`](app-tools.md#libprogram) implements the program side.
 
-3. Pack one archive per platform under the [archive rules](../../protocol/README.md#release-archives).
+3. Pack one archive per platform under the [archive rules](protocol.md#release-archives).
    For each, write the descriptor with the archive's exact size and SHA-256
-   ([Signed descriptor bytes](README.md#signed-descriptor-bytes)) and sign those exact bytes with the
+   ([Signed descriptor bytes](app-packages.md#signed-descriptor-bytes)) and sign those exact bytes with the
    publisher's Ed25519 key. Keep the descriptor bytes as they are: the app verifies the signature over
    them, then the archive's size and SHA-256, before it unpacks anything. Changing one byte of the
    archive needs a new descriptor and signature.

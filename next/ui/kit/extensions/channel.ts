@@ -1,8 +1,3 @@
-// The panel's side of the extension page channel, version 0 (extension-pages/README.md): it
-// answers one page's calls on one port, for the extension the panel bound the page to. It
-// checks every message's shape and size, each method's permission and the call rate, and
-// answers each well-formed call once. Nothing a page sends can name another extension.
-
 export const CHANNEL_VERSION = 0;
 export const MAX_MESSAGE_BYTES = 64 * 1024;
 export const MAX_CALLS_PER_SECOND = 30;

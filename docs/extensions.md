@@ -9,8 +9,8 @@ only while its extension is installed and turned on.
 An extension is delivered as a **package**: a release archive from a **registry** (a list of
 packages and the archives that go with them). This page says how to get packages, manage them and
 pack your own. To write an extension, follow the
-[extension tutorial](../next/protocol/TUTORIAL.md); the protocol itself is in
-[`next/protocol/README.md`](../next/protocol/README.md).
+[extension tutorial](extension-tutorial.md); the protocol itself is in
+[`docs/protocol.md`](protocol.md).
 
 A package has three independent states:
 
@@ -245,7 +245,7 @@ is resolved against the index's own address. Core never shows a registry's or ar
 password or query string.
 
 The index and archive formats are in the protocol README, under
-[Release archives](../next/protocol/README.md#release-archives).
+[Release archives](protocol.md#release-archives).
 
 Each tagged build uploads the packed extensions and a `registry.json` to its GitHub release
 (`.github/workflows/next-release.yml`). To install from one, add that `registry.json` address under
@@ -281,7 +281,7 @@ on Windows `SYSTEMROOT`.
 
 Extensions may add pages to the panel, under **Settings** in the group **From extensions**. They
 are served from a site of their own; see
-[`next/ui/extension-pages/README.md`](../next/ui/extension-pages/README.md).
+[`docs/extension-pages.md`](extension-pages.md).
 
 ## Run an extension from a folder
 
@@ -300,7 +300,7 @@ relative to the config file:
 Rebuild the program and run `pluxy reload` (saving the config file unchanged does not reload): core
 sees the changed program, starts the new version and drains the old one. The extension uses the same settings as a package
 (`idle_stop_ms` and the others above). The
-[extension tutorial](../next/protocol/TUTORIAL.md) builds one from scratch.
+[extension tutorial](extension-tutorial.md) builds one from scratch.
 
 ## Pack extensions
 

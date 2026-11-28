@@ -1,22 +1,3 @@
-//! This device's extension catalog: page-only app packages (`app.tier` `web`) installed on this
-//! computer, apart from the packages of the core the app is connected to
-//! (`../app-host/README.md`). It reads release archives from a local file the person chose in
-//! the native file chooser, or from a registry named in `device-registries.json`, checks them
-//! before anything is kept, copies each release into an immutable store folder named by its
-//! archive's SHA-256, and serves a page's files only while each still has the digest it had at
-//! install.
-//!
-//! A package from a source that is not curated is Unverified, and one claiming a reserved
-//! publisher (`pluxy`, or a publisher a trust root names) is refused. A native tool (`app.tier`
-//! `native`) is admitted only from a curated registry with a first-party signature, and runs
-//! only after the person enabled it in a native confirmation (`device_admission.rs`). Any other
-//! publisher signature a registry lists is checked with the key the index names before the
-//! archive is unpacked and kept with the release, for Access (`access.rs`) to grant files only to
-//! web packages whose signer the person approved. No package gets settings here. The previous
-//! release stays as the last good one, so a failed candidate keeps the active release and the
-//! person can roll back. With `--safe-mode`, no device page is listed, opened or served and no
-//! native tool is admitted; the catalog can still be managed.
-
 #[cfg(native_stack)]
 pub use admission::main_window;
 pub use admission::{

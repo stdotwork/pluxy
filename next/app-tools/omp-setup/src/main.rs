@@ -1,11 +1,3 @@
-//! pluxy/omp-setup: sets up Oh My Pi to use pluxy's core, and starts it, for pluxy's desktop app
-//! (README.md). Its operations: `preview` (read: pins Oh My Pi's models file and settings file and
-//! reads their values back, never the key), `apply`, `clear` and `restore` (write: each call asks
-//! the person; `apply` receives the client key as a secret's value and writes it where Oh My Pi
-//! reads it), `status` (read), `recipe` (read: how the launcher starts Oh My Pi) and the backup
-//! browser's standard operations. Writes go through pluxy-transactions: link-preserving,
-//! journalled, with the originals and manual backups in the host's vault.
-
 mod omp;
 mod yaml;
 

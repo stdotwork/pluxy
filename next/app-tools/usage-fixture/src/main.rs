@@ -1,17 +1,3 @@
-//! pluxy/usage-fixture: a test-only usage parser of a simple fixture format, for the usage hub's
-//! checks (`../README.md`); never released. It reads `*.jsonl` files under its roots (by default
-//! `~/.usage-fixture`), one JSON object a line:
-//!
-//! - a record `{"id"?, "ts", "model", "input", "output", "cache_read"?, "cache_write"?,
-//!   "reasoning"?, "total"?}`: `ts` in unix seconds; `total`, when absent, is input + output +
-//!   cache read + cache write; a record whose `id` came earlier in the file is counted once;
-//! - `{"part": true}` ends the part being read, so a file's rows come in more than one batch;
-//! - `{"pause": <ms>}` ends the part and waits that long before reading on (a cancel ends it);
-//! - any other line is skipped.
-//!
-//! `relay` calls another package's operation through the host, so a check can show what a tool
-//! with no right to it is refused.
-
 use pluxy_program::{run, Call, Error, Handler};
 use pluxy_usage::{produce, Parser, Sink, Tokens};
 use serde_json::Value;
