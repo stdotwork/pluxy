@@ -273,8 +273,9 @@ export function CommandMenu(props: CommandMenuProps) {
       e.stopPropagation();
       close();
     } else if (e.key === "Tab") {
-      // The options are reached by the arrow keys: focus stays in the field.
-      e.preventDefault();
+      // The options are reached by the arrow keys: focus stays in the field. Control Tab and the
+      // like belong to the browser.
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) e.preventDefault();
     } else if (e.isComposing) {
       // A letter being composed (an input method) is not a command yet.
     } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {

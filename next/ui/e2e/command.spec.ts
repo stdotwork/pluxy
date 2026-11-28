@@ -117,6 +117,19 @@ test("the shortcut held down opens the menu once and does not close it with its 
   await expect(menu(page)).toHaveCount(0);
 });
 
+test("Tab stays in the field, but Control Tab is left to the browser", async ({ page }) => {
+  await open(page);
+  const cancelled = await page.evaluate(() => {
+    const press = (init: KeyboardEventInit) => {
+      const e = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true, ...init });
+      document.activeElement?.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    return { tab: press({}), shiftTab: press({ shiftKey: true }), ctrlTab: press({ ctrlKey: true }) };
+  });
+  expect(cancelled).toEqual({ tab: true, shiftTab: true, ctrlTab: false });
+});
+
 test("a menu opened by the keyboard is there at once, and one opened by the pointer fades in", async ({
   page,
 }) => {
