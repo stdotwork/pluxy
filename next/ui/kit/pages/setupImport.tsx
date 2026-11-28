@@ -1,8 +1,9 @@
 // The one line above Setup's steps when core found a CLIProxyAPI setup on its computer: a preview of
 // what importing it would do, then the import, each only when the person asks. Nothing is sent
-// with dry_run false unless a preview is on screen that came from the same config, the same auth
-// folder and the same scan; Import now sends exactly what that preview sent. A new scan, or any
-// other change to what core found, drops the preview.
+// with dry_run false unless a preview is on screen that came from the same config, auth folder,
+// account-file count and import record; Import now sends exactly what that preview sent. Any change
+// to what core found drops an open preview; a background scan that finds the same setup keeps it,
+// and never drops an in-flight call, a refusal or a completed report for the same config.
 
 import { useRef, useState } from "preact/hooks";
 import { type ImportReport, type ImportRow, problem, type Setup, type SetupImport } from "../api";
@@ -101,13 +102,14 @@ export function refusalWords(r: Refusal): string {
 
 /**
  * What a preview is bound to: the config, the auth folder an import of it names, the number of
- * account files the scan counted there, and when that scan ran. Any change is another setup.
+ * account files the scan counted there, and the last recorded import. Any change is another setup
+ * and drops an open preview; a newer scan that found the same setup keeps it.
  */
-function scanKey(setup: Setup, found: SetupImport): string {
-  return JSON.stringify([found.config, authDir(found) ?? "", found.accounts, setup.scanned_at ?? ""]);
+function setupKey(found: SetupImport): string {
+  return JSON.stringify([found.config, authDir(found) ?? "", found.accounts, found.last_import?.at ?? ""]);
 }
 
-/** Where the import stands on this page, for the scan it started from (key). */
+/** Where the import stands on this page, for the setup it started from (key). */
 interface ImportState {
   key: string;
   /** What the preview sent, which Import now sends again. */
@@ -118,10 +120,26 @@ interface ImportState {
   report?: ImportReport;
   done?: boolean;
   refusal?: Refusal;
-  /** For an import whose reply was lost: when core's last record of an import was before it. */
+  /** For a call whose reply was lost or found not run: core's last import record before it. */
   lastBefore?: string;
   /** Refresh after a lost reply found no new record: the import did not run. */
   notRun?: boolean;
+}
+
+/**
+ * Whether state still belongs to found. An open preview must match setupKey so Import now cannot
+ * confirm one setup and import another; in-flight calls, refusals and completed reports stay for
+ * the same config across background scans (a lost Import now or notRun clears once core records a
+ * newer import).
+ */
+function isMine(state: ImportState | undefined, found: SetupImport): boolean {
+  if (!state || state.config !== found.config) return false;
+  if (state.busy) return true;
+  if (state.report && !state.done) return state.key === setupKey(found);
+  if ((state.refusal && !state.refusal.preview && state.refusal.status === 0) || state.notRun) {
+    if (found.last_import !== undefined && found.last_import.at !== state.lastBefore) return false;
+  }
+  return true;
 }
 
 function Code(props: { value: string }) {
@@ -219,16 +237,16 @@ export function ImportLine(props: {
   // Try again or Refresh waits for a new scan.
   const [rescanning, setRescanning] = useState(false);
   if (!found) return null;
-  const mine = state?.key === scanKey(props.setup, found) ? state : undefined;
+  const mine = isMine(state, found) ? state : undefined;
 
   // A preview of what setup found (target), or the import of the preview on screen.
   const run = async (preview: boolean, setup: Setup = props.setup) => {
     const target = setup.found.imports[0];
     if (busy.current || !target) return;
     // Import now only ever follows a preview of this same setup, and sends what it sent.
-    if (!preview && !mine?.report) return;
+    if (!preview && (!mine?.report || mine.done)) return;
     const sent = preview
-      ? { key: scanKey(setup, target), config: target.config, authDir: authDir(target) }
+      ? { key: setupKey(target), config: target.config, authDir: authDir(target) }
       : { key: mine?.key ?? "", config: mine?.config ?? "", authDir: mine?.authDir };
     busy.current = true;
     setState({ ...sent, report: preview ? undefined : mine?.report, busy: preview ? "preview" : "import" });
@@ -266,7 +284,13 @@ export function ImportLine(props: {
     if (!target || (target.last_import !== undefined && target.last_import.at !== lastBefore)) {
       return setState(undefined);
     }
-    setState({ key: scanKey(fresh, target), config: target.config, authDir: authDir(target), notRun: true });
+    setState({
+      key: setupKey(target),
+      config: target.config,
+      authDir: authDir(target),
+      notRun: true,
+      lastBefore: target.last_import?.at,
+    });
   };
 
   const last = !mine ? found.last_import : undefined;
