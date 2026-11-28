@@ -84,6 +84,13 @@ describe("the README and the code agree", () => {
       .map(([hook]) => hook?.match(/^`data-part="([^"]+)"`/)?.[1])
       .filter((h) => h !== undefined);
     expect(documented).toEqual([...PARTS]);
+    const settingGroup = readFileSync(
+      join(import.meta.dir, "..", "kit", "pages", "settingGroup.tsx"),
+      "utf8",
+    );
+    const groupParts = [...settingGroup.matchAll(/data-part="([^"]+)"/g)].map((m) => m[1] as string);
+    expect(groupParts).toContain("settings-column");
+    for (const part of groupParts) expect(PARTS).toContain(part as (typeof PARTS)[number]);
   });
 
   test("every T3 Code data-slot name, and the kit sets each one", () => {

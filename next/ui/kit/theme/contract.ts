@@ -222,6 +222,7 @@ export const PARTS = [
   "item",
   "detail",
   "card",
+  "settings-column",
   "settings-section",
   "setting-card",
   "button",

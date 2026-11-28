@@ -365,6 +365,7 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="item"` | One item in a list; a selected one has `aria-current="true"` |
 | `data-part="detail"` | The detail pane |
 | `data-part="card"` | A card or panel grouping related content |
+| `data-part="settings-column"` | The centred column of groups on a Settings page (General, Themes, Config, System, Extensions) |
 | `data-part="settings-section"` | A group on a Settings page (General, Themes, Config, System, Extensions): its small heading above a card of rows |
 | `data-part="setting-card"` | The rounded card of a group, its rows split by hairlines |
 | `data-part="button"` | A button; `data-variant` is `primary` (a view's main action, filled), `quiet` (the ordinary button, outlined), `ghost` (no border until hovered) or `danger` (outlined, in the danger colour) |
