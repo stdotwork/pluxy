@@ -13,7 +13,6 @@ func TestCanonicalServiceTier(t *testing.T) {
 	}
 }
 
-// A loss names the field of the client's body the setting came from.
 func TestServiceTierAndVerbosityPaths(t *testing.T) {
 	for _, c := range []struct {
 		name                  string

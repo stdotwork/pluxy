@@ -42,7 +42,6 @@ func TestExtractAndFilterRateLimitHeaders(t *testing.T) {
 		t.Fatalf("gemini extracted = %+v, want nil", gotGem)
 	}
 
-	// Cross-format filtering drops foreign headers.
 	if filtered := FilterRateLimitHeaders(FormatOpenAIChat, gotAnt); filtered != nil {
 		t.Errorf("chat filter kept anthropic headers: %+v", filtered)
 	}

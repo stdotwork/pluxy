@@ -28,7 +28,6 @@ var contextOverflowMessages = []string{
 	"input context is too long",                    // Google's error table, for a 500 INTERNAL
 }
 
-// isContextOverflow reports whether an upstream's message says the prompt does not fit.
 func isContextOverflow(message string) bool {
 	m := strings.ToLower(message)
 	if strings.Contains(m, "string_above_max_length") || (strings.Contains(m, "invalid 'user'") && strings.Contains(m, "string too long")) {
@@ -55,8 +54,6 @@ func MarkContextOverflow(err error) error {
 		return err
 	}
 	if e.ProviderCode != ProviderContextLengthExceeded {
-		// An error without a status says what it is only by its code: one with another code stays
-		// that error, even if its message quotes an overflow.
 		if e.Status == 0 && !invalidRequestCode(e.ProviderCode) {
 			return err
 		}
@@ -69,7 +66,6 @@ func MarkContextOverflow(err error) error {
 	return err
 }
 
-// invalidRequestCode reports whether a provider code is empty or names an invalid request.
 func invalidRequestCode(code string) bool {
 	switch strings.ToLower(code) {
 	case "", "invalid_request_error", "invalid_request", "invalid_argument":

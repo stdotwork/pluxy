@@ -14,10 +14,6 @@ const (
 	MaxRateLimitHeaderValue = 256
 )
 
-// Documented rate-limit response header names (lower-case) per wire format.
-// Only headers explicitly documented by each vendor are listed, and a value is carried only in
-// a shape the vendors document (ValidRateLimitHeaderValue), so no cookie, auth token or text
-// ID is carried. A numeric ID cannot be told from a number and is.
 var (
 	// Anthropic Messages: https://platform.claude.com/docs/en/api/rate-limits
 	// and https://platform.claude.com/docs/en/build-with-claude/fast-mode.
@@ -93,20 +89,10 @@ func AllowedRateLimitHeader(format, name string) bool {
 	}
 }
 
-// maxRateLimitShapedValue bounds a time or a duration at 40 bytes: a time with nanoseconds and an
-// offset is 35, and a duration is shorter. The bound is on length only: a time's fraction or a
-// duration's number may be longer than any vendor writes, so PlainRateLimitValue is the narrower
-// check for a value whose characters cannot be a key's.
 const maxRateLimitShapedValue = 40
 
-// rateLimitDuration matches the durations the vendors write, as Go prints them: hours, minutes
-// and seconds with a fraction on the seconds ("1s", "6m0s", "1h2m3.5s"), or one sub-second unit
-// ("17ms").
 var rateLimitDuration = regexp.MustCompile(`^(?:[0-9]+h)?(?:[0-9]+m)?(?:[0-9]+(?:\.[0-9]+)?s)?$|^[0-9]+(?:\.[0-9]+)?(?:ms|us|[\x{b5}\x{3bc}]s|ns)$`)
 
-// rateLimitPlainDuration matches a duration whose every number has at most 4 digits, with a
-// fraction of at most 3 digits on the seconds or on a sub-second unit: "1s", "6m0s", "1h2m3.5s",
-// "17ms". A longer number, such as "4829175306s", could hold a key's digits.
 var rateLimitPlainDuration = regexp.MustCompile(`^(?:[0-9]{1,4}h)?(?:[0-9]{1,4}m)?(?:[0-9]{1,4}(?:\.[0-9]{1,3})?s)?$|^[0-9]{1,4}(?:\.[0-9]{1,3})?(?:ms|us|[\x{b5}\x{3bc}]s|ns)$`)
 
 // ValidRateLimitHeaderValue reports whether v is a value a vendor documents for a rate-limit

@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// The usage-limit reply's body, message and headers are today's core's.
 func TestUsageLimitReply(t *testing.T) {
 	at := time.Unix(1_800_000_000, 0)
 	u := &UsageLimit{Model: "gpt-5", Provider: "codex", ResetsAt: at.Add(2*time.Hour - 300*time.Millisecond), WindowMinutes: 300,
@@ -46,8 +45,6 @@ func TestUsageLimitReply(t *testing.T) {
 	}
 }
 
-// The countdown in the reply is whole seconds rounded up, the same in reset_time, reset_seconds and
-// the Anthropic message: 1.2s left is 2s in all three.
 func TestUsageLimitCountdownRoundsUp(t *testing.T) {
 	at := time.Unix(1_800_000_000, 0)
 	u := &UsageLimit{ResetsAt: at.Add(1200 * time.Millisecond), At: at}

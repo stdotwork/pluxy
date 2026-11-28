@@ -66,11 +66,8 @@ func VerbosityPath(r Request) string {
 	return "verbosity"
 }
 
-// ServiceTierUnsent is the detail of the loss for a service tier an encoder leaves out because
-// nothing says its upstream takes the field.
 const ServiceTierUnsent = "nothing says this upstream takes a service tier, so it is not sent"
 
-// VerbosityUnsent is ServiceTierUnsent for verbosity.
 const VerbosityUnsent = "nothing says this upstream takes a verbosity, so it is not sent"
 
 // Verbosities are the verbosities OpenAI's Chat Completions and Responses create references list.

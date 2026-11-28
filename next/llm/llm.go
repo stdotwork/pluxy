@@ -4,7 +4,7 @@
 // close output items and end in exactly one terminal event. The shapes follow the prompt and
 // stream-part types of Vercel's AI SDK Language Model Specification and the items and streaming
 // events of Open Responses. Client formats and provider extensions translate to and from this
-// model; the extension protocol carries it on the wire (see docs/protocol.md).
+// model; the extension protocol carries it on the wire.
 package llm
 
 import (
@@ -14,7 +14,6 @@ import (
 	"time"
 )
 
-// Request is a model request in pluxy's internal form.
 type Request struct {
 	Model   string  `json:"model"`
 	Stream  bool    `json:"stream"`
@@ -38,7 +37,6 @@ type Request struct {
 	Caller string `json:"caller,omitempty"`
 }
 
-// Drop policies.
 const (
 	DropReport = "report"
 	DropReject = "reject"
@@ -54,7 +52,6 @@ type Origin struct {
 	Raw    json.RawMessage `json:"raw,omitempty"`
 }
 
-// Loss kinds.
 const (
 	// LossApproximated: the meaning was carried over in a different form.
 	LossApproximated = "approximated"
@@ -101,7 +98,6 @@ type Translation struct {
 	Losses      []Loss `json:"losses,omitempty"`
 }
 
-// Dropped reports whether any loss is a drop.
 func (t *Translation) Dropped() bool {
 	if t == nil {
 		return false
@@ -114,7 +110,6 @@ func (t *Translation) Dropped() bool {
 	return false
 }
 
-// DroppedPaths returns the paths of the losses that are drops, in order.
 func (t *Translation) DroppedPaths() []string {
 	if t == nil {
 		return nil
@@ -128,7 +123,6 @@ func (t *Translation) DroppedPaths() []string {
 	return paths
 }
 
-// Native is a body kept in its original format.
 type Native struct {
 	Format string          `json:"format"`
 	Body   json.RawMessage `json:"body"`
@@ -153,7 +147,6 @@ func (n *Native) IsParsed() bool {
 	return n != nil && len(n.Body) > 0 && bytes.Equal(n.Parsed, n.Body)
 }
 
-// Native formats.
 const (
 	FormatOpenAIChat        = "openai.chat"
 	FormatOpenAIResponses   = "openai.responses"
@@ -218,11 +211,9 @@ const (
 // EndpointReply is the Raw of an endpoint call's response.start: how to send the reply's body,
 // which follows in native events, each a JSON string holding the next piece of the body.
 type EndpointReply struct {
-	// ContentType is the body's media type, such as application/json or text/event-stream.
 	ContentType string `json:"content_type"`
 }
 
-// Item types.
 const (
 	ItemTypeMessage    = "message"
 	ItemTypeToolCall   = "tool_call"
@@ -232,7 +223,6 @@ const (
 	ItemTypeNative = "native"
 )
 
-// Message roles.
 const (
 	RoleSystem    = "system"
 	RoleDeveloper = "developer"
@@ -277,7 +267,6 @@ type Item struct {
 	Origin *Origin `json:"origin,omitempty"`
 }
 
-// Part types.
 const (
 	PartText   = "text"
 	PartImage  = "image"
@@ -305,7 +294,6 @@ type Part struct {
 	Origin *Origin `json:"origin,omitempty"`
 }
 
-// Tool types.
 const (
 	ToolFunction = "function"
 	// ToolWebSearch is a provider-hosted web search tool (protocol minor version 29). WebSearch
@@ -373,7 +361,6 @@ type Options struct {
 	CandidateCount int `json:"candidate_count,omitempty"`
 }
 
-// Tool choice modes.
 const (
 	ToolChoiceAuto     = "auto"
 	ToolChoiceNone     = "none"
@@ -384,7 +371,6 @@ const (
 	ToolChoiceCodeExecution = "code_execution"
 )
 
-// ToolChoice says whether and which tool the model must call.
 type ToolChoice struct {
 	Mode string `json:"mode"`
 	Name string `json:"name,omitempty"`
@@ -394,19 +380,16 @@ type ToolChoice struct {
 	// defining only these tools. An extension below protocol minor 0.26 cannot read it: core
 	// sends the choice without the list and cuts the request's tools to the function tools it
 	// names, so the narrowing still holds, and refuses the request as invalid when it names none
-	// of them (see internal/host).
+	// of them.
 	Allowed []string `json:"allowed,omitempty"`
 }
 
-// Response format types.
 const (
 	ResponseFormatText       = "text"
 	ResponseFormatJSONObject = "json_object"
 	ResponseFormatJSONSchema = "json_schema"
 )
 
-// ResponseFormat constrains the reply's text: plain text, any JSON object, or JSON following
-// Schema.
 type ResponseFormat struct {
 	Type        string          `json:"type"`
 	Name        string          `json:"name,omitempty"`
@@ -415,7 +398,6 @@ type ResponseFormat struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 
-// Event types.
 const (
 	EventResponseStart  = "response.start"
 	EventItemStart      = "item.start"
@@ -473,10 +455,8 @@ type Event struct {
 	Raw json.RawMessage `json:"raw,omitempty"`
 }
 
-// Terminal reports whether the event ends the stream.
 func (e Event) Terminal() bool { return e.Type == EventFinish || e.Type == EventError }
 
-// ResponseInfo describes the reply as a whole.
 type ResponseInfo struct {
 	ID string `json:"id"`
 	// Model is the model that actually served the request.
@@ -487,9 +467,8 @@ type ResponseInfo struct {
 	Format string `json:"format,omitempty"`
 	// Raw holds the upstream's reply-level fields that have no place in the model, as one JSON
 	// object; for OpenAI Chat Completions, fields such as system_fingerprint.
-	Raw json.RawMessage `json:"raw,omitempty"`
-	// Translation reports how the extension built the upstream request from the client's.
-	Translation *Translation `json:"translation,omitempty"`
+	Raw         json.RawMessage `json:"raw,omitempty"`
+	Translation *Translation    `json:"translation,omitempty"`
 	// Headers holds the upstream's documented rate-limit response headers (protocol minor
 	// version 34), keyed by lower-case name. Only headers from the explicit allowlist for
 	// Format are carried, and only values of a documented shape (ValidRateLimitHeaderValue: an
@@ -498,7 +477,6 @@ type ResponseInfo struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
-// Output item kinds.
 const (
 	ItemMessage   = "message"
 	ItemReasoning = "reasoning"
@@ -507,7 +485,7 @@ const (
 
 // OpaqueDevin is the Opaque.Format of a Devin reasoning signature, which has no native format.
 // A Messages client carries it in the thinking block's signature and a streamed Gemini reply in a
-// thought part's thoughtSignature, as today's core does; both give it back on the next turn.
+// thought part's thoughtSignature; both give it back on the next turn.
 const OpaqueDevin = "devin"
 
 // Opaque is reasoning state only its provider can read, with the format it came from.
@@ -516,14 +494,12 @@ type Opaque struct {
 	Data   string `json:"data"`
 }
 
-// ItemStart describes an output item when it opens.
 type ItemStart struct {
 	Kind   string `json:"kind"`
 	CallID string `json:"call_id,omitempty"`
 	Name   string `json:"name,omitempty"`
 }
 
-// Finish reasons.
 const (
 	FinishStop          = "stop"
 	FinishLength        = "length"
@@ -532,7 +508,7 @@ const (
 	FinishOther         = "other"
 )
 
-// Finish says why generation ended. RawReason keeps the upstream's own value.
+// RawReason keeps the upstream's own value.
 type Finish struct {
 	Reason    string `json:"reason"`
 	RawReason string `json:"raw_reason,omitempty"`
@@ -550,7 +526,6 @@ type Usage struct {
 	Raw                   json.RawMessage `json:"raw,omitempty"`
 }
 
-// Error codes.
 const (
 	CodeInvalidRequest = "invalid_request"
 	CodeAuth           = "auth"
@@ -574,7 +549,6 @@ const (
 	CodeExtensionTimeout = "extension_timeout"
 )
 
-// Error scopes: what a failure is about.
 const (
 	ScopeRequest    = "request"
 	ScopeCredential = "credential"
@@ -582,7 +556,6 @@ const (
 	ScopeEndpoint   = "endpoint"
 )
 
-// Error is a structured failure.
 type Error struct {
 	Code         string `json:"code"`
 	Message      string `json:"message"`
@@ -645,8 +618,7 @@ type Explain struct {
 	// Trace is the request's trace ID, as the X-CPA-TRACE-ID header has it.
 	Trace string `json:"trace,omitempty"`
 	// Tried are the attempts the request made, in order.
-	Tried []Tried `json:"tried"`
-	// LeftOut are the accounts that serve the request's model and were not tried, and why.
+	Tried   []Tried   `json:"tried"`
 	LeftOut []LeftOut `json:"left_out"`
 }
 
@@ -677,8 +649,6 @@ type LeftOut struct {
 	Until    *time.Time `json:"until,omitempty"`
 }
 
-// Pluxy adds the error's `pluxy` member to the error object o of a client format, when core set
-// one.
 func (e *Error) Pluxy(o map[string]any) {
 	if e.Explain != nil {
 		o["pluxy"] = e.Explain
@@ -722,5 +692,4 @@ func (e *Error) Error() string {
 	return e.Code + ": " + e.Message
 }
 
-// Int64 returns a pointer to v, for Usage fields.
 func Int64(v int64) *int64 { return &v }

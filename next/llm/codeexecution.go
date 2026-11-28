@@ -6,8 +6,6 @@ import (
 	"sync/atomic"
 )
 
-// ToolCodeExecutionUnsent is the detail of the loss for a code execution tool an encoder leaves
-// out because nothing says its upstream takes one.
 const ToolCodeExecutionUnsent = "nothing says this upstream takes a code execution tool, so it is not sent"
 
 // CodeExecution is one server-side code execution run reported in a reply (protocol minor version
@@ -24,8 +22,7 @@ type CodeExecution struct {
 	FilesOmitted bool   `json:"files_omitted,omitempty"`
 }
 
-// MaxCodeExecutionBytes bounds what one reply's runs hold. They travel together on the finish event,
-// so without a limit a reply whose blocks each fit a protocol frame could fail on the last one.
+// MaxCodeExecutionBytes bounds what one reply's runs hold.
 const MaxCodeExecutionBytes = 4 << 20
 
 // MaxCodeExecutionCodeBytes bounds the code or command of one run. A run whose code is longer is
@@ -33,20 +30,15 @@ const MaxCodeExecutionBytes = 4 << 20
 // is the same for streamed and non-streamed replies.
 const MaxCodeExecutionCodeBytes = 1 << 20
 
-// codeExecutionsLeftOut is the record that stands for runs left out of a list.
 var codeExecutionsLeftOut = CodeExecution{FilesOmitted: true}
 
-// codeExecutionSize is what one run counts against MaxCodeExecutionBytes.
 func codeExecutionSize(r CodeExecution) int {
 	return len(r.Code) + len(r.Language) + len(r.Output) + 64
 }
 
-// codeRunSteps counts the runs the CodeRuns methods look at, so a test can bound their work
-// without timing it.
 var codeRunSteps atomic.Int64
 
-// CodeRuns collects a reply's runs for a decoder. It keeps the total size of the runs so each Append
-// costs the size of the run it adds, not of the whole list. The zero value is an empty list.
+// CodeRuns collects a reply's runs for a decoder. The zero value is an empty list.
 type CodeRuns struct {
 	runs    []CodeExecution
 	size    int
@@ -70,9 +62,7 @@ func (c *CodeRuns) Append(run CodeExecution) {
 // LeaveOut ends the list with the one record that says runs were left out.
 func (c *CodeRuns) LeaveOut() { c.leftOut = true }
 
-// Remove takes out the last run equal to run, if the list has one. It looks from the end because
-// the runs a decoder takes back are the latest ones; runs equal to each other are the same
-// whichever is taken out.
+// Remove takes out the last run equal to run, if the list has one.
 func (c *CodeRuns) Remove(run CodeExecution) {
 	for i := len(c.runs) - 1; i >= 0; i-- {
 		codeRunSteps.Add(1)
@@ -96,7 +86,6 @@ func (c *CodeRuns) List() []CodeExecution {
 // CodeExecutions is a list of code execution runs whose empty JSON array parses to nil.
 type CodeExecutions []CodeExecution
 
-// UnmarshalJSON decodes CodeExecutions and normalizes an empty JSON array to nil.
 func (c *CodeExecutions) UnmarshalJSON(data []byte) error {
 	var list []CodeExecution
 	if err := json.Unmarshal(data, &list); err != nil {

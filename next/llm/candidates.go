@@ -24,8 +24,7 @@ type CandidateEvent struct {
 	Kind string `json:"kind"`
 	// Item identifies a tool call within this candidate for tool_call.start, tool_input.delta
 	// and tool_call.end.
-	Item int `json:"item,omitempty"`
-	// Delta carries text, reasoning or tool argument fragments.
+	Item  int    `json:"item,omitempty"`
 	Delta string `json:"delta,omitempty"`
 	// CallID and Name identify a tool call on tool_call.start.
 	CallID string `json:"call_id,omitempty"`
@@ -79,6 +78,4 @@ func CandidateCountPath(r Request) string {
 	return "candidate_count"
 }
 
-// CandidateCountUnsent is the detail of the loss for a candidate count an encoder leaves out
-// because nothing says its upstream takes the field.
 const CandidateCountUnsent = "nothing says this upstream takes a candidate count, so it is not sent"

@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// A wait is told in whole seconds rounded up, and never as 0 while time is left.
 func TestWholeSeconds(t *testing.T) {
 	for _, c := range []struct{ in, want time.Duration }{
 		{-time.Second, 0},

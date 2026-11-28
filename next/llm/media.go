@@ -15,15 +15,11 @@ const (
 )
 
 // MaxOutputMediaPartBytes is the largest base64 Data string a single media event carries.
-// Keeping each part at or below 24 MiB ensures that even when Event.Raw carries the same
-// upstream chunk alongside Event.Media, the serialized JSON event fits inside
-// protocol.MaxFrame (64 MiB).
 const MaxOutputMediaPartBytes = 24 << 20
 
 // MaxOutputMediaReplyBytes is the total base64 Data bytes a single reply carries across all
 // media events. Parts beyond this limit are dropped with a reported loss instead of failing the
-// reply. It is larger than protocol.MaxFrame so a reply with several media parts can stream
-// across separate frames without hitting a single-frame ceiling.
+// reply.
 const MaxOutputMediaReplyBytes = 96 << 20
 
 // MaxNonStreamedReplyBytes is the most core collects for a reply it sends whole. An aggregator
@@ -40,10 +36,6 @@ type OutputMedia struct {
 	Data      string `json:"data"`
 }
 
-// outputImageTypes and outputAudioTypes are the media types a reply may carry as generated
-// media. A type not listed is not understood and is refused, so a type that only looks safe
-// (an SVG in disguise, an unknown vendor type) never reaches a client that builds a data URL
-// from it.
 var (
 	outputImageTypes = map[string]bool{
 		"image/png": true, "image/jpeg": true, "image/jpg": true, "image/gif": true,
@@ -151,8 +143,6 @@ func ValidOutputMedia(m *OutputMedia) error {
 	return nil
 }
 
-// decodeBase64Prefix decodes up to 18 leading bytes from b64 into a stack buffer without copying
-// the whole string, for magic-byte sniffing.
 func decodeBase64Prefix(b64 string) []byte {
 	var clean [24]byte
 	n := 0
