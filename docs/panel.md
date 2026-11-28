@@ -103,25 +103,55 @@ Settings opens on **General** and groups its topics into **This device** (**Gene
 
 ## Accounts
 
-- **Address:** `#/accounts` (`data-page="accounts"`), tab **All accounts**.
-- **Purpose and listing:** lists every account grouped by condition (**Needs you**, **Waiting**,
-  **Serving**, **Turned off**, plus **Not checked** when provider status cannot be read), sorted by
-  soonest return time then name in **Needs you** and **Waiting**, and by name in **Serving** and
-  **Turned off**. Each row shows the account's condition, reason, plan, two shortest limits (read
-  for up to 24 accounts per view), 7-day request count, and inline fix. Refreshes every 10 seconds
-  while visible (paused while selecting or running a batch action).
+- **Address:** `#/accounts` (also `#/quota`; `data-page="accounts"`), tab **All accounts**.
+- **Empty state:** when core has no accounts, shows **No accounts yet.** and **Add an account**
+  (`#/add-account`).
+- **Summary and provider filter:** above the list, a counts line (total accounts and provider count,
+  or one provider's account count when filtered, plus non-zero counts for accounts needing you,
+  serving, waiting, not checked, and turned off) sits over a proportional state bar. When accounts
+  span 2 or more providers, **Filter by provider** chips (**All** and one chip per provider with its
+  count) filter the summary, state bar, and groups to one provider and show that provider's pool
+  card above the groups (when provider status is checked).
+- **Listing, grouping and sorting:** groups matching accounts by condition in order: **Needs you**,
+  **Waiting**, **Serving**, and **Turned off**, each heading showing its count. When core's provider
+  status could not be read on initial load, accounts whose condition depends on whether their
+  provider runs appear under **Not checked** (sorted by name, then ID) in place of **Waiting** and
+  **Serving**. **Needs you** and **Waiting** sort by soonest return time (accounts without a return
+  time last), then name, then ID; **Serving** and **Turned off** sort by name, then ID.
+  - Each row (or card) shows the provider mark with condition dot, account name (linking to
+    `#/accounts/<id>`), condition word and reason (or provider name and `base_url` host when simply
+    serving; provider name is omitted when filtered to one provider), plan pill, two shortest
+    request limits (read for up to 24 serving or waiting accounts per view, cached 5 minutes), 7-day
+    request count (`{count} this week`, omitted if usage could not be read), and inline fix.
+  - At most one filled primary button appears on the page: the first repair action in **Needs you**,
+    or **Add an account** when no repair is needed.
+- **Refresh:** polls accounts, provider status, and 7-day usage every 10 seconds while visible
+  (paused while **Select** is active or a batch action runs). If a refresh fails over existing data,
+  or provider status or 7-day usage could not be read, a warning notice keeps the last loaded rows
+  and offers **Try again**.
 - **Actions:**
   - **Add an account:** opens `#/add-account`.
-  - **Find an account** (shown when more than 6 accounts exist): filters by account name, ID, public
-    ID, provider name, extension ID, condition, or last error.
+  - **Filter by provider** (when 2 or more providers have accounts): **All** or one provider chip.
+  - **Find an account** (shown when more than 6 accounts exist, or while a search is entered):
+    filters by account label, ID, public ID, provider name, extension ID, condition word, or last
+    error (case-insensitive). Offers **Clear search** when nothing matches.
+  - **Account view** (**List** / **Cards**): switches this page between rows and cards. Starts from
+    the active theme's **Lists** layout and remembers a page-only choice in browser storage
+    (`pluxy.accounts.view`) without changing **Themes**.
   - Inline row fixes: **Sign in again** (`#/accounts/<id>/sign-in`), **See what to do**
     (`#/accounts/<id>`), **Open Extensions** (`#/extensions`), **Turn on**, **Clear cooldown**.
-  - **Select** (shown when 2 or more accounts exist): adds per-row checkboxes and a batch bar with
-    **Turn on**, **Turn off**, **Clear cooldown**, **Remove…**, and **Done**.
-- **Spends or deletes:** **Remove…** asks for confirmation (**Remove**) before deleting saved
-  sign-ins from core's credential store; accounts defined in the settings file are skipped by **Turn
-  off** and **Remove…** and reported as skipped.
-- **Settings read:** `usage.enabled` (for 7-day counts; [config.md](config.md#usage)).
+  - **Select** (shown when 2 or more accounts exist): adds per-row checkboxes and a bottom batch bar
+    (**Actions for the selected accounts**) showing `{count} selected` (or
+    `{count} selected, {hidden} hidden` when search or the provider filter hides selected accounts),
+    **Select all** / **Clear** (for visible accounts), **Turn on**, **Turn off**, **Clear
+    cooldown**, **Remove…**, and **Done**.
+- **Spends or deletes:** **Remove…** opens a confirmation dialog (**Remove** / **Cancel**), noting
+  if search or the provider filter hides selected accounts, before deleting saved sign-ins from
+  core's credential store. Accounts defined in the settings file are skipped by batch **Turn off**
+  and **Remove…** (reported in a notice); batch **Turn on** and **Clear cooldown** still run on
+  them. Nothing spends from an account.
+- **Settings read:** `usage.enabled` (for 7-day counts; [config.md](config.md#usage)); the active
+  theme's **Lists** layout (default view before `pluxy.accounts.view` is set in browser storage).
 
 ## An account's page
 
