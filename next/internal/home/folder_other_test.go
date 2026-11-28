@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-// A folder another user owns is refused, naming that user, and left as it is. Owning a folder as
-// another user takes root, so the test runs as a user the folder does not belong to instead.
 func TestOpenDirRefusesAnotherUsersFolder(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "home")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -44,7 +42,6 @@ func TestOpenDirRefusesAnotherUsersFolder(t *testing.T) {
 	root.Close()
 }
 
-// The chmod line names the folder as one shell argument.
 func TestShellArg(t *testing.T) {
 	for in, want := range map[string]string{
 		"/home/ann/.local/share/pluxy":           "/home/ann/.local/share/pluxy",

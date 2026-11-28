@@ -14,7 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/private"
 )
 
-// euid is the user a folder must belong to; tests give another.
 var euid = os.Geteuid
 
 func openDir(dir string) (*os.Root, error) {
@@ -31,7 +30,6 @@ func openDir(dir string) (*os.Root, error) {
 	if st.Mode()&fs.ModeSymlink != 0 {
 		return nil, &Refusal{Dir: dir, Link: true}
 	}
-	// The checks are made on the folder opened, never on a link put in its place since.
 	f, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EMLINK) { // EMLINK: FreeBSD's ELOOP for O_NOFOLLOW
 		return nil, &Refusal{Dir: dir, Link: true}

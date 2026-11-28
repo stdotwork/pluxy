@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// A refusal shows all its foreign text through show, the Windows check's message too, and names
-// the chmod command only when the folder is shown as it is: a name show changed would not run.
 func TestRefusalTextShowsForeignText(t *testing.T) {
 	show := func(s string) string { return strings.ReplaceAll(s, "\x1b", `\x1b`) }
 	for _, c := range []struct {

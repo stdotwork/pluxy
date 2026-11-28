@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// abs is p, a path written the Unix way from the root, as an absolute path of the system the
-// test runs on: on Windows, on drive C: with its separator. The tables below simulate each
-// system's rule, but the paths are joined and checked by the running system's rules.
 func abs(p string) string {
 	if runtime.GOOS == "windows" {
 		return "C:" + filepath.FromSlash(p)
@@ -17,9 +14,6 @@ func abs(p string) string {
 	return p
 }
 
-// Each system's default folder, PLUXY_HOME in its place, and the paths that are refused rather
-// than taken from wherever pluxy runs. The expected paths are written out by hand from the
-// documented rule (docs/config.md, "pluxy's home").
 func TestDir(t *testing.T) {
 	for _, c := range []struct {
 		name, goos string
@@ -28,7 +22,6 @@ func TestDir(t *testing.T) {
 	}{
 		{name: "linux default", goos: "linux", env: map[string]string{"HOME": abs("/home/ann")}, want: abs("/home/ann/.local/share/pluxy")},
 		{name: "linux XDG_DATA_HOME", goos: "linux", env: map[string]string{"HOME": abs("/home/ann"), "XDG_DATA_HOME": abs("/data/ann")}, want: abs("/data/ann/pluxy")},
-		// The XDG Base Directory Specification: a relative path is invalid and is ignored.
 		{name: "linux relative XDG_DATA_HOME", goos: "linux", env: map[string]string{"HOME": abs("/home/ann"), "XDG_DATA_HOME": "data"}, want: abs("/home/ann/.local/share/pluxy")},
 		{name: "freebsd default", goos: "freebsd", env: map[string]string{"HOME": abs("/home/ann")}, want: abs("/home/ann/.local/share/pluxy")},
 		{name: "macOS", goos: "darwin", env: map[string]string{"HOME": abs("/Users/ann"), "XDG_DATA_HOME": abs("/data/ann")}, want: abs("/Users/ann/Library/Application Support/pluxy")},
@@ -52,8 +45,6 @@ func TestDir(t *testing.T) {
 	}
 }
 
-// The desktop app's own core is in the app's data folder, which is the data folder pluxy's home
-// is in, whatever PLUXY_HOME says.
 func TestAppCoreConfig(t *testing.T) {
 	for _, c := range []struct {
 		goos string
