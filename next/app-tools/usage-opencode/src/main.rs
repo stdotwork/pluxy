@@ -1,14 +1,3 @@
-//! pluxy/usage-opencode: the usage hub's parser of OpenCode's local store (`../README.md`). It reads
-//! OpenCode's database (`opencode.db`, or `opencode-<channel>.db`) and its older JSON message files
-//! (`storage/message/<session>/<message>.json`) under `~/.local/share/opencode` and `~/.opencode`
-//! (the hub's `roots` name others), read-only, and sends the hub token counts per message at schema
-//! 2: never a prompt, a reply, a title, a folder name or a raw session or message ID.
-//!
-//! Each session in a database is a file of the hub's of its own (`Parser::entries`), with the
-//! session's own revision, so the hub reads again only the sessions that changed and a database of
-//! many sessions never passes the hub's rows of one file. The rules that turn a message into a row
-//! are in `message.rs`; the database is read in `db.rs`.
-
 mod db;
 mod message;
 #[cfg(test)]

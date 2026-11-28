@@ -1,15 +1,3 @@
-//! Signed native-tier admission for this device's catalog (`../app-host/README.md`). A native
-//! tool installs only from a curated registry (one a trust root names by its index), with a
-//! descriptor signed by that root's first-party key and verified (`artifact.rs`) before its
-//! archive is unpacked. It installs disabled. Enabling it takes a native confirmation that says
-//! it has full access to your user account; the confirmed admission is bound to the active
-//! release's digest, its source, its signer and key. A new release, a rollback, disabling or
-//! removing it ends the admission.
-//!
-//! `Catalog::admitted` is the record the program host takes: it checks the admission, the root
-//! and signature again, and every file of the installed package, each time. Nothing here starts
-//! a process.
-
 use super::*;
 use crate::artifact::{self, PublisherKeys, Tier, VerifiedDescriptor};
 

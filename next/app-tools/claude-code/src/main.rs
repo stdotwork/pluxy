@@ -1,14 +1,3 @@
-//! pluxy/claude-code: sets up Claude Code to use pluxy's core, and starts it, for pluxy's desktop
-//! app (README.md). Its operations: `preview` (read: pins Claude Code's settings file and reads
-//! its values back, never the key, or names the folder Connect makes while `~/.claude` does not
-//! exist yet; not exported), `apply`, `clear` and `restore` (write: each call asks the person;
-//! `apply` receives the client key as a secret's value and writes it where Claude Code reads it,
-//! making `~/.claude` first when the preview named it), `status` (read: the applied set, the originals kept for restore, the
-//! latest recovery reports), `recipe` (read: how the launcher starts Claude Code) and the backup
-//! browser's standard operations (`backup-list` and `backup-diff`, reads; `backup-create`,
-//! `backup-restore` and `backup-delete`, writes). Writes go through pluxy-transactions:
-//! link-preserving, journalled, with the originals and manual backups in the host's vault.
-
 mod settings;
 
 use pluxy_program::{run, Call, Error, Handler};

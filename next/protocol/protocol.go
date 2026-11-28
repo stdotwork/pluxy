@@ -1,5 +1,5 @@
 // Package protocol holds the wire types and framing of the pluxy extension protocol. The
-// protocol itself is described in README.md next to this file.
+// protocol itself is described in docs/protocol.md.
 package protocol
 
 import (

@@ -74,8 +74,6 @@ type Config struct {
 	// CredentialsDir is the folder that keeps accounts added by login, relative to the config
 	// file. Default: "credentials" beside the config file.
 	CredentialsDir string `json:"credentials_dir,omitempty"`
-	// ExtensionPages says where extension pages are served: on a site of their own, never the
-	// one serving the panel (next/ui/extension-pages/README.md).
 	ExtensionPages ExtensionPagesConfig `json:"extension_pages"`
 	// CORS says which web pages may call the client API from a browser. Default: none.
 	CORS CORSConfig `json:"cors"`

@@ -28,7 +28,6 @@ type Manifest struct {
 	Version         string            `json:"version"`
 	Protocol        []int             `json:"protocol"`
 	Programs        map[string]string `json:"programs"`
-	// UI is the package's pages, if any (next/ui/extension-pages/README.md).
 	UI *UI `json:"ui,omitempty"`
 	// Config is the schema of the extension's settings, if any.
 	Config *ConfigSection `json:"config,omitempty"`

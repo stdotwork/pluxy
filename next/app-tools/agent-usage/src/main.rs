@@ -1,8 +1,3 @@
-//! pluxy/agent-usage, the usage hub (`../README.md`): the one store of agents' token usage on
-//! this computer and its Agent usage page. Parsers produce kind `pluxy/agent-usage/usage` at
-//! schema 1 or 2; the hub starts their jobs when the page syncs, takes their batches through `ingest`
-//! (which only the host may call) and answers the page's reports.
-
 mod report;
 mod store;
 mod sync;

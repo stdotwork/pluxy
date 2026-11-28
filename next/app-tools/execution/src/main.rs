@@ -1,17 +1,3 @@
-//! pluxy/execution: prepares terminal, direct and open launches for pluxy's desktop app, which
-//! spawns them (README.md). Its operations: `terminals` and `prepare` (read: no process is started),
-//! `launch` (launch: the host confirms the exact executable, argv, cwd, program, lifetime and
-//! environment, then spawns it when asked; this program holds secret references only, never a
-//! secret's value; `managed` applies to direct launches only: the host refuses a managed
-//! terminal launch, since many terminals hand their session to a server process and exit),
-//! `runtime` (read: its package's managed runtimes, through the host) and
-//! `control` (write: stops or restarts one of them). Only `prepare` and `launch` are exported:
-//! another tool prepares and launches, such as opening one of its files in the person's own app.
-//!
-//! On Windows and macOS this program is also the terminal and opener of the launches it prepares:
-//! run by the app with arguments (as a confirmed launch, never as a tool, which gets none), it
-//! runs a launch mode (`launch_windows.rs`, `launch_macos.rs`) instead of serving operations.
-
 #[cfg(target_os = "macos")]
 mod checked;
 #[cfg(windows)]

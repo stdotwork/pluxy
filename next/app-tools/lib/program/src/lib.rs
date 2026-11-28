@@ -1,8 +1,8 @@
-//! The program side of pluxy's app program contract v0 (`next/app/app-host/README.md`, "App
+//! The program side of pluxy's app program contract v0 (`docs/app-packages.md`, "App
 //! program contract v0"): framing, hello, describe (with the calls of unknown outcome and the open
 //! journals it names), calls with progress and cancellation, a program's own calls of other
 //! packages' operations, its vault frames, its spawn and runtime requests, and jobs
-//! (`next/app/app-host/README.md`, "Jobs"): a consumer's `jobs` frames ([`Call::jobs`]) and a
+//! (`docs/app-packages.md`, "Jobs"): a consumer's `jobs` frames ([`Call::jobs`]) and a
 //! producer's batches within the job's window ([`Call::batch`]), counted off by the host's `ack`
 //! frames.
 //!
@@ -36,7 +36,7 @@
 //! waits for them and returns: the program then exits.
 //!
 //! A call of a `disclose` operation may hand the person one file through the host's save dialog,
-//! with [`Call::save_file`] (`next/app/app-host/README.md`, "Saving files").
+//! with [`Call::save_file`] (`docs/app-packages.md`, "Saving files").
 
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;

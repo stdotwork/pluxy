@@ -1,13 +1,3 @@
-// The backup browser every tool page shows under Settings file, key and backups (Create backup, the
-// saved copies, what restoring one would change, Restore, Delete), through the writer
-// tool's standard backup operations (next/app-tools/README.md, lib/transactions: backup-list,
-// backup-diff, backup-create, backup-restore, backup-delete). The bytes stay in the app's vault:
-// this page gets each version's ID, when it was saved, its files' paths, presence and sizes, and
-// the names of the settings a restore would add, change or remove, never a value. Each write asks
-// in the add-on's own confirmation window, so the page asks nothing before it; leaving the page
-// while that window is open withdraws it (each write's call carries a ticket for program_cancel).
-// Paths and errors are masked in privacy mode.
-
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Reply } from "../../ui/kit/host";
 import { strings } from "../../ui/kit/strings";

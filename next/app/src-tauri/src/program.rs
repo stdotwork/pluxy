@@ -1,81 +1,3 @@
-//! The program host: runs the native tools this device admitted, on demand, as app program
-//! contract v0 says (`../app-host/README.md`), on Linux, macOS and Windows (`owned.rs`).
-//!
-//! A tool starts at the first call or lease, from the record `device::Catalog::admitted` gives
-//! at that moment (`Host::new`'s resolver), never from anything a caller passes. The program
-//! file is opened, its SHA-256 checked against the record, and that opened file is what runs: a
-//! file replaced after the check never runs. It runs in its package folder with a cleared
-//! environment holding only the contract's three values, only its three private pipes open,
-//! in a process group of its own, with a parent-death signal; with `Host::set_tool_env`, it also
-//! gets `HOME` and its own data folder (`PLUXY_TOOL_DATA_DIR`), made as it starts. A dedicated supervisor thread
-//! starts it and stays until it has exited and been reaped: on Linux the parent-death signal
-//! follows the thread that started the process, and the threads commands run on end when idle.
-//!
-//! It says hello and describes itself; a mismatch with the record (ID, digest, contract,
-//! operations, state) leaves it incompatible until its package changes. Calls are checked
-//! against the declared operation and its schema (`schema`), serialized, at most `MAX_PENDING`
-//! at a time per tool, and can be cancelled. Each call holds a lease; when the last lease ends
-//! the tool stops after the idle delay (30 seconds): its stdin closes, and after the stop grace
-//! its whole process group is killed, then it is reaped, and no process or thread of it is left.
-//! `stop` (when its package changes, is disabled or removed) and `stop_all` (when the app quits,
-//! after which no call or swap starts a tool) do the same at once; `cancel_all` (when the window
-//! closes) cancels every call, of every release, so the tools stop when idle. Calls waiting for a
-//! tool to start or stop are bounded too, and calls waiting on a start that fails get its error.
-//!
-//! A tool that exits unexpectedly, or breaks its pipe, has crashed: its calls fail. A call after
-//! a backoff starts it again (one second, doubling to a minute; a call during it is refused);
-//! nothing restarts it on its own. Five crashes in a row quarantine it until its package changes;
-//! a clean stop (idle, or one the host asked for) or a run of ten minutes starts a new count. A
-//! call that reached the tool and ended without its answer has an unknown outcome: it may or may
-//! not have run. It is never sent again; the host records it and reports it in the describe of
-//! the package's next start, whichever release that is, on the package's turn, so the tool can
-//! reconcile it before it takes work. A swap's candidate is told of none. A start that fails after
-//! its describe is told again at the next one: delivery may repeat.
-//!
-//! A swap replaces a running release's tool by another's (`prepare`, then `switch`): the new one
-//! is started and described first, with no call; only once it is ready do new calls go to it.
-//! The old one drains: the calls that hold its leases finish on it (until the drain limit, ten
-//! minutes, when it is stopped), then it stops. A candidate that fails leaves the old one as it
-//! was. Calls to a package run one at a time, whichever release they reach: the new release's
-//! first call waits for the call running on the old one, and calls still waiting their turn on
-//! either release go in no set order. A swap is refused once its package was stopped (changed)
-//! since the swap was staged (`stops`).
-//!
-//! Its stderr is logged, one bounded line at a time, at most `LOG_RATE` lines a second, with
-//! control and format characters escaped and the values the tool must not show removed; the last
-//! lines say why it stopped. What a tool says that reaches a caller or the status is escaped the
-//! same way.
-//!
-//! The host authorizes nothing: the router (`route.rs`) decides each call and passes it with a
-//! `Context`, whose chain each call frame names. A tool calls another package's operation by
-//! sending a `call` frame on its stdout for the host call it serves (`for`); the host hands it to
-//! the router (`Host::set_route`) and writes the answer to the tool's stdin. A frame naming its own
-//! caller or chain is refused: the host sets them.
-//!
-//! A job's call (`Context::feed`, the router's `jobs.rs`) carries the job in its frame; the tool's
-//! `progress` frames for it are the job's batches, handed to the feed, and the host acknowledges
-//! each batch the job's consumer took with an `ack` frame. A tool asks the host's job service with
-//! a `jobs` frame, for a host call it serves, which goes to the router as its calls do.
-//!
-//! The host-private services (`Host::set_private`, the app's vault) answer a tool's `vault` frames
-//! for a host call it serves or the describe it is answering, name the package's open journals in
-//! the describe of its next start (on the package's turn, with the calls of unknown outcome; a start
-//! whose describe leaves one open fails), and say what must never be shown: every secret value and
-//! reference is redacted from its log lines, the errors and status it causes and the outputs of its
-//! calls. A call the router gives secrets to (`Context::secrets`) carries them in its frame only.
-//!
-//! A tool's `spawn` and `runtime` frames, for a host call it serves, go to the host's spawn service
-//! (`Host::set_spawner`, `spawn.rs`), on a thread of their own; their IDs count among its own calls.
-//! Its `files` frames go to the host's save service (`Host::set_saver`, `savefile.rs`) the same way.
-//!
-//! What runs is an instance: a package in an environment (`environments.rs`). On this computer
-//! that is the package itself, as above. On Windows, a package may also run in a WSL distribution
-//! as one of its users: its release's Linux program, from the Windows disk through the drive the
-//! distribution mounts, started through Windows' own `wsl.exe` with the contract's values passed on
-//! by `WSLENV`, pinned (no writer, rename or delete) for the whole run; it makes its own data folder
-//! there. Each instance has its own process, slot, turn, calls of unknown outcome and vault
-//! records; a tool in WSL may use its vault, but its own calls, jobs, spawns and saves are refused.
-
 use crate::environments::{Environment, Instance, Record};
 use crate::managed::{start_when_free, BUSY_PAUSE};
 use crate::owned::{
@@ -478,7 +400,6 @@ fn redact_value(p: &dyn Private, v: Value) -> Value {
     }
 }
 
-/// A call's failure: a protocol error code (`../../protocol/README.md#errors`) and a message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallError {
     pub code: String,
@@ -494,8 +415,6 @@ impl std::fmt::Display for CallError {
     }
 }
 
-/// Whether s is one of the extension protocol's error codes (`../../protocol/README.md#errors`,
-/// plus `incompatible`).
 fn is_protocol_code(s: &str) -> bool {
     matches!(
         s.to_ascii_lowercase().as_str(),
