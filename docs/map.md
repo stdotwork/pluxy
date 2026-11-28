@@ -91,7 +91,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 - **Tests**: `go test -count=1 -run TestParserVersion ./format` and
   `go test -count=1 -run TestInlineImage ./format/internal/media`.
 - **Fakes and helpers**: `next/format/formattest/formattest.go` (`CorpusRequests`, `LiteralRequests`).
-- **Handbook**: `docs/design.md` ("Inside core"), `docs/translation.md` (what each provider carries,
+- **Handbook**: `docs/design/design.md` ("Inside core"), `docs/translation.md` (what each provider carries,
   changes or drops) and `next/README.md` ("Layout").
 
 ### Config key
@@ -231,7 +231,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 - **Tests**: `go test -count=1 -run TestUsesManagement ./corpus` (unit check on case files); narrow
   replay with
   `PLUXY_CORPUS_CASE=gemini-interactions/interactions/models-prefix go test -count=1 -v -run TestCorpus ./corpus`.
-- **Handbook**: `next/corpus/README.md` ("Case files", "Adding cases") and `docs/corpus.md` ("The bar").
+- **Handbook**: `next/corpus/README.md` ("Case files", "Adding cases") and `docs/design/corpus.md` ("The bar").
 
 ## Test fakes
 

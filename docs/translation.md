@@ -6,7 +6,7 @@ differ, core and the provider's extension translate the request on the way in an
 back. This page is a reference for that translation: what carries over unchanged, what is changed and
 how, what is dropped or refused, and what the client then sees. Sign-in, account settings and model
 lists are on [Providers](providers.md). Routing between accounts is on [Routing](routing.md). The
-reasons for this design are in [Design](design.md); what is planned is in `plans.md`.
+reasons for this design are in [Design](design/design.md); what is planned is in [Plans](design/plans.md).
 
 ## How to read the tables and sections
 

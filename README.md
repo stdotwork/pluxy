@@ -165,8 +165,8 @@ the same record. `./pluxy help` lists every command.
 | Call the management API | [docs/management-api.md](docs/management-api.md) |
 | Use the desktop app | [next/app/README.md](next/app/README.md) |
 | Write a provider extension | [next/protocol/TUTORIAL.md](next/protocol/TUTORIAL.md) |
-| Know why pluxy is built this way | [docs/design.md](docs/design.md) |
-| Know what pluxy costs in time and memory | [docs/perf.md](docs/perf.md) |
+| Know why pluxy is built this way | [docs/design/design.md](docs/design/design.md) |
+| Know what pluxy costs in time and memory | [docs/design/perf.md](docs/design/perf.md) |
 | Build, test or change pluxy | [AGENTS.md](AGENTS.md) |
 
 ## What is in this repository
