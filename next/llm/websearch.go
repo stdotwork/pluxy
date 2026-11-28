@@ -13,7 +13,6 @@ type WebSearchTool struct {
 	Disabled bool `json:"disabled,omitempty"`
 }
 
-// UserLocation is the approximate location for a web search tool.
 type UserLocation struct {
 	Type     string `json:"type,omitempty"`
 	Country  string `json:"country,omitempty"`
@@ -22,6 +21,4 @@ type UserLocation struct {
 	Timezone string `json:"timezone,omitempty"`
 }
 
-// WebSearchUnsent is the detail of the loss for a web search tool an encoder leaves out because
-// nothing says its upstream takes one.
 const WebSearchUnsent = "nothing says this upstream takes a web search tool, so it is not sent"

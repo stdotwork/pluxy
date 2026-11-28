@@ -10,8 +10,8 @@ import "fmt"
 type Sequence struct {
 	started bool
 	done    bool
-	next    int            // index the next item.start must use
-	open    map[int]string // open item index -> kind
+	next    int
+	open    map[int]string
 }
 
 // Check reports whether ev may come next, and records it if so.
@@ -101,8 +101,6 @@ func (s *Sequence) Check(ev Event) error {
 	return nil
 }
 
-// Done reports whether the terminal event has been seen.
 func (s *Sequence) Done() bool { return s.done }
 
-// NextIndex returns the index the next item.start must use.
 func (s *Sequence) NextIndex() int { return s.next }

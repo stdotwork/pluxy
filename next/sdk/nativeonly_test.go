@@ -14,8 +14,6 @@ import (
 
 const nativeOnlyChatBody = `{"model":"m","messages":[{"role":"system","content":"s"},{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}],"user":"u"}`
 
-// nativeOnlyRun sends one generate call and returns what the handler got (nil if it did not run)
-// and the events of the reply.
 func nativeOnlyRun(t *testing.T, call protocol.Call) (*Call, []llm.Event) {
 	t.Helper()
 	var got *Call
@@ -67,7 +65,7 @@ func TestDescribeNativeParser(t *testing.T) {
 	if err := protocol.ReadFrame(conn, &r); err != nil || r.Info == nil {
 		t.Fatalf("describe: %+v, %v", r, err)
 	}
-	if r.Info.NativeParser != format.ParserVersion || r.Info.ProtocolMinor < 27 { // minor 27 adds native-only calls
+	if r.Info.NativeParser != format.ParserVersion || r.Info.ProtocolMinor < 27 {
 		t.Errorf("info = %+v, want native_parser %d and minor >= 27", r.Info, format.ParserVersion)
 	}
 }

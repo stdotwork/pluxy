@@ -23,11 +23,9 @@ func JSONSize(v any) int {
 	return buf.Len() - 1
 }
 
-// FitFinish makes the finish event ev fit one frame. A same-format reply carries the whole upstream
-// body in Raw, which holds the reply's sources and code execution runs already, so what ev adds
-// beside Raw could push its frame over MaxFrame for a reply the upstream sent within the limit. It
-// leaves the runs out first, keeping the one record that says they were left out, and then the
-// sources. It returns a loss naming what it left out, and false if it left out nothing.
+// FitFinish makes the finish event ev fit one frame. It leaves the runs out first, keeping the one
+// record that says they were left out, and then the sources. It returns a loss naming what it left
+// out, and false if it left out nothing.
 func FitFinish(ev *llm.Event) (llm.Loss, bool) {
 	limit := MaxFrame - FrameHeadroom
 	size := len(ev.Raw) + JSONSize(ev.Sources) + JSONSize(ev.CodeExecutions)

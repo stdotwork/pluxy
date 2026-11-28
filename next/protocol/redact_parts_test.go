@@ -8,10 +8,8 @@ import (
 	"testing"
 )
 
-// A test JWT (HS256, made up) in the shape Devin issues as a session token's secret part.
 const partsJWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJwYXJ0cy0xIn0.c2lnbmF0dXJlLW9mLXBhcnRzLXRlc3Q"
 
-// The parts of a secret made of parts, each written out by hand from the secret's shape.
 func TestSecretParts(t *testing.T) {
 	basic := base64.StdEncoding.EncodeToString([]byte("gw-user:gw-password-123"))
 	for _, c := range []struct {
@@ -27,8 +25,6 @@ func TestSecretParts(t *testing.T) {
 		{"header line", "Authorization: Bearer gw-token-0123456789", []string{"Bearer gw-token-0123456789", "gw-token-0123456789"}},
 		{"header pair", "Cookie=sid=cookie-sid-0123456789", []string{"sid=cookie-sid-0123456789", "cookie-sid-0123456789"}},
 		{"key and secret", "AKIDEXAMPLE:secret-access-0123", []string{"secret-access-0123"}},
-		// Not split: a URL (core takes a proxy URL apart itself), a plain key, base64 padding,
-		// a short part, a JSON-quoted header line and an OAuth scope.
 		{"proxy url", "http://alice:proxy-pass-1-9f8e7d@proxy.example:3128", nil},
 		{"socks url", "socks5h://operator-account:x@127.0.0.1:1080", nil},
 		{"url with a token query", "https://up.example/v1?token=sk-query-0123456789", nil},
@@ -42,8 +38,6 @@ func TestSecretParts(t *testing.T) {
 			t.Errorf("%s: SecretParts(%q) = %q, want %q", c.name, c.secret, got, c.want)
 		}
 	}
-	// With a smaller minimum, a secret whose parts are all short has them; a plain one has none.
-	// Base64 padding is no cookie value, even where short parts count.
 	for secret, want := range map[string][]string{
 		"c2stdGVzdC9rZXkrNDI=":                  nil,
 		"c2stdGVzdC9rZXkrNDJh==":                nil,
@@ -62,8 +56,6 @@ func TestSecretParts(t *testing.T) {
 	}
 }
 
-// What an upstream echoes of a secret made of parts is removed: the token without its public
-// prefix or scheme, a cookie's value, Basic's base64 text and its password.
 func TestRedactorRemovesSecretParts(t *testing.T) {
 	basic := base64.StdEncoding.EncodeToString([]byte("gw-user:gw-password-123"))
 	for _, c := range []struct {
@@ -91,8 +83,6 @@ func TestRedactorRemovesSecretParts(t *testing.T) {
 	}
 }
 
-// The public parts of a secret made of parts stay in text: a scheme, a prefix, a cookie's name,
-// a short cookie value and the words around them. No form the parts add is shorter than 8 bytes.
 func TestRedactorKeepsPublicPartsOfSecrets(t *testing.T) {
 	basic := base64.StdEncoding.EncodeToString([]byte("gw-user:gw-password-123"))
 	secrets := []string{
@@ -136,7 +126,6 @@ func TestRedactorKeepsPublicPartsOfSecrets(t *testing.T) {
 	if added == 0 {
 		t.Error("the parts add no form")
 	}
-	// A proxy URL adds nothing: core takes its user name and password out itself.
 	if p := SecretParts(secrets[len(secrets)-1], minFragment); p != nil {
 		t.Errorf("SecretParts of a proxy URL = %q, want none", p)
 	}
@@ -145,16 +134,14 @@ func TestRedactorKeepsPublicPartsOfSecrets(t *testing.T) {
 	}
 }
 
-// A credential that ends in base64 padding keeps its redaction: it is no cookie pair, so the
-// secret counts whole (or by its token behind a scheme), and a cut of it is removed.
 func TestAccountSecretsBase64Padding(t *testing.T) {
 	basicText := base64.StdEncoding.EncodeToString([]byte("gw-user:gw-pass-123"))
 	long := "c2VydmljZS1hY2NvdW50LTE6cDdRdzJFcjVhYWFhYWE=="
 	for _, c := range []struct {
 		name string
 		acct Account
-		want string // a secret AccountSecrets must return
-		cut  string // a cut of it that RemovePieces must remove
+		want string
+		cut  string
 	}{
 		{"api key", Account{Credential: &Credential{APIKey: "c2stdGVzdC9rZXkrNDJh=="}}, "c2stdGVzdC9rZXkrNDJh==", "c2stdGVz"},
 		{"long api key", Account{Credential: &Credential{APIKey: long}}, long, long[10:30]},
@@ -173,7 +160,6 @@ func TestAccountSecretsBase64Padding(t *testing.T) {
 			t.Errorf("%s: RemovePieces(%q) = %q, want %q", c.name, in, out, want)
 		}
 	}
-	// A real cookie header keeps its parts exactly.
 	got := AccountSecrets(Account{Headers: map[string]string{"Cookie": "sid=cookie-sid-0123456789; theme=dark; other=c2VjcmV0LXZhbHVl=="}})
 	slices.Sort(got)
 	if want := []string{"c2VjcmV0LXZhbHVl==", "cookie-sid-0123456789"}; !slices.Equal(got, want) {

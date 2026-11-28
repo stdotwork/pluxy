@@ -25,15 +25,13 @@ import (
 // preserving its connection pool, HTTP versions and timeout settings, except for a tracked
 // request (see below). One setting of base changes before its first use: when base sets
 // MaxIdleConns above 0 and leaves MaxIdleConnsPerHost at 0, Upstream sets MaxIdleConnsPerHost to
-// MaxIdleConns. net/http otherwise keeps only DefaultMaxIdleConnsPerHost (2) idle connections
-// per host, so a burst of concurrent requests to one upstream would close all but 2 of its
-// connections and dial new ones (and, on TLS, handshake again) for the next burst. A base that
-// sets MaxIdleConnsPerHost keeps its value, and a base with MaxIdleConns 0 keeps net/http's
-// default per-host limit. The per-proxy and tracked copies below inherit the setting. A call whose account has a proxy (Info.ProxyURL) goes through a
-// copy of base that sends every request through that proxy, one copy per proxy, kept for reuse. A call whose account has headers
-// (Info.Headers) sends each of them on every request, in place of any value the extension set
-// for the same name. A call with payload rules (Info.Payload, protocol minor version 14) has them
-// applied to each request whose body is JSON, after everything else changed it (see
+// MaxIdleConns. A base that sets MaxIdleConnsPerHost keeps its value, and a base with MaxIdleConns
+// 0 keeps net/http's default per-host limit. The per-proxy and tracked copies below inherit the
+// setting. A call whose account has a proxy (Info.ProxyURL) goes through a copy of base that sends
+// every request through that proxy, one copy per proxy, kept for reuse. A call whose account has
+// headers (Info.Headers) sends each of them on every request, in place of any value the extension
+// set for the same name. A call with payload rules (Info.Payload, protocol minor version 14) has
+// them applied to each request whose body is JSON, after everything else changed it (see
 // WithPayloadRoot); a session turn's upstream message is not such a request, so the extension
 // passes it to ApplyPayload (protocol minor version 15). A call core asks to capture (protocol
 // minor version 13) records each request and what came back, without its secrets, and the SDK
@@ -55,19 +53,10 @@ func Upstream(base *http.Transport) http.RoundTripper {
 	return upstreamTransport{base: base, proxies: &proxyPool{}}
 }
 
-// upstreamUsed is set when the process creates a transport with Upstream. An extension that never
-// does has no client that honours an account's proxy or headers or a call's payload rules, so the
-// SDK refuses a call that carries any of them (refuseUpstream) instead of letting the extension
-// send it without them.
 var upstreamUsed atomic.Bool
 
-// defaultIdleConnTimeout is the idle connection timeout of a per-proxy transport whose base has
-// none, as http.DefaultTransport has.
 const defaultIdleConnTimeout = 90 * time.Second
 
-// refuseUpstream returns the error for a call that carries a proxy, headers or payload rules
-// when no client of the process is wrapped in Upstream; nil otherwise. The message holds no part
-// of the proxy URL, no header value and no rule.
 func refuseUpstream(call protocol.Call) *llm.Error {
 	if upstreamUsed.Load() {
 		return nil
@@ -131,11 +120,10 @@ func (t upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	return rt.RoundTrip(req)
 }
 
-// withHeaders returns a copy of req (a RoundTripper must not change the request it is given)
-// with each of headers set over every value req has for that name, in any letter case. On a
+// withHeaders returns a copy of req (a RoundTripper must not change the request it is given). On a
 // redirect away from the first request's scheme and host, a header whose name is secret
 // (upheader.Secret) is removed instead, whoever set it, as net/http leaves Authorization and
-// Cookie out there: the redirect target must not receive it.
+// Cookie out there.
 func withHeaders(req *http.Request, headers map[string]string) *http.Request {
 	r := req.Clone(req.Context())
 	if r.Header == nil {
@@ -156,9 +144,6 @@ func withHeaders(req *http.Request, headers map[string]string) *http.Request {
 	return r
 }
 
-// redirectedAway reports whether req follows a redirect to another scheme (https to http, say)
-// or another host (name and port as written, letter case aside) than the first request of its
-// redirect chain went to.
 func redirectedAway(req *http.Request) bool {
 	if req.Response == nil || req.URL == nil {
 		return false
@@ -168,16 +153,15 @@ func redirectedAway(req *http.Request) bool {
 		first = first.Request.Response
 	}
 	if first.Request == nil || first.Request.URL == nil {
-		return true // the chain cannot be traced, so the new host is not known to be the first
+		return true
 	}
 	from, to := first.Request.URL, req.URL
 	return !strings.EqualFold(from.Scheme, to.Scheme) || !strings.EqualFold(from.Host, to.Host)
 }
 
-// withPayload returns req with rules applied to its body: a copy holding the new body when they
-// change it. A body that is not JSON (by its Content-Type), or is encoded (Content-Encoding), is
-// sent as it is. The rules apply to the body req carries, once: net/http sends the same new
-// bytes again when it retries the request on another connection.
+// A body that is not JSON (by its Content-Type), or is encoded (Content-Encoding), is sent as it
+// is. The rules apply to the body req carries, once: net/http sends the same new bytes again when
+// it retries the request on another connection.
 func withPayload(req *http.Request) (*http.Request, error) {
 	if req.Body == nil || req.Body == http.NoBody || !jsonBody(req.Header) {
 		return req, nil
@@ -210,8 +194,6 @@ func ApplyPayload(ctx context.Context, body []byte) []byte {
 	return out
 }
 
-// jsonBody reports whether h says the body is JSON (application/json or a +json type) and not
-// encoded.
 func jsonBody(h http.Header) bool {
 	if e := strings.TrimSpace(h.Get("Content-Encoding")); e != "" && !strings.EqualFold(e, "identity") {
 		return false
@@ -224,8 +206,7 @@ type payloadRootKey struct{}
 
 // WithPayloadRoot returns ctx saying that requests made with it carry the model request inside
 // the body's member root (for example "request" for a body {"project": ..., "request": {...}}):
-// payload rule paths are then relative to it, as in today's core. Without it they are relative
-// to the body itself.
+// payload rule paths are then relative to it. Without it they are relative to the body itself.
 func WithPayloadRoot(ctx context.Context, root string) context.Context {
 	return context.WithValue(ctx, payloadRootKey{}, root)
 }
@@ -235,7 +216,6 @@ func payloadRoot(ctx context.Context) string {
 	return root
 }
 
-// transport returns the transport for requests through proxy ("" for none).
 func (t upstreamTransport) transport(proxy string) (*http.Transport, error) {
 	if proxy == "" {
 		return t.base, nil
@@ -243,10 +223,9 @@ func (t upstreamTransport) transport(proxy string) (*http.Transport, error) {
 	return t.proxies.get(t.base, proxy)
 }
 
-// oneShot returns the transport for one tracked request: a copy of base, through proxy ("" for
-// none), with keep-alives off. Nothing else uses it, so no request shares its connection: an
-// HTTP/2 connection of a shared transport stays open to the next request when a request on it
-// was cancelled before it was written.
+// Nothing else uses it, so no request shares its connection: an HTTP/2 connection of a shared
+// transport stays open to the next request when a request on it was cancelled before it was
+// written.
 func (t upstreamTransport) oneShot(proxy string) (http.RoundTripper, error) {
 	c := t.base.Clone()
 	if proxy != "" {
@@ -257,7 +236,6 @@ func (t upstreamTransport) oneShot(proxy string) (http.RoundTripper, error) {
 		c.Proxy = http.ProxyURL(u)
 	}
 	c.DisableKeepAlives = true
-	// The copy gets a dialer of its own below.
 	keepHTTP2(c, t.base)
 	conns := &dialedConns{}
 	dial := c.DialContext
@@ -282,10 +260,9 @@ func (t upstreamTransport) oneShot(proxy string) (http.RoundTripper, error) {
 	return oneShotTransport{c, conns}, nil
 }
 
-// oneShotTransport sends one request and closes every connection it dialed once the request
-// failed or the response body is closed. Closing idle connections is not enough: an HTTP/2
-// request cancelled before it was written gives back its hold on the connection only after
-// RoundTrip has returned, and the connection is then left open.
+// Closing idle connections is not enough: an HTTP/2 request cancelled before it was written gives
+// back its hold on the connection only after RoundTrip has returned, and the connection is then
+// left open.
 type oneShotTransport struct {
 	t     *http.Transport
 	conns *dialedConns
@@ -301,7 +278,6 @@ func (o oneShotTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// done stops any dial still running and closes every connection dialed, now and later.
 func (o oneShotTransport) done() {
 	o.t.CloseIdleConnections()
 	o.conns.closeAll()
@@ -318,7 +294,6 @@ func (b *closingBody) Close() error {
 	return err
 }
 
-// dialedConns keeps the connections a transport dialed, to close them all.
 type dialedConns struct {
 	mu     sync.Mutex
 	closed bool
@@ -358,18 +333,13 @@ func (t upstreamTransport) CloseIdleConnections() {
 	t.proxies.closeIdle()
 }
 
-// maxProxies bounds the transports one client keeps: a config names a handful of proxies, and
-// past this many the pool starts over rather than grow with every proxy a reload names.
 const maxProxies = 32
 
-// proxyPool holds a client's transports for each proxy.
 type proxyPool struct {
 	mu sync.Mutex
 	by map[string]*http.Transport
 }
 
-// get returns the transport through proxy, a copy of base made the first time. A proxy that
-// does not parse fails the request instead of sending it without one.
 func (p *proxyPool) get(base *http.Transport, proxy string) (*http.Transport, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -391,14 +361,9 @@ func (p *proxyPool) get(base *http.Transport, proxy string) (*http.Transport, er
 	}
 	t := base.Clone()
 	keepHTTP2(t, base)
-	// A transport the pool drops while a request still uses it must close its own idle
-	// connections, so none stays open for good.
 	if t.IdleConnTimeout <= 0 {
 		t.IdleConnTimeout = defaultIdleConnTimeout
 	}
-	// net/http speaks to http and https proxies (CONNECT for https targets) and to socks5 and
-	// socks5h ones, and fills in Proxy-Authorization or SOCKS5 authentication from the user name
-	// and password. It resolves target host names at a SOCKS5 proxy for both schemes.
 	t.Proxy = http.ProxyURL(u)
 	p.by[proxy] = t
 	return t, nil
@@ -409,15 +374,13 @@ func (p *proxyPool) get(base *http.Transport, proxy string) (*http.Transport, er
 // of its own, and a copy carries the TLS config net/http may have made for base (and oneShot gives
 // its copy a dialer), so net/http would not turn HTTP/2 on for the copy, though its TLS config
 // offers h2. Clone has set base up, and then base has an "h2" entry in TLSNextProto, which the
-// copy does not carry. A base that chose its protocols (Protocols, its own TLSNextProto) or
-// already forces HTTP/2 keeps what it chose.
+// copy does not carry.
 func keepHTTP2(c, base *http.Transport) {
 	if c.Protocols == nil && c.TLSNextProto == nil && !c.ForceAttemptHTTP2 && base.TLSNextProto["h2"] != nil {
 		c.ForceAttemptHTTP2 = true
 	}
 }
 
-// parseProxy parses an account's proxy URL. Its error holds no part of the URL.
 func parseProxy(proxy string) (*url.URL, error) {
 	u, err := protocol.ParseProxyURL(proxy)
 	if err != nil {
@@ -436,8 +399,7 @@ func (p *proxyPool) closeIdle() {
 
 // Info describes the call making an upstream request. It contains only the account's ID,
 // settings, proxy and headers and the call's payload rules, never its credential or the request
-// body. Settings are
-// read-only.
+// body. Settings are read-only.
 type Info struct {
 	AccountID string
 	Settings  json.RawMessage
@@ -455,13 +417,12 @@ type Info struct {
 	// version 14, 15 for a turn), which Upstream applies to each JSON request body and
 	// ApplyPayload to a message; nil for none. Read-only.
 	Payload *payload.Rules
-	// Stream is true when the call's model request asked for streaming.
-	Stream bool
+	Stream  bool
 	// Timeouts holds the upstream timeouts core resolved for the account (protocol minor version
-	// 22). Nil uses the SDK defaults when hasTimeouts is set.
+	// 22). Nil uses the SDK defaults.
 	Timeouts *protocol.Timeouts
 
-	capture *captureLog // the call's capture, when core asked for one
+	capture *captureLog
 }
 
 type upstreamInfoKey struct{}
@@ -487,8 +448,6 @@ func Uncaptured(ctx context.Context) context.Context {
 	return context.WithValue(ctx, upstreamInfoKey{}, info)
 }
 
-// withUpstreamInfo returns ctx carrying call's upstream information, and the call's capture when
-// core asked for one (nil otherwise).
 func withUpstreamInfo(ctx context.Context, call protocol.Call) (context.Context, *captureLog) {
 	info := Info{Operation: call.Op}
 	switch {

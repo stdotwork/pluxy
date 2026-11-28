@@ -7,16 +7,13 @@ import (
 	"testing"
 )
 
-// A run of token characters that holds 4 or more characters of a secret under 32 bytes in a row is replaced,
-// also where escapes spell them; the words around it, a run that shares only 3 characters and
-// text without any piece are kept.
 func TestRemovePieces(t *testing.T) {
 	const key = "sk-test-Qx7Rv2Lm9Tz4Wp8Ys3Nk6"
 	for in, want := range map[string]string{
 		"invalid x-api-key: " + key[:24] + "...":               "invalid x-api-key: [redacted]",
 		"Incorrect API key provided: " + key[:12] + "*****Nk6": "Incorrect API key provided: [redacted]*****Nk6",
 		`key Qx7\u0052v2 given`:                                "key [redacted] given",
-		"key Qx7%252Fv2 given":                                 "key Qx7%252Fv2 given", // decodes to Qx7/v2: no 4 characters of the key
+		"key Qx7%252Fv2 given":                                 "key Qx7%252Fv2 given",
 		"key Qx7R%76 given":                                    "key [redacted] given",
 		"rate limited, try again in 7 seconds":                 "rate limited, try again in 7 seconds",
 		"Qx7 and Rv2 and Lm9":                                  "Qx7 and Rv2 and Lm9",
@@ -33,8 +30,6 @@ func TestRemovePieces(t *testing.T) {
 	}
 }
 
-// A key's public vendor prefix gives no piece: the error keeps "project" for an "sk-proj-" key,
-// while a cut piece of the key's random part is still removed.
 func TestRemovePiecesKeepsPublicPrefix(t *testing.T) {
 	const key = "sk-proj-Qx7Rv2Lm9Tz4Wp8Ys3Nk"
 	in := "project not found for key " + key[:20] + "..."
@@ -46,9 +41,6 @@ func TestRemovePiecesKeepsPublicPrefix(t *testing.T) {
 	}
 }
 
-// A key file's private key spans lines: its pieces are taken a line at a time, at 8 bytes, so a
-// key that spells part of an error's word leaves the word whole, while the key itself, each of its
-// lines and a line cut in half are still removed.
 func TestRemovePiecesKeyFileLines(t *testing.T) {
 	const (
 		line1 = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQInvaA7Zs3Lp9Qd"
@@ -56,7 +48,7 @@ func TestRemovePiecesKeyFileLines(t *testing.T) {
 		line3 = "0Zt3Xc6Vb9Nm2Qw5Er8Ty1Ui4Op7As0Df3Gh6Jk9LzXc5VbQSign5Nm1Qw4Er7Ty"
 	)
 	key := "-----BEGIN PRIVATE KEY-----\n" + line1 + "\n" + line2 + "\n" + line3 + "\n-----END PRIVATE KEY-----\n"
-	p := AccountSecretsWith(Account{}, []string{key}) // as core passes a key file's private_key
+	p := AccountSecretsWith(Account{}, []string{key})
 	if in := "invalid_grant (Invalid JWT Signature.)"; RemovePieces(in, p...) != in {
 		t.Errorf("RemovePieces(%q) = %q, want the words kept", in, RemovePieces(in, p...))
 	}
@@ -65,8 +57,6 @@ func TestRemovePiecesKeyFileLines(t *testing.T) {
 			t.Errorf("RemovePieces(%q) = %q, want %q", line, got, Redacted)
 		}
 	}
-	// A PEM's boundary lines are public words, so of them only what a run holds longPiece bytes
-	// of goes: "PRIVATE", 7 bytes, is no piece, and the key's body is gone whole.
 	whole := "private_key: " + key
 	want := "private_key: [redacted] PRIVATE [redacted]\n" + strings.Repeat(Redacted+"\n", 3) + "[redacted] PRIVATE [redacted]\n"
 	if got := RemovePieces(whole, p...); got != want {
@@ -77,16 +67,13 @@ func TestRemovePiecesKeyFileLines(t *testing.T) {
 	}
 }
 
-// A secret whose rest after the prefix is under 16 bytes keeps every piece, the prefix's too.
 func TestRemovePiecesShortSecretKeepsPrefixPieces(t *testing.T) {
-	const key = "sk-proj-Qx7Rv2Lm9Tz4" // 12 bytes after the prefix
+	const key = "sk-proj-Qx7Rv2Lm9Tz4"
 	if got, want := RemovePieces("project not found", key), "[redacted] not found"; got != want {
 		t.Errorf("RemovePieces = %q, want %q", got, want)
 	}
 }
 
-// publicKeyPrefix takes the longest known vendor prefix a secret starts with, and only when 16
-// bytes or more follow it.
 func TestPublicKeyPrefix(t *testing.T) {
 	const rest = "Qx7Rv2Lm9Tz4Wp8Ys3Nk"
 	for in, want := range map[string]int{
@@ -103,11 +90,11 @@ func TestPublicKeyPrefix(t *testing.T) {
 		"sk-or-v1-" + rest:         9,
 		"xai-" + rest:              4,
 		"gsk_" + rest:              4,
-		"sk-test-" + rest:          3, // only the vendor's "sk-"
-		"github_pat_" + rest:       0, // not on the list
+		"sk-test-" + rest:          3,
+		"github_pat_" + rest:       0,
 		"Sk-" + rest:               0,
 		rest:                       0,
-		"sk-proj-Qx7Rv2Lm9Tz4Wp8":  0, // 15 bytes after the prefix
+		"sk-proj-Qx7Rv2Lm9Tz4Wp8":  0,
 		"sk-proj-Qx7Rv2Lm9Tz4Wp8Y": 8,
 	} {
 		if got := publicKeyPrefix(in); got != want {
@@ -116,9 +103,6 @@ func TestPublicKeyPrefix(t *testing.T) {
 	}
 }
 
-// Secrets that only look like they start with a prefix keep every piece: a UUID's first groups,
-// the words of a secret that is no vendor's key, and the start of an OpenAI key's random part
-// after "sk-proj-".
 func TestRemovePiecesNoPrefixGuess(t *testing.T) {
 	for _, c := range []struct{ secret, in, want string }{
 		{"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", "unknown id a1b2c3d4 given", "unknown id [redacted] given"},
@@ -131,7 +115,6 @@ func TestRemovePiecesNoPrefixGuess(t *testing.T) {
 	}
 }
 
-// A secret that shares 4 characters with "redacted" leaves an earlier [redacted] as it is.
 func TestRemovePiecesKeepsRedacted(t *testing.T) {
 	const key = "sk-Zredacted9Qx7Rv2Lm9Tz4"
 	in := "bad key " + Redacted + " and " + key[:12]
@@ -140,7 +123,6 @@ func TestRemovePiecesKeepsRedacted(t *testing.T) {
 	}
 }
 
-// A secret that itself holds what reads as an escape is caught as written too.
 func TestRemovePiecesLiteralEscape(t *testing.T) {
 	const key = "Zq%41Wx9Lm"
 	if got, want := RemovePieces("bad key Zq%41W", key), "bad key [redacted]"; got != want {
@@ -148,9 +130,6 @@ func TestRemovePiecesLiteralEscape(t *testing.T) {
 	}
 }
 
-// A URL below a secret-named settings key counts by its user name, password and secret query
-// values only, so an error keeps "https", "auth" and "token"; a query value named like a secret by
-// core's rule for settings (sig) counts.
 func TestAccountSecretsSettingsURLs(t *testing.T) {
 	settings := []byte(`{"token_url":"https://auth.example.com/oauth/token","auth_base_url":"https://u7Qx2Lm9Rv:p4Zw8Kt3Jn@gw.example.com/v1?sig=Sg5Tb2Nq8Vc1Xz&model=m"}`)
 	got := AccountSecrets(Account{Settings: settings})
@@ -170,8 +149,6 @@ func TestAccountSecretsSettingsURLs(t *testing.T) {
 	}
 }
 
-// ReplaceRuns hands each run to match as written and decoded, through nested escapes, and
-// replaces the runs match reports.
 func TestReplaceRuns(t *testing.T) {
 	var seen [][2]string
 	got := ReplaceRuns(`a %2541b \ud83d\ude00 c\/d end`, func(run, decoded string) bool {
@@ -192,10 +169,6 @@ func TestReplaceRuns(t *testing.T) {
 	}
 }
 
-// Only a PEM private key counts by its lines. Any other secret with a line break inside it keeps
-// the 4-byte rule whatever its length, and so does a short token read from a file with its final
-// newline: an upstream that echoes a refused key cut to its first characters must not get them
-// through.
 func TestRemovePiecesOnlyPEMCountsByLines(t *testing.T) {
 	for _, secret := range []string{"tok-abcdefghijklmnopqrstuvwxyz\n", "first-line-secret\nsecond-line-secret"} {
 		if got := RemovePieces("key tok-a... refused", secret); strings.HasPrefix(secret, "tok-") && got != "key [redacted] refused" {
@@ -207,9 +180,6 @@ func TestRemovePiecesOnlyPEMCountsByLines(t *testing.T) {
 	}
 }
 
-// Only one long token counts at 8 bytes. A value of 32 bytes or more that holds a shorter token
-// in a shape SecretParts does not split, or that is the base64 of text such as Basic's
-// user:password, keeps the 4-byte rule: a few bytes of it can be a large share of the real secret.
 func TestRemovePiecesLongRuleIsForOneToken(t *testing.T) {
 	account := func(name, value string) []string {
 		return AccountSecrets(Account{Headers: map[string]string{name: value}})
@@ -232,7 +202,6 @@ func TestRemovePiecesLongRuleIsForOneToken(t *testing.T) {
 			t.Errorf("%s (secrets %q): RemovePieces(%q) = %q, want %q", c.name, c.secrets, c.in, got, want)
 		}
 	}
-	// A long token keeps the 8-byte rule with its final newline.
 	const key = "Qx7Rv2Lm9Tz4Kp8Wn3Hc6Yd1Bf5Gs0Ja\n"
 	if got := RemovePieces("key Qx7Rv2L given", key); got != "key Qx7Rv2L given" {
 		t.Errorf("a 7-byte cut of a long token with a newline = %q, want it kept", got)
@@ -242,8 +211,6 @@ func TestRemovePiecesLongRuleIsForOneToken(t *testing.T) {
 	}
 }
 
-// A fragment that runs across a PEM body's line break, as an upstream that unwraps the key would
-// echo it, is removed though neither side holds 8 bytes of one line.
 func TestRemovePiecesPEMAcrossLines(t *testing.T) {
 	const (
 		line1 = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQInvaA7Zs3Lp9Qd"
@@ -255,11 +222,8 @@ func TestRemovePiecesPEMAcrossLines(t *testing.T) {
 	}
 }
 
-// A secret of 32 bytes or more counts at 8 bytes: a 7-byte run of it stays, an 8-byte run is
-// replaced, also written with escapes. A shorter one counts at 4, and a trailing newline (a token
-// read from a file) is not part of its length.
 func TestRemovePiecesLongSecretCountsAtEightBytes(t *testing.T) {
-	const long = "Qx7Rv2Lm9Tz4Wp8Ys3Nk6Df1Gh5Jc0Bv" // 32 bytes
+	const long = "Qx7Rv2Lm9Tz4Wp8Ys3Nk6Df1Gh5Jc0Bv"
 	if len(long) != 32 {
 		t.Fatalf("test key is %d bytes", len(long))
 	}
@@ -288,8 +252,6 @@ func TestRemovePiecesLongSecretCountsAtEightBytes(t *testing.T) {
 	}
 }
 
-// The word "test" in an error stays for a long key that holds it, the way an account's last error
-// shows it; a short key that holds it still takes it.
 func TestRemovePiecesLongKeyKeepsOrdinaryWords(t *testing.T) {
 	const long = "sk-live-test-Qx7Rv2Lm9Tz4Wp8Ys3Nk6Df1"
 	in := "test request failed: invalid x-api-key"
@@ -301,8 +263,6 @@ func TestRemovePiecesLongKeyKeepsOrdinaryWords(t *testing.T) {
 	}
 }
 
-// A secret made of parts counts each part by its own length: a part under 32 bytes of a value
-// over 32 still counts at 4.
 func TestRemovePiecesPartOfLongValueCountsByItsOwnLength(t *testing.T) {
 	const part = "Qx7Rv2Lm9Tz4"
 	const longPart = "Ab3Cd5Ef7Gh9Ij1Kl3Mn5Op7Qr9St1Uv3Wx"
@@ -325,8 +285,6 @@ func TestRemovePiecesPartOfLongValueCountsByItsOwnLength(t *testing.T) {
 	}
 }
 
-// A long key with a public prefix: a run inside the prefix stays, and an 8-byte run with one byte
-// after the prefix is replaced.
 func TestRemovePiecesLongKeyWithPrefix(t *testing.T) {
 	const key = "sk-proj-Qx7Rv2Lm9Tz4Wp8Ys3Nk6Df1Gh5Jc0Bv"
 	for in, want := range map[string]string{
@@ -347,13 +305,8 @@ func TestRemovePiecesLongKeyWithPrefix(t *testing.T) {
 	}
 }
 
-// A header, proxy or settings secret whose kept parts are all under 8 bytes counts whole, so it is
-// never left unprotected for being made of short parts. The fake value is one cookie pair whose
-// only part is the 7-byte "d29ybGQ"; the bytes before its "=" are no part, so only the whole value
-// covers them.
 func TestAccountSecretsShortPartsCountWhole(t *testing.T) {
 	const value = "aGVsbG8=d29ybGQ"
-	// The proxy's user name, "user", is under 8 bytes and adds nothing.
 	for name, got := range map[string][]string{
 		"header":   AccountSecrets(Account{Headers: map[string]string{"X-Api-Key": value}}),
 		"proxy":    AccountSecrets(Account{ProxyURL: "http://user:" + value + "@proxy.example:8080"}),
@@ -369,8 +322,6 @@ func TestAccountSecretsShortPartsCountWhole(t *testing.T) {
 	}
 }
 
-// A value with a part of 8 bytes or more counts by its parts only, and one under 8 bytes adds
-// nothing, as before.
 func TestAccountSecretsLongPartAndShortValueUnchanged(t *testing.T) {
 	got := AccountSecrets(Account{Headers: map[string]string{"Authorization": "Bearer gw-token-12345"}})
 	if !slices.Equal(got, []string{"gw-token-12345"}) {
@@ -384,15 +335,11 @@ func TestAccountSecretsLongPartAndShortValueUnchanged(t *testing.T) {
 	}
 }
 
-// A credential field holding one name=value counts whole, as well as by its value: the bytes before
-// the "=" are no part, so a cut of the start of the field would stay in an error otherwise.
 func TestAccountSecretsCredentialPairCountsWhole(t *testing.T) {
 	for _, tc := range []struct {
 		name, key, value, cut string
 	}{
-		// 40 bytes, a long token: a cut of 23 bytes of its start.
 		{"long", "QUJDREVGR0hJSktMTU5PUFI=U1RVVldYWVphYmNk", "U1RVVldYWVphYmNk", "QUJDREVGR0hJSktMTU5PUFI"},
-		// 20 bytes, under 32: a cut of 4 bytes of its start.
 		{"short", "aGVsbG8=d29ybGQxMjM0", "d29ybGQxMjM0", "aGVs"},
 	} {
 		for field, c := range map[string]Credential{
@@ -411,7 +358,6 @@ func TestAccountSecretsCredentialPairCountsWhole(t *testing.T) {
 	}
 }
 
-// A scheme or a public prefix in front of one name=value does not hide it: the pair counts whole.
 func TestAccountSecretsCredentialPairBehindPrefix(t *testing.T) {
 	const pair = "aGVsbG8=d29ybGQxMjM0"
 	for _, key := range []string{"Bearer " + pair, "dca:" + pair, "devin-session-token$" + pair} {
@@ -422,13 +368,11 @@ func TestAccountSecretsCredentialPairBehindPrefix(t *testing.T) {
 		if out := RemovePieces("key aGVs refused", got...); out != "key "+Redacted+" refused" {
 			t.Errorf("RemovePieces for %q = %q, want the cut removed", key, out)
 		}
-		// The scheme or prefix is no piece.
 		const words = "upstream session expired, Bearer refused"
 		if out := RemovePieces(words, got...); out != words {
 			t.Errorf("RemovePieces for %q = %q, want the public words kept", key, out)
 		}
 	}
-	// A password that is one pair, inside Basic.
 	basic := base64.StdEncoding.EncodeToString([]byte("gw-user:name=0123456789abcdef"))
 	got := AccountSecrets(Account{Credential: &Credential{APIKey: "Basic " + basic}})
 	if !slices.Contains(got, "name=0123456789abcdef") || !slices.Contains(got, "0123456789abcdef") {
@@ -439,7 +383,6 @@ func TestAccountSecretsCredentialPairBehindPrefix(t *testing.T) {
 	}
 }
 
-// A pair of 32 or more token characters is one long token: a cut of its name counts from 8 bytes.
 func TestAccountSecretsLongCredentialPairCountsAtEight(t *testing.T) {
 	got := AccountSecrets(Account{Credential: &Credential{APIKey: "QUJDREVGR0hJSktMTU5PUFI=U1RVVldYWVphYmNk"}})
 	if out := RemovePieces("bad QUJDREV refused", got...); out != "bad QUJDREV refused" {
@@ -450,8 +393,6 @@ func TestAccountSecretsLongCredentialPairCountsAtEight(t *testing.T) {
 	}
 }
 
-// What is no single pair counts as before: a cookie list by its values, and a token ending in "="
-// or "==" whole once.
 func TestAccountSecretsCredentialPairUnchanged(t *testing.T) {
 	got := AccountSecrets(Account{Credential: &Credential{APIKey: "a=value-one; b=value-two"}})
 	if !slices.Equal(got, []string{"value-one", "value-two"}) {
@@ -466,8 +407,6 @@ func TestAccountSecretsCredentialPairUnchanged(t *testing.T) {
 	if !slices.Equal(got, []string{"value-one", "value-two"}) {
 		t.Errorf("cookie list behind a scheme: AccountSecrets = %q, want its values only", got)
 	}
-	// Only the Cookie header, whatever the case of its name, counts a single pair by its value. A
-	// secret header or a settings secret counts it whole as well, as a credential's field does.
 	for _, name := range []string{"Cookie", "cookie", "COOKIE"} {
 		got = AccountSecrets(Account{Headers: map[string]string{name: "aaaaaaaa=bbbbbbbb"}})
 		if !slices.Equal(got, []string{"bbbbbbbb"}) {

@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// referenceAppend is the list's rule written as a plain rescan: the results CodeRuns must keep.
 func referenceAppend(runs []CodeExecution, run CodeExecution) []CodeExecution {
 	leftOut := false
 	if n := len(runs); n > 0 && runs[n-1] == codeExecutionsLeftOut {
@@ -28,7 +27,6 @@ func referenceAppend(runs []CodeExecution, run CodeExecution) []CodeExecution {
 	return runs
 }
 
-// Many runs must cost work in proportion to their number, not to the size of the list so far.
 func TestCodeRunsWorkGrowsWithTheRunsAdded(t *testing.T) {
 	const n = 50000
 	codeRunSteps.Store(0)

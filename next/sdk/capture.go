@@ -12,16 +12,13 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// captureLog records a captured call's upstream exchanges (protocol minor version 13): the
-// first and the last, counting the ones between. Its zero value is ready; nil records nothing.
 type captureLog struct {
 	mu          sync.Mutex
 	first, last *exchange
 	between     int
-	sent        bool // the diagnostic frame went out: later exchanges are not recorded
+	sent        bool
 }
 
-// exchange is one recorded upstream request and what came back.
 type exchange struct {
 	req     protocol.UpstreamRequest
 	reqBody *bodyCapture
@@ -30,25 +27,18 @@ type exchange struct {
 	err     string
 }
 
-// roundTrip sends req through rt, recording it and its response. A request made after the call's
-// diagnostic frame went out is sent unrecorded.
 func (c *captureLog) roundTrip(rt http.RoundTripper, req *http.Request) (*http.Response, error) {
 	x := &exchange{req: protocol.UpstreamRequest{TimeMs: time.Now().UnixMilli(), Method: req.Method,
 		URL: capturedURL(req.URL)}}
 	x.req.Headers, x.req.HeadersLeftOut = capturedHeaders(req.Header)
 	hasBody := req.Body != nil && req.Body != http.NoBody
 	if hasBody {
-		x.reqBody = &bodyCapture{size: req.ContentLength} // set before x is published: take reads it
+		x.reqBody = &bodyCapture{size: req.ContentLength}
 	}
 	if !c.add(x) {
 		return rt.RoundTrip(req)
 	}
 	if hasBody {
-		// What the transport reads is what is recorded, as it reads it: the request is not held
-		// back to read the body first, and the body is read once.
-		// When the transport sends the body again, each copy is recorded on its own and the
-		// copy read last is the one kept, not the copies joined. A copy made but never read
-		// (one kept ready for a retry that did not happen) changes nothing.
 		use := func(bc *bodyCapture) func() {
 			return func() {
 				c.mu.Lock()
@@ -56,7 +46,7 @@ func (c *captureLog) roundTrip(rt http.RoundTripper, req *http.Request) (*http.R
 				c.mu.Unlock()
 			}
 		}
-		r := *req // a RoundTripper must not change the request it is given
+		r := *req
 		r.Body = &sentBody{teeBody: teeBody{req.Body, x.reqBody}, use: use(x.reqBody)}
 		if get := req.GetBody; get != nil {
 			r.GetBody = func() (io.ReadCloser, error) {
@@ -79,10 +69,9 @@ func (c *captureLog) roundTrip(rt http.RoundTripper, req *http.Request) (*http.R
 	}
 	x.resp = &protocol.UpstreamResponse{TimeMs: time.Now().UnixMilli(), Status: resp.StatusCode}
 	x.resp.Headers, x.resp.HeadersLeftOut = capturedHeaders(resp.Header)
-	// A 101's body is the switched connection (a WebSocket's), which its reader needs as it is;
-	// its messages are not recorded.
+	// A 101's body is the switched connection (a WebSocket's), which its reader needs as it is.
 	if resp.StatusCode != http.StatusSwitchingProtocols && resp.Body != nil {
-		x.body = &bodyCapture{eof: resp.Body == http.NoBody, size: resp.ContentLength} // NoBody has nothing to read
+		x.body = &bodyCapture{eof: resp.Body == http.NoBody, size: resp.ContentLength}
 		resp.Body = teeBody{resp.Body, x.body}
 	}
 	return resp, nil
@@ -105,7 +94,6 @@ func (c *captureLog) add(x *exchange) bool {
 	return true
 }
 
-// take returns the diagnostic of what was recorded, once: nil when nothing was or it was taken.
 func (c *captureLog) take() *protocol.Diagnostic {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -133,9 +121,6 @@ func (c *captureLog) take() *protocol.Diagnostic {
 	return d
 }
 
-// capturedURL is u without its user name and password, with the values of query parameters
-// whose names are secret (protocol.SecretName) redacted. A query that does not parse cannot be
-// told apart from its secrets, so all of it is redacted.
 func capturedURL(u *url.URL) string {
 	c := *u
 	c.User = nil
@@ -159,10 +144,6 @@ func capturedURL(u *url.URL) string {
 	return c.String()
 }
 
-// capturedHeaders is a copy of h with the values of headers whose names are secret
-// (protocol.SecretName) redacted, keeping an authorization scheme such as Bearer. It keeps at
-// most protocol.CapturedHeaderBytes of header lines, taking names in order, and counts the lines
-// it left out.
 func capturedHeaders(h http.Header) (headers map[string][]string, leftOut int) {
 	if len(h) == 0 {
 		return nil, 0
@@ -199,7 +180,6 @@ func capturedHeaders(h http.Header) (headers map[string][]string, leftOut int) {
 	return out, leftOut
 }
 
-// teeBody records what is read from a body as it is read, and whether the read reached its end.
 type teeBody struct {
 	io.ReadCloser
 	c *bodyCapture
@@ -218,8 +198,6 @@ func (b teeBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// sentBody is one copy of a request body the transport sends: each read makes it the copy
-// recorded, so the one read last is.
 type sentBody struct {
 	teeBody
 	use func()
@@ -230,16 +208,14 @@ func (b *sentBody) Read(p []byte) (int, error) {
 	return b.teeBody.Read(p)
 }
 
-// bodyCapture keeps the start and the end of what is written to it (protocol.CapturedHead and
-// protocol.CapturedEnd bytes) and counts the rest.
 type bodyCapture struct {
 	mu      sync.Mutex
 	head    []byte
-	tail    []byte // a ring of protocol.CapturedEnd bytes once full
-	at      int    // where the ring's oldest byte is
+	tail    []byte
+	at      int
 	written int64
-	eof     bool  // the body was read to its end
-	size    int64 // the body's length when known (more than 0)
+	eof     bool
+	size    int64
 }
 
 func (c *bodyCapture) Write(p []byte) (int, error) {
@@ -266,11 +242,6 @@ func (c *bodyCapture) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// captured returns what c kept: the whole body in Body when it fits, else its start and end,
-// with BodyStopped set when the body was not read to its end, however its read stopped. A body of
-// known length whose every byte was read was read to its end, whether or not a read has seen that
-// yet: a transport sends a request body's last byte, and the upstream can answer, before its last
-// read of the body.
 func (c *bodyCapture) captured() protocol.CapturedBody {
 	if c == nil {
 		return protocol.CapturedBody{}

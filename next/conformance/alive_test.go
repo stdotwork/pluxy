@@ -13,8 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// The kit's alive check passes for an extension that streams through sdk.Upstream from an
-// upstream that keeps sending SSE comments after its first text.
 func TestAliveCheck(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -52,8 +50,6 @@ func TestAliveCheck(t *testing.T) {
 	k.alive(t)
 }
 
-// A quiet target promises the alive scenario, so an extension that reports a minor version before
-// alive frames must fail the check rather than skip it.
 func TestAliveMinorForQuietTarget(t *testing.T) {
 	old := protocol.Info{ProtocolMinor: host.AliveMinor - 1}
 	if err := aliveMinorError(old, true); err == nil || !strings.Contains(err.Error(), "protocol 0.") {
@@ -68,8 +64,6 @@ func TestAliveMinorForQuietTarget(t *testing.T) {
 	}
 }
 
-// An extension that reports the account_closed minor passes the kit's gate; one a minor before it
-// fails, since core drops the code for an extension that old and its bans are lost.
 func TestAccountClosedMinor(t *testing.T) {
 	old := protocol.Info{ProtocolMinor: host.AccountClosedMinor - 1}
 	if err := accountClosedMinorError(old); err == nil || !strings.Contains(err.Error(), "protocol 0.") {

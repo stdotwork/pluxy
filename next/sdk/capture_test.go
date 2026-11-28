@@ -17,13 +17,11 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// gatedBody is a request body that refuses to give its bytes until gate is closed, the way a body
-// that is produced slowly does, and counts the bytes read from it and its copies in read.
 type gatedBody struct {
 	r     io.Reader
 	gate  <-chan struct{}
 	read  *atomic.Int64
-	early *atomic.Int64 // reads that gave up waiting for the gate
+	early *atomic.Int64
 }
 
 func (g *gatedBody) Read(p []byte) (int, error) {
@@ -42,8 +40,6 @@ func (g *gatedBody) Read(p []byte) (int, error) {
 
 func (g *gatedBody) Close() error { return nil }
 
-// echoUpstream is a server that closes got when a request's headers arrive and replies with the
-// body it read.
 func echoUpstream(t *testing.T, got chan struct{}) *httptest.Server {
 	t.Helper()
 	var once sync.Once
@@ -85,8 +81,6 @@ func roundTripCaptured(t *testing.T, c *captureLog, req *http.Request) string {
 	return string(reply)
 }
 
-// A body the transport reads slowly must not hold the request back: capture records what the
-// transport reads, as it reads it.
 func TestCaptureDoesNotReadBodyBeforeSending(t *testing.T) {
 	const payload = `{"model":"example-model","input":"hello"}`
 	got := make(chan struct{})
@@ -118,7 +112,6 @@ func TestCaptureReadsBodyOnce(t *testing.T) {
 	}
 }
 
-// When the transport cannot get a replay copy of the body, what it did send is still recorded.
 func TestCaptureBodyWhenGetBodyFails(t *testing.T) {
 	const payload = `{"model":"example-model","input":"hello"}`
 	got := make(chan struct{})
@@ -136,14 +129,12 @@ func TestCaptureBodyWhenGetBodyFails(t *testing.T) {
 	}
 }
 
-// A transport that sends a body twice (a retry on a fresh connection) leaves the body it sent
-// last in the capture, not the two joined.
 func TestCaptureReplayedBody(t *testing.T) {
 	const payload = `{"model":"example-model","input":"hello"}`
 	var read, early atomic.Int64
 	req := newBodyRequest(t, "http://upstream.invalid/v1", payload, &read, &early, nil)
 	replay := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
-		_, _ = io.ReadFull(r.Body, make([]byte, 10)) // the first attempt fails part way
+		_, _ = io.ReadFull(r.Body, make([]byte, 10))
 		b, err := r.GetBody()
 		if err != nil {
 			return nil, err
@@ -165,8 +156,6 @@ func TestCaptureReplayedBody(t *testing.T) {
 	}
 }
 
-// A copy of the body made for a retry that never happens leaves the body that was sent in the
-// capture.
 func TestCaptureUnusedReplay(t *testing.T) {
 	const payload = `{"model":"example-model","input":"hello"}`
 	var read, early atomic.Int64
@@ -175,7 +164,7 @@ func TestCaptureUnusedReplay(t *testing.T) {
 		if _, err := io.Copy(io.Discard, r.Body); err != nil {
 			return nil, err
 		}
-		b, err := r.GetBody() // kept ready for a retry, then not needed
+		b, err := r.GetBody()
 		if err != nil {
 			return nil, err
 		}
@@ -194,8 +183,6 @@ func TestCaptureUnusedReplay(t *testing.T) {
 	}
 }
 
-// A transport that reads a replay copy part way and then goes back to the original body leaves
-// the original, read last, in the capture.
 func TestCaptureInterleavedReplay(t *testing.T) {
 	const payload = `{"model":"example-model","input":"hello"}`
 	var read, early atomic.Int64
@@ -234,7 +221,6 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// The diagnostic can be taken while a request is in flight: run with -race.
 func TestCaptureTakeDuringRoundTrip(t *testing.T) {
 	c := &captureLog{}
 	release := make(chan struct{})
@@ -247,7 +233,7 @@ func TestCaptureTakeDuringRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.GetBody = nil // the transport reads the body itself
+	req.GetBody = nil
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -258,8 +244,6 @@ func TestCaptureTakeDuringRoundTrip(t *testing.T) {
 		}
 		resp.Body.Close()
 	}()
-	// Wait until the request is recorded, by the log's own lock, as the call's terminal event
-	// would find it: nothing else orders the two goroutines.
 	for {
 		c.mu.Lock()
 		recorded := c.first != nil
@@ -280,7 +264,7 @@ func TestCaptureTakeDuringRoundTrip(t *testing.T) {
 func TestCapturedURL(t *testing.T) {
 	for _, tc := range []struct {
 		name, raw string
-		want      string // exact; empty when notWant is checked instead
+		want      string
 		notWant   []string
 	}{
 		{name: "plain", raw: "https://api.example.test/v1/chat?model=m&stream=true", want: "https://api.example.test/v1/chat?model=m&stream=true"},
@@ -308,7 +292,6 @@ func TestCapturedURL(t *testing.T) {
 	}
 }
 
-// headersLeftOut reads a captured request's headers_left_out from its JSON.
 func headersLeftOut(t *testing.T, r protocol.UpstreamRequest) int {
 	t.Helper()
 	b, err := json.Marshal(r)
@@ -399,9 +382,6 @@ func TestCaptureBoundsHeaders(t *testing.T) {
 	})
 }
 
-// A captured body says whether it was read to its end: not where the reader stopped early, as an
-// extension that reads only an error's first MiB does, or closed the body part way; a request
-// body the transport sent whole, a response read to its end and an empty one never read are not.
 func TestCaptureMarksStoppedRead(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
@@ -451,7 +431,6 @@ func TestCaptureMarksStoppedRead(t *testing.T) {
 	}
 }
 
-// lateEOF gives its text, then holds back the end of the body until release is closed.
 type lateEOF struct {
 	r       *strings.Reader
 	release <-chan struct{}
@@ -466,9 +445,6 @@ func (l *lateEOF) Read(p []byte) (int, error) {
 
 func (l *lateEOF) Close() error { return nil }
 
-// A request body of known length that the transport has sent whole is not marked as stopped,
-// even when the call's diagnostic is taken before the transport's last read sees the body's end:
-// the transport sends no more than the length, so the upstream can answer first.
 func TestCaptureRequestBodySentWhole(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)

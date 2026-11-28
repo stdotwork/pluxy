@@ -21,16 +21,10 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// A tracked HTTP/2 request never shares a connection with another tracked request, and nothing
-// it opened stays open: not after a tracked request that was cancelled before it was written,
-// and not while two run at once.
 func TestTrackSendOwnConnection(t *testing.T) {
 	t.Run("after a request cancelled before it was written", func(t *testing.T) {
 		target := startH2Target(t)
 		client := &http.Client{Transport: Upstream(target.base), Timeout: 10 * time.Second}
-		// Cancelling as the request gets its connection races with writing it, so a request is
-		// cancelled before it was written about half the time: twenty tries make it all but
-		// certain that some were.
 		for i := range 20 {
 			ctx, cancel := context.WithCancel(context.Background())
 			ctx = onGotConn(ctx, func(httptrace.GotConnInfo) { cancel() })
@@ -40,7 +34,6 @@ func TestTrackSendOwnConnection(t *testing.T) {
 			}
 			cancel()
 
-			// A request can get a connection more than once when it is retried on another.
 			var reused bool
 			ctx = onGotConn(context.Background(), func(info httptrace.GotConnInfo) { reused = reused || info.Reused })
 			req, _ = TrackSend(post(t, target.URL+"/token").WithContext(ctx))
@@ -66,8 +59,6 @@ func TestTrackSendOwnConnection(t *testing.T) {
 		second := make(chan result, 1)
 		secondGotConn := make(chan struct{})
 		var once, secondOnce sync.Once
-		// The second request starts when the first has its connection and has not yet been
-		// written, and the first goes on once the second has its connection too.
 		ctx := onGotConn(context.Background(), func(httptrace.GotConnInfo) {
 			once.Do(func() {
 				go func() {
@@ -112,9 +103,6 @@ func TestTrackSendOwnConnection(t *testing.T) {
 	})
 }
 
-// A request through Upstream, tracked or not, directly or through the account's proxy, speaks the
-// HTTP version the base transport would: HTTP/2 when net/http turns it on for base by itself, and
-// HTTP/1.1 when base turned it off or has a TLS config of its own.
 func TestUpstreamKeepsBaseProtocol(t *testing.T) {
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
@@ -141,7 +129,7 @@ func TestUpstreamKeepsBaseProtocol(t *testing.T) {
 	}{
 		{"a zero transport", func() *http.Transport {
 			// net/http gives a zero transport its TLS config, offering h2, on first use (here
-			// Clone); the test then trusts the server's certificate in it.
+			// Clone).
 			base := &http.Transport{}
 			_ = base.Clone()
 			base.TLSClientConfig.RootCAs = roots
@@ -181,19 +169,11 @@ func TestUpstreamKeepsBaseProtocol(t *testing.T) {
 	}
 }
 
-// A tracked request of a call whose account has a proxy goes through that proxy, on a new
-// connection each time, while untracked requests through it share one; the client keeps one
-// transport for the proxy, and none for tracked requests. A proxy that refuses the request before
-// it is written leaves it not sent.
 func TestTrackSendThroughProxy(t *testing.T) {
 	pass := rand.Text()
 	for _, c := range []struct {
-		name string
-		// start starts the proxy, which wants user alice with password, and returns its URL
-		// scheme and address, and a function that reports how many connections the client
-		// opened to it so far.
+		name  string
 		start func(t *testing.T, password string) (scheme, addr string, conns func() int)
-		// https sends to an HTTPS target that speaks HTTP/2, through CONNECT or SOCKS5.
 		https bool
 	}{
 		{"http proxy, http target", startHTTPProxy, false},
@@ -207,7 +187,6 @@ func TestTrackSendThroughProxy(t *testing.T) {
 				h2 := startH2Target(t)
 				target, base = h2.URL+"/token", h2.base
 			} else {
-				// A plain http request goes to the proxy whole, which answers it itself.
 				target = "http://login.pluxy-test.invalid/token"
 			}
 			scheme, addr, conns := c.start(t, pass)
@@ -259,7 +238,6 @@ func TestTrackSendThroughProxy(t *testing.T) {
 				if resp.StatusCode == http.StatusOK {
 					t.Fatal("a proxy that refuses the password passed the request")
 				}
-				// An http proxy refuses a plain request with its own answer, after reading it.
 				if !sent() {
 					t.Error("a request the proxy answered counted as not sent")
 				}
@@ -272,14 +250,13 @@ func TestTrackSendThroughProxy(t *testing.T) {
 	}
 }
 
-// h2Target is an HTTPS server that speaks HTTP/2 and keeps track of its connections.
 type h2Target struct {
 	*httptest.Server
-	base *http.Transport // a transport that trusts the server and attempts HTTP/2
+	base *http.Transport
 
 	mu      sync.Mutex
 	open    int
-	changed chan struct{} // closed and replaced when open changes
+	changed chan struct{}
 	conns   map[string]string
 }
 
@@ -316,14 +293,12 @@ func startH2Target(t *testing.T) *h2Target {
 	return h
 }
 
-// connOf returns the connection the last request for path came on.
 func (h *h2Target) connOf(path string) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.conns[path]
 }
 
-// waitAllClosed waits until every connection to the server is closed.
 func (h *h2Target) waitAllClosed(t *testing.T) {
 	t.Helper()
 	deadline := time.After(10 * time.Second)
@@ -342,14 +317,10 @@ func (h *h2Target) waitAllClosed(t *testing.T) {
 	}
 }
 
-// onGotConn returns ctx with a trace that calls f when a request made with it gets its
-// connection.
 func onGotConn(ctx context.Context, f func(httptrace.GotConnInfo)) context.Context {
 	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: f})
 }
 
-// startHTTPProxy starts an http proxy that wants user alice with password: it tunnels CONNECT and
-// answers a plain request itself.
 func startHTTPProxy(t *testing.T, password string) (string, string, func() int) {
 	t.Helper()
 	var mu sync.Mutex
@@ -389,8 +360,6 @@ func startHTTPProxy(t *testing.T, password string) (string, string, func() int) 
 	}
 }
 
-// startSOCKS5Proxy starts a SOCKS5 proxy that wants user alice with password (RFC 1928 and
-// RFC 1929, CONNECT only).
 func startSOCKS5Proxy(t *testing.T, password string) (string, string, func() int) {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -431,7 +400,7 @@ func serveSOCKS5(c net.Conn, password string) {
 		fail()
 		return
 	}
-	_, _ = c.Write([]byte{5, 2}) // username and password
+	_, _ = c.Write([]byte{5, 2})
 	readField := func() string {
 		n, err := r.ReadByte()
 		if err != nil {
@@ -495,7 +464,6 @@ type bufferedConn struct {
 
 func (b *bufferedConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 
-// pipe copies between a and b until either side ends, then closes both.
 func pipe(a, b net.Conn) {
 	done := make(chan struct{}, 2)
 	go func() { _, _ = io.Copy(a, b); done <- struct{}{} }()

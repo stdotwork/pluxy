@@ -7,8 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Every secret field of an OAuth credential, including provider data core does not read, is
-// removed from what a call sends back, without the redactor listing the fields.
 func TestRedactorCoversOAuthCredential(t *testing.T) {
 	c := &Credential{Kind: CredentialOAuth, AccessToken: "at-0123456789abcdef", RefreshToken: "rt-0123456789abcdef",
 		ExpiresAt: 1767225600, Data: []byte(`{"id_token":"idt-0123456789abcdef","nested":{"key":"sa-private-0123456789"}}`)}

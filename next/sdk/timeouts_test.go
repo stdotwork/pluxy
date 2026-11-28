@@ -89,7 +89,6 @@ func TestTimeoutHeaderLimit(t *testing.T) {
 		t.Errorf("log = %q, want header, acct-hdr, and 80ms", got)
 	}
 
-	// 0 turns the header limit off.
 	srvFast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(100 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
@@ -138,8 +137,6 @@ func TestTimeoutIdleLimit(t *testing.T) {
 		t.Errorf("log = %q, want idle, acct-idle, and 80ms", got)
 	}
 
-	// Stream with gaps shorter than idle_ms completes even when total duration exceeds both
-	// idle_ms and total_ms.
 	srvHealthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		for i := range 5 {
@@ -170,7 +167,6 @@ func TestTimeoutTotalLimit(t *testing.T) {
 	logs := captureTimeoutLogs(t)
 	release := make(chan struct{})
 
-	// 1. Pre-header total timeout on non-streamed request is retryable.
 	srvNoHeader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
@@ -193,7 +189,6 @@ func TestTimeoutTotalLimit(t *testing.T) {
 		t.Errorf("log = %q, want total, acct-tot-pre, and 80ms", got)
 	}
 
-	// 2. Post-header total timeout on non-streamed request is NOT retryable.
 	srvSlowBody := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
@@ -221,7 +216,6 @@ func TestTimeoutTotalLimit(t *testing.T) {
 		t.Errorf("log = %q, want acct-tot-post", got)
 	}
 
-	// 3. Non-streamed request slower than header_ms succeeds within total_ms; total_ms=0 turns it off.
 	srvSlowOK := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(60 * time.Millisecond)
 		io.WriteString(w, "ok")
@@ -337,8 +331,6 @@ func TestTimeoutWebSocketUpgradePreservesRWC(t *testing.T) {
 	}
 }
 
-// Core finds an upstream timeout in an extension's failure by the phrase in the message (the
-// protocol has no field for it), so every kind of timeoutError must carry it.
 func TestTimeoutMessagesCarryThePhrase(t *testing.T) {
 	for _, kind := range []string{timeoutHeader, timeoutIdle, timeoutTotal} {
 		err := fmt.Errorf("upstream unreachable: %w", &timeoutError{kind: kind, limit: time.Minute})

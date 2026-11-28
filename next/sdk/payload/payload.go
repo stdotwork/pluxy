@@ -1,9 +1,8 @@
 // Package payload applies payload rules to a JSON request body: the config `payload` section
 // that sets, fills in or removes fields of the body an extension is about to send upstream.
 //
-// The rule types and their JSON names are the old core's, so config can decode straight into
-// Rules. Apply is pure: it reads the rules and the body and returns the new body, so a caller
-// applies it once, to the final upstream body, after everything else has touched it.
+// Apply is pure: it reads the rules and the body and returns the new body, so a caller applies it
+// once, to the final upstream body, after everything else has touched it.
 package payload
 
 import (
@@ -36,22 +35,20 @@ type Rule struct {
 	Params map[string]any `json:"params,omitempty"`
 }
 
-// FilterRule removes the Params paths from bodies of the models it names.
 type FilterRule struct {
 	Models []Model  `json:"models,omitempty"`
 	Params []string `json:"params,omitempty"`
 }
 
-// Model selects the requests a rule applies to. A rule applies when any of its models does.
+// A rule applies when any of its models does.
 type Model struct {
 	// Name is the model name; `*` matches any run of characters.
 	Name string `json:"name,omitempty"`
 	// Protocol restricts the rule to one extension channel (case-insensitive).
 	Protocol string `json:"protocol,omitempty"`
 	// Headers requires every named client header to have a value matching its pattern.
-	Headers map[string]string `json:"headers,omitempty"`
-	// FromProtocol restricts the rule to one client format.
-	FromProtocol string `json:"from-protocol,omitempty"`
+	Headers      map[string]string `json:"headers,omitempty"`
+	FromProtocol string            `json:"from-protocol,omitempty"`
 	// Match requires each path to equal its value; NotMatch requires that none does.
 	Match    []map[string]any `json:"match,omitempty"`
 	NotMatch []map[string]any `json:"not-match,omitempty"`
@@ -60,7 +57,6 @@ type Model struct {
 	NotExist []string `json:"not-exist,omitempty"`
 }
 
-// Input is what a call knows besides the rules and the body.
 type Input struct {
 	// Model is the upstream model name and RequestedModel the name the client asked for. A
 	// rule's model name may match either; a thinking suffix `name(8192)` on the requested one
@@ -70,14 +66,12 @@ type Input struct {
 	Protocol string
 	// FromProtocol is the client format; a rule that names one needs it to match.
 	FromProtocol string
-	// Headers are the client's request headers.
-	Headers http.Header
+	Headers      http.Header
 	// Root is a path prefix for every rule path, for bodies that carry the request inside
 	// another object (for example `request`).
 	Root string
 	// Original is the body as the client sent it. Default rules check it, not the body being
-	// built, for whether a field is missing, so a field the pipeline added is still defaulted.
-	// Without it they check the body.
+	// built, for whether a field is missing. Without it they check the body.
 	Original []byte
 	// Selected says the rules are what Select returned for this call: their models were matched
 	// to the call already, so Apply checks only each model's body conditions (match, not-match,
@@ -86,10 +80,9 @@ type Input struct {
 }
 
 // Select returns the rules that apply to the call in (its model names, protocol, client format
-// and client headers), for a caller that knows the call but not the final body: each rule keeps
-// only the models that match the call, each reduced to its body conditions, and a rule with none
-// left is dropped. Apply with Selected then gives the same body as Apply with r and in. It
-// returns nil when no rule applies.
+// and client headers): each rule keeps only the models that match the call, each reduced to its
+// body conditions, and a rule with none left is dropped. Apply with Selected then gives the same
+// body as Apply with r and in. It returns nil when no rule applies.
 func Select(r *Rules, in Input) *Rules {
 	if r == nil || r.empty() {
 		return nil
@@ -163,17 +156,14 @@ type engine struct {
 	in         Input
 	candidates []string
 	original   []byte
-	originalOK bool // original is valid JSON; if not, no path exists in it
+	originalOK bool
 
-	// Default rules: first write wins, and a field a default created does not count as one the
-	// client sent.
 	applied      map[string]struct{}
 	created      map[string]struct{}
 	initialItems map[string]int
 }
 
 func (e *engine) run(r *Rules) {
-	// Params is a map; its paths go in sorted order so a result never depends on map order.
 	for i := range r.Default {
 		rule := &r.Default[i]
 		if !e.matches(rule.Models) {
@@ -225,7 +215,6 @@ func (e *engine) run(r *Rules) {
 		}
 		for _, p := range rule.Params {
 			resolved := e.resolveParam(p)
-			// Last first, so removing an array element leaves the earlier indexes valid.
 			for k := len(resolved) - 1; k >= 0; k-- {
 				if out, ok := deleteValue(e.body, resolved[k]); ok {
 					e.body, e.changed = out, true
@@ -252,8 +241,6 @@ func (e *engine) fullPath(path string) string {
 	return root + "." + strings.TrimPrefix(path, ".")
 }
 
-// resolveParam resolves a rule's param path. A blank one names nothing: it must not name the
-// root, which would replace or delete the whole wrapped request.
 func (e *engine) resolveParam(path string) [][]string {
 	if strings.TrimSpace(path) == "" {
 		return nil
@@ -272,8 +259,6 @@ func (e *engine) write(comps []string, raw []byte) bool {
 
 func pathKey(comps []string) string { return strings.Join(comps, "\x00") }
 
-// writeDefault sets the field of each path the param resolves to when the source has no such
-// field and no earlier default wrote it.
 func (e *engine) writeDefault(path string, v any, raw bool) {
 	for _, comps := range e.resolveParam(path) {
 		if e.sourceHas(comps) {
@@ -301,8 +286,6 @@ func (e *engine) writeDefault(path string, v any, raw bool) {
 	}
 }
 
-// sourceHas reports whether the field exists in the body the client sent (Original) or, without
-// one, in the body now, not counting what a default rule created.
 func (e *engine) sourceHas(comps []string) bool {
 	if len(e.original) > 0 {
 		return e.originalOK && lookup(e.original, comps).ok
@@ -324,8 +307,6 @@ func (e *engine) sourceHas(comps []string) bool {
 	return lookup(e.body, comps).ok
 }
 
-// recordCreation notes, before a default writes comps, which of its parents and itself the body
-// does not have yet, and how long the arrays above it are.
 func (e *engine) recordCreation(comps []string) {
 	if len(e.original) > 0 {
 		return
@@ -350,7 +331,6 @@ func (e *engine) recordCreation(comps []string) {
 	}
 }
 
-// override writes v at comps unless the field already holds it.
 func (e *engine) override(comps []string, v any) {
 	cur := lookup(e.body, comps)
 	switch want := v.(type) {
@@ -384,8 +364,6 @@ func (e *engine) overrideRaw(comps []string, raw []byte) {
 	e.write(comps, raw)
 }
 
-// rawValue returns the JSON text of a Raw rule's value: a string is the text itself, anything
-// else is encoded. It reports false for a value that is not valid JSON.
 func rawValue(v any) ([]byte, bool) {
 	var raw []byte
 	switch v := v.(type) {
@@ -407,9 +385,6 @@ func rawValue(v any) ([]byte, bool) {
 	return raw, true
 }
 
-// resolve turns a rule path into the plain paths it names in the body: a key or index names
-// itself, and a query names the index of the first (or every) matching element of the array
-// before it. A query with no array before it, or no match, names nothing.
 func (e *engine) resolve(path string) [][]string {
 	parts, err := parsePath(path)
 	if err != nil {
@@ -446,9 +421,6 @@ func (e *engine) resolve(path string) [][]string {
 	return paths
 }
 
-// modelCandidates lists the names a rule's model name is tried against: the upstream model, the
-// requested model without a thinking suffix `(...)`, and the requested model as asked. Names are
-// compared exactly, as rule names are, so a name that differs in case is kept.
 func modelCandidates(model, requested string) []string {
 	var out []string
 	add := func(s string) {
@@ -472,7 +444,6 @@ func modelCandidates(model, requested string) []string {
 	return out
 }
 
-// matches reports whether any model entry applies to this call and to the body as it is now.
 func (e *engine) matches(models []Model) bool {
 	for i := range models {
 		m := &models[i]
@@ -483,9 +454,6 @@ func (e *engine) matches(models []Model) bool {
 	return false
 }
 
-// callMatches reports whether a model entry applies to this call, before its body conditions:
-// its name matches one of the call's model names, and its protocol, from-protocol and headers
-// hold.
 func (e *engine) callMatches(m *Model) bool {
 	pattern := strings.TrimSpace(m.Name)
 	if pattern == "" {
@@ -533,7 +501,6 @@ func (e *engine) conditionsMatch(m *Model) bool {
 	return true
 }
 
-// pathExists reports whether any path the rule path resolves to holds a value that is not null.
 func (e *engine) pathExists(path string) bool {
 	for _, comps := range e.resolve(e.fullPath(path)) {
 		if v := lookup(e.body, comps); v.ok && !v.null() {
@@ -543,8 +510,6 @@ func (e *engine) pathExists(path string) bool {
 	return false
 }
 
-// pathEquals reports whether any path the rule path resolves to holds a value equal to want,
-// compared as decoded JSON (so 1 equals 1.0 and key order does not matter).
 func (e *engine) pathEquals(path string, want any) bool {
 	var expected any
 	text, err := json.Marshal(want)
@@ -579,7 +544,6 @@ func normalizeFormat(s string) string {
 	return s
 }
 
-// headersMatch reports whether every header the rule names has a value matching its pattern.
 func headersMatch(h http.Header, rules map[string]string) bool {
 	for key, pattern := range rules {
 		key = strings.TrimSpace(key)
@@ -604,12 +568,6 @@ func headersMatch(h http.Header, rules map[string]string) bool {
 	return true
 }
 
-// matchPattern is a glob where `*` matches any run of characters (including none) and every
-// other character stands for itself, so a `*` in the pattern is always a wildcard, also when the
-// value has a `*` there. Both sides are trimmed, and an empty pattern matches nothing.
-//
-// The pattern is split at its stars: the first piece must start the value, the last must end it,
-// and the pieces between are found in order, so the work stays linear in the two lengths.
 func matchPattern(pattern, s string) bool {
 	pattern, s = strings.TrimSpace(pattern), strings.TrimSpace(s)
 	if pattern == "" {
@@ -634,10 +592,9 @@ func matchPattern(pattern, s string) bool {
 	return true
 }
 
-// Validate checks the rules the way a config loader should before it keeps them: every path
-// (rule params, filter params, match, not-match, exist, not-exist) must be inside the supported
-// syntax, and every raw value must be valid JSON. The error lists every problem, each naming the
-// rule and the path or value.
+// Validate checks the rules: every path (rule params, filter params, match, not-match, exist,
+// not-exist) must be inside the supported syntax, and every raw value must be valid JSON. The
+// error lists every problem, each naming the rule and the path or value.
 func Validate(r *Rules) error {
 	if r == nil {
 		return nil
@@ -692,7 +649,6 @@ func validateModels(where string, models []Model) []error {
 	return errs
 }
 
-// validateParamPath checks the path of a rule's param, which may not be blank.
 func validateParamPath(where, path string) []error {
 	if strings.TrimSpace(path) == "" {
 		return []error{fmt.Errorf("%s: path %q: the path is blank", where, path)}
@@ -700,8 +656,6 @@ func validateParamPath(where, path string) []error {
 	return validatePath(where, path)
 }
 
-// validatePath checks one rule path of a model's conditions. A blank path is skipped, as Apply
-// skips it.
 func validatePath(where, path string) []error {
 	path = strings.TrimSpace(path)
 	if path == "" {

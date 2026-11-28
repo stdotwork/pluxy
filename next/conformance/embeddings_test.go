@@ -18,8 +18,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// serveFakeEndpoint is an extension at protocol minor that lists the endpoint operation and
-// answers every endpoint call with a one-piece body.
 func serveFakeEndpoint(minor int) {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
@@ -76,10 +74,6 @@ func serveFakeEndpoint(minor int) {
 	}
 }
 
-// TestConformanceGeminiEmbeddings sends Gemini's embedContent and batchEmbedContents through
-// core's client API, the host and the real Gemini extension to a fake upstream, and checks the
-// client gets the upstream's reply. An extension below protocol minor 36 is skipped with a
-// retryable refusal on the account.
 func TestConformanceGeminiEmbeddings(t *testing.T) {
 	if protocol.Minor < host.GeminiEmbeddingsMinor {
 		t.Fatalf("protocol.Minor = %d, want >= %d", protocol.Minor, host.GeminiEmbeddingsMinor)

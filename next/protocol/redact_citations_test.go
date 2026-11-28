@@ -8,8 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// A page's URL or title can carry what the upstream put there, so the credential comes out of the
-// citations and sources an event holds, and the caller's own lists are left as they were.
 func TestRedactorEventCitationsAndSources(t *testing.T) {
 	secret := "sk-super-secret-token-1234567890"
 	r := protocol.NewRedactor(&protocol.Credential{Kind: "api_key", APIKey: secret})

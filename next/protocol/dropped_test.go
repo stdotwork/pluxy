@@ -8,8 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// An error's dropped reaches core: it survives a frame's encoding and the redactor, which removes
-// the credential from it as from a translation report's loss paths.
 func TestErrorDroppedSurvivesTheWire(t *testing.T) {
 	ev := llm.Event{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 		Message: "cannot carry parts of this request", Dropped: []string{"response_format", "tools[0].sk-secret-123"}}}

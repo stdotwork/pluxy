@@ -57,8 +57,6 @@ func TestUpstreamUnmodified(t *testing.T) {
 	}
 }
 
-// Dispatch through the same socket host used by the other SDK tests. No handler may
-// lose core's cancellation or inherit the preceding session turn's metadata.
 func TestUpstreamInfoHandlers(t *testing.T) {
 	if _, ok := UpstreamInfo(context.Background()); ok {
 		t.Fatal("unrelated context has upstream info")
@@ -113,7 +111,6 @@ func TestUpstreamInfoHandlers(t *testing.T) {
 			if strings.Contains(string(encoded), account.Credential.APIKey) {
 				t.Fatal("metadata contains the credential")
 			}
-			// Info must not retain the credential via an embedded account.
 			typ := reflect.TypeOf(got.info)
 			for i := 0; i < typ.NumField(); i++ {
 				if typ.Field(i).Type == reflect.TypeOf(account) || typ.Field(i).Type == reflect.TypeOf(account.Credential) {
@@ -158,7 +155,6 @@ func TestUpstreamInfoHandlers(t *testing.T) {
 			waitCancelled(t, ctx)
 		})
 	}
-	// Use a second host for turns, whose opening returns immediately.
 	ext.Session = func(ctx context.Context, _ SessionCall) (Session, error) {
 		info, ok := UpstreamInfo(ctx)
 		seen <- observation{info, ok, ctx}
@@ -211,8 +207,6 @@ func TestUpstreamInfoHandlers(t *testing.T) {
 	waitCancelled(t, opening)
 }
 
-// A call's headers replace every value the extension set for the same name, whatever its letter
-// case in the header map, keep its other headers, and leave the extension's request as it was.
 func TestUpstreamSetsCallHeaders(t *testing.T) {
 	base := &http.Transport{}
 	recorder := &recordUpstream{}
@@ -240,8 +234,6 @@ func TestUpstreamSetsCallHeaders(t *testing.T) {
 	}
 }
 
-// A request made with Uncaptured goes as the call's other requests go, through the account's proxy
-// with its headers, but is left out of the call's capture, which still records the others.
 func TestUncapturedKeepsProxyAndHeaders(t *testing.T) {
 	type seen struct{ uri, key string }
 	got := make(chan seen, 1)
@@ -284,10 +276,6 @@ func TestUncapturedKeepsProxyAndHeaders(t *testing.T) {
 	}
 }
 
-// An extension that has not wrapped any client in Upstream cannot send through a proxy, with an
-// account's headers or with a call's payload rules, so a call that carries any of them is
-// answered with an error and never reaches its handler or the upstream; a call without a proxy
-// still does, and once the process wraps a client the proxied call goes through too.
 func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
 	was := upstreamUsed.Swap(false)
 	t.Cleanup(func() { upstreamUsed.Store(was) })
@@ -295,7 +283,7 @@ func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
 	defer provider.Close()
 	var ran atomic.Int32
-	send := func(ctx context.Context) error { // what an extension does with a client it never wrapped
+	send := func(ctx context.Context) error {
 		ran.Add(1)
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, provider.URL, nil)
 		resp, err := http.DefaultClient.Do(req)
@@ -332,7 +320,6 @@ func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
 	socket, _, _ := startServe(t, ext)
 	const proxy = "http://alice:Fake-Proxy-Secret-1@127.0.0.1:1"
 	request := &llm.Request{Model: "m"}
-	// reply returns the first terminal frame the call gets.
 	reply := func(t *testing.T, conn net.Conn) protocol.Reply {
 		t.Helper()
 		for {
@@ -365,7 +352,6 @@ func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
 	}
 
 	refused(t, generate(t, proxy))
-	// An account's headers take the same refusal, and the error holds none of their values.
 	const headerSecret = "Fake-Header-Secret-1"
 	conn := dial(t, socket)
 	hcall := protocol.Call{Type: protocol.TypeCall, ID: "h", Op: protocol.OpGenerate, Request: request,
@@ -379,7 +365,6 @@ func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
 		t.Fatalf("the error shows a header value: %q", hr.Error.Message)
 	}
 	conn.Close()
-	// So do a call's payload rules, which only a wrapped client applies.
 	conn = dial(t, socket)
 	pcall := protocol.Call{Type: protocol.TypeCall, ID: "p", Op: protocol.OpGenerate, Request: request, Account: &protocol.Account{ID: "a"},
 		Payload: &payload.Rules{Override: []payload.Rule{{Models: []payload.Model{{}}, Params: map[string]any{"service_tier": "priority"}}}}}
@@ -398,7 +383,6 @@ func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
 		t.Fatalf("a refused call ran %d handlers and made %d upstream requests", ran.Load(), hits.Load())
 	}
 
-	// A session opened without a proxy refuses a turn that has one; a turn without one runs.
 	conn = dial(t, socket)
 	defer conn.Close()
 	account := &protocol.Account{ID: "a"}
@@ -423,7 +407,6 @@ func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
 		t.Fatalf("a turn without a proxy: %+v, %d handlers, %d upstream requests", r, ran.Load(), hits.Load())
 	}
 
-	// A direct call reaches the handler; so does a proxied one once a client is wrapped.
 	if r := generate(t, ""); r.Type != llm.EventFinish || ran.Load() != 2 {
 		t.Fatalf("a direct call: %+v, %d handlers", r, ran.Load())
 	}
@@ -433,9 +416,6 @@ func TestProxiedCallRefusedWithoutUpstream(t *testing.T) {
 	}
 }
 
-// A session turn refused for its proxy does not leave that proxy for the next turn of the session:
-// the next turn, with no account, runs with no account and no proxy, both in its call and in the
-// UpstreamInfo of its context.
 func TestRefusedTurnLeavesNoProxyForNextTurn(t *testing.T) {
 	was := upstreamUsed.Swap(false)
 	t.Cleanup(func() { upstreamUsed.Store(was) })
@@ -462,7 +442,6 @@ func TestRefusedTurnLeavesNoProxyForNextTurn(t *testing.T) {
 	socket, _, _ := startServe(t, ext)
 	conn := dial(t, socket)
 	defer conn.Close()
-	// The session opens without a proxy and with no sdk.Upstream client in the process.
 	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "s", Op: protocol.OpSession,
 		Account: &protocol.Account{ID: "a"}, Session: &protocol.SessionInfo{Format: protocol.SessionOpenAIResponses}}); err != nil {
 		t.Fatal(err)
@@ -471,7 +450,6 @@ func TestRefusedTurnLeavesNoProxyForNextTurn(t *testing.T) {
 	if err := protocol.ReadFrame(conn, &ready); err != nil || ready.Type != protocol.TypeSessionReady {
 		t.Fatalf("session open: %+v, %v", ready, err)
 	}
-	// terminal returns the first terminal frame the session sends.
 	terminal := func(t *testing.T) protocol.Reply {
 		t.Helper()
 		for {
@@ -495,7 +473,6 @@ func TestRefusedTurnLeavesNoProxyForNextTurn(t *testing.T) {
 	if ran.Load() != 0 {
 		t.Fatalf("a refused turn ran its handler %d times", ran.Load())
 	}
-	// The next turn carries no account at all.
 	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeSessionTurn, Request: request}); err != nil {
 		t.Fatal(err)
 	}
@@ -511,8 +488,6 @@ func TestRefusedTurnLeavesNoProxyForNextTurn(t *testing.T) {
 	}
 }
 
-// Every transport made for a proxy closes its own idle connections after a finite time, so one the
-// pool drops while a request still uses it does not keep them open for good.
 func TestProxyTransportClosesIdleConnections(t *testing.T) {
 	for _, c := range []struct {
 		name       string
@@ -537,8 +512,6 @@ func TestProxyTransportClosesIdleConnections(t *testing.T) {
 	}
 }
 
-// A redirect that keeps the host but changes the scheme (https to http) is away from the first
-// request too: the account's secret headers would go out unencrypted.
 func TestRedirectedAwayOnSchemeChange(t *testing.T) {
 	first, _ := http.NewRequest(http.MethodGet, "https://api.example.test/start", nil)
 	for _, c := range []struct {
@@ -559,8 +532,6 @@ func TestRedirectedAwayOnSchemeChange(t *testing.T) {
 	}
 }
 
-// A request that has no Header map (a RoundTripper may be given one) gets the call's headers
-// instead of panicking.
 func TestUpstreamHeadersOnRequestWithoutHeaderMap(t *testing.T) {
 	base := &http.Transport{}
 	recorder := &recordUpstream{}
@@ -584,11 +555,6 @@ func TestUpstreamHeadersOnRequestWithoutHeaderMap(t *testing.T) {
 	}
 }
 
-// A redirect to another host never carries the account's secret headers (net/http leaves
-// Authorization and Cookie out there, but the call's context still holds the configured ones), nor
-// does a later hop of the same chain, even when the extension set one of those names itself (net/http
-// copies other headers to the redirect); a header that is not secret does, and a redirect on the same
-// host carries all of them.
 func TestUpstreamRedirectKeepsSecretHeadersOnTheirHost(t *testing.T) {
 	type seen struct{ secret, key, title string }
 	var first, same, other, otherHop atomic.Pointer[seen]
@@ -598,7 +564,7 @@ func TestUpstreamRedirectKeepsSecretHeadersOnTheirHost(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/hop" {
 			record(&other, r)
-			http.Redirect(w, r, "/final", http.StatusFound) // a second hop on the other host
+			http.Redirect(w, r, "/final", http.StatusFound)
 			return
 		}
 		record(&otherHop, r)
@@ -626,7 +592,7 @@ func TestUpstreamRedirectKeepsSecretHeadersOnTheirHost(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		req.Header["x-api-key"] = []string{"fake-extension-key"} // the extension's own, not canonical
+		req.Header["x-api-key"] = []string{"fake-extension-key"}
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -649,17 +615,12 @@ func TestUpstreamRedirectKeepsSecretHeadersOnTheirHost(t *testing.T) {
 	}
 }
 
-// A call's payload rules change each JSON request body once, inside the root the extension
-// names, and leave bodies that are not JSON or are encoded as they are. The second account's
-// retry and net/http's own resend get the same bytes (GetBody).
 func TestUpstreamAppliesPayload(t *testing.T) {
 	rules := &payload.Rules{
 		Override: []payload.Rule{{Models: []payload.Model{{}}, Params: map[string]any{"service_tier": "priority"}}},
 		Filter:   []payload.FilterRule{{Models: []payload.Model{{}}, Params: []string{`tools.#(name=="apply_patch")`}}},
 	}
 	const body = `{"model":"m","tools":[{"name":"apply_patch","n":1},{"name":"apply_patch","n":2}]}`
-	// The old engine removes only the first match (testdata case "example filter codex flat
-	// tools, two patches: first only").
 	const want = `{"model":"m","service_tier":"priority","tools":[{"name":"apply_patch","n":2}]}`
 	ctx, _ := withUpstreamInfo(context.Background(), protocol.Call{Op: protocol.OpGenerate, Payload: rules})
 	send := func(ctx context.Context, contentType, encoding, body string) (*recordUpstream, *http.Request) {
@@ -717,7 +678,6 @@ func TestUpstreamAppliesPayload(t *testing.T) {
 		t.Errorf("without the call's context: upstream got %s, want it unchanged", rec.body)
 	}
 
-	// Capture comes after the rules: the request log shows the body as it went upstream.
 	captured, capture := withUpstreamInfo(context.Background(), protocol.Call{Op: protocol.OpGenerate, Payload: rules, Capture: true})
 	rec, _ = send(captured, "application/json", "", body)
 	d := capture.take()
@@ -726,10 +686,6 @@ func TestUpstreamAppliesPayload(t *testing.T) {
 	}
 }
 
-// ApplyPayload gives a message that is not an HTTP request (a session turn's upstream message) the
-// rules of its turn: once, inside the root the extension names, and as it is when the turn has no
-// rules or the message is not a JSON object or array. Expected values are the ones of
-// TestUpstreamAppliesPayload (the old engine's oracle).
 func TestApplyPayload(t *testing.T) {
 	rules := &payload.Rules{
 		Override: []payload.Rule{{Models: []payload.Model{{}}, Params: map[string]any{"service_tier": "priority"}}},
@@ -738,7 +694,6 @@ func TestApplyPayload(t *testing.T) {
 	const body = `{"model":"m","tools":[{"name":"apply_patch","n":1},{"name":"apply_patch","n":2}]}`
 	const want = `{"model":"m","service_tier":"priority","tools":[{"name":"apply_patch","n":2}]}`
 	turn, _ := withUpstreamInfo(context.Background(), protocol.Call{Type: protocol.TypeSessionTurn, Payload: rules})
-	// The engine adds a new member at the end of its object, so compare the JSON, not the text.
 	sameJSON := func(got []byte, want string) bool {
 		var g, w any
 		return json.Unmarshal(got, &g) == nil && json.Unmarshal([]byte(want), &w) == nil && reflect.DeepEqual(g, w)
