@@ -370,10 +370,10 @@ gets 400 `invalid_request`. Optional query parameters:
 - `key_id`: a client key ID from `GET /client-keys`; the placeholder then names that key.
 - `model`: the model the tool starts with (trimmed, at most 240 characters of valid UTF-8, no control
   characters, else 400 `invalid_request`). Without `model`, core chooses the best match among the
-  models it serves: a model made for the tool (for Claude Code, one whose name holds `claude-opus`,
-  `claude-sonnet`, `claude`, `opus` or `sonnet`; for Codex, `codex` or `gpt-`), else the first chat
-  model (not an embedding, image, audio, speech, moderation or realtime model). When core serves no
-  chat model, `model` is left out and the files hold `<model-id>`.
+  models `GET /models` lists (sorted by name): a model made for the tool (for Claude Code, one whose
+  name holds `claude-opus`, `claude-sonnet`, `claude`, `opus` or `sonnet`; for Codex, `codex` or
+  `gpt-`), else the first chat model by name (not an embedding, image, audio, speech, moderation or
+  realtime model). When core serves no chat model, `model` is left out and the files hold `<model-id>`.
 
 A coding tool asks for a model of its own unless told which one, and an account of another service
 serves none of those, so every tool's text names one: Claude Code's `model` and its three

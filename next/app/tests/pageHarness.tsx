@@ -505,11 +505,11 @@ export async function mount(
     all(root, "label").filter((l) =>
       l.childNodes.some((c) => c.localName === "span" && c.textContent === label),
     );
-  /** The text input a label names, or the input whose accessible name is label. */
   const field = (label: string) => {
     const found =
       labelled(label).flatMap((l) => all(l, "input"))[0] ??
-      all(root, "input").find((i) => i.getAttribute("aria-label") === label);
+      all(root, "input").find((i) => i.getAttribute("aria-label") === label) ??
+      all(root, "select").find((s) => s.getAttribute("aria-label") === label);
     if (!found) throw new Error(`no field labelled ${label}`);
     return found;
   };
@@ -518,9 +518,7 @@ export async function mount(
   return {
     root,
     text: () => root.textContent,
-    /** The path a field shows. */
     shown: (label: string) => field(label).value,
-    /** Leaves the page: it is unmounted, as when the person goes to another page. */
     leave: async () => {
       await act(async () => {
         render(null, root);
@@ -536,8 +534,25 @@ export async function mount(
       });
       await settle();
     },
+    select: async (label: string, option: string) => {
+      const select = all(root, "select").find(
+        (s) => s.getAttribute("aria-label") === label || s.getAttribute("aria-label") === `Choose ${label}`,
+      );
+      if (!select) throw new Error(`no select labelled ${label}`);
+      if (select.disabled) throw new Error(`select ${label} is disabled`);
+      const match = all(select, "option").find((o) => o.textContent === option || o.value === option);
+      if (!match) throw new Error(`no option ${option} in ${label}`);
+      select.value = match.value;
+      await act(async () => {
+        select.dispatchEvent(new Event("change"));
+      });
+      await settle();
+    },
     type: async (label: string, value: string) => {
-      const input = field(label);
+      const input =
+        labelled(label).flatMap((l) => all(l, "input"))[0] ??
+        all(root, "input").find((i) => i.getAttribute("aria-label") === label);
+      if (!input) throw new Error(`no field labelled ${label}`);
       if (input.disabled) throw new Error(`field ${label} is disabled`);
       input.value = value;
       await act(async () => {

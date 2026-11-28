@@ -948,6 +948,12 @@ test("a setting that worked keeps its value; a disabled one says why", async () 
   expect(plain(off)).toContain("pluxy runs as a service, so its port is set there.");
 });
 
+test("SettingRow hides a switch label only when the switch is the row's sole control", async () => {
+  const css = await Bun.file(new URL("../kit/parts/parts.css", import.meta.url)).text();
+  expect(css).not.toMatch(/\.setting-control\s+\.switch\b/);
+  expect(css).toMatch(/\.setting-control\s+fieldset\s*>\s*\.switch\s+\.label\b/);
+});
+
 // ---- privacy: everything a part shows about a person is masked ---------------------------------
 
 test("in privacy mode an unlabelled account's ID is masked wherever the row shows it", () => {

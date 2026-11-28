@@ -29,7 +29,8 @@ nobody changed since. pluxy changes no other file of a client's, and these two o
    - A coding tool asks for a model of its own unless told which one, and your accounts may not
      serve that one, so every tool's output names the model it starts with. When pluxy serves
      models, `pluxy client show <tool>` fills in the best match for the tool (a Claude model for
-     Claude Code, a `codex` or `gpt-` one for Codex, else the first chat model); when pluxy serves
+     Claude Code, a `codex` or `gpt-` one for Codex, else the first chat model by name, in `pluxy model
+     list` order); when pluxy serves
      no model yet, it puts `<model-id>` in its place.
    - `pluxy client show <tool> --model <name>` names another model from `pluxy model list`.
    - `pluxy client show <tool> --key-id <id>` names the key with that ID in the output, still

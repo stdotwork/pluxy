@@ -148,7 +148,7 @@
     max-width: 100%;
   }
 
-  .tool-page .setting-control :is(.tool-model, .tool-path) input {
+  .tool-page .setting-control :is(.tool-model, .tool-path) :is(input, select) {
     width: 100%;
   }
 
