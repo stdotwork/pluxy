@@ -9,8 +9,6 @@ import (
 	pt "github.com/stdotwork/pluxy/next/internal/private/privatetest"
 )
 
-// The usage folder, a day file, a summary file and the seq mark each have a protected access list
-// that lets in only this user and SYSTEM.
 func TestUsageWindowsAccessList(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "usage")
 	c := &clock{t: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
@@ -36,8 +34,6 @@ func TestUsageWindowsAccessList(t *testing.T) {
 	pt.CheckPrivate(t, "new summary file", sumPath, false)
 }
 
-// A usage folder that already exists, open to Everyone, is made private before its day file is
-// written, and the day file is private too.
 func TestUsageWindowsMakesExistingFolderPrivate(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "usage")
 	pt.OpenFolder(t, dir)
@@ -54,8 +50,6 @@ func TestUsageWindowsMakesExistingFolderPrivate(t *testing.T) {
 	pt.CheckPrivate(t, "day file in an existing folder", filepath.Join(dir, "2026-11-19"+daySuffix), false)
 }
 
-// A usage folder that is a link (here a junction) is refused, not made private through the
-// link, and no day file is written through it.
 func TestUsageWindowsRefusesALink(t *testing.T) {
 	base := t.TempDir()
 	target := filepath.Join(base, "target")

@@ -24,8 +24,6 @@ func TestOpenRefillsFromTodayAndYesterdayAndPersistsV1(t *testing.T) {
 	dir := t.TempDir()
 	c := &clock{t: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
 
-	// Seed a file from two days ago (ignored by refill, still within default 90-day retention),
-	// yesterday (within 24h maxAge), and today.
 	writeLine := func(day string, e Event) {
 		b, err := json.Marshal(diskEvent{V: 1, Event: e})
 		if err != nil {
@@ -75,7 +73,6 @@ func TestOpenRefillsFromTodayAndYesterdayAndPersistsV1(t *testing.T) {
 		t.Fatalf("today line = %s (%v), want v=1", raw, err)
 	}
 
-	// Reopen and verify yesterday-kept + today-1 are both present with persistent monotonic Seq.
 	s2, err := openStore(Options{Dir: dir, MaxEvents: 100, MaxAge: 24 * time.Hour}, c.now, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +84,6 @@ func TestOpenRefillsFromTodayAndYesterdayAndPersistsV1(t *testing.T) {
 		p.Events[0].Seq != 2 || p.Events[1].Seq != 3 {
 		t.Fatalf("refilled events = %+v", p.Events)
 	}
-	// Summarize over the 24h window covers yesterday-kept + today-1; empty Filter reaches back across kept days.
 	sum24 := s2.Summarize(Filter{Since: c.now().Add(-24 * time.Hour)}, time.Minute, 1)
 	if sum24.Requests != 2 || sum24.Tokens.Total != 45 || sum24.Evicted != 0 || sum24.Dropped != 0 {
 		t.Fatalf("refilled 24h summary = %+v", sum24)
@@ -167,7 +163,6 @@ func TestRefillSkipsTornLastLine(t *testing.T) {
 				t.Fatalf("events after torn tail = %+v", p.Events)
 			}
 
-			// Writing a new event after reopening must land cleanly on its own line.
 			s.Add(Event{Timestamp: c.now(), Endpoint: "/v1/chat/completions", Model: "after-crash"})
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
@@ -205,7 +200,6 @@ func TestFullQueueDropsAndCountsWithoutBlocking(t *testing.T) {
 	}
 	s.closeTimeout = 2 * time.Second
 
-	// First event enters writeLine and blocks the single writer goroutine.
 	s.Add(Event{Timestamp: c.now(), Model: "first"})
 	select {
 	case <-writing:
@@ -213,7 +207,6 @@ func TestFullQueueDropsAndCountsWithoutBlocking(t *testing.T) {
 		t.Fatal("writer did not start")
 	}
 
-	// Next DefaultQueueSize (4096) events fill the bounded queue; extra events must drop at once.
 	const extra = 17
 	done := make(chan struct{})
 	go func() {
@@ -258,7 +251,6 @@ func TestRetentionDeletesOldFilesAndZeroKeepsAll(t *testing.T) {
 			}
 		}
 
-		// keep_days: 3 keeps 2026-11-17, 2026-11-18, 2026-11-19; deletes 2026-11-14, 15, 16 at start.
 		s, err := openStore(Options{Dir: dir, KeepDays: intPtr(3)}, c.now, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -276,7 +268,6 @@ func TestRetentionDeletesOldFilesAndZeroKeepsAll(t *testing.T) {
 			}
 		}
 
-		// Advance clock by 1 day and write a new day's event (triggering daily retention on rollover).
 		c.add(24 * time.Hour)
 		s.Add(Event{Timestamp: c.now(), Model: "next-day"})
 		if err := s.Close(); err != nil {
@@ -319,7 +310,6 @@ func TestSeqPersistsAcrossRestarts(t *testing.T) {
 		yesterday := c.now().Add(-24 * time.Hour).UTC().Format("2006-01-02")
 		today := c.now().UTC().Format("2006-01-02")
 
-		// Seed yesterday with an old line missing seq (seq=0) and a sequenced line expired past maxAge.
 		writeJSONL := func(day string, lines ...Event) {
 			path := filepath.Join(dir, day+".jsonl")
 			f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -358,7 +348,6 @@ func TestSeqPersistsAcrossRestarts(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Advance clock past maxAge so ALL previous events are expired from the 24h ring on restart.
 		c.add(25 * time.Hour)
 		s2, err := openStore(Options{Dir: dir, MaxEvents: 100, MaxAge: 24 * time.Hour}, c.now, nil)
 		if err != nil {
@@ -500,7 +489,6 @@ func TestSummariesBuiltOnDemandAndNoClosedRawReads(t *testing.T) {
 	accounts := []string{"acct-claude", "acct-openai", "acct-gemini"}
 	keys := []string{"k-alpha", "k-beta", ""}
 
-	// Generate 30 closed days (day-30 .. day-1) plus today across varied hours, models, accounts, keys, failures, latencies, and all 6 tokens.
 	var allEvents []Event
 	byDay := map[string][]Event{}
 	var seq uint64
@@ -567,20 +555,17 @@ func TestSummariesBuiltOnDemandAndNoClosedRawReads(t *testing.T) {
 	}
 	defer s.Close()
 
-	// Summaries are built on demand, not at Open.
 	sumDir := filepath.Join(dir, "summary")
 	if _, err := os.Stat(sumDir); !os.IsNotExist(err) {
 		t.Fatalf("summary dir created eagerly on Open: %v", err)
 	}
 
-	// First 30-day query builds summaries on demand and matches the raw reference.
 	f30 := Filter{Since: now.Add(-30 * 24 * time.Hour)}
 	got30 := s.Summarize(f30, 0, 0)
 	first30 := f30.Since.Truncate(24 * time.Hour)
 	want30 := refSummarize(allEvents, f30, 24*time.Hour, first30, int(now.Truncate(24*time.Hour).Sub(first30)/(24*time.Hour))+1)
 	assertSummaryMatches(t, "30d initial", got30, want30)
 
-	// Verify summary files exist for closed days (with mode 0600) and NOT for today.
 	todayStr := now.UTC().Format(dayLayout)
 	if _, err := os.Stat(filepath.Join(sumDir, todayStr+".json")); !os.IsNotExist(err) {
 		t.Fatalf("summary written for today %s", todayStr)
@@ -594,7 +579,6 @@ func TestSummariesBuiltOnDemandAndNoClosedRawReads(t *testing.T) {
 		t.Errorf("summary mode = %o, want 0600", info.Mode().Perm())
 	}
 
-	// Reopen a fresh Store (empty memory cache) and attach fail-on-closed-raw hook.
 	s2, err := openStore(Options{Dir: dir, MaxEvents: 1000, MaxAge: 48 * time.Hour}, c.now, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -606,7 +590,6 @@ func TestSummariesBuiltOnDemandAndNoClosedRawReads(t *testing.T) {
 		}
 	}
 
-	// Check 30d unfiltered, filtered queries, and 2d hourly range against raw reference without touching closed .jsonl files.
 	assertSummaryMatches(t, "30d from disk summaries", s2.Summarize(f30, 0, 0), want30)
 
 	failedTrue := true
@@ -624,14 +607,12 @@ func TestSummariesBuiltOnDemandAndNoClosedRawReads(t *testing.T) {
 		assertSummaryMatches(t, "30d "+tc.name, got, want)
 	}
 
-	// 2d range defaults to hourly buckets.
 	f2d := Filter{Since: now.Add(-48 * time.Hour)}
 	got2d := s2.Summarize(f2d, 0, 0)
 	first2d := f2d.Since.Truncate(time.Hour)
 	want2d := refSummarize(allEvents, f2d, time.Hour, first2d, int(now.Truncate(time.Hour).Sub(first2d)/time.Hour)+1)
 	assertSummaryMatches(t, "2d hourly", got2d, want2d)
 
-	// Corrupt one summary file and confirm it rebuilds cleanly from its raw file.
 	s2.onReadRaw = nil
 	if err := os.WriteFile(closedSample, []byte("{corrupt"), 0o600); err != nil {
 		t.Fatal(err)
@@ -664,7 +645,6 @@ func TestRetentionKeepsSummariesAndReadsThem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Trigger building the summary before retention deletes the raw file.
 	sum := s.Summarize(Filter{Since: now.Add(-30 * 24 * time.Hour)}, 0, 0)
 	if sum.Requests != 1 || sum.Tokens.Total != 75 {
 		s.Close()
@@ -672,7 +652,6 @@ func TestRetentionKeepsSummariesAndReadsThem(t *testing.T) {
 	}
 	s.Close()
 
-	// Reopen with keep_days: 3 -> deletes oldDay.jsonl, keeps summary/oldDay.json.
 	s2, err := openStore(Options{Dir: dir, KeepDays: intPtr(3)}, c.now, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -706,7 +685,6 @@ func TestTodayRingOverflowReadsTodayFile(t *testing.T) {
 			Tokens:    TokensOf(&llm.Usage{InputTokens: &in, OutputTokens: &out}),
 		})
 	}
-	// Ring holds only 3 events, but all 7 are in today's file + ring and must be counted without double-counting.
 	sum := s.Summarize(Filter{Since: now.Add(-time.Hour)}, 0, 0)
 	if sum.Requests != 7 || sum.Tokens.Total != 7*15 {
 		t.Fatalf("today overflow summary = %+v, want 7 requests and 105 tokens", sum)
@@ -725,7 +703,6 @@ func TestLateClosedDayEventInvalidatesSummary(t *testing.T) {
 	}
 	defer s.Close()
 
-	// Seed yesterday with 1 event via file before querying.
 	yPath := filepath.Join(dir, "2026-11-18.jsonl")
 	b, _ := json.Marshal(diskEvent{V: 1, Event: Event{Seq: 1, Timestamp: yesterdayTs, Model: "m1"}})
 	if err := os.WriteFile(yPath, append(b, '\n'), 0o600); err != nil {
@@ -737,7 +714,6 @@ func TestLateClosedDayEventInvalidatesSummary(t *testing.T) {
 		t.Fatalf("initial summary requests = %d, want 1", sum1.Requests)
 	}
 
-	// Late request started at 23:59 yesterday finishes now (just after midnight).
 	s.Add(Event{Timestamp: yesterdayTs.Add(9 * time.Minute), Model: "m2"})
 	sum2 := s.Summarize(Filter{Since: now.Add(-48 * time.Hour)}, 0, 0)
 	if sum2.Requests != 2 {
@@ -745,8 +721,6 @@ func TestLateClosedDayEventInvalidatesSummary(t *testing.T) {
 	}
 }
 
-// appendEvents adds records to a day file behind the store's back, as a late event's append or
-// another process would.
 func appendEvents(t *testing.T, path string, events ...Event) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -765,11 +739,9 @@ func appendEvents(t *testing.T, path string, events ...Event) {
 	}
 }
 
-// A closed day's totals and its series hold the same requests: a query whose first step starts
-// inside a closed hour counts that hour in the first step instead of nowhere.
 func TestSeriesCountsClosedDayHourTheRangeCutsShort(t *testing.T) {
 	dir := t.TempDir()
-	now := time.Date(2026, 11, 19, 1, 0, 0, 0, time.UTC) // yesterday is a closed day
+	now := time.Date(2026, 11, 19, 1, 0, 0, 0, time.UTC)
 	c := &clock{t: now}
 	appendEvents(t, filepath.Join(dir, "2026-11-18"+daySuffix),
 		Event{Seq: 1, Timestamp: time.Date(2026, 11, 18, 21, 45, 0, 0, time.UTC), Model: "m"},
@@ -781,8 +753,6 @@ func TestSeriesCountsClosedDayHourTheRangeCutsShort(t *testing.T) {
 	}
 	defer s.Close()
 
-	// The 200-minute window starts at 21:40, so the series' first 10-minute step starts at
-	// 21:50, inside the closed 21:00 hour.
 	sum := s.Summarize(Filter{Since: now.Add(-200 * time.Minute)}, 10*time.Minute, 20)
 	if sum.Requests != 2 {
 		t.Fatalf("totals = %d requests, want 2", sum.Requests)
@@ -802,8 +772,6 @@ func TestSeriesCountsClosedDayHourTheRangeCutsShort(t *testing.T) {
 	}
 }
 
-// The sequence never goes back on a restart, including one whose day files retention has since
-// deleted, so a poller's after cursor keeps working.
 func TestSeqSurvivesPrunedDayFiles(t *testing.T) {
 	t.Run("after a clean shutdown and a longer idle than retention keeps", func(t *testing.T) {
 		dir := t.TempDir()
@@ -819,7 +787,7 @@ func TestSeqSurvivesPrunedDayFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		c.add(72 * time.Hour) // the day files are now older than keep_days keeps
+		c.add(72 * time.Hour)
 		s2, err := openStore(Options{Dir: dir, KeepDays: intPtr(1)}, c.now, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -857,8 +825,6 @@ func TestSeqSurvivesPrunedDayFiles(t *testing.T) {
 		s.Add(Event{Timestamp: c.now(), Model: "before"})
 		s.flushWriter()
 
-		// The run goes on and prunes its only day file, then the process dies, so Close never
-		// records the seq: the store is left open here as a crash leaves it.
 		c.add(72 * time.Hour)
 		s.prune()
 
@@ -873,8 +839,6 @@ func TestSeqSurvivesPrunedDayFiles(t *testing.T) {
 	})
 }
 
-// A closed day whose file grew after its summary was built is rebuilt from the file, whether the
-// summary is the one in memory or one a restart read back.
 func TestLateClosedDayEventRebuildsAStaleSummary(t *testing.T) {
 	now := time.Date(2026, 11, 19, 0, 5, 0, 0, time.UTC)
 	yesterday := time.Date(2026, 11, 18, 23, 50, 0, 0, time.UTC)
@@ -902,8 +866,6 @@ func TestLateClosedDayEventRebuildsAStaleSummary(t *testing.T) {
 				t.Fatalf("initial summary = %d requests, want 1", sum.Requests)
 			}
 
-			// The crash window between appending a late event to a closed day and invalidating
-			// its summary.
 			appendEvents(t, path, Event{Seq: 2, Timestamp: yesterday.Add(5 * time.Minute), Model: "m2"})
 			if tc.reopen {
 				if err := s.Close(); err != nil {
@@ -921,8 +883,6 @@ func TestLateClosedDayEventRebuildsAStaleSummary(t *testing.T) {
 	}
 }
 
-// A day file the disk refuses is counted apart from a full queue and logged with its error; the
-// event stays in the record.
 func TestDiskWriteErrorIsCountedAndLogged(t *testing.T) {
 	dir := t.TempDir()
 	c := &clock{t: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
@@ -963,7 +923,6 @@ func TestDiskWriteErrorIsCountedAndLogged(t *testing.T) {
 	}
 }
 
-// lockedBuffer is a log destination a test reads while a store's writer writes to it.
 type lockedBuffer struct {
 	mu sync.Mutex
 	b  strings.Builder
@@ -984,7 +943,6 @@ func (l *lockedBuffer) String() string {
 func TestAttemptsAndTriedPersistAndOlderRecordsLoad(t *testing.T) {
 	dir := t.TempDir()
 	c := &clock{t: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
-	// A day-file line written before attempts and tried existed.
 	old := `{"v":1,"seq":1,"timestamp":"2026-11-19T11:58:00Z","endpoint":"/v1/chat/completions","stream":false,"model":"gpt-4o","failed":false,"latency_ms":3,"tokens":{}}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "2026-11-19.jsonl"), []byte(old), 0o600); err != nil {
 		t.Fatal(err)
@@ -1014,7 +972,6 @@ func TestAttemptsAndTriedPersistAndOlderRecordsLoad(t *testing.T) {
 	}
 }
 
-// The same average read back from a closed day's summary rows, which group requests by account.
 func TestAverageTimeFromSummaryRowsLeavesOutRequestsThatReachedNoAccount(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)

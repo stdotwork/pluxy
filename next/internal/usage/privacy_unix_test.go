@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// The usage folder, a day file, a summary file and the seq mark are owner-only on unix, including
-// a folder that already existed with wider access.
 func TestUsageOwnerOnlyModes(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "usage")
 	if err := os.Mkdir(dir, 0o755); err != nil {

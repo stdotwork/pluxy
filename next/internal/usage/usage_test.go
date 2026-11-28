@@ -11,7 +11,6 @@ import (
 
 func i64(n int64) *int64 { return &n }
 
-// clock is a store's time, moved by hand.
 type clock struct {
 	mu sync.Mutex
 	t  time.Time
@@ -24,8 +23,6 @@ func (c *clock) add(d time.Duration) {
 	c.mu.Unlock()
 }
 
-// newTestStore is a store with no folder (in memory only), which is what the tests below exercise;
-// disk_test.go covers a folder's summaries.
 func newTestStore(t *testing.T, maxEvents int, maxAge time.Duration) (*Store, *clock) {
 	t.Helper()
 	c := &clock{t: time.Date(2026, 11, 9, 12, 0, 30, 0, time.UTC)}
@@ -62,8 +59,6 @@ func TestTokensOf(t *testing.T) {
 	}
 }
 
-// Reading never removes events; the limit on events pushes out the oldest; after reads only
-// newer ones and says when some were lost.
 func TestStoreKeepsWhatItIsAskedAndDropsTheOldest(t *testing.T) {
 	s, c := newTestStore(t, 3, time.Hour)
 	for i := range 5 {
@@ -94,7 +89,7 @@ func TestStoreDropsEventsOlderThanItsAgeLimit(t *testing.T) {
 	s.Add(Event{Timestamp: c.now()})
 	c.add(40 * time.Second)
 	s.Add(Event{Timestamp: c.now()})
-	c.add(30 * time.Second) // the first is now 70s old
+	c.add(30 * time.Second)
 	if got := fmt.Sprint(seqs(s.Events(Filter{}, 0, 10))); got != "[2]" {
 		t.Fatalf("events %s", got)
 	}
@@ -161,8 +156,6 @@ func TestSummarize(t *testing.T) {
 	if len(sum.Providers) != 2 || sum.Providers[0].Name != "p/openai" {
 		t.Fatalf("providers %+v", sum.Providers)
 	}
-	// Now is 12:00:30; buckets of a minute: 11:58, 11:59, 12:00. The event 5 minutes ago is
-	// before the series; 90s ago is 11:59:00; 10s ago and now are in 12:00.
 	want := []Bucket{
 		{Start: time.Date(2026, 11, 9, 11, 58, 0, 0, time.UTC)},
 		{Start: time.Date(2026, 11, 9, 11, 59, 0, 0, time.UTC), Requests: 1, Failure: 1},
@@ -209,14 +202,12 @@ func TestStoreConcurrentUse(t *testing.T) {
 	}
 }
 
-// The age limit counts from when an event was recorded, which is the order the store keeps: a
-// request that arrived long ago but ended just now stays, and one recorded before it goes first.
 func TestStoreAgesByRecordingOrder(t *testing.T) {
 	s, c := newTestStore(t, 100, time.Minute)
 	s.Add(Event{Timestamp: c.now()})
 	c.add(30 * time.Second)
-	s.Add(Event{Timestamp: c.now().Add(-2 * time.Hour)}) // a request that ran two hours
-	c.add(40 * time.Second)                              // recorded 70s and 40s ago
+	s.Add(Event{Timestamp: c.now().Add(-2 * time.Hour)})
+	c.add(40 * time.Second)
 	if got := fmt.Sprint(seqs(s.Events(Filter{}, 0, 10))); got != "[2]" {
 		t.Fatalf("events %s", got)
 	}
@@ -261,7 +252,6 @@ func TestEventsBefore(t *testing.T) {
 		t.Fatalf("before=1 limit=2: %+v", p4)
 	}
 
-	// Filter with before paging.
 	mf := s.EventsBefore(Filter{Model: "m1"}, 0, 2)
 	if got := fmt.Sprint(seqs(mf)); got != "[5 3]" || mf.Next != 3 || !mf.More {
 		t.Fatalf("filtered before=0 limit=2: seqs=%s next=%d more=%v", got, mf.Next, mf.More)
@@ -272,9 +262,6 @@ func TestEventsBefore(t *testing.T) {
 	}
 }
 
-// A request refused before any account was tried (no account serves its model) took no time on an
-// account: the average time is the mean of the requests that reached one, so such refusals do not
-// pull it toward zero.
 func TestAverageTimeLeavesOutRequestsThatReachedNoAccount(t *testing.T) {
 	s, c := newTestStore(t, 100, time.Hour)
 	add := func(account string, failed bool, latency int64) {
@@ -286,12 +273,10 @@ func TestAverageTimeLeavesOutRequestsThatReachedNoAccount(t *testing.T) {
 	if got := s.Summarize(Filter{}, time.Minute, 3).AverageLatencyMS; got != 300 {
 		t.Fatalf("average = %d ms, want 300: the two refused requests reached no account", got)
 	}
-	// A failure after an account was tried still took that time.
 	add("a1", true, 900)
 	if got := s.Summarize(Filter{}, time.Minute, 3).AverageLatencyMS; got != 600 {
 		t.Fatalf("average = %d ms, want 600: a failure on an account counts", got)
 	}
-	// Nothing reached an account: no average, not a division by zero.
 	only, oc := newTestStore(t, 100, time.Hour)
 	only.Add(Event{Timestamp: oc.now(), Model: "m", Failed: true})
 	if got := only.Summarize(Filter{}, time.Minute, 3).AverageLatencyMS; got != 0 {
