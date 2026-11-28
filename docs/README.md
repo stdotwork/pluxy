@@ -7,12 +7,12 @@ from the accounts you already have. These pages say how to set it up, use it and
 
 - [Quick start](../README.md#quick-start): build pluxy, add an account and send a first request.
 - [Setup](setup.md): build from source, start core, where its files are, run it in a container.
+- [Providers](providers.md): the providers pluxy serves, how to sign in to each, and their options.
 - [Clients](clients.md): point Claude Code, Codex, OpenCode, Pi or another client at pluxy.
 - [Troubleshooting](troubleshooting.md): what an error means and what to do about it.
 
 ## Guide
 
-- [Providers](providers.md): the providers pluxy serves, how to sign in to each, and their options.
 - [Accounts and routing](routing.md): how a request picks an account, blocks, fallback chains,
   window ignition, proxies, headers, payload rules and model names.
 - [Extensions](extensions.md): install, update, turn off and remove provider extensions and packages.
@@ -25,10 +25,11 @@ from the accounts you already have. These pages say how to set it up, use it and
 
 - [Configuration](config.md): where the config is, every key, every `PLUXY_` environment variable,
   and what reloads without a restart.
+- [config.yaml keys](config-yaml.md): CLIProxyAPI `config.yaml` keys and auth-file fields mapped to
+  pluxy.
 - [Command line](cli.md): every `pluxy` command and flag.
 - [Management API](management-api.md): the HTTP API the panel, the app and the `pluxy` command use.
 - [Translation](translation.md): how requests and replies are translated between the client APIs and upstreams.
-- [UI terms](terms.md): the words the panel and the app use for quota, limits, accounts and usage.
 
 ## Extend pluxy
 
@@ -58,3 +59,4 @@ from the accounts you already have. These pages say how to set it up, use it and
 - [AGENTS.md](../AGENTS.md): the repository's layout, build and test commands, and how changes flow.
 - [Code map](map.md): where to start in the code for a kind of change, and the test fakes.
 - [CI](ci.md): the GitHub Actions workflows and the runners they use.
+- [UI terms](terms.md): the words the panel and the app use for quota, limits, accounts and usage.

@@ -109,8 +109,8 @@ JSON object named in its row; `204` means an empty reply.
 
 ## Changing the config
 
-These calls read and change the config file core runs on, whether it is the JSON config or a
-`config.yaml` ([`docs/config.md`](config.md)). A change goes through the same steps as a reload: core
+These calls read and change the config file core runs on, whether it is the JSON config
+([`docs/config.md`](config.md)) or a `config.yaml` ([`docs/config-yaml.md`](config-yaml.md)). A change goes through the same steps as a reload: core
 checks and prepares the new contents, and only when they are ready to serve does it write the file
 and switch to them. The file is replaced in one step (a new file renamed over it, through a symbolic
 link if the path is one), so nothing reads half of it. The new file keeps the old one's permissions:

@@ -104,7 +104,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 - **Tests**: `go test -count=1 -run TestParseConfig ./internal/server`,
   `go test -count=1 -run TestApplySettings ./internal/configdoc`, and
   `go test -count=1 -run TestWriteConfig ./internal/core`.
-- **Handbook**: `docs/config.md` ("Keys", "config.yaml with CLIProxyAPI key names", "Reloading").
+- **Handbook**: `docs/config.md` ("Keys", "Reloading") and `docs/config-yaml.md` ("config.yaml keys").
 
 ### Management API endpoint, CLI command, and panel page
 - **Entry**: request/reply types and Go client in `next/management/types.go` and
