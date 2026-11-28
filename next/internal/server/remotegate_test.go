@@ -12,8 +12,6 @@ import (
 	"testing"
 )
 
-// The management API answers only this machine unless management_allow_remote is on; a request
-// a proxy core does not trust forwards from elsewhere does not count as this machine.
 func TestManagementRemoteGate(t *testing.T) {
 	cfg := &Config{ManagementKey: "right-key"}
 	m := NewManagement(func() *Config { return cfg }, nil, nil)
@@ -52,7 +50,6 @@ func TestManagementRemoteGate(t *testing.T) {
 		}
 	}
 
-	// Behind a trusted proxy the forwarded client decides.
 	trusted, _ := parseTrustedProxies([]string{"127.0.0.1"})
 	cfg = &Config{ManagementKey: "right-key", trusted: trusted}
 	if w := call("127.0.0.1:1", map[string]string{"X-Forwarded-For": "198.51.100.1"}); w.Code != http.StatusForbidden {
@@ -61,7 +58,6 @@ func TestManagementRemoteGate(t *testing.T) {
 	if w := call("127.0.0.1:1", map[string]string{"X-Forwarded-For": "::1"}); w.Code != http.StatusNoContent {
 		t.Errorf("local client behind a trusted proxy: %d", w.Code)
 	}
-	// A trusted proxy that names the client only in a way core does not read is not this machine.
 	for _, h := range []map[string]string{{"Forwarded": "for=198.51.100.1"}, {"X-Forwarded-For": "unknown"}, {"X-Real-IP": "unknown"}} {
 		if w := call("127.0.0.1:1", h); w.Code != http.StatusForbidden {
 			t.Errorf("trusted proxy with %v: %d, want 403", h, w.Code)
@@ -71,16 +67,12 @@ func TestManagementRemoteGate(t *testing.T) {
 		t.Errorf("the trusted proxy's own call: %d", w.Code)
 	}
 
-	// management_allow_remote serves other machines, still with the key.
 	cfg = &Config{ManagementKey: "right-key", ManagementAllowRemote: true}
 	if w := call("192.0.2.10:1", nil); w.Code != http.StatusNoContent {
 		t.Errorf("allow remote: %d", w.Code)
 	}
 }
 
-// A call from the very address its connection arrived at comes from this machine, as a loopback
-// call does: core listening on a network address of its machine still answers the pluxy command
-// run there. Another address, a forwarded call and a client a trusted proxy names do not count.
 func TestManagementGateOwnAddress(t *testing.T) {
 	cfg := &Config{ManagementKey: "right-key"}
 	m := NewManagement(func() *Config { return cfg }, nil, nil)
@@ -125,7 +117,6 @@ func TestManagementGateOwnAddress(t *testing.T) {
 		}
 	}
 
-	// A caller at that address is never locked out, as a loopback one is not.
 	cfg = &Config{ManagementKey: "right-key", ManagementAllowRemote: true}
 	for range lockoutFailures + 1 {
 		call("192.0.2.1:50000", "192.0.2.1:18417", "wrong-key", nil)
@@ -134,8 +125,6 @@ func TestManagementGateOwnAddress(t *testing.T) {
 		t.Errorf("right key after %d wrong ones from the address it arrived at: %d %s, want 204", lockoutFailures+1, w.Code, w.Body)
 	}
 
-	// Behind a trusted proxy the client it names decides, even when that is core's own address:
-	// the TCP connection shows only where the proxy is.
 	trusted, _ := parseTrustedProxies([]string{"192.0.2.0/24"})
 	cfg = &Config{ManagementKey: "right-key", trusted: trusted}
 	if w := call("192.0.2.1:50000", "192.0.2.1:18417", "right-key", map[string]string{"X-Forwarded-For": "198.51.100.1"}); w.Code != http.StatusForbidden {
@@ -149,13 +138,9 @@ func TestManagementGateOwnAddress(t *testing.T) {
 	}
 }
 
-// The address a connection arrived at reaches the gate over real connections: plain HTTP, and
-// HTTPS with HTTP/2, as core serves its TLS listener. A call from another address of this machine
-// to it is refused.
 func TestManagementGateOwnAddressOverTheNetwork(t *testing.T) {
 	addrs := networkAddresses(t)
 	if len(addrs) == 0 {
-		// A CI runner always has one; a machine with no network does not.
 		if os.Getenv("CI") != "" {
 			t.Fatal("no IPv4 address on this machine that is not loopback")
 		}
@@ -167,7 +152,7 @@ func TestManagementGateOwnAddressOverTheNetwork(t *testing.T) {
 		w.Header().Set("X-Proto", r.Proto)
 		w.WriteHeader(http.StatusNoContent)
 	})
-	var peer atomic.Value // the source address of the last call, as the server saw it
+	var peer atomic.Value
 	gate := WithClientIP(func() *Config { return cfg }, m)
 	for _, tlsOn := range []bool{false, true} {
 		ln, err := net.Listen("tcp", net.JoinHostPort(addrs[0].String(), "0"))
@@ -186,11 +171,10 @@ func TestManagementGateOwnAddressOverTheNetwork(t *testing.T) {
 		} else {
 			srv.Start()
 		}
-		// from is a client whose calls leave from source (the zero Addr: the one the system picks).
 		from := func(source netip.Addr) *http.Client {
 			tr := srv.Client().Transport.(*http.Transport).Clone()
 			if tr.TLSClientConfig != nil {
-				tr.TLSClientConfig.ServerName = "example.com" // the test certificate names it, not this address
+				tr.TLSClientConfig.ServerName = "example.com"
 			}
 			if source.IsValid() {
 				tr.DialContext = (&net.Dialer{LocalAddr: &net.TCPAddr{IP: source.AsSlice()}}).DialContext
@@ -216,10 +200,6 @@ func TestManagementGateOwnAddressOverTheNetwork(t *testing.T) {
 		if want := map[bool]string{false: "HTTP/1.1", true: "HTTP/2.0"}[tlsOn]; resp.Header.Get("X-Proto") != want {
 			t.Errorf("TLS %v: served over %q, want %s", tlsOn, resp.Header.Get("X-Proto"), want)
 		}
-		// A call from another address of this machine arrives at the first one, so it does not
-		// count. NAT on this machine may rewrite such a source to the address called (Docker's
-		// masquerade rule does for its bridge's address): that call is skipped, since its source
-		// is then the address it arrived at.
 		tried := false
 		for _, other := range addrs[1:] {
 			resp := get(from(other))
@@ -240,7 +220,6 @@ func TestManagementGateOwnAddressOverTheNetwork(t *testing.T) {
 	}
 }
 
-// networkAddresses returns this machine's IPv4 addresses that are not loopback.
 func networkAddresses(t *testing.T) []netip.Addr {
 	t.Helper()
 	ifaces, err := net.InterfaceAddrs()

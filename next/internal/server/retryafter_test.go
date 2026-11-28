@@ -11,8 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Retry-After is whole seconds rounded up, so it agrees with the "try again in" in the message:
-// 0.2s left is 1, 1s is 1, 1.2s is 2.
 func TestRetryAfterRoundsUp(t *testing.T) {
 	for _, c := range []struct {
 		ms   int64
@@ -31,8 +29,6 @@ func TestRetryAfterRoundsUp(t *testing.T) {
 	}
 }
 
-// A locked-out management client is told the wait in whole seconds rounded up, in the header
-// and in the message alike, down to the last fraction of a second.
 func TestManagementLockoutWaitRoundsUp(t *testing.T) {
 	cfg := &Config{ManagementKey: "right-key", ManagementAllowRemote: true}
 	m := NewManagement(func() *Config { return cfg }, nil, nil)

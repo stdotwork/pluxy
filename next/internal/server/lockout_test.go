@@ -14,13 +14,11 @@ type fakeClock struct{ t time.Time }
 
 func (c *fakeClock) now() time.Time { return c.t }
 
-// fail records a wrong key from a and reports whether that blocked it.
 func (l *lockout) fail(a netip.Addr) bool {
 	_, blockedNow := l.attempt(a, false)
 	return blockedNow
 }
 
-// blockedFor returns how long a stays blocked, without recording a call.
 func (l *lockout) blockedFor(a netip.Addr) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -43,7 +41,6 @@ func TestLockout(t *testing.T) {
 	if !l.fail(a) || l.blockedFor(a) != lockoutFor {
 		t.Fatalf("not blocked for %s after %d failures: %s", lockoutFor, lockoutFailures, l.blockedFor(a))
 	}
-	// While blocked, a right key is refused and changes nothing.
 	clock.t = clock.t.Add(time.Minute)
 	if left, _ := l.attempt(a, true); left != lockoutFor-time.Minute || l.blockedFor(a) != left {
 		t.Errorf("right key while blocked: left %s, still blocked %s", left, l.blockedFor(a))
@@ -55,12 +52,10 @@ func TestLockout(t *testing.T) {
 	if left, _ := l.attempt(a, true); left != 0 {
 		t.Error("still blocked after the block ended")
 	}
-	// After the block the count starts again.
 	if l.fail(a) {
 		t.Error("blocked again by one failure")
 	}
 
-	// A right key clears the count.
 	b := netip.MustParseAddr("203.0.113.1")
 	for range lockoutFailures - 1 {
 		l.fail(b)
@@ -72,7 +67,6 @@ func TestLockout(t *testing.T) {
 		t.Error("count not cleared by a right key")
 	}
 
-	// A count is forgotten after lockoutIdle without a failure.
 	c := netip.MustParseAddr("203.0.113.2")
 	for range lockoutFailures - 1 {
 		l.fail(c)
@@ -107,7 +101,6 @@ func TestLockoutBounded(t *testing.T) {
 	}
 }
 
-// Failing from many other addresses does not push a blocked client out of the table.
 func TestLockoutKeepsBlockedClientsWhenFull(t *testing.T) {
 	l := newLockout()
 	l.max = 100
@@ -123,7 +116,6 @@ func TestLockoutKeepsBlockedClientsWhenFull(t *testing.T) {
 	}
 }
 
-// lockoutCall sends GET /ping to m from address from with key ("": no Authorization header).
 func lockoutCall(m *Management, from, key string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodGet, ManagementPrefix+"/ping", nil)
 	r.RemoteAddr = net.JoinHostPort(from, "1234")
@@ -142,8 +134,6 @@ func lockoutManagement() *Management {
 	return m
 }
 
-// The management API refuses a client after lockoutFailures wrong keys, even with the right
-// key, says when to try again, and still serves other clients.
 func TestManagementLockout(t *testing.T) {
 	m := lockoutManagement()
 	for i := range lockoutFailures {
@@ -160,8 +150,6 @@ func TestManagementLockout(t *testing.T) {
 	}
 }
 
-// Calls with no key at all are 401 and do not count: a proxy or page that forgets the key
-// cannot lock out the people behind its address.
 func TestManagementLockoutIgnoresMissingKey(t *testing.T) {
 	m := lockoutManagement()
 	for i := range lockoutFailures + 1 {
@@ -174,8 +162,6 @@ func TestManagementLockoutIgnoresMissingKey(t *testing.T) {
 	}
 }
 
-// A caller on this machine is never blocked, however many wrong keys it sends; the same wrong
-// keys from another machine block it.
 func TestManagementLockoutSparesThisMachine(t *testing.T) {
 	m := lockoutManagement()
 	for _, from := range []string{"127.0.0.1", "::1"} {

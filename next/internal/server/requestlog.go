@@ -19,26 +19,14 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// RequestLog says which client requests core writes to files in its logs folder, as today's
-// core does: every request while request-log is on; while it is off, each request that failed,
-// as error-<name>.log, keeping the newest ErrorMaxFiles of those.
 type RequestLog struct {
-	Dir string
-	// All is today's request-log.
-	All bool
-	// ErrorMaxFiles is how many error logs are kept (today's error-logs-max-files); 0 keeps all.
+	Dir           string
+	All           bool
 	ErrorMaxFiles int
-	// Redact removes the config's secrets (client keys, the management key, the accounts'
-	// credentials, the secrets in their settings and the proxy URLs' user info) from everything
-	// a request log holds.
-	Redact *protocol.Redactor
-	// Trim applies the logs folder's size cap; nil: none.
-	Trim func()
+	Redact        *protocol.Redactor
+	Trim          func()
 }
 
-// How much of a reply a request log keeps: its start and its end, so the error that ends a long
-// stream is kept. Every request keeps them until it ends, as any of them may fail, so with
-// request-log off (error logs only) a request keeps less.
 const (
 	loggedHead      = 256 << 10
 	loggedTail      = 768 << 10
@@ -46,19 +34,17 @@ const (
 	errorLoggedTail = 96 << 10
 )
 
-// capture keeps the start and the end of what is written to it, and counts the rest.
 type capture struct {
 	mu        sync.Mutex
 	head      []byte
-	tail      []byte // a ring of tailLimit bytes once full
-	at        int    // where the ring's oldest byte is
+	tail      []byte
+	at        int
 	written   int64
 	headLimit int
 	tailLimit int
-	redact    *protocol.Redactor // the secrets a cut could split in two (trimGap)
+	redact    *protocol.Redactor
 }
 
-// newCapture returns a capture for l's request logs.
 func (l *RequestLog) newCapture() *capture {
 	if l.All {
 		return &capture{headLimit: loggedHead, tailLimit: loggedTail, redact: l.Redact}
@@ -90,9 +76,6 @@ func (c *capture) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// bytes returns what was kept, with a note where bytes in the middle were left out. Beside the
-// note it leaves out what could be part of a secret cut in two there, which the redaction could
-// not recognise (trimGap), and counts it with the bytes left out.
 func (c *capture) bytes() []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -106,8 +89,6 @@ func (c *capture) bytes() []byte {
 	return fmt.Appendf([]byte(head), "\n[... %d bytes not logged ...]\n%s", skipped, end)
 }
 
-// recorder is the client's ResponseWriter, keeping the reply's status, headers and body for
-// the request log.
 type recorder struct {
 	http.ResponseWriter
 	status int
@@ -131,42 +112,31 @@ func (w *recorder) Write(p []byte) (int, error) {
 	return w.ResponseWriter.Write(p)
 }
 
-// Unwrap lets http.ResponseController reach the client's writer to flush it.
 func (w *recorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// requestEntry is one request as its request log writes it.
 type requestEntry struct {
-	at       time.Time
-	method   string
-	url      *url.URL
-	client   netip.Addr // where the request came from (ClientIP)
-	headers  http.Header
-	body     []byte
-	trace    *trace
-	status   int
-	rHeaders http.Header
-	reply    *capture // made into text only when the log is written
-	// replyTitle names the reply's section: RESPONSE, or WEBSOCKET MESSAGES for a turn.
+	at         time.Time
+	method     string
+	url        *url.URL
+	client     netip.Addr
+	headers    http.Header
+	body       []byte
+	trace      *trace
+	status     int
+	rHeaders   http.Header
+	reply      *capture
 	replyTitle string
-	// panicked is set when the handler panicked, whether or not it sent a reply.
-	panicked bool
+	panicked   bool
 }
 
-// failed reports whether the request counts as failed for an error log: as in today's core, a
-// reply status of 400 or more or a failure after the reply began, and also a handler that
-// panicked. A client that went away is not a failure.
 func (e *requestEntry) failed() bool {
 	return e.status >= 400 || e.panicked || e.trace != nil && e.trace.failed
 }
 
-// write writes e to its request log file, if e is to be logged.
 func (l *RequestLog) write(e *requestEntry) {
 	if l == nil || !l.All && !e.failed() {
 		return
 	}
-	// The logs folder is checked, and made when it is missing, as main.log's is (logfile), and
-	// each log file can be read only by core's user (and, on Windows, SYSTEM) from the moment it
-	// exists.
 	root, err := private.Dir{Path: l.Dir}.OpenRoot(true)
 	if err != nil {
 		log.Printf("request log: %v", err)
@@ -177,9 +147,6 @@ func (l *RequestLog) write(e *requestEntry) {
 	if !l.All {
 		name = "error-" + name
 	}
-	// Written in full under a name no reader lists, then linked to its own: a reader finds the
-	// whole log or none. Linking fails when the name exists, so an existing name, or a link
-	// planted under it, is never written through.
 	f, tmp, err := private.CreateTemp(root, l.Dir, ".writing-")
 	if err != nil {
 		log.Printf("request log: %v", err)
@@ -205,8 +172,6 @@ func (l *RequestLog) write(e *requestEntry) {
 	}
 }
 
-// logFileName names a request's log file as today's core does, by its path and time, ending in
-// its trace ID: v1-chat-completions-2026-11-09T120000-<trace>.log.
 func logFileName(path string, at time.Time, id string) string {
 	var b strings.Builder
 	for _, r := range strings.Trim(path, "/") {
@@ -223,7 +188,6 @@ func logFileName(path string, at time.Time, id string) string {
 	return fmt.Sprintf("%s-%s-%s.log", b.String(), at.Format("2006-01-02T150405"), id)
 }
 
-// keepNewestErrors deletes the oldest error logs beyond ErrorMaxFiles.
 func (l *RequestLog) keepNewestErrors() {
 	if l.ErrorMaxFiles <= 0 {
 		return
@@ -237,15 +201,12 @@ func (l *RequestLog) keepNewestErrors() {
 	}
 }
 
-// LogFile is a request log file as the management API lists it.
 type LogFile struct {
-	Name string `json:"name"`
-	Size int64  `json:"size"`
-	// Modified is when it was last written, in Unix seconds.
-	Modified int64 `json:"modified"`
+	Name     string `json:"name"`
+	Size     int64  `json:"size"`
+	Modified int64  `json:"modified"`
 }
 
-// ErrorLogs returns the error logs in dir, newest first.
 func ErrorLogs(dir string) ([]LogFile, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -276,18 +237,13 @@ func ErrorLogs(dir string) ([]LogFile, error) {
 	return files, nil
 }
 
-// requestLogName matches the names logFileName gives, with error- in front for an error log:
-// the path's characters, the time and the trace ID.
 var requestLogName = regexp.MustCompile(`^(error-)?[A-Za-z0-9._-]{0,100}-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}-([0-9]{14}-[0-9a-f]{16})\.log$`)
 
-// IsErrorLogName reports whether name is an error log's, as core names them.
 func IsErrorLogName(name string) bool {
 	m := requestLogName.FindStringSubmatch(name)
 	return m != nil && m[1] != ""
 }
 
-// FindRequestLog returns the name of the newest request log in dir, plain or error, of the
-// request with trace ID id; "" when there is none.
 func FindRequestLog(dir, id string) string {
 	if !traceID.MatchString(id) {
 		return ""
@@ -311,11 +267,8 @@ func FindRequestLog(dir, id string) string {
 	return best
 }
 
-// traceID matches a trace ID as newTrace makes them; no other file in the logs folder ends in one.
 var traceID = regexp.MustCompile(`^[0-9]{14}-[0-9a-f]{16}$`)
 
-// sensitiveName reports whether a header or query parameter name may carry a secret, as today's
-// core judges it, plus cookies and Google's key parameter.
 func sensitiveName(name string) bool {
 	n := strings.ToLower(name)
 	for _, s := range []string{"authorization", "api-key", "apikey", "api_key", "token", "secret", "cookie", "password"} {
@@ -326,7 +279,6 @@ func sensitiveName(name string) bool {
 	return n == "key"
 }
 
-// maskValue hides a secret header value, keeping an authorization scheme such as Bearer.
 func maskValue(name, v string) string {
 	if scheme, _, ok := strings.Cut(v, " "); ok && strings.Contains(strings.ToLower(name), "authorization") && scheme != "" {
 		return scheme + " " + protocol.Redacted
@@ -351,8 +303,6 @@ func writeHeaders(b *bytes.Buffer, h http.Header) {
 	}
 }
 
-// format writes e in today's core's sections, with every secret it can find removed: header
-// values and query parameters by name, and the config's secrets anywhere.
 func (l *RequestLog) format(e *requestEntry) []byte {
 	u := *e.url
 	if q := u.Query(); len(q) > 0 {
@@ -396,15 +346,12 @@ func (l *RequestLog) format(e *requestEntry) []byte {
 	return []byte(l.Redact.String(b.String()))
 }
 
-// keepBody keeps the request's body, once read, for its request log.
 func keepBody(r *http.Request, body []byte) {
 	if t := traceOf(r); t != nil {
 		t.body = body
 	}
 }
 
-// logged runs h for a client request and writes the request's log when the generation's
-// request log calls for it.
 func logged(w http.ResponseWriter, r *http.Request, g *Generation, h func(w http.ResponseWriter, r *http.Request)) {
 	if g.RequestLog == nil {
 		h(w, r)
@@ -416,11 +363,6 @@ func logged(w http.ResponseWriter, r *http.Request, g *Generation, h func(w http
 		r = r.WithContext(t.captureUpstream(r.Context(), g.RequestLog.Redact))
 	}
 	rec := &recorder{ResponseWriter: w, body: g.RequestLog.newCapture()}
-	// Written whether h returns or panics, and the panic then continues unchanged
-	// (http.ErrAbortHandler included): a handler that crashed is the one whose log is most
-	// needed. A status of 0 is shown as no status, the way the log already shows a reply that
-	// never began.
-	// A panic is seen as h not returning: finished stays false, and nothing recovers it.
 	finished := false
 	defer func() {
 		g.RequestLog.write(&requestEntry{at: at, method: r.Method, url: r.URL, client: ClientIP(r), headers: r.Header, body: t.body, trace: t,
@@ -430,8 +372,6 @@ func logged(w http.ResponseWriter, r *http.Request, g *Generation, h func(w http
 	finished = true
 }
 
-// requestTrace returns r's trace, adding a new one when it has none. The request's access line
-// reads the trace from its access state.
 func requestTrace(r *http.Request) (*http.Request, *trace) {
 	if t := traceOf(r); t != nil {
 		return r, t

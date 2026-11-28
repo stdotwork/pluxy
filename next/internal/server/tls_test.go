@@ -16,7 +16,6 @@ import (
 	"time"
 )
 
-// selfSigned returns a new self-signed certificate for localhost named cn, and its key, as PEM.
 func selfSigned(t *testing.T, cn string) (certPEM, keyPEM []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -46,7 +45,7 @@ func selfSigned(t *testing.T, cn string) (certPEM, keyPEM []byte) {
 func served(t *testing.T, c *CertFiles) string {
 	t.Helper()
 	c.mu.Lock()
-	c.checked = time.Time{} // look at the files now
+	c.checked = time.Time{}
 	c.mu.Unlock()
 	pair, err := c.GetCertificate(&tls.ClientHelloInfo{})
 	if err != nil {
@@ -59,8 +58,6 @@ func served(t *testing.T, c *CertFiles) string {
 	return leaf.Subject.CommonName
 }
 
-// A changed certificate and key are served from the next handshake; files that do not make a
-// pair leave the previous certificate in service.
 func TestCertFilesReadAgainWhenChanged(t *testing.T) {
 	dir := t.TempDir()
 	certPath, keyPath := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
@@ -89,7 +86,6 @@ func TestCertFilesReadAgainWhenChanged(t *testing.T) {
 		t.Errorf("after renewal served %q, want renewed", got)
 	}
 
-	// Half a renewal: the new certificate is written, its key not yet.
 	certC, keyC := selfSigned(t, "third")
 	if err := os.WriteFile(certPath, certC, 0o600); err != nil {
 		t.Fatal(err)

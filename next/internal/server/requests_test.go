@@ -25,8 +25,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// hold is where a test keeps attempts open: each attempt that reaches it tells entered, then
-// waits until the test closes release or the attempt's context ends.
 type hold struct {
 	entered chan struct{}
 	release chan struct{}
@@ -34,15 +32,12 @@ type hold struct {
 
 func newHold() *hold { return &hold{entered: make(chan struct{}, 4096), release: make(chan struct{})} }
 
-// held is an attempt's reply: pre, then a wait at its hold, then post. When the context ends
-// during the wait the reply ends with the cancelled error, as the extension host's does.
 type held struct {
 	ctx       context.Context
 	h         *hold
 	pre, post []llm.Event
 	n         int
-	// panics makes the reply panic after the wait, as a handler that crashes does.
-	panics bool
+	panics    bool
 }
 
 func (s *held) Next() llm.Event {
@@ -82,28 +77,21 @@ var (
 	replyRefused = []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeInvalidRequest, Scope: llm.ScopeRequest, Status: 400, Message: "refused by the test"}}}
 )
 
-// requestsCore is a client API served over HTTP with one account, "work", a registry and a usage
-// record. Each attempt's reply is what reply returns.
 type requestsCore struct {
 	*httptest.Server
-	q     *Requests
-	usage *usage.Store
-	reply atomic.Pointer[func(ctx context.Context, req llm.Request) route.Stream]
-	// key is the client key, state the routing state, attempts how many attempts began, and g
-	// the generation every request runs on.
+	q        *Requests
+	usage    *usage.Store
+	reply    atomic.Pointer[func(ctx context.Context, req llm.Request) route.Stream]
 	key      string
 	state    *route.State
 	attempts atomic.Int64
 	g        *Generation
 	client   *http.Client
-	// encoding, when set, is the Content-Encoding of the requests postBody sends.
 	encoding string
 }
 
 func newRequestsCore(t *testing.T) *requestsCore { return newRequestsCoreWith(t, "k", false, nil) }
 
-// newRequestsCoreWith is newRequestsCore with the client key key, over HTTP/2 when h2, and with
-// accounts that take sessions when openSession is not nil.
 func newRequestsCoreWith(t *testing.T, key string, h2 bool, openSession OpenSessionFunc) *requestsCore {
 	t.Helper()
 	c := &requestsCore{q: NewRequests(), key: key, state: route.NewState(), client: http.DefaultClient}
@@ -139,7 +127,6 @@ func newRequestsCoreWith(t *testing.T, key string, h2 bool, openSession OpenSess
 	return c
 }
 
-// holding makes every attempt reply pre, wait at the hold it returns, then reply post.
 func (c *requestsCore) holding(pre, post []llm.Event) *hold {
 	h := newHold()
 	f := func(ctx context.Context, _ llm.Request) route.Stream {
@@ -166,8 +153,6 @@ func (c *requestsCore) postBody(ctx context.Context, path string, body io.Reader
 	return c.client.Do(req)
 }
 
-// waitEmpty fails unless the registry is empty within a few seconds: a handler returns a moment
-// after its client has the reply.
 func (c *requestsCore) waitEmpty(t *testing.T) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -183,7 +168,6 @@ func (c *requestsCore) waitEmpty(t *testing.T) {
 	}
 }
 
-// waitEntered waits until n attempts are at h.
 func waitEntered(t *testing.T, h *hold, n int) {
 	t.Helper()
 	for range n {
@@ -195,7 +179,6 @@ func waitEntered(t *testing.T, h *hold, n int) {
 	}
 }
 
-// onlyRequest returns the one request the registry lists.
 func (c *requestsCore) onlyRequest(t *testing.T) management.RunningRequest {
 	t.Helper()
 	l := c.q.List()
@@ -217,8 +200,6 @@ func (c *requestsCore) lastEvent(t *testing.T) usage.Event {
 const heldChatBody = `{"model":"m1","messages":[{"role":"user","content":"hi"}]}`
 const heldChatStreamBody = `{"model":"m1","stream":true,"messages":[{"role":"user","content":"hi"}]}`
 
-// Every client route that reaches an account is listed while its attempt is open, with what the
-// request asked for and the account it went to, and is gone when it ends.
 func TestRequestsListsEveryClientRoute(t *testing.T) {
 	type route struct {
 		path, body, model, format string
@@ -238,10 +219,9 @@ func TestRequestsListsEveryClientRoute(t *testing.T) {
 		{path: "/v1beta/models/m1:countTokens", body: `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, model: "m1", format: llm.FormatGeminiGenerate},
 		{path: "/v1beta/models/m1:embedContent", body: `{"content":{"parts":[{"text":"hi"}]}}`, model: "m1", format: llm.FormatGeminiEmbedContent},
 	}
-	// The endpoints beyond generation: each names its own format.
 	for path, ep := range endpointRoutes {
 		if ep.form {
-			continue // a form body; the JSON ones enter and leave the registry the same way
+			continue
 		}
 		routes = append(routes, route{path: path, body: `{"model":"m1","input":"hi","prompt":"hi","query":"hi"}`, model: "m1", format: ep.format})
 	}
@@ -299,9 +279,7 @@ func TestRequestsListsEveryClientRoute(t *testing.T) {
 	}
 }
 
-// The registry is empty after a request ends, whichever way it ends.
 func TestRequestsEmptyAfterEveryEnding(t *testing.T) {
-	// readChunk reads the stream until it holds want.
 	readChunk := func(t *testing.T, r *bufio.Reader, want string) string {
 		t.Helper()
 		var got strings.Builder
@@ -410,7 +388,6 @@ func TestRequestsEmptyAfterEveryEnding(t *testing.T) {
 				t.Fatal("the request the client gave up got a reply")
 			}
 			c.waitEmpty(t)
-			// The client got nothing, so the event has no status.
 			if e := c.lastEvent(t); e.ErrorCode != llm.CodeCancelled || e.Status != 0 {
 				t.Errorf("usage has error_code %q status %d, want cancelled and no status", e.ErrorCode, e.Status)
 			}
@@ -429,7 +406,6 @@ func TestRequestsEmptyAfterEveryEnding(t *testing.T) {
 			if v, ok := c.q.Cancel(id); !ok || v.ID != id {
 				t.Fatalf("Cancel(%q) = %+v, %v", id, v, ok)
 			}
-			// The client is still there: its stream ends with the cancelled error.
 			rest, err := io.ReadAll(body)
 			if err != nil || !strings.Contains(string(rest), "the request was cancelled") || strings.Contains(string(rest), "last") {
 				t.Fatalf("after the cancel the stream held %q (error %v), want the cancelled error and no more of the reply", rest, err)
@@ -462,10 +438,8 @@ func TestRequestsEmptyAfterEveryEnding(t *testing.T) {
 			}()
 			waitEntered(t, h, 1)
 			id := c.onlyRequest(t).ID
-			// Twice: a second cancel of a request still listed changes nothing.
 			for range 2 {
 				if _, ok := c.q.Cancel(id); !ok {
-					// The first cancel may already have ended it.
 					break
 				}
 			}
@@ -477,7 +451,6 @@ func TestRequestsEmptyAfterEveryEnding(t *testing.T) {
 				t.Fatalf("the client got status %d and %q, want an error reply saying the request was cancelled", r.status, r.body)
 			}
 			c.waitEmpty(t)
-			// Unlike a client that went away, this one got a reply: the event has its status.
 			if e := c.lastEvent(t); e.ErrorCode != llm.CodeCancelled || e.Status != r.status {
 				t.Errorf("usage has error_code %q status %d, want cancelled and the reply's %d", e.ErrorCode, e.Status, r.status)
 			}
@@ -509,9 +482,6 @@ func TestRequestsEmptyAfterEveryEnding(t *testing.T) {
 	}
 }
 
-// A Responses WebSocket is listed while a turn runs, under the trace ID its handshake gave, and
-// not between turns. Cancelling the turn ends it as a turn whose context ends does: the socket
-// closes.
 func TestRequestsWebSocketTurn(t *testing.T) {
 	dial := func(t *testing.T, c *requestsCore) (*websocket.Conn, string) {
 		t.Helper()
@@ -529,8 +499,6 @@ func TestRequestsWebSocketTurn(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// readUntil reads messages until one holds want; it returns the error that ended the socket
-	// when none does.
 	readUntil := func(conn *websocket.Conn, want string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -583,7 +551,6 @@ func TestRequestsWebSocketTurn(t *testing.T) {
 		if _, ok := c.q.Cancel(trace); !ok {
 			t.Fatal("the running turn could not be cancelled")
 		}
-		// The cancel must be what closes the socket, not readUntil's own 5s limit.
 		cancelledAt := time.Now()
 		if err := readUntil(conn, "response.completed"); err == nil {
 			t.Fatal("the cancelled turn completed")
@@ -624,7 +591,6 @@ func TestRequestsWebSocketTurn(t *testing.T) {
 	})
 }
 
-// The list is oldest first, and a request nobody is serving cannot be cancelled.
 func TestRequestsListOrderAndUnknownTrace(t *testing.T) {
 	c := newRequestsCore(t)
 	h := c.holding(nil, replyRefused)
@@ -635,7 +601,7 @@ func TestRequestsListOrderAndUnknownTrace(t *testing.T) {
 				resp.Body.Close()
 			}
 		}()
-		waitEntered(t, h, 1) // each is being served before the next starts
+		waitEntered(t, h, 1)
 	}
 	var models []string
 	for _, r := range c.q.List() {
@@ -654,8 +620,6 @@ func TestRequestsListOrderAndUnknownTrace(t *testing.T) {
 	c.waitEmpty(t)
 }
 
-// Requests start, end and are cancelled while the list is read: every one leaves the registry,
-// and the race detector sees every access.
 func TestRequestsConcurrentStartEndCancel(t *testing.T) {
 	c := newRequestsCore(t)
 	h := c.holding(replyStart, replyEnd)
@@ -663,11 +627,10 @@ func TestRequestsConcurrentStartEndCancel(t *testing.T) {
 	stop := make(chan struct{})
 	var readers sync.WaitGroup
 	var cancelled atomic.Int64
-	// cancelSeen is closed when the first cancel has landed on a request that is still held.
 	cancelSeen := make(chan struct{})
 	var seen sync.Once
 	readers.Add(2)
-	go func() { // lists, and cancels every third request it sees
+	go func() {
 		defer readers.Done()
 		for i := 0; ; i++ {
 			select {
@@ -685,7 +648,7 @@ func TestRequestsConcurrentStartEndCancel(t *testing.T) {
 			}
 		}
 	}()
-	go func() { // only lists
+	go func() {
 		defer readers.Done()
 		for {
 			select {
@@ -713,16 +676,11 @@ func TestRequestsConcurrentStartEndCancel(t *testing.T) {
 			}
 			defer resp.Body.Close()
 			if i%5 == 0 {
-				return // the client goes away with the reply unread
+				return
 			}
 			_, _ = io.Copy(io.Discard, resp.Body)
 		}()
 	}
-	// Nothing ends before release, so a request that is listed is still running. Hold them all
-	// until a cancel has landed on one, however long the scheduler takes to start the clients and
-	// the lister: a timer could fire before any request had started. Then let the requests that
-	// were not cancelled finish, a few at a time, while more start. If no cancel ever lands the
-	// release still comes, so the check below fails instead of the test hanging.
 	go func() {
 		select {
 		case <-cancelSeen:
@@ -739,8 +697,6 @@ func TestRequestsConcurrentStartEndCancel(t *testing.T) {
 	}
 }
 
-// The registry keeps the ID of a request's client key and never the key: no text an entry holds
-// contains it, for an HTTP request or a WebSocket turn.
 func TestRequestsKeepNoClientKey(t *testing.T) {
 	const key = "client-key-the-registry-must-not-keep-7Qm2"
 	c := newRequestsCoreWith(t, key, false, nil)
@@ -780,13 +736,12 @@ func TestRequestsKeepNoClientKey(t *testing.T) {
 	if entries != 2 {
 		t.Fatalf("%d entries, want the HTTP request and the WebSocket turn", entries)
 	}
-	// Every string field is checked above; a field of another kind that could hold text fails here.
 	for i := range reflect.TypeFor[running]().NumField() {
 		switch f := reflect.TypeFor[running]().Field(i); f.Type.Kind() {
 		case reflect.String, reflect.Bool, reflect.Int:
 		default:
 			switch f.Name {
-			case "start", "client", "cancel", "stopped", "mu": // a time, an address, a function, a flag, a lock
+			case "start", "client", "cancel", "stopped", "mu":
 			default:
 				t.Errorf("the entry's field %s is a %s: say here why it cannot hold the client key", f.Name, f.Type)
 			}
@@ -800,14 +755,11 @@ func TestRequestsKeepNoClientKey(t *testing.T) {
 	c.waitEmpty(t)
 }
 
-// A cancel while the request's body is still arriving ends the read: the client gets the
-// cancelled error, the request leaves the list at once, no attempt is made, and the usage record
-// has one cancelled event with no attempt. Over HTTP/1 and HTTP/2.
 func TestRequestsCancelDuringBodyRead(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		h2   bool
-		gzip bool // the body is gzip, and the cancel comes before its header does
+		gzip bool
 	}{{"HTTP/1", false, false}, {"HTTP/2", true, false}, {"HTTP/1 before the gzip header", false, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			h2 := tc.h2
@@ -885,8 +837,6 @@ func TestRequestsCancelDuringBodyRead(t *testing.T) {
 	}
 }
 
-// cancelOnRead is a request body that cancels the one listed request when it is first read, then
-// gives the whole body: the cancel lands after the request is listed and before it is routed.
 type cancelOnRead struct {
 	q    *Requests
 	rest io.Reader
@@ -905,8 +855,6 @@ func (b *cancelOnRead) Read(p []byte) (int, error) {
 
 func (b *cancelOnRead) Close() error { return nil }
 
-// A request cancelled before routing never starts an attempt, though its whole body was read: the
-// generate routes and an endpoint record it as cancelled with its model, a count just answers.
 func TestRequestsCancelledBeforeRoutingMakesNoAttempt(t *testing.T) {
 	for _, tc := range []struct {
 		path, body string
@@ -948,7 +896,6 @@ func TestRequestsCancelledBeforeRoutingMakesNoAttempt(t *testing.T) {
 	}
 }
 
-// testSession is an upstream session whose turns are what reply returns.
 type testSession struct {
 	reply  func(ctx context.Context) Stream
 	turns  atomic.Int64
@@ -964,9 +911,6 @@ func (s *testSession) Turn(ctx context.Context, _ protocol.Account, _ llm.Reques
 	return s.reply(ctx)
 }
 
-// A WebSocket turn that runs on an upstream session is listed like any other, and a cancel ends
-// it: the turn's context ends, the socket closes, the session is closed, the account counts no
-// request, and the registry is empty.
 func TestRequestsCancelWebSocketSessionTurn(t *testing.T) {
 	h := newHold()
 	sess := &testSession{}
@@ -1006,8 +950,6 @@ func TestRequestsCancelWebSocketSessionTurn(t *testing.T) {
 	if _, ok := c.q.Cancel(got.ID); !ok {
 		t.Fatal("the session turn could not be cancelled")
 	}
-	// The cancel must be what closes the socket: it closes within a second, long before this
-	// read's own limit would end it.
 	cancelledAt := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1017,7 +959,7 @@ func TestRequestsCancelWebSocketSessionTurn(t *testing.T) {
 			if took := time.Since(cancelledAt); ctx.Err() != nil || took > time.Second {
 				t.Fatalf("the socket did not close because of the cancel: the read ended after %s with %v", took, err)
 			}
-			break // the socket closed, as it does for a turn whose context ended
+			break
 		}
 		if strings.Contains(string(data), "response.completed") {
 			t.Fatal("the cancelled session turn completed")
@@ -1039,16 +981,11 @@ func TestRequestsCancelWebSocketSessionTurn(t *testing.T) {
 	}
 }
 
-// A cancel that lands just as a request's body ends must not harm the requests that follow it on
-// the same HTTP/1 connection: the read deadline that ends a body read would otherwise outlive the
-// request and end the connection's context, and each later request on it would be answered as
-// cancelled though nobody cancelled it. The request after a cancelled one always gets its reply.
 func TestRequestsCancelAtBodyEndLeavesConnectionUsable(t *testing.T) {
 	const workers, rounds = 8, 60
 	var wg sync.WaitGroup
 	var cancelled, poisoned atomic.Int64
 	for range workers {
-		// A core for each worker, so a worker cancels only its own first request.
 		c := newRequestsCore(t)
 		h := c.holding(replyStart, replyEnd)
 		close(h.release)
@@ -1056,7 +993,6 @@ func TestRequestsCancelAtBodyEndLeavesConnectionUsable(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			defer c.waitEmpty(t)
-			// One connection for this worker, kept between requests.
 			client := &http.Client{Transport: &http.Transport{MaxConnsPerHost: 1, MaxIdleConnsPerHost: 1}}
 			defer client.CloseIdleConnections()
 			do := func(body io.Reader, marker string) (int, string, error) {
@@ -1082,8 +1018,6 @@ func TestRequestsCancelAtBodyEndLeavesConnectionUsable(t *testing.T) {
 					first <- status
 				}()
 				_, _ = send.Write([]byte(`{"model":"m1","messages":[{"role":"user",`))
-				// Once core lists the request, the rest of the body and the cancel go out together,
-				// the cancel up to 300 microseconds behind: often it lands as the read ends.
 				var id string
 				for deadline := time.Now().Add(5 * time.Second); id == "" && time.Now().Before(deadline); {
 					if l := c.q.List(); len(l) == 1 {
@@ -1099,7 +1033,6 @@ func TestRequestsCancelAtBodyEndLeavesConnectionUsable(t *testing.T) {
 					cancelled.Add(1)
 				}
 				<-first
-				// Nobody cancels this one: it must be answered, on the old connection or a new one.
 				if status, b, err := do(strings.NewReader(heldChatBody), "second"); err != nil || status != http.StatusOK {
 					poisoned.Add(1)
 					t.Errorf("the request after a cancelled one got status %d, error %v: %s", status, err, b)

@@ -9,38 +9,30 @@ import (
 	"time"
 )
 
-// certCheckInterval is how often CertFiles looks at its files for a change, at most.
 const certCheckInterval = time.Second
 
-// CertFiles serves the TLS certificate held in a certificate file and a key file, and reads
-// them again when either changes, so a renewed certificate is served without a restart. While
-// the files on disk do not make a valid pair (one written, the other not yet), it keeps
-// serving the pair it has.
 type CertFiles struct {
 	certPath, keyPath string
 
 	mu      sync.Mutex
 	cur     *tls.Certificate
-	stamps  [2]fileStamp // of the files when last read, or last found unreadable
+	stamps  [2]fileStamp
 	checked time.Time
 }
 
-// fileStamp tells whether a file changed: its size and modification time.
 type fileStamp struct {
 	size int64
 	mod  time.Time
 }
 
 func stampOf(path string) fileStamp {
-	fi, err := os.Stat(path) // through symbolic links, which certificate tools swap
+	fi, err := os.Stat(path)
 	if err != nil {
 		return fileStamp{size: -1}
 	}
 	return fileStamp{fi.Size(), fi.ModTime()}
 }
 
-// LoadCertFiles reads the certificate (PEM, the chain after the leaf) and private key (PEM) at
-// the given paths.
 func LoadCertFiles(certPath, keyPath string) (*CertFiles, error) {
 	c := &CertFiles{certPath: certPath, keyPath: keyPath}
 	c.stamps = [2]fileStamp{stampOf(certPath), stampOf(keyPath)}
@@ -52,8 +44,6 @@ func LoadCertFiles(certPath, keyPath string) (*CertFiles, error) {
 	return c, nil
 }
 
-// GetCertificate is tls.Config.GetCertificate: the current pair, read again first when a file
-// changed since the last look.
 func (c *CertFiles) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -73,7 +63,6 @@ func (c *CertFiles) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, erro
 	return c.cur, nil
 }
 
-// TLSConfig returns the TLS settings to serve listen with, or nil when tls.enable is off.
 func (c *Config) TLSConfig() (*tls.Config, error) {
 	if !c.TLS.Enable {
 		return nil, nil

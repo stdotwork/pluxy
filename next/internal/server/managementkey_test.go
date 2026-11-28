@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// managementCall sends GET /ping to m with token as the bearer token (none when empty), from the
-// client address from, and returns the status.
 func managementCall(m *Management, from, token string) int {
 	r := httptest.NewRequest(http.MethodGet, ManagementPrefix+"/ping", nil)
 	r.RemoteAddr = from + ":1234"
@@ -28,8 +26,6 @@ func pingManagement(cfg *Config) *Management {
 	return m
 }
 
-// The token the management key accepts: exactly it, not a prefix or an extension of it, and a
-// client that sends five wrong ones is locked out, with the key's digest made at load or not.
 func TestManagementKeyMatches(t *testing.T) {
 	loaded, err := ParseConfig([]byte(`{"listen": "127.0.0.1:0", "client_keys": ["c"], "management_key": "right-key", "management_allow_remote": true, "extension": {}}`), "/srv/pluxy/config.json")
 	if err != nil {
@@ -62,8 +58,6 @@ func TestManagementKeyMatches(t *testing.T) {
 	}
 }
 
-// A loaded config has the digest of its management key made, so a request's check does not hash
-// the key.
 func TestParseConfigPreparesManagementKey(t *testing.T) {
 	c, err := ParseConfig([]byte(`{"listen": "127.0.0.1:0", "client_keys": ["client-a"], "management_key": "m", "extension": {}}`), "/srv/pluxy/config.json")
 	if err != nil {
@@ -74,13 +68,6 @@ func TestParseConfigPreparesManagementKey(t *testing.T) {
 	}
 }
 
-// How long a management key check takes must not show how long the management key is. The same
-// wrong 1-byte token is checked against a config with a 1-byte key and one with a 16 MiB key.
-// Hashing the key on each request (the check before) costs milliseconds for the long key against
-// microseconds for the short one; this check hashes only the token, and compares it with the
-// digest made when the config was loaded. The two sides run alternately and each keeps its
-// fastest of ten, so a loaded machine's noise falls on both; only a long-key check clearly slower
-// than the short-key one fails.
 func TestManagementKeyTimeDoesNotShowKeyLength(t *testing.T) {
 	loaded := func(n int) *Management {
 		cfg := &Config{ManagementKey: strings.Repeat("k", n), ManagementAllowRemote: true}
@@ -91,7 +78,7 @@ func TestManagementKeyTimeDoesNotShowKeyLength(t *testing.T) {
 	i := 0
 	timeIt := func(m *Management) time.Duration {
 		i++
-		from := fmt.Sprintf("198.51.%d.%d", i>>8, i&255) // a new client each time: none is locked out
+		from := fmt.Sprintf("198.51.%d.%d", i>>8, i&255)
 		start := time.Now()
 		got := managementCall(m, from, "x")
 		d := time.Since(start)
@@ -100,7 +87,7 @@ func TestManagementKeyTimeDoesNotShowKeyLength(t *testing.T) {
 		}
 		return d
 	}
-	timeIt(short) // warm up
+	timeIt(short)
 	timeIt(long)
 	fastShort, fastLong := time.Duration(1<<63-1), time.Duration(1<<63-1)
 	for range 10 {

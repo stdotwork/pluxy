@@ -6,42 +6,32 @@ import (
 	"time"
 )
 
-// The management key lockout, with today's core's numbers: a client on another machine that
-// sends a wrong management key lockoutFailures times in a row is refused for lockoutFor,
-// whatever it sends. A client's count is forgotten after lockoutIdle without a failure. A call
-// with no key does not count, and a caller on this machine is never counted or blocked
-// (Management.ServeHTTP).
 const (
 	lockoutFailures = 5
 	lockoutFor      = 30 * time.Minute
 	lockoutIdle     = 2 * time.Hour
-	// lockoutSweep is how often, at most, forgotten clients are removed.
-	lockoutSweep = 10 * time.Minute
-	// lockoutClients bounds how many clients are tracked; past it one is dropped (dropOne).
-	lockoutClients = 10000
+	lockoutSweep    = 10 * time.Minute
+	lockoutClients  = 10000
 )
 
-// lockout counts failed management keys per client. An IPv6 client is counted by its /64, the
-// block one host is usually given, so it cannot start afresh by changing address within it.
 type lockout struct {
 	mu      sync.Mutex
 	clients map[netip.Prefix]*attempts
-	max     int // lockoutClients; smaller in tests
+	max     int
 	swept   time.Time
 	now     func() time.Time
 }
 
 type attempts struct {
 	failures int
-	last     time.Time // of the last failure
-	until    time.Time // blocked until then
+	last     time.Time
+	until    time.Time
 }
 
 func newLockout() *lockout {
 	return &lockout{clients: map[netip.Prefix]*attempts{}, max: lockoutClients, now: time.Now}
 }
 
-// lockoutKey is what a client is counted by: its address, or for IPv6 its /64.
 func lockoutKey(a netip.Addr) netip.Prefix {
 	if !a.IsValid() {
 		return netip.Prefix{}
@@ -53,10 +43,6 @@ func lockoutKey(a netip.Addr) netip.Prefix {
 	return netip.PrefixFrom(a, a.BitLen())
 }
 
-// attempt records one call from the client, whose key was right or not, in one step: it returns
-// how long the client stays blocked (0 when it is not, and then the call may go on when the key
-// was right), and whether this call's failure blocked it. A blocked client's calls change
-// nothing; a right key clears the count; a wrong one adds to it.
 func (l *lockout) attempt(a netip.Addr, right bool) (left time.Duration, blockedNow bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -89,7 +75,6 @@ func (l *lockout) attempt(a netip.Addr, right bool) (left time.Duration, blocked
 	return 0, true
 }
 
-// sweep removes clients whose count is forgotten and who are not blocked.
 func (l *lockout) sweep(now time.Time) {
 	if now.Sub(l.swept) < lockoutSweep {
 		return
@@ -102,11 +87,6 @@ func (l *lockout) sweep(now time.Time) {
 	}
 }
 
-// dropOne makes room for a new client: it drops the client that is not blocked whose last
-// failure is oldest or, when every client is blocked, the one whose block ends first. So a
-// client cannot end its own block by failing from many other addresses until it is dropped:
-// that needs every tracked client blocked, which takes more failed keys from more addresses than
-// those addresses could try fresh.
 func (l *lockout) dropOne(now time.Time) {
 	var victim netip.Prefix
 	var vat *attempts

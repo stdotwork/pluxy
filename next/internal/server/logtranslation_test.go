@@ -13,7 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// captureLog sends the standard logger's output to a buffer until the test ends.
 func captureLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var out bytes.Buffer
@@ -23,9 +22,6 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	return &out
 }
 
-// A request with 10,000 losses, each with a 1 KiB path and detail, logs one short line: the first
-// 20 losses with their paths and details cut to 200 bytes, then a count of the rest. Twenty such
-// entries come to about 8.6 KiB, so the line is held under 16 KiB.
 func TestLogTranslationBoundsTheLine(t *testing.T) {
 	out := captureLog(t)
 	losses := make([]llm.Loss, 10000)
@@ -55,8 +51,6 @@ func TestLogTranslationBoundsTheLine(t *testing.T) {
 	}
 }
 
-// A cut falls on a UTF-8 boundary, so the log line stays valid text. "€" is 3 bytes, so 66 whole
-// runes fit in 200 bytes and a 67th would not.
 func TestLogTranslationCutsOnRuneBoundary(t *testing.T) {
 	out := captureLog(t)
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
@@ -73,9 +67,6 @@ func TestLogTranslationCutsOnRuneBoundary(t *testing.T) {
 	}
 }
 
-// A request the extension sent as the client's own body (passthrough) can still lose something
-// to its endpoint's repairs (Codex's history repairs, an effort clamp, a thinking fit): those
-// losses are logged like any other, so a client is never left without a sign of what changed.
 func TestLogTranslationLogsPassthroughLosses(t *testing.T) {
 	out := captureLog(t)
 	r := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
@@ -87,8 +78,6 @@ func TestLogTranslationLogsPassthroughLosses(t *testing.T) {
 	}
 }
 
-// The request path is client input too, so the log line cuts it like a loss's path: to 200 bytes
-// on a UTF-8 boundary.
 func TestLogTranslationCutsThePath(t *testing.T) {
 	out := captureLog(t)
 	r := httptest.NewRequest(http.MethodPost, "/v1/"+strings.Repeat("€", 5000), nil)

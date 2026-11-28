@@ -9,27 +9,16 @@ import (
 	"strings"
 )
 
-// CORSConfig says which web pages may call the client API from a browser (CORS). Empty: none,
-// and core sends no CORS headers. Today's core allowed every origin on every route; this core
-// allows only the origins listed here, and only on the client API (the panel and the management
-// API stay same-site).
 type CORSConfig struct {
-	// AllowedOrigins are the origins allowed, each scheme://host[:port], such as
-	// https://app.example.com; "*" allows every origin, as today's core does.
 	AllowedOrigins []string `json:"allowed_origins,omitempty"`
 }
 
-// corsAllowHeaders are the request headers a page may always send: the ones client keys and
-// the client formats use. A preflight's own list is allowed too.
 var corsAllowHeaders = []string{"Authorization", "Content-Type", "X-Api-Key", "X-Goog-Api-Key", "Anthropic-Version", "Anthropic-Beta"}
 
-// corsExposeHeaders are the reply headers a page may read: the ones core adds.
 const corsExposeHeaders = TraceHeader + ", Retry-After"
 
-// corsMethods are the methods the client API serves.
 const corsMethods = "GET, POST, OPTIONS"
 
-// prepare checks the origins and writes each in the form browsers send it.
 func (c *CORSConfig) prepare() error {
 	for i, o := range c.AllowedOrigins {
 		if o == "*" {
@@ -45,8 +34,6 @@ func (c *CORSConfig) prepare() error {
 	return nil
 }
 
-// allow returns the Access-Control-Allow-Origin value for a request from origin: "*" when every
-// origin is allowed, origin itself when it is listed, "" when it may not call the API.
 func (c *CORSConfig) allow(origin string) string {
 	if slices.Contains(c.AllowedOrigins, "*") {
 		return "*"
@@ -57,16 +44,12 @@ func (c *CORSConfig) allow(origin string) string {
 	return ""
 }
 
-// perOrigin reports whether replies depend on the request's origin: some origins are listed, and
-// not every origin.
 func (c *CORSConfig) perOrigin() bool {
 	return len(c.AllowedOrigins) > 0 && !slices.Contains(c.AllowedOrigins, "*")
 }
 
-// withCORS answers CORS for the client API: it adds the CORS headers to replies to allowed
-// origins and answers their preflight requests itself (204, before the client key is checked,
-// since browsers send no credentials with a preflight). Requests from other origins, and every
-// request when no origin is allowed, go on unchanged.
+// withCORS answers preflight requests before the client key is checked, since browsers send
+// no credentials with a preflight.
 func withCORS(src Source, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g, release := src.Acquire()
@@ -95,7 +78,6 @@ func withCORS(src Source, next http.Handler) http.Handler {
 	})
 }
 
-// allowHeaders returns corsAllowHeaders and the headers a preflight asks for, each once.
 func allowHeaders(requested []string) string {
 	out := slices.Clone(corsAllowHeaders)
 	for _, v := range requested {

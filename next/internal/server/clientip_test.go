@@ -65,7 +65,6 @@ func TestClientIP(t *testing.T) {
 			t.Errorf("%s: client %s, want %s", c.name, got, c.want)
 		}
 	}
-	// Without trusted proxies no header counts.
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.RemoteAddr = "127.0.0.1:1"
 	r.Header.Set("X-Forwarded-For", "198.51.100.1")
@@ -74,7 +73,6 @@ func TestClientIP(t *testing.T) {
 	}
 }
 
-// WithClientIP uses the trusted proxies of the config active when the request arrives.
 func TestWithClientIPFollowsTheActiveConfig(t *testing.T) {
 	cfg := &Config{}
 	var seen netip.Addr

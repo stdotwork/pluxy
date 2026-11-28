@@ -19,25 +19,16 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol/nativeonly"
 )
 
-// nativeOnlyRequest is one client request the differential test sends through both frames.
 type nativeOnlyRequest struct {
-	src     string // corpus, format tests or edge cases
+	src     string
 	name    string
 	path    string
 	headers map[string]string
 	body    []byte
 }
 
-// TestNativeOnlyFrameGivesTheSameRequest is the differential test of native-only generate calls
-// (protocol minor 27): for every generate request the corpus cases send and every request body
-// the format packages' tests hold as a literal, a handler that gets it in a native-only call (core
-// leaves its items, tools and origin out and the extension parses its native body) gets the same
-// llm.Request, field for field, as one that gets the full call. Each request goes as core reads
-// it, with its thinking suffix taken, and also renamed to another upstream model.
 func TestNativeOnlyFrameGivesTheSameRequest(t *testing.T) {
 	reqs := append(corpusGenerateRequests(t), formatTestRequests(t)...)
-	// Odd text, once in valid UTF-8 (which goes native-only) and once with invalid bytes (which
-	// does not).
 	reqs = append(reqs, nativeOnlyEdgeRequests("a<b>&c\u2028d\u2029e\\ud800f\\u0000g\U0001F600 \\\"q\\\"")...)
 	reqs = append(reqs, nativeOnlyEdgeRequests("a<b>&c\xff\xfeg")...)
 
@@ -87,9 +78,6 @@ func TestNativeOnlyFrameGivesTheSameRequest(t *testing.T) {
 	}
 }
 
-// TestNativeOnlyLeavesChangedBodiesWhole checks that core sends the full request when the native
-// body is no longer the one its items were parsed from: a thinking suffix rewrites the body, and
-// a Gemini body's own "model" is part of the request's origin, so renaming it changes that.
 func TestNativeOnlyLeavesChangedBodiesWhole(t *testing.T) {
 	for _, c := range []nativeOnlyRequest{
 		{name: "chat suffix", path: "/v1/chat/completions", body: []byte(`{"model":"m(high)","messages":[{"role":"user","content":"hi"}]}`)},
@@ -123,9 +111,6 @@ func TestNativeOnlyLeavesChangedBodiesWhole(t *testing.T) {
 	}
 }
 
-// readAsCore reads c as serve does up to routing: the format's parser, the parsed record, the
-// drop policy, the thinking suffix and the native headers. It reports false for a request core
-// refuses before routing.
 func readAsCore(t *testing.T, c nativeOnlyRequest) (llm.Request, bool) {
 	t.Helper()
 	path, rest := c.path, ""
@@ -170,7 +155,6 @@ func readAsCore(t *testing.T, c nativeOnlyRequest) (llm.Request, bool) {
 	return req, true
 }
 
-// throughFrame writes call as core does and reads it as an extension does.
 func throughFrame(t *testing.T, call protocol.Call) protocol.Call {
 	t.Helper()
 	var buf bytes.Buffer
@@ -187,8 +171,6 @@ func throughFrame(t *testing.T, call protocol.Call) protocol.Call {
 	return got
 }
 
-// corpusGenerateRequests returns the HTTP requests of every corpus case (client and then), as
-// the case files hold them. readAsCore keeps those to generate routes.
 func corpusGenerateRequests(t *testing.T) []nativeOnlyRequest {
 	t.Helper()
 	reqs, err := formattest.CorpusRequests(filepath.Join("..", ".."))
@@ -198,9 +180,6 @@ func corpusGenerateRequests(t *testing.T) []nativeOnlyRequest {
 	return asNativeOnlyRequests(reqs)
 }
 
-// formatTestRequests returns every string literal in the format packages' tests that is a JSON
-// object, as a request to each route that reads the package's format (readAsCore drops those that
-// are not requests).
 func formatTestRequests(t *testing.T) []nativeOnlyRequest {
 	t.Helper()
 	reqs, err := formattest.LiteralRequests(filepath.Join("..", ".."))
@@ -218,9 +197,6 @@ func asNativeOnlyRequests(reqs []formattest.Request) []nativeOnlyRequest {
 	return out
 }
 
-// nativeOnlyEdgeRequests are bodies whose raw parts a frame could change: whitespace inside
-// kept JSON, repeated keys and unknown fields at every level, and odd, raw in a JSON string, in
-// every kind of text.
 func nativeOnlyEdgeRequests(odd string) []nativeOnlyRequest {
 	return []nativeOnlyRequest{
 		{src: "edge cases", name: "chat edge", path: "/v1/chat/completions", headers: map[string]string{"X-Unused": "1"}, body: []byte(`{
