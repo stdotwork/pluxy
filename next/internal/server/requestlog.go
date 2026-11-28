@@ -112,6 +112,7 @@ func (w *recorder) Write(p []byte) (int, error) {
 	return w.ResponseWriter.Write(p)
 }
 
+// Unwrap lets http.ResponseController reach the client's writer to flush it.
 func (w *recorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 type requestEntry struct {
@@ -276,7 +277,7 @@ func sensitiveName(name string) bool {
 			return true
 		}
 	}
-	return n == "key"
+	return n == "key" // Google's key parameter
 }
 
 func maskValue(name, v string) string {

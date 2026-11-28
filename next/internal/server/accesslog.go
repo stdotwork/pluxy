@@ -40,6 +40,7 @@ func (w *statusWriter) Write(p []byte) (int, error) {
 	return w.ResponseWriter.Write(p)
 }
 
+// Unwrap keeps http.ResponseController's Flush and Hijack working through the wrapper.
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func accessLog(h http.HandlerFunc) http.HandlerFunc {
@@ -55,6 +56,7 @@ func accessLog(h http.HandlerFunc) http.HandlerFunc {
 // never the query string, where Gemini clients send their key.
 func writeAccessLine(status int, start time.Time, r *http.Request, t *trace) {
 	if status == 0 {
+		// The handler returned before writing anything: net/http sends 200.
 		status = http.StatusOK
 	}
 	latency := time.Since(start)

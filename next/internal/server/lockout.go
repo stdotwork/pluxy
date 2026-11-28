@@ -14,6 +14,8 @@ const (
 	lockoutClients  = 10000
 )
 
+// An IPv6 client is counted by its /64, the block one host is usually given, so it cannot start
+// afresh by changing address within it.
 type lockout struct {
 	mu      sync.Mutex
 	clients map[netip.Prefix]*attempts

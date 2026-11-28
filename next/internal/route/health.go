@@ -41,7 +41,9 @@ var (
 	minReset = time.Second
 	maxReset = 8 * 24 * time.Hour
 	// Codex's monthly window, 28 to 31 days.
-	maxWindow         = 31 * 24 * time.Hour
+	maxWindow = 31 * 24 * time.Hour
+	// Providers name resets as Unix seconds, set against their own clock and truncated to the
+	// second, and a window's length is its nominal one.
 	resetSlack        = time.Hour
 	defaultCheckEvery = 15 * time.Minute
 	exhaustedFrom     = 5 * time.Minute

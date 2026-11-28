@@ -28,6 +28,7 @@ func (m *Management) importAuthFile(w http.ResponseWriter, r *http.Request) {
 		Name    string  `json:"name"`
 		Content *string `json:"content"`
 	}
+	// The decoding error is not sent back: it can quote the file.
 	if json.Unmarshal(b, &req) != nil || req.Content == nil {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", `send {"name": "<file name>.json", "content": "<the file's text>"}`)
 		return

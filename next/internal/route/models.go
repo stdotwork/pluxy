@@ -778,6 +778,7 @@ func (s storedCredentials) Credential(_ context.Context, extension, id string) (
 	return nil, 0, &llm.Error{Code: llm.CodeUnavailable, Message: "stored credential is unavailable"}
 }
 
+// a model's resource name (Gemini's "models/<id>")
 func renameResource(name, old, cur string) string {
 	switch {
 	case old == cur:

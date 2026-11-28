@@ -221,6 +221,7 @@ func TestConfigYAMLPayloadLikeOldCore(t *testing.T) {
 	}
 }
 
+// The invalid JSON text +Inf or -Inf, which no upstream accepts: this core leaves the field out.
 func TestConfigYAMLPayloadNonJSONLikeOldCore(t *testing.T) {
 	const m = "- models: [{name: m}]\n      params: "
 	model := func(list, one string) string {

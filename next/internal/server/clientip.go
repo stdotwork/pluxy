@@ -9,6 +9,7 @@ import (
 	"strings"
 )
 
+// RFC 7239's Forwarded, which core does not read.
 var anyForwardHeaders = []string{"X-Forwarded-For", "X-Real-IP", "Forwarded"}
 
 func parseTrustedProxies(list []string) ([]netip.Prefix, error) {
@@ -76,6 +77,7 @@ func remoteAddr(r *http.Request) netip.Addr {
 	return ap.Addr().Unmap()
 }
 
+// http.LocalAddrContextKey, which net/http sets for each connection, HTTP/2 over TLS included
 func localAddr(r *http.Request) netip.Addr {
 	a, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
 	if !ok || a == nil {
@@ -89,8 +91,11 @@ func localAddr(r *http.Request) netip.Addr {
 }
 
 type client struct {
-	addr       netip.Addr
-	forwarded  bool
+	addr      netip.Addr
+	forwarded bool
+	// addr is the connection's peer and the same address the connection arrived at. Only a
+	// program on this machine can open such a connection: the other end of a TCP handshake sends
+	// its replies to the source address, which here is this machine's own.
 	ownAddress bool
 }
 

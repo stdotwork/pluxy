@@ -33,6 +33,7 @@ type OpenSessionFunc func(ctx context.Context, extension string, account protoco
 
 const wsQueue = 16
 
+// a close message's payload is at most 125 bytes, two of which are the code.
 const wsCloseReasonMax = 123
 
 var codexOriginators = []string{"codex desktop", "codex-tui", "codex_cli_rs"}
