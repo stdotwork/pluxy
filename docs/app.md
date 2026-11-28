@@ -222,7 +222,9 @@ is never overwritten: the new one gets ` (1)`, ` (2)` and so on.
 
 Tools and Setup's step 2 show the same eight coding-tool rows: the five tools pluxy scans, plus
 Claude Desktop, Grok Build and Hermes Agent, which the app reads itself. When connected to a pluxy
-on another computer, Tools and Setup show that computer's tools with manual paste steps and list
+on another computer, Tools and Setup show that computer's tools with the panel's own buttons (for
+Claude Code and Codex, **Connect**, which writes their settings on the computer pluxy runs on, and
+the paste steps under **Set up by hand**; for the others, the paste steps under **Set up**) and list
 links to this computer's eight tool pages underneath.
 
 ### Add-ons
@@ -267,7 +269,7 @@ computer, each row offers one button that moves the tool forward in one press:
 | On | **Open** when the tool is Connected, else **Set up**; both open the tool's page |
 | Installed, off | **Turn on add-on**: opens the add-on's confirmation window, then opens the tool's page |
 | Offered by a registry | **Install add-on** (shows **Installing…**), then opens the turn-on confirmation window and the tool's page |
-| None available | No app button; the row keeps the panel's own paste steps |
+| None available | No app button; the row keeps the panel's own buttons: for Claude Code and Codex while pluxy can write their settings, **Connect** and the paste steps under **Set up by hand** (**Disconnect** once pluxy connected the tool); else the paste steps under **Set up**, or **Needs its add-on** |
 
 A tool page shows how the tool stands (`Connected`, `Installed · not connected`, `Settings need update`,
 `Cannot change settings`, `Not installed`, `Not checked`) and the one thing to press next:

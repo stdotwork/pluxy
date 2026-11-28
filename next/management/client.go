@@ -330,6 +330,34 @@ func (c *Client) ClientPaste(ctx context.Context, id, keyID, model string) (Clie
 	return v, err
 }
 
+// ConnectClient is POST /setup/clients/{id}/connect: core writes the tool's settings on its own
+// machine, with a client key made for it, labelled label (empty: the tool's name), and model as
+// the model the tool starts with (empty: the best match among those core serves, or none when
+// core serves no model).
+func (c *Client) ConnectClient(ctx context.Context, id, label, model string) (ClientConnection, error) {
+	fields := map[string]string{}
+	if label != "" {
+		fields["label"] = label
+	}
+	if model != "" {
+		fields["model"] = model
+	}
+	var body any
+	if len(fields) > 0 {
+		body = fields
+	}
+	var v ClientConnection
+	_, err := c.Call(ctx, http.MethodPost, "/setup/clients/"+url.PathEscape(id)+"/connect", nil, body, &v)
+	return v, err
+}
+
+// DisconnectClient is POST /setup/clients/{id}/disconnect: core puts back what its connect changed.
+func (c *Client) DisconnectClient(ctx context.Context, id string) (ClientConnection, error) {
+	var v ClientConnection
+	_, err := c.Call(ctx, http.MethodPost, "/setup/clients/"+url.PathEscape(id)+"/disconnect", nil, nil, &v)
+	return v, err
+}
+
 // SetupDone is POST /setup/done.
 func (c *Client) SetupDone(ctx context.Context) (SetupDoneReply, error) {
 	var v SetupDoneReply
