@@ -177,8 +177,8 @@
     cursor: default;
   }
 
-  /* Dimmed, except its Remove button. */
-  .theme-card[data-unusable] > :not(.btn, .confirm) {
+  /* Dim only the empty miniature; the theme name and why it cannot be used stay readable. */
+  .theme-card[data-unusable] > .mini-pair {
     opacity: 0.7;
   }
 

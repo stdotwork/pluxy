@@ -98,22 +98,28 @@ for (const theme of THEMES) {
     test(`segment labels, theme names and setting words are readable on the Themes page: ${name}`, async ({
       page,
     }) => {
-      await open(page, theme, appearance);
-      await goTo(page, "Themes");
-      const spans = page.locator(".segment span");
-      expect(await spans.count()).toBeGreaterThan(0);
-      // The text of each segment: its label, and the note under it where it has one; each theme's
-      // name and description; each setting's name and sentence.
-      const parts = page.locator(
-        ".segment span, .segment span small, .theme-name, .theme-about, .setting-name, .setting-description",
-      );
-      const measured = await measureContrast(parts);
-      const texts = await parts.allTextContents();
-      const low = measured
-        .map((m, i) => ({ text: texts[i]?.trim().slice(0, 30), ...m }))
-        .filter((m) => m.ratio < AA)
-        .map((m) => `"${m.text}": ${m.ratio.toFixed(2)}:1 (${m.fg} on ${m.bg})`);
-      expect(low).toEqual([]);
+      expect((await core.mgmt("PUT", "/themes/me/broken", { name: "Broken Thing" })).status).toBe(200);
+      try {
+        await open(page, theme, appearance);
+        await goTo(page, "Themes");
+        const spans = page.locator(".segment span");
+        expect(await spans.count()).toBeGreaterThan(0);
+        await expect(page.locator(".theme-card[data-unusable] .theme-about")).toBeVisible();
+        // The text of each segment: its label, and the note under it where it has one; each theme's
+        // name and description (including an unusable theme's reason); each setting's name and sentence.
+        const parts = page.locator(
+          ".segment span, .segment span small, .theme-name, .theme-about, .setting-name, .setting-description",
+        );
+        const measured = await measureContrast(parts);
+        const texts = await parts.allTextContents();
+        const low = measured
+          .map((m, i) => ({ text: texts[i]?.trim().slice(0, 30), ...m }))
+          .filter((m) => m.ratio < AA)
+          .map((m) => `"${m.text}": ${m.ratio.toFixed(2)}:1 (${m.fg} on ${m.bg})`);
+        expect(low).toEqual([]);
+      } finally {
+        await core.mgmt("DELETE", "/themes/me/broken");
+      }
     });
   }
 }
