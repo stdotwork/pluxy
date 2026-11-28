@@ -184,6 +184,87 @@
     min-width: 0;
   }
 
+  /* Each SettingRow is a size container (its own stacking context), so the row whose model list is
+     open rises above the rows below it. */
+  .tool-page .setting-row:focus-within,
+  .tool-page .setting-row:has(.tool-model-menu) {
+    position: relative;
+    z-index: 20;
+  }
+
+  .tool-model-box {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .tool-model-box[data-has-choices] input {
+    padding-inline-end: 1.75rem;
+  }
+
+  .tool-model-toggle {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 0;
+    display: grid;
+    place-items: center;
+    width: 1.75rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--px-color-text-muted);
+    cursor: pointer;
+  }
+
+  .tool-model-toggle:hover {
+    color: var(--px-color-text);
+  }
+
+  .tool-model-caret {
+    width: 0.4em;
+    height: 0.4em;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: translateY(-20%) rotate(45deg);
+  }
+
+  .tool-model-menu {
+    position: absolute;
+    inset-block-start: calc(100% + 2px);
+    inset-inline: 0;
+    z-index: 30;
+    max-height: 14rem;
+    overflow-y: auto;
+    padding: var(--s) 0;
+    background: var(--px-color-overlay);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    box-shadow: var(--px-shadow-raised);
+  }
+
+  .tool-model-option {
+    display: block;
+    width: 100%;
+    padding: calc(var(--s) * 1.5) calc(var(--s) * 2.5);
+    border: 0;
+    background: transparent;
+    color: var(--px-color-text);
+    text-align: start;
+    font-size: var(--px-font-size-mono);
+    cursor: pointer;
+    overflow-wrap: anywhere;
+  }
+
+  .tool-model-option:hover,
+  .tool-model-option[data-active] {
+    background: var(--px-color-selected);
+    color: var(--px-color-selected-text);
+  }
+
+  .tool-model-option[aria-selected="true"] {
+    font-weight: var(--px-font-weight-strong);
+  }
+
   .tool-unserved {
     color: var(--px-color-warn);
     font-size: var(--px-font-size-small);

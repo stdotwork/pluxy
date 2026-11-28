@@ -514,6 +514,98 @@ describe("models", () => {
     expect(page.shown("Haiku")).toBe("my-haiku");
   });
 
+  test("opening a Claude Code model box offers every served model even while it holds a value, and picking one updates it", async () => {
+    const ch = channel();
+    const page = await mount(() => <ClaudeCodePage />, ch.invoke, ["walk-model-1", "walk-model-2"]);
+    ch.reads[0]?.answer(claudeCode("not-configured", { opus: "", sonnet: "", haiku: "" }));
+    await settle();
+    expect(page.shown("Opus")).toBe("walk-model-1");
+    const inputOf = (label: string) => {
+      const el = all(page.root, "input").find((i) => i.getAttribute("aria-label") === label);
+      if (!el) throw new Error(`no input ${label}`);
+      return el;
+    };
+    const options = () =>
+      all(page.root, "button")
+        .filter((b) => b.getAttribute("role") === "option")
+        .map((b) => b.textContent);
+
+    // Focusing Opus while it already holds walk-model-1 still lists every served model.
+    const opus = inputOf("Opus");
+    await act(async () => {
+      opus.dispatchEvent(new Event("focusin"));
+    });
+    expect(options()).toEqual(["walk-model-1", "walk-model-2"]);
+    // Picking walk-model-2 updates the box and closes the list.
+    await page.click("walk-model-2");
+    expect(page.shown("Opus")).toBe("walk-model-2");
+    expect(options()).toEqual([]);
+
+    // Opening Sonnet while it holds an unserved name still offers every served model, and keyboard picks one.
+    await page.type("Sonnet", "claude-sonnet-9");
+    const sonnet = inputOf("Sonnet");
+    await act(async () => {
+      sonnet.dispatchEvent(new Event("focusout"));
+    });
+    await act(async () => {
+      sonnet.dispatchEvent(new Event("focusin"));
+    });
+    expect(options()).toEqual(["walk-model-1", "walk-model-2"]);
+    const key = (k: string) => Object.assign(new Event("keydown", { cancelable: true }), { key: k });
+    await act(async () => {
+      sonnet.dispatchEvent(key("ArrowDown"));
+    });
+    await act(async () => {
+      sonnet.dispatchEvent(key("ArrowDown"));
+    });
+    await act(async () => {
+      sonnet.dispatchEvent(key("Enter"));
+    });
+    expect(page.shown("Sonnet")).toBe("walk-model-2");
+    expect(options()).toEqual([]);
+
+    await page.click("Connect Claude Code");
+    const input = applies(ch)[0]?.input;
+    expect([input?.opus, input?.sonnet, input?.haiku]).toEqual([
+      "walk-model-2",
+      "walk-model-2",
+      "walk-model-1",
+    ]);
+  });
+
+  test("typing in a model box filters the list, Escape closes it, and reopening shows every served model again", async () => {
+    const ch = channel();
+    const page = await mount(() => <ClaudeCodePage />, ch.invoke, [
+      "walk-model-1",
+      "walk-model-2",
+      "other-model",
+    ]);
+    ch.reads[0]?.answer(claudeCode("not-configured", { opus: "", sonnet: "", haiku: "" }));
+    await settle();
+    const opus = all(page.root, "input").find((i) => i.getAttribute("aria-label") === "Opus");
+    if (!opus) throw new Error("no Opus input");
+    const options = () =>
+      all(page.root, "button")
+        .filter((b) => b.getAttribute("role") === "option")
+        .map((b) => b.textContent);
+
+    await act(async () => {
+      opus.dispatchEvent(new Event("focusin"));
+    });
+    expect(options()).toEqual(["walk-model-1", "walk-model-2", "other-model"]);
+    await page.type("Opus", "other");
+    expect(options()).toEqual(["other-model"]);
+    await act(async () => {
+      opus.dispatchEvent(Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape" }));
+    });
+    expect(options()).toEqual([]);
+    // Clicking the box again opens the full list even while it still holds "other".
+    await act(async () => {
+      opus.dispatchEvent(new Event("click"));
+    });
+    expect(options()).toEqual(["walk-model-1", "walk-model-2", "other-model"]);
+  });
+
   test("Codex clears what an import could not bring once its files are read again", async () => {
     const ch = channel({ ops: { import: () => ({ models: [], missing: ["odd-model"] }) } });
     const page = await mount(() => <CodexPage />, ch.invoke);

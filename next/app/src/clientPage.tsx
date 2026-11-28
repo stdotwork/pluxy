@@ -49,6 +49,7 @@ const t = strings("toolPage", {
   keyFailed: "Could not make a key for {tool}. {reason}",
   noBackup: "There is no copy from before pluxy changed this file.",
   unserved: "Your accounts do not offer {model}.",
+  chooseModel: "Choose {label}",
   refreshSuggestions: "Refresh suggestions",
   suggestionsFailed: "Could not read the models pluxy serves. {reason}",
   connect: "Connect {tool}",
@@ -955,35 +956,161 @@ export function ModelList(props: { id: string; s: ToolSetup; more?: readonly str
 }
 
 /**
- * A model field: what the person types or picks from what pluxy serves (list), with a line under
- * it when pluxy's accounts do not offer that model. Connect still writes it, for an account added
- * later. known are names that are not models (a tool's own aliases), never said to be missing.
+ * A model field: what the person types or picks from what pluxy serves, with a line under it when
+ * pluxy's accounts do not offer that model. Opening the box offers every served model whatever text
+ * the box holds (unlike an HTML datalist, which filters by the current value); typing narrows the
+ * list, and reopening shows them all again. Connect still writes whatever is typed, for an account
+ * added later. known are names that are not models (a tool's own aliases), never said to be
+ * missing and offered alongside the served models.
  */
 export function ModelInput(props: {
   id?: string;
   label: string;
   value: string;
   onInput: (v: string) => void;
-  list: string;
+  list?: string;
   served: Set<string> | undefined;
+  choices?: readonly string[];
   known?: readonly string[];
   placeholder?: string;
 }) {
+  const shown = useShown();
+  const menuId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const boxRef = useRef<HTMLSpanElement>(null);
+  const [open, setOpen] = useState(false);
+  const [filtering, setFiltering] = useState(false);
+  const [active, setActive] = useState(-1);
   const model = props.value.trim();
+  const base = props.choices ?? (props.served ? [...props.served] : []);
+  const allChoices = [...new Set([...base, ...(props.known ?? [])])];
+  const shownChoices = !open
+    ? []
+    : !filtering || model === ""
+      ? allChoices
+      : allChoices.filter((m) => m.toLowerCase().includes(model.toLowerCase()));
+  const expanded = open && shownChoices.length > 0;
+
+  const openAll = () => {
+    if (allChoices.length === 0) return;
+    setOpen(true);
+    setFiltering(false);
+    setActive(-1);
+  };
+  const close = () => {
+    setOpen(false);
+    setFiltering(false);
+    setActive(-1);
+  };
+  const choose = (choice: string) => {
+    props.onInput(choice);
+    close();
+  };
+
   return (
     <span class="tool-model">
-      <input
-        id={props.id}
-        type="text"
-        class="mono"
-        aria-label={props.label}
-        autocomplete="off"
-        spellcheck={false}
-        list={props.list}
-        placeholder={props.placeholder}
-        value={props.value}
-        onInput={(e) => props.onInput(e.currentTarget.value)}
-      />
+      <span class="tool-model-box" ref={boxRef} data-has-choices={allChoices.length > 0 ? "" : undefined}>
+        <input
+          ref={inputRef}
+          id={props.id}
+          type="text"
+          class="mono"
+          role="combobox"
+          aria-label={props.label}
+          aria-autocomplete="list"
+          aria-expanded={expanded}
+          aria-controls={expanded ? menuId : undefined}
+          aria-activedescendant={
+            expanded && active >= 0 && shownChoices[active] ? `${menuId}-${active}` : undefined
+          }
+          autocomplete="off"
+          spellcheck={false}
+          placeholder={props.placeholder}
+          value={props.value}
+          onFocus={openAll}
+          onClick={openAll}
+          onBlur={(e) => {
+            const next = e.relatedTarget as Node | null;
+            if (next && typeof boxRef.current?.contains === "function" && boxRef.current.contains(next))
+              return;
+            close();
+          }}
+          onInput={(e) => {
+            props.onInput(e.currentTarget.value);
+            if (allChoices.length > 0) {
+              setOpen(true);
+              setFiltering(true);
+              setActive(-1);
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") {
+              if (allChoices.length === 0) return;
+              e.preventDefault();
+              if (!open) {
+                setOpen(true);
+                setFiltering(false);
+                setActive(0);
+              } else if (shownChoices.length > 0) {
+                setActive((a) => (a + 1) % shownChoices.length);
+              }
+            } else if (e.key === "ArrowUp") {
+              if (!expanded) return;
+              e.preventDefault();
+              setActive((a) => (a <= 0 ? shownChoices.length - 1 : a - 1));
+            } else if (e.key === "Enter") {
+              const picked = expanded && active >= 0 ? shownChoices[active] : undefined;
+              if (picked !== undefined) {
+                e.preventDefault();
+                choose(picked);
+              }
+            } else if (e.key === "Escape" && open) {
+              e.preventDefault();
+              close();
+            }
+          }}
+        />
+        {allChoices.length > 0 && (
+          <button
+            type="button"
+            class="tool-model-toggle"
+            tabIndex={-1}
+            aria-label={t("chooseModel", { label: props.label })}
+            aria-expanded={expanded}
+            aria-controls={expanded ? menuId : undefined}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              if (open && !filtering) {
+                close();
+              } else {
+                openAll();
+                inputRef.current?.focus();
+              }
+            }}
+          >
+            <span aria-hidden="true" class="tool-model-caret" />
+          </button>
+        )}
+        {expanded && (
+          <div id={menuId} role="listbox" class="tool-model-menu" aria-label={props.label}>
+            {shownChoices.map((m, i) => (
+              <button
+                key={m}
+                id={`${menuId}-${i}`}
+                type="button"
+                role="option"
+                class="tool-model-option mono"
+                aria-selected={m === model}
+                data-active={i === active ? "" : undefined}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => choose(m)}
+              >
+                {shown.text(m)}
+              </button>
+            ))}
+          </div>
+        )}
+      </span>
       {!props.known?.includes(model) && <Unserved model={model} served={props.served} />}
     </span>
   );
@@ -1015,6 +1142,7 @@ export function DefaultModel(props: {
           value={props.value}
           onInput={props.onInput}
           list={id}
+          choices={s.served.data?.models.map((m) => m.id)}
           served={props.valid ? servedNames(s) : undefined}
         />
         <Button busy={s.served.loading} disabled={s.served.loading} onClick={s.served.reload}>
