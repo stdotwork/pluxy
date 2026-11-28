@@ -566,6 +566,37 @@ test("Connect sends the row's name for the key, reads the tools and keys again, 
   expect(all(row, "button").map((b) => b.textContent)).toEqual(["Disconnect"]);
 });
 
+test("picking a model in Set up by hand sends that model when Connect is pressed", async () => {
+  const w = world({
+    clients: [CAN],
+    models: ["fake-gpt-1", "fake-gpt-mini"],
+    connect: () => ({
+      status: 200,
+      body: {
+        client: { ...CAN, state: "configured", connected_by_pluxy: true },
+        files: [{ path: "~/.claude/settings.json", change: "changed" }],
+        model: "fake-gpt-mini",
+      },
+    }),
+  });
+  const m = await w.mount(<ToolsPage />);
+  await press(buttonIn(rowOf(m.root, "Claude Code"), "Set up by hand"));
+  const pick = all(rowOf(m.root, "Claude Code"), "select")[0];
+  if (!pick) throw new Error("no model picker in Set up by hand");
+  pick.value = "fake-gpt-mini";
+  await act(async () => {
+    pick.dispatchEvent(new Event("change"));
+  });
+  await settle();
+  const before = w.calls.length;
+  await press(buttonIn(rowOf(m.root, "Claude Code"), "Connect"));
+  expect(w.calls[before]).toEqual({
+    method: "POST",
+    path: "/setup/clients/claude-code/connect",
+    body: { label: "Claude Code", model: "fake-gpt-mini" },
+  });
+});
+
 test("a refused Connect says why under the row, and Disconnect says what it did to the file", async () => {
   const byPluxy = { ...CAN, state: "configured" as const, connected_by_pluxy: true };
   const refused = world({

@@ -657,6 +657,10 @@ type ClientConnection struct {
 	KeyMade bool `json:"key_made,omitempty"`
 	// KeyRemoved: the disconnect removed the client key its connect had made.
 	KeyRemoved bool `json:"key_removed,omitempty"`
+	// Model is the model the connect wrote for the tool to start with: the one the call asked for,
+	// else the best match among the models pluxy serves; empty when no model was served and none
+	// was asked for (the tool's own model setting, if any, was left alone), and on disconnect.
+	Model string `json:"model,omitempty"`
 }
 
 // Changes to a tool's settings file (ClientConnectionFile.Change).

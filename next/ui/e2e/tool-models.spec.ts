@@ -2,6 +2,8 @@
 // tool name a model pluxy serves (with a picker), and a request for the tool's own default model,
 // which no account serves, tells the person which models are served and leads to the account's
 // alias form with the name already filled in.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { goTo, openPanel, signIn, useCore } from "./support";
 
@@ -45,7 +47,10 @@ test("the steps under a tool name a model pluxy serves, and picking another chan
   expect(names.length).toBeGreaterThan(1);
   await goTo(page, "Tools");
   const claude = page.locator('[data-part="tool-row"]').filter({ hasText: "Claude Code" });
-  await claude.getByRole("button", { name: "Set up", exact: true }).click();
+  if (await claude.isHidden()) {
+    await page.getByText(/^Other tools \(/).click();
+  }
+  await claude.getByRole("button", { name: /^Set up( by hand)?$/ }).click();
   const steps = claude.locator('[data-part="tool-steps"]');
   const picker = steps.getByLabel("Model Claude Code starts with");
   // The demo serves no Claude model, so the best match is the first chat model it serves.
@@ -59,6 +64,18 @@ test("the steps under a tool name a model pluxy serves, and picking another chan
   await picker.selectOption(other);
   await expect(steps.locator("pre")).toContainText(`"model": "${other}"`);
   await expect(steps.locator("pre")).not.toContainText(`"model": "${chosen}"`);
+  // When Connect is offered (Claude Code is installed), pressing it writes the picked model.
+  const connect = claude.getByRole("button", { name: "Connect", exact: true });
+  if ((await connect.count()) > 0) {
+    await connect.click();
+    await expect(claude).toContainText("Connected. Start Claude Code again so it reads the new settings.");
+    const written = readFileSync(join(dirname(core.config), "home", ".claude", "settings.json"), "utf8");
+    expect(written).toContain(`"model": "${other}"`);
+    expect(written).toContain(`"ANTHROPIC_DEFAULT_HAIKU_MODEL": "${other}"`);
+    expect(written).not.toContain("<model-id>");
+    await claude.getByRole("button", { name: "Disconnect", exact: true }).click();
+    await expect(claude).toContainText("Disconnected.");
+  }
 });
 
 test("a request for a model no account serves says what is served and leads to an alias", async ({

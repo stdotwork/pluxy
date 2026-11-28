@@ -706,6 +706,7 @@ func applyCodexConfig(before []byte, snippet string) ([]byte, error) {
 // codexKeys are the settings Connect sets or takes out, by table.
 var codexKeys = []tomlEntry{
 	{table: "", key: "model_provider"},
+	{table: "", key: "model"},
 	{table: codexProvider, key: "name"},
 	{table: codexProvider, key: "base_url"},
 	{table: codexProvider, key: "wire_api"},

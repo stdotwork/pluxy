@@ -112,7 +112,10 @@ func setupCommands() []command {
 			args:    []string{"tool"},
 			routes:  []string{"POST /setup/clients/{id}/connect"},
 			summary: "point a client tool on core's machine at core: core writes its settings with a key made for it, and keeps the file as it was",
-			run:     func(x *invocation) error { return runClientConnect(x, "connect") },
+			flags: func(fs *flag.FlagSet, o *opts) {
+				fs.StringVar(&o.model, "model", "", "model the tool starts with, one from pluxy model list (default: the best match)")
+			},
+			run: func(x *invocation) error { return runClientConnect(x, "connect") },
 		},
 		{
 			words:   "client disconnect",
@@ -127,8 +130,12 @@ func setupCommands() []command {
 // runClientConnect is pluxy client connect and pluxy client disconnect (verb).
 func runClientConnect(x *invocation, verb string) error {
 	tool := x.args[0]
+	var body any
+	if verb == "connect" && x.opts.model != "" {
+		body = map[string]string{"model": x.opts.model}
+	}
 	var r management.ClientConnection
-	return x.call(http.MethodPost, "/setup/clients/"+url.PathEscape(tool)+"/"+verb, nil, nil, &r, func() {
+	return x.call(http.MethodPost, "/setup/clients/"+url.PathEscape(tool)+"/"+verb, nil, body, &r, func() {
 		name := x.cell(cmpOr(r.Client.Name, r.Client.ID))
 		for _, f := range r.Files {
 			x.printf("%s: %s\n", x.cell(f.Path), x.cell(f.Change))
@@ -136,6 +143,9 @@ func runClientConnect(x *invocation, verb string) error {
 		if verb == "connect" {
 			x.printf("Connected %s. Start it again so it reads the new settings.\n", name)
 			x.printf("pluxy keeps the file as it was: pluxy client disconnect %s puts it back.\n", x.cell(r.Client.ID))
+			if r.Model == "" {
+				x.eprintf("pluxy serves no models yet, so %s's model was left as it was. Connect again after adding an account, or pass --model <name>.\n", x.errCell(cmpOr(r.Client.Name, r.Client.ID)))
+			}
 			return
 		}
 		x.printf("Disconnected %s.\n", name)

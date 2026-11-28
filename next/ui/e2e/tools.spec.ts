@@ -2,7 +2,7 @@
 // Code on its machine, in a home folder of its own): the tools listed, Connect and Disconnect, the
 // steps under a row, a key made for a tool and put in its text, named keys, deleting with a
 // question, and the address.
-import { existsSync, mkdtempSync, symlinkSync, unlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
@@ -68,7 +68,11 @@ test("Connect writes Claude Code's settings on pluxy's computer, and Disconnect 
   await expect(page.getByText("1 installed · 1 connected", { exact: false })).toBeVisible();
   await expect(claude.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
   await expect(claude.getByRole("button", { name: "Set up by hand", exact: true })).toHaveCount(0);
-  // Core reads the file it wrote as pointing Claude Code at it, with a key made for Claude Code.
+  // Core reads the file it wrote as pointing Claude Code at it, with a key made for Claude Code
+  // and no placeholder model (first-run core serves no model yet).
+  const written = readFileSync(join(dirname(core.config), "home", ".claude", "settings.json"), "utf8");
+  expect(written).not.toContain("<model-id>");
+  expect(written).not.toContain('"model"');
   const read = await core.mgmt<{
     found: { clients: { id: string; state: string; connected_by_pluxy?: boolean }[] };
   }>("GET", "/setup");

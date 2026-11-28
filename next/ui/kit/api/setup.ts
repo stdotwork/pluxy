@@ -40,6 +40,8 @@ export interface ClientConnection {
   key?: { id: string; masked: string; label?: string };
   key_made?: boolean;
   key_removed?: boolean;
+  /** The model the connect wrote for the tool to start with; absent when none was written. */
+  model?: string;
 }
 
 /** A sign-in core saw on its machine. Core reads no token from it. */
@@ -172,11 +174,20 @@ export const setupApi = (host: Host) => ({
     return host.call<ClientPaste>("GET", `/setup/clients/${one(id)}/paste${query ? `?${query}` : ""}`);
   },
   /**
-   * Core writes the tool's settings on its own machine, with a key made for it (named label), and
-   * keeps the file as it was.
+   * Core writes the tool's settings on its own machine, with a key made for it (named label) and
+   * model as the model the tool starts with (default: best match among served models, or none when
+   * core serves no model), and keeps the file as it was.
    */
-  connectClient: (id: string, label?: string) =>
-    host.call<ClientConnection>("POST", `/setup/clients/${one(id)}/connect`, label ? { label } : undefined),
+  connectClient: (id: string, label?: string, model?: string) => {
+    const body: { label?: string; model?: string } = {};
+    if (label) body.label = label;
+    if (model) body.model = model;
+    return host.call<ClientConnection>(
+      "POST",
+      `/setup/clients/${one(id)}/connect`,
+      Object.keys(body).length > 0 ? body : undefined,
+    );
+  },
   /** Core puts back what its connect changed in the tool's settings. */
   disconnectClient: (id: string) =>
     host.call<ClientConnection>("POST", `/setup/clients/${one(id)}/disconnect`),

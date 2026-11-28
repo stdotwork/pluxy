@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,7 +64,7 @@ type toolRecordFile struct {
 // connectable reports whether core writes tool's settings itself: every file of its setup text
 // is one it can change.
 func connectable(tool string) bool {
-	s, ok := ClientSnippetFor(tool, "", "")
+	s, ok := ClientSnippetFor(tool, "", "", "")
 	if !ok || len(s.Files) == 0 {
 		return false
 	}
@@ -426,8 +427,10 @@ func (c *Core) clientNow(tool, home, coreURL string) management.SetupClient {
 }
 
 // ConnectClient points tool, on core's machine, at core: see the comment at the top of the file.
-// label names a key made for the tool (checked by the caller); empty is the tool's name.
-func (c *Core) ConnectClient(tool, label string) (management.ClientConnection, error) {
+// label names a key made for the tool (checked by the caller); empty is the tool's name. model is
+// the model the tool starts with (checked by the caller); empty picks the best match among the
+// models core serves, and when core serves none leaves the tool's model settings alone.
+func (c *Core) ConnectClient(ctx context.Context, tool, label, model string) (management.ClientConnection, error) {
 	id, _, err := canonicalTool(tool)
 	if err != nil {
 		return management.ClientConnection{}, err
@@ -445,7 +448,7 @@ func (c *Core) ConnectClient(tool, label string) (management.ClientConnection, e
 	if err != nil {
 		return management.ClientConnection{}, fileError(err)
 	}
-	paths, _ := ClientSnippetFor(id, baseURL, "<client-key>")
+	paths, _ := ClientSnippetFor(id, baseURL, "<client-key>", "")
 	files := make([]*toolFile, 0, len(paths.Files))
 	defer func() {
 		for _, f := range files {
@@ -496,7 +499,8 @@ func (c *Core) ConnectClient(tool, label string) (management.ClientConnection, e
 		}
 	}
 
-	snip, _ := ClientSnippetFor(id, baseURL, key)
+	model, _ = c.clientModel(ctx, id, model)
+	snip, _ := clientSnippet(id, baseURL, key, model)
 	next := &toolRecord{Format: toolRecordFormat, Tool: id, At: time.Now().UTC(), KeyID: keyID}
 	outs := make([][]byte, len(files))
 	for i, f := range files {
@@ -524,7 +528,7 @@ func (c *Core) ConnectClient(tool, label string) (management.ClientConnection, e
 		dropKey()
 		return fail(err)
 	}
-	reply := management.ClientConnection{KeyMade: made}
+	reply := management.ClientConnection{KeyMade: made, Model: model}
 	for i, f := range files {
 		change := management.ClientFileChanged
 		switch {
@@ -589,7 +593,7 @@ func (c *Core) DisconnectClient(tool string) (management.ClientConnection, error
 		return management.ClientConnection{}, fileError(err)
 	}
 	if rec == nil {
-		cfg, _ := ClientSnippetFor(id, "", "")
+		cfg, _ := ClientSnippetFor(id, "", "", "")
 		return management.ClientConnection{}, &editError{http.StatusConflict, "conflict",
 			fmt.Sprintf("pluxy did not connect %s, so it keeps nothing to put back: change %s by hand", client.Name, cfg.Files[0].Path)}
 	}
@@ -733,8 +737,11 @@ func (c *Core) handleConnect(m *server.Management) {
 	}
 	m.Handle("POST /setup/clients/{id}/connect", func(w http.ResponseWriter, r *http.Request) {
 		// label names a key made for the tool, as POST /client-keys's does; empty is the tool's name.
+		// model names the model the tool starts with, as GET /setup/clients/{id}/paste's does;
+		// empty picks the best match among those core serves (and writes no model when none is served).
 		var req struct {
 			Label string `json:"label"`
+			Model string `json:"model"`
 		}
 		if !readOptionalJSON(w, r, &req) {
 			return
@@ -746,7 +753,12 @@ func (c *Core) handleConnect(m *server.Management) {
 				return
 			}
 		}
-		v, err := c.ConnectClient(r.PathValue("id"), label)
+		model, err := checkClientModel(req.Model)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		v, err := c.ConnectClient(r.Context(), r.PathValue("id"), label, model)
 		reply(w, v, err)
 	})
 	m.Handle("POST /setup/clients/{id}/disconnect", func(w http.ResponseWriter, r *http.Request) {

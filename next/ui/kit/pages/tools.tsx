@@ -312,12 +312,18 @@ function CopyButton(props: { value: string }) {
 }
 
 /** The steps to set one tool up, with the text for its settings file. */
-function Steps(props: { client: SetupClient; made: MadeKeys; onKeysChanged?: () => void }) {
+function Steps(props: {
+  client: SetupClient;
+  made: MadeKeys;
+  model?: string;
+  onModel: (model: string) => void;
+  onKeysChanged?: () => void;
+}) {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
   const tool = toolName(props.client);
   // The model the person picked; until they pick, the text names pluxy's best match.
-  const [model, setModel] = useState<string>();
+  const model = props.model;
   const paste = useLoad(() => api.clientPaste(props.client.id, undefined, model));
   const askedFor = useRef(model);
   useEffect(() => {
@@ -388,7 +394,7 @@ function Steps(props: { client: SetupClient; made: MadeKeys; onKeysChanged?: () 
             <select
               data-slot="select-trigger"
               value={data.model ?? ""}
-              onChange={(e) => setModel(e.currentTarget.value)}
+              onChange={(e) => props.onModel(e.currentTarget.value)}
             >
               {data.model && !data.models?.includes(data.model) && (
                 <option value={data.model}>{data.model}</option>
@@ -470,6 +476,7 @@ function disconnectedText(reply: ClientConnection): string {
  */
 function ConnectButtons(props: {
   client: SetupClient;
+  model?: string;
   onDone: (note: RowNote) => void;
   onChanged: () => void;
 }) {
@@ -508,7 +515,7 @@ function ConnectButtons(props: {
     return action.run(async () => {
       const r =
         which === "connect"
-          ? await api.connectClient(props.client.id, tool)
+          ? await api.connectClient(props.client.id, tool, props.model)
           : await api.disconnectClient(props.client.id);
       reply.current = r.body;
       return r;
@@ -570,6 +577,7 @@ export function ToolListView(
   const { state } = props;
   const setup = state.setup;
   const [open, setOpen] = useState<string>();
+  const [pickedModels, setPickedModels] = useState<Record<string, string | undefined>>({});
   const [rowNotes, setRowNotes] = useState<Record<string, RowNote | undefined>>({});
   const remote = props.remote ?? !onThisMachine(host.address);
   const rows = {
@@ -580,6 +588,8 @@ export function ToolListView(
     remote,
     open,
     setOpen,
+    pickedModels,
+    setPickedModel: (id: string, model: string) => setPickedModels((m) => ({ ...m, [id]: model })),
     rowNotes,
     setRowNote: (id: string, note?: RowNote) => setRowNotes((n) => ({ ...n, [id]: note })),
     // A connect or disconnect changed the tool's settings and the keys: both are read again.
@@ -660,6 +670,9 @@ function ToolRows(props: {
   remote: boolean;
   open?: string;
   setOpen: (id: string | undefined) => void;
+  /** The model picked for each tool in Set up by hand, so Connect writes the same one. */
+  pickedModels: Record<string, string | undefined>;
+  setPickedModel: (id: string, model: string) => void;
   /** What a Connect or Disconnect said under each row, by tool ID. */
   rowNotes: Record<string, RowNote | undefined>;
   setRowNote: (id: string, note?: RowNote) => void;
@@ -709,6 +722,7 @@ function ToolRows(props: {
       <>
         <ConnectButtons
           client={client}
+          model={props.pickedModels[client.id]}
           onDone={(n) => {
             props.setRowNote(client.id, n);
             if (n.tone === "ok") props.setOpen(undefined);
@@ -735,7 +749,15 @@ function ToolRows(props: {
                 {rich(remote ? t("connectHintThere") : t("connectHint"), { tool: toolName(client), path })}
               </p>
             )}
-            {steps && <Steps client={client} made={props.made} onKeysChanged={props.onKeysChanged} />}
+            {steps && (
+              <Steps
+                client={client}
+                made={props.made}
+                model={props.pickedModels[client.id]}
+                onModel={(m) => props.setPickedModel(client.id, m)}
+                onKeysChanged={props.onKeysChanged}
+              />
+            )}
           </>
         )}
       </ToolRow>

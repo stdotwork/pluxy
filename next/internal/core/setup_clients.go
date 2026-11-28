@@ -941,6 +941,16 @@ const ModelPlaceholder = "<model-id>"
 // tool starts with (a name pluxy serves), ModelPlaceholder when empty. Each file holds what the
 // tool's writer in the desktop app writes for inspect to read it as configured.
 func ClientSnippetFor(tool, baseURL, key, model string) (ClientSnippet, bool) {
+	if model == "" {
+		model = ModelPlaceholder
+	}
+	return clientSnippet(tool, baseURL, key, model)
+}
+
+// clientSnippet builds the setup files for tool. Unlike ClientSnippetFor, an empty model leaves
+// the tool's model settings out (for Connect, which must never write ModelPlaceholder into a real
+// settings file when pluxy serves no model yet).
+func clientSnippet(tool, baseURL, key, model string) (ClientSnippet, bool) {
 	id, ok := clientSnippetNames[strings.ToLower(strings.TrimSpace(tool))]
 	if !ok {
 		return ClientSnippet{}, false
@@ -948,40 +958,42 @@ func ClientSnippetFor(tool, baseURL, key, model string) (ClientSnippet, bool) {
 	base := strings.TrimRight(baseURL, "/")
 	spec, _ := clientSpecByID(id)
 	s := ClientSnippet{Tool: id, Name: spec.name}
-	if model == "" {
-		model = ModelPlaceholder
-	}
 	switch id {
 	case "claude-code":
 		// Claude Code asks for its own model names (claude-opus-5-5 and the like) unless told
 		// otherwise, and an account of another service serves none of them: `model` is the one it
 		// starts with, and the three ANTHROPIC_DEFAULT_*_MODEL are what its opus, sonnet and
 		// haiku choices, and the small model it uses in the background, resolve to.
-		s.Files = []ClientSnippetFile{{"~/.claude/settings.json", prettyJSON(map[string]any{
-			"model": model,
-			"env": map[string]string{
-				"ANTHROPIC_BASE_URL":                         base,
-				"ANTHROPIC_AUTH_TOKEN":                       key,
-				"ANTHROPIC_DEFAULT_OPUS_MODEL":               model,
-				"ANTHROPIC_DEFAULT_SONNET_MODEL":             model,
-				"ANTHROPIC_DEFAULT_HAIKU_MODEL":              model,
-				"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-				"CLAUDE_CODE_AUTO_MODE_SERVER":               "0",
-			},
-		})}}
+		env := map[string]string{
+			"ANTHROPIC_BASE_URL":                         base,
+			"ANTHROPIC_AUTH_TOKEN":                       key,
+			"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+			"CLAUDE_CODE_AUTO_MODE_SERVER":               "0",
+		}
+		doc := map[string]any{"env": env}
+		if model != "" {
+			doc["model"] = model
+			env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model
+			env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = model
+			env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = model
+		}
+		s.Files = []ClientSnippetFile{{"~/.claude/settings.json", prettyJSON(doc)}}
 	case "codex":
-		// The two keys at the top come before the table: in TOML a key written below a [table]
+		// The keys at the top come before the table: in TOML a key written below a [table]
 		// line belongs to that table.
-		s.Files = []ClientSnippetFile{{"~/.codex/config.toml", fmt.Sprintf(`model_provider = "pluxy"
-model = %q
-
+		head := "model_provider = \"pluxy\"\n"
+		if model != "" {
+			head += fmt.Sprintf("model = %q\n", model)
+		}
+		s.Files = []ClientSnippetFile{{"~/.codex/config.toml", fmt.Sprintf(`%s
 [model_providers.pluxy]
 name = "pluxy"
 base_url = %q
 wire_api = "responses"
-experimental_bearer_token = %q`, model, codexBaseURL(base), key)}}
+experimental_bearer_token = %q`, head, codexBaseURL(base), key)}}
 		s.Note = codexTOMLNote
 	case "opencode":
+		m := cmp.Or(model, ModelPlaceholder)
 		s.Files = []ClientSnippetFile{{"~/.config/opencode/opencode.jsonc", prettyJSON(map[string]any{
 			"$schema": openCodeSchema,
 			"provider": map[string]any{
@@ -989,22 +1001,24 @@ experimental_bearer_token = %q`, model, codexBaseURL(base), key)}}
 					"npm":     "@ai-sdk/openai-compatible",
 					"name":    "pluxy",
 					"options": map[string]string{"baseURL": base + "/v1", "apiKey": key},
-					"models":  map[string]any{model: map[string]string{"name": model}},
+					"models":  map[string]any{m: map[string]string{"name": m}},
 				},
 			},
-			"model": "pluxy/" + model,
+			"model": "pluxy/" + m,
 		})}}
 	case "pi":
+		m := cmp.Or(model, ModelPlaceholder)
 		s.Files = []ClientSnippetFile{
 			{"~/.pi/agent/cliproxyapi.json", prettyJSON(map[string]string{"baseUrl": piBaseURL(base), "apiKey": key})},
 			{"~/.pi/agent/settings.json", prettyJSON(map[string]any{
 				"packages":        []string{"./" + piAdapterFolder},
 				"defaultProvider": "cliproxyapi",
-				"defaultModel":    model,
+				"defaultModel":    m,
 			})},
 		}
 		s.Note = "Pi also needs pluxy's adapter in ~/.pi/agent/" + piAdapterFolder + ", which the desktop app installs."
 	case "omp":
+		m := cmp.Or(model, ModelPlaceholder)
 		s.Files = []ClientSnippetFile{
 			{"~/.omp/agent/models.yml", fmt.Sprintf(`providers:
   pluxy:
@@ -1014,7 +1028,7 @@ experimental_bearer_token = %q`, model, codexBaseURL(base), key)}}
     discovery:
       type: openai-models-list`, ompBaseURL(base), key)},
 			{"~/.omp/agent/config.yml", fmt.Sprintf(`modelRoles:
-  default: %q`, "pluxy/"+model)},
+  default: %q`, "pluxy/"+m)},
 		}
 	}
 	return s, true

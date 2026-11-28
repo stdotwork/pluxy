@@ -1,6 +1,8 @@
 // The Setup page on a real first run: a core with nothing installed and no accounts, whose
 // computer holds Claude Code (panelcore -first-run). The case walks a new install through the
 // three steps to Home.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { nav, openPanel, signIn, useCore } from "./support";
 
@@ -66,6 +68,14 @@ test("a first run opens Setup and its three steps lead to Finish setup and Home"
   expect(keys.body.keys.map((k) => k.label)).toContain("Claude Code");
   const found = await core.mgmt<{ found: { clients: { id: string; state: string }[] } }>("GET", "/setup");
   expect(found.body.found.clients.find((c) => c.id === "claude-code")?.state).toBe("configured");
+  const served = await core.mgmt<{ models: { id: string }[] }>("GET", "/models");
+  const written = JSON.parse(
+    readFileSync(join(dirname(core.config), "home", ".claude", "settings.json"), "utf8"),
+  ) as { model?: string; env?: Record<string, string> };
+  expect(served.body.models.map((m) => m.id)).toContain(written.model);
+  expect(written.env?.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe(written.model);
+  expect(written.env?.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe(written.model);
+  expect(written.env?.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe(written.model);
   await two.locator(".setup-next").getByRole("button", { name: "Continue", exact: true }).click();
 
   // Step 3: one test request through the account passes.

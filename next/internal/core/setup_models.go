@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"unicode"
@@ -66,6 +67,22 @@ func SuggestClientModel(tool string, names []string) string {
 		return chat[0]
 	}
 	return ""
+}
+
+// clientModel returns the model tool should start with and the names of the models core serves:
+// asked when non-empty, else the best match among the served models (empty when none is served).
+func (c *Core) clientModel(ctx context.Context, tool, asked string) (string, []string) {
+	s, release := c.acquire()
+	served := s.Router.ServedModels(ctx)
+	release()
+	names := make([]string, len(served))
+	for i, m := range served {
+		names[i] = m.ID
+	}
+	if asked != "" {
+		return asked, names
+	}
+	return SuggestClientModel(tool, names), names
 }
 
 func containsAny(s string, words []string) bool {

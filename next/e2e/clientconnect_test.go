@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/examples/oauth/oauthtest"
 	mgmt "github.com/stdotwork/pluxy/next/management"
 )
 
@@ -70,7 +71,7 @@ func TestClientConnect(t *testing.T) {
 	}
 
 	// Claude Code, through the client.
-	conn, err := client.ConnectClient(ctx, "claude-code", "")
+	conn, err := client.ConnectClient(ctx, "claude-code", "", "")
 	if err != nil {
 		t.Fatalf("connect claude-code: %v", err)
 	}
@@ -78,7 +79,11 @@ func TestClientConnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(string(b), "<model-id>") {
+		t.Errorf("settings with no served models contain placeholder:\n%s", b)
+	}
 	var file struct {
+		Model string            `json:"model"`
 		Env   map[string]string `json:"env"`
 		Theme string            `json:"theme"`
 	}
@@ -87,7 +92,7 @@ func TestClientConnect(t *testing.T) {
 	}
 	key := file.Env["ANTHROPIC_AUTH_TOKEN"]
 	made = append(made, key)
-	if file.Env["ANTHROPIC_BASE_URL"] != base || key == "" || file.Theme != "dark" {
+	if file.Env["ANTHROPIC_BASE_URL"] != base || key == "" || file.Theme != "dark" || file.Model != "" {
 		t.Errorf("settings after connect:\n%s", b)
 	}
 	if _, ok := file.Env["ANTHROPIC_API_KEY"]; ok {
@@ -96,7 +101,7 @@ func TestClientConnect(t *testing.T) {
 	if code := accepts(key); code != http.StatusOK {
 		t.Errorf("core answers the key connect wrote with %d", code)
 	}
-	if !conn.KeyMade || conn.Key == nil || conn.Key.Label != "Claude Code" || conn.Client.State != mgmt.ClientStateConfigured || !conn.Client.ConnectedByPluxy {
+	if !conn.KeyMade || conn.Key == nil || conn.Key.Label != "Claude Code" || conn.Model != "" || conn.Client.State != mgmt.ClientStateConfigured || !conn.Client.ConnectedByPluxy {
 		t.Errorf("connect reply = %+v", conn)
 	}
 	raw, _ := json.Marshal(conn)
@@ -130,7 +135,7 @@ func TestClientConnect(t *testing.T) {
 		}
 	}
 	made = append(made, codexKey)
-	if !strings.HasPrefix(string(toml), "model_provider = \"pluxy\"\n") || !strings.Contains(string(toml), "base_url = \""+base+"/v1\"\n") || codexKey == "" || codexKey == key {
+	if !strings.HasPrefix(string(toml), "model_provider = \"pluxy\"\n") || !strings.Contains(string(toml), "base_url = \""+base+"/v1\"\n") || codexKey == "" || codexKey == key || strings.Contains(string(toml), "<model-id>") || strings.Contains(string(toml), "\nmodel = ") {
 		t.Errorf("config.toml after connect:\n%s", toml)
 	}
 	if code := accepts(codexKey); code != http.StatusOK {
@@ -144,7 +149,7 @@ func TestClientConnect(t *testing.T) {
 
 	// A tool core does not connect, and a disconnect of one it did not connect.
 	var apiErr *mgmt.APIError
-	if _, err := client.ConnectClient(ctx, "opencode", ""); !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
+	if _, err := client.ConnectClient(ctx, "opencode", "", ""); !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound {
 		t.Errorf("connect opencode: %v", err)
 	}
 
@@ -183,5 +188,107 @@ func TestClientConnect(t *testing.T) {
 		if logs.contains(k) {
 			t.Errorf("core's log holds a key connect made")
 		}
+	}
+}
+
+// Connect against a real core serving models writes the best-matching model into each tool's file
+// (and an explicit --model when asked), and Disconnect puts back the person's own model after an
+// edit elsewhere.
+func TestClientConnectWritesServedModel(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	env := isolatedSetupEnv(home, t.TempDir())
+	srv := oauthtest.New(t)
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	cfg, _ := json.Marshal(map[string]any{
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "oauth", "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id": "walk", "models": []string{"fake-gpt-1", "claude-sonnet-5-5", "gpt-6.1-codex"},
+				"settings":   map[string]string{"base_url": srv.URL},
+				"credential": map[string]any{"kind": "oauth", "access_token": srv.IssueToken("text")},
+			}},
+		},
+	})
+	if err := os.WriteFile(cfgPath, cfg, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, _, _, err := startCoreEnv(t, env, filepath.Join(binDir, "pluxy"), "serve", "-config", cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &mgmt.Client{URL: base, Key: managementKey}
+	ctx := context.Background()
+
+	// Claude Code: Connect writes claude-sonnet-5-5; edited Disconnect gives back opus.
+	settings := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte("{\n  \"model\": \"opus\"\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := client.ConnectClient(ctx, "claude-code", "", "")
+	if err != nil || conn.Model != "claude-sonnet-5-5" {
+		t.Fatalf("connect claude-code: %+v, %v", conn, err)
+	}
+	b, _ := os.ReadFile(settings)
+	for _, want := range []string{`"model": "claude-sonnet-5-5"`, `"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-sonnet-5-5"`, `"ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5"`, `"ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-5-5"`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("claude settings lack %s:\n%s", want, b)
+		}
+	}
+	edited := strings.Replace(string(b), "{\n", "{\n  \"theme\": \"dark\",\n", 1)
+	if err := os.WriteFile(settings, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DisconnectClient(ctx, "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(settings)
+	if !strings.Contains(string(after), `"model": "opus"`) || strings.Contains(string(after), "ANTHROPIC_DEFAULT_") {
+		t.Errorf("claude settings after disconnect:\n%s", after)
+	}
+
+	// Codex: Connect writes gpt-6.1-codex; edited Disconnect restores user's model; --model overrides it.
+	codexPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(codexPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codexPath, []byte("model = \"gpt-6.1-sol\"\n\n[projects.\"/w\"]\ntrust_level = \"trusted\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conn, err = client.ConnectClient(ctx, "codex", "", "")
+	if err != nil || conn.Model != "gpt-6.1-codex" {
+		t.Fatalf("connect codex: %+v, %v", conn, err)
+	}
+	tb, _ := os.ReadFile(codexPath)
+	if !strings.Contains(string(tb), `model = "gpt-6.1-codex"`) {
+		t.Errorf("codex config lacks served model:\n%s", tb)
+	}
+	editedToml := strings.Replace(string(tb), `"trusted"`, `"untrusted"`, 1)
+	if err := os.WriteFile(codexPath, []byte(editedToml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DisconnectClient(ctx, "codex"); err != nil {
+		t.Fatal(err)
+	}
+	afterToml, _ := os.ReadFile(codexPath)
+	if !strings.Contains(string(afterToml), `model = "gpt-6.1-sol"`) {
+		t.Errorf("codex config after disconnect did not restore model:\n%s", afterToml)
+	}
+
+	cliEnv := append(slices.Clone(env), "PLUXY_URL="+base, "PLUXY_MANAGEMENT_KEY="+managementKey)
+	r := runCLI(t, cliEnv, "client", "connect", "codex", "--model", "fake-gpt-1")
+	if r.code != 0 {
+		t.Fatalf("pluxy client connect codex --model fake-gpt-1: %s", r)
+	}
+	tb, _ = os.ReadFile(codexPath)
+	if !strings.Contains(string(tb), `model = "fake-gpt-1"`) {
+		t.Errorf("codex config after --model fake-gpt-1:\n%s", tb)
 	}
 }

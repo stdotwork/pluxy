@@ -23,13 +23,13 @@ const (
 
 func claudeSnippet(t *testing.T) string {
 	t.Helper()
-	s, _ := ClientSnippetFor("claude-code", connectURL, connectKey)
+	s, _ := clientSnippet("claude-code", connectURL, connectKey, "")
 	return s.Files[0].Content
 }
 
 func codexSnippet(t *testing.T) string {
 	t.Helper()
-	s, _ := ClientSnippetFor("codex", connectURL, connectKey)
+	s, _ := clientSnippet("codex", connectURL, connectKey, "")
 	return s.Files[0].Content
 }
 
@@ -675,7 +675,7 @@ func TestConnectedAtEveryInterface(t *testing.T) {
 	core := coreAddress("0.0.0.0:8317", false)
 	reached := "http://" + net.JoinHostPort(own, "8317")
 	for _, tool := range ClientSnippetTools {
-		snip, _ := ClientSnippetFor(tool, reached, connectKey)
+		snip, _ := ClientSnippetFor(tool, reached, connectKey, "")
 		home := t.TempDir()
 		for _, f := range snip.Files {
 			writeTestFile(t, filepath.Join(home, filepath.FromSlash(strings.TrimPrefix(f.Path, "~/"))), f.Content)
@@ -697,5 +697,269 @@ func TestConnectedAtEveryInterface(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json")); !strings.Contains(string(b), `"ANTHROPIC_BASE_URL": "http://127.0.0.1:8317"`) {
 		t.Errorf("connect with listen 0.0.0.0 wrote:\n%s", b)
+	}
+}
+
+// Claude Code with a model: apply sets model and the three ANTHROPIC_DEFAULT_*_MODEL variables;
+// clear restores the person's own model (and any default model variable they had) or takes them
+// out when they had none, while keeping changes the person made since.
+func TestClaudeSettingsApplyAndClearWithModel(t *testing.T) {
+	snip, _ := ClientSnippetFor("claude-code", connectURL, connectKey, "claude-sonnet-5-5")
+	original := []byte(`{
+  "env": {
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "my-opus",
+    "FOO": "bar"
+  },
+  "model": "opus"
+}
+`)
+	applied, err := applyClaudeSettings(original, snip.Files[0].Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := parseJSONObj(applied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := root.get("model"); string(v) != `"claude-sonnet-5-5"` {
+		t.Errorf("applied model = %s, want claude-sonnet-5-5:\n%s", v, applied)
+	}
+	env, _, _ := root.sub("env")
+	for _, k := range []string{"ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"} {
+		if v, _ := env.get(k); string(v) != `"claude-sonnet-5-5"` {
+			t.Errorf("applied env %s = %s, want claude-sonnet-5-5:\n%s", k, v, applied)
+		}
+	}
+	// Edited elsewhere: Disconnect gives back the person's own model and opus default, and takes out
+	// sonnet and haiku defaults that Connect added.
+	edited := strings.Replace(string(applied), `"FOO": "bar"`, `"FOO": "baz"`, 1)
+	back, err := clearClaudeSettings(original, applied, []byte(edited))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseJSONObj(back)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := got.get("model"); string(v) != `"opus"` {
+		t.Errorf("after clear model = %s, want opus:\n%s", v, back)
+	}
+	genv, _, _ := got.sub("env")
+	if v, _ := genv.get("ANTHROPIC_DEFAULT_OPUS_MODEL"); string(v) != `"my-opus"` {
+		t.Errorf("after clear ANTHROPIC_DEFAULT_OPUS_MODEL = %s, want my-opus:\n%s", v, back)
+	}
+	for _, k := range []string{"ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"} {
+		if _, ok := genv.get(k); ok {
+			t.Errorf("after clear env still has %s:\n%s", k, back)
+		}
+	}
+	// No model before (and no file before): Connect adds them, edited Disconnect takes them out.
+	fresh, err := applyClaudeSettings(nil, snip.Files[0].Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	added := strings.Replace(string(fresh), "{\n", "{\n  \"theme\": \"dark\",\n", 1)
+	back, err = clearClaudeSettings(nil, fresh, []byte(added))
+	if err != nil || string(back) != "{\n  \"theme\": \"dark\"\n}\n" {
+		t.Errorf("clear of a made file with a model = %q, %v; want only theme", back, err)
+	}
+	// Person changed model after Connect: Disconnect keeps the person's new model.
+	changedModel := strings.Replace(string(applied), `"model": "claude-sonnet-5-5"`, `"model": "my-custom"`, 1)
+	back, err = clearClaudeSettings(original, applied, []byte(changedModel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = parseJSONObj(back)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := got.get("model"); string(v) != `"my-custom"` {
+		t.Errorf("after clear with user-changed model = %s, want my-custom:\n%s", v, back)
+	}
+}
+
+// Codex with a model: apply puts root model above tables (keeping an existing model's comment),
+// passes the post-write check, and clear gives back the person's own model or takes it out when
+// they had none.
+func TestCodexConfigApplyAndClearWithModel(t *testing.T) {
+	snip, _ := ClientSnippetFor("codex", connectURL, connectKey, "gpt-6.1-codex")
+	applied, err := applyCodexConfig([]byte(codexOriginal), snip.Files[0].Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(applied), `model = "gpt-6.1-codex" # the default`+"\n") {
+		t.Errorf("apply did not update root model keeping comment:\n%s", applied)
+	}
+	if _, state := inspectFile(t, ".codex/config.toml", applied, inspectCodex); state != stateConfigured {
+		t.Errorf("after apply with model state = %q, want configured", state)
+	}
+	// Edited elsewhere: Disconnect gives back the person's own model (with comment).
+	edited := strings.Replace(string(applied), `trust_level = "trusted"`, `trust_level = "untrusted"`, 1)
+	back, err := clearCodexConfig([]byte(codexOriginal), applied, []byte(edited))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Replace(codexOriginal, `"trusted"`, `"untrusted"`, 1); string(back) != want {
+		t.Errorf("clear of an edited file with model =\n%s\nwant\n%s", back, want)
+	}
+	// No root model before: Connect puts model above the first table, edited Disconnect takes it out.
+	noModel := "[projects.\"/home/me/x\"]\ntrust_level = \"trusted\"\n"
+	appliedNoModel, err := applyCodexConfig([]byte(noModel), snip.Files[0].Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _, _ := strings.Cut(string(appliedNoModel), "[projects.")
+	if !strings.Contains(head, `model_provider = "pluxy"`) || !strings.Contains(head, `model = "gpt-6.1-codex"`) {
+		t.Errorf("root keys not above first table:\n%s", appliedNoModel)
+	}
+	editedNoModel := strings.Replace(string(appliedNoModel), `"trusted"`, `"untrusted"`, 1)
+	back, err = clearCodexConfig([]byte(noModel), appliedNoModel, []byte(editedNoModel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Replace(noModel, `"trusted"`, `"untrusted"`, 1); string(back) != want {
+		t.Errorf("clear when person had no model =\n%s\nwant\n%s", back, want)
+	}
+	// Person changed model after Connect: Disconnect keeps the person's new model.
+	changedModel := strings.Replace(string(applied), `model = "gpt-6.1-codex"`, `model = "my-custom"`, 1)
+	back, err = clearCodexConfig([]byte(codexOriginal), applied, []byte(changedModel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(back), `model = "my-custom" # the default`) {
+		t.Errorf("clear dropped user's changed model:\n%s", back)
+	}
+}
+
+// Connect writes the best-matching served model for Claude Code and Codex (and an explicit model
+// when asked, refusing an invalid one with 400); Disconnect puts back the person's own model (or
+// takes it out when they had none).
+func TestConnectWritesServedModelAndExplicitModel(t *testing.T) {
+	home := connectHome(t)
+	h, _ := startManagementCore(t, `{"listen":"127.0.0.1:8317","client_keys":["fake-client-key-1"],"management_key":"mgmt-key","extensions":{"pluxy/fake":{"accounts":[{"id":"acc-1","models":["fake-gpt-1","claude-sonnet-5-5","gpt-6.1-codex"],"credential":{"kind":"api_key","api_key":"fake-0"}}]}}}`)
+
+	// Invalid model in connect body is refused with 400 invalid_request before writing anything.
+	rec := manageCall(t, h, http.MethodPost, "/setup/clients/claude-code/connect", `{"model":"bad\nname"}`)
+	if rec.Code != http.StatusBadRequest || errorCodeOf(t, rec) != "invalid_request" {
+		t.Fatalf("connect with bad model = %d %s, want 400 invalid_request", rec.Code, rec.Body)
+	}
+	if len(clientKeys(t, h)) != 1 {
+		t.Fatalf("bad model left a client key behind")
+	}
+
+	// Claude Code with an existing model: Connect writes claude-sonnet-5-5; edited Disconnect restores opus.
+	claudePath := filepath.Join(home, ".claude", "settings.json")
+	writeTestFile(t, claudePath, "{\n  \"model\": \"opus\"\n}\n")
+	code, reply, body := connectCall(t, h, "connect", "claude-code")
+	if code != http.StatusOK || reply.Model != "claude-sonnet-5-5" {
+		t.Fatalf("connect claude-code = %d model %q %s", code, reply.Model, body)
+	}
+	b, _ := os.ReadFile(claudePath)
+	for _, want := range []string{`"model": "claude-sonnet-5-5"`, `"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-sonnet-5-5"`, `"ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5"`, `"ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-5-5"`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("claude settings missing %s:\n%s", want, b)
+		}
+	}
+	if strings.Contains(string(b), ModelPlaceholder) {
+		t.Errorf("claude settings contain placeholder:\n%s", b)
+	}
+	// Edit another key, then Disconnect: opus comes back and ANTHROPIC_DEFAULT_* go.
+	edited := strings.Replace(string(b), "{\n", "{\n  \"theme\": \"dark\",\n", 1)
+	if err := os.WriteFile(claudePath, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, body := connectCall(t, h, "disconnect", "claude-code"); code != http.StatusOK {
+		t.Fatalf("disconnect claude-code = %d %s", code, body)
+	}
+	after, _ := os.ReadFile(claudePath)
+	if !strings.Contains(string(after), `"model": "opus"`) || strings.Contains(string(after), "ANTHROPIC_DEFAULT_") {
+		t.Errorf("claude settings after edited disconnect did not restore opus:\n%s", after)
+	}
+
+	// Codex with an existing model: Connect writes gpt-6.1-codex; edited Disconnect restores gpt-6.1-sol.
+	codexPath := filepath.Join(home, ".codex", "config.toml")
+	writeTestFile(t, codexPath, codexOriginal)
+	code, reply, body = connectCall(t, h, "connect", "codex")
+	if code != http.StatusOK || reply.Model != "gpt-6.1-codex" {
+		t.Fatalf("connect codex = %d model %q %s", code, reply.Model, body)
+	}
+	b, _ = os.ReadFile(codexPath)
+	if !strings.Contains(string(b), `model = "gpt-6.1-codex" # the default`) {
+		t.Errorf("codex config missing served model:\n%s", b)
+	}
+	if strings.Contains(string(b), ModelPlaceholder) {
+		t.Errorf("codex config contains placeholder:\n%s", b)
+	}
+	editedCodex := strings.Replace(string(b), `trust_level = "trusted"`, `trust_level = "untrusted"`, 1)
+	if err := os.WriteFile(codexPath, []byte(editedCodex), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, body := connectCall(t, h, "disconnect", "codex"); code != http.StatusOK {
+		t.Fatalf("disconnect codex = %d %s", code, body)
+	}
+	after, _ = os.ReadFile(codexPath)
+	if !strings.Contains(string(after), `model = "gpt-6.1-sol" # the default`) {
+		t.Errorf("codex config after edited disconnect did not restore model:\n%s", after)
+	}
+
+	// Explicit model in POST body overrides the best match.
+	rec = manageCall(t, h, http.MethodPost, "/setup/clients/codex/connect", `{"model":"fake-gpt-1"}`)
+	var explicitReply management.ClientConnection
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &explicitReply) != nil || explicitReply.Model != "fake-gpt-1" {
+		t.Fatalf("connect codex with explicit model = %d %+v %s", rec.Code, explicitReply, rec.Body)
+	}
+	b, _ = os.ReadFile(codexPath)
+	if !strings.Contains(string(b), `model = "fake-gpt-1"`) {
+		t.Errorf("codex config with explicit model wrote:\n%s", b)
+	}
+}
+
+// When pluxy serves no model, Connect succeeds, writes no placeholder, keeps whatever model the
+// file already had, and adds no model setting when the file had none.
+func TestConnectWithNoServedModelsWritesNoPlaceholder(t *testing.T) {
+	home := connectHome(t)
+	h, _ := startManagementCore(t, `{"listen":"127.0.0.1:8317","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`)
+
+	// Existing files with their own models: kept untouched, no placeholder.
+	claudePath := filepath.Join(home, ".claude", "settings.json")
+	writeTestFile(t, claudePath, "{\n  \"model\": \"opus\"\n}\n")
+	if code, reply, body := connectCall(t, h, "connect", "claude-code"); code != http.StatusOK || reply.Model != "" {
+		t.Fatalf("connect claude-code with no served models = %d model %q %s", code, reply.Model, body)
+	}
+	cb, _ := os.ReadFile(claudePath)
+	if strings.Contains(string(cb), ModelPlaceholder) || !strings.Contains(string(cb), `"model": "opus"`) || strings.Contains(string(cb), "ANTHROPIC_DEFAULT_") {
+		t.Errorf("claude settings with no served models:\n%s", cb)
+	}
+
+	codexPath := filepath.Join(home, ".codex", "config.toml")
+	writeTestFile(t, codexPath, codexOriginal)
+	if code, reply, body := connectCall(t, h, "connect", "codex"); code != http.StatusOK || reply.Model != "" {
+		t.Fatalf("connect codex with no served models = %d model %q %s", code, reply.Model, body)
+	}
+	tb, _ := os.ReadFile(codexPath)
+	if strings.Contains(string(tb), ModelPlaceholder) || !strings.Contains(string(tb), `model = "gpt-6.1-sol" # the default`) {
+		t.Errorf("codex config with no served models:\n%s", tb)
+	}
+
+	// Disconnect both, remove the files, and Connect with no file: no placeholder, no model key.
+	_, _, _ = connectCall(t, h, "disconnect", "claude-code")
+	_, _, _ = connectCall(t, h, "disconnect", "codex")
+	_ = os.Remove(claudePath)
+	_ = os.Remove(codexPath)
+
+	if code, _, body := connectCall(t, h, "connect", "claude-code"); code != http.StatusOK {
+		t.Fatalf("connect claude-code fresh with no served models = %d %s", code, body)
+	}
+	cb, _ = os.ReadFile(claudePath)
+	if strings.Contains(string(cb), ModelPlaceholder) || strings.Contains(string(cb), `"model"`) || strings.Contains(string(cb), "ANTHROPIC_DEFAULT_") {
+		t.Errorf("fresh claude settings with no served models wrote a model:\n%s", cb)
+	}
+
+	if code, _, body := connectCall(t, h, "connect", "codex"); code != http.StatusOK {
+		t.Fatalf("connect codex fresh with no served models = %d %s", code, body)
+	}
+	tb, _ = os.ReadFile(codexPath)
+	if strings.Contains(string(tb), ModelPlaceholder) || strings.Contains(string(tb), "\nmodel = ") || strings.HasPrefix(string(tb), "model = ") {
+		t.Errorf("fresh codex config with no served models wrote a model:\n%s", tb)
 	}
 }

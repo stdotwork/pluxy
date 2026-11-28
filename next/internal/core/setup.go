@@ -469,16 +469,7 @@ func (c *Core) handleSetup(m *server.Management) {
 		}
 		// The models pluxy serves, for the person to pick from; the tool starts with the one they
 		// picked, else the best match among them.
-		s, release := c.acquire()
-		served := s.Router.ServedModels(r.Context())
-		release()
-		names := make([]string, len(served))
-		for i, m := range served {
-			names[i] = m.ID
-		}
-		if model == "" {
-			model = SuggestClientModel(id, names)
-		}
+		model, names := c.clientModel(r.Context(), id, model)
 		snip, _ := ClientSnippetFor(id, baseURL, key, model)
 		reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: baseURL, Key: key, Note: snip.Note,
 			Model: model, Models: names}
