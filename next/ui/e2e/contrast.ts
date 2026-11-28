@@ -16,15 +16,24 @@ export interface Measured {
 export async function measureContrast(locator: Locator): Promise<Measured[]> {
   return locator.evaluateAll((elements) => {
     type Rgba = [number, number, number, number];
+    const canvas = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
     const parse = (value: string): Rgba => {
-      // The browser reports rgb(), rgba() or color(srgb ...) for colours it has mixed.
       const nums = (value.match(/-?[\d.]+(?:e-?\d+)?%?/g) ?? []).map((n) => Number.parseFloat(n));
-      if (value.startsWith("color(srgb")) {
-        const [r = 0, g = 0, b = 0, a = 1] = nums.slice(0);
+      if (value.startsWith("color(srgb ")) {
+        const [r = 0, g = 0, b = 0, a = 1] = nums;
         return [r * 255, g * 255, b * 255, a];
       }
-      const [r = 0, g = 0, b = 0, a = 1] = nums;
-      return [r, g, b, a];
+      if (value.startsWith("rgb")) {
+        const [r = 0, g = 0, b = 0, a = 1] = nums;
+        return [r, g, b, a];
+      }
+      // Browsers report a colour mid-transition in the space they mix it in, such as oklab().
+      if (!canvas || !CSS.supports("color", value)) throw new Error(`cannot read the colour ${value}`);
+      canvas.clearRect(0, 0, 1, 1);
+      canvas.fillStyle = value;
+      canvas.fillRect(0, 0, 1, 1);
+      const [r = 0, g = 0, b = 0, a = 0] = canvas.getImageData(0, 0, 1, 1).data;
+      return [r, g, b, a / 255];
     };
     const over = (top: Rgba, below: Rgba): Rgba => {
       const a = top[3] + below[3] * (1 - top[3]);
