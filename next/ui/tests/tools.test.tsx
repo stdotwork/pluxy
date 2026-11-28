@@ -663,7 +663,7 @@ test("a tool that needs an update and can be connected has the view's one filled
   expect(filled(again.root)).toEqual(["Connect again"]);
   expect(attribute(buttonIn(rowOf(again.root, "Claude Code"), "Disconnect"), "data-variant")).toBe("quiet");
   await press(buttonIn(rowOf(m.root, "Claude Code"), "Set up by hand"));
-  expect(filled(m.root)).toEqual([]);
+  expect(filled(m.root)).toEqual(["Connect"]);
 });
 
 // ---- the steps and the key made for a tool -----------------------------------------------------

@@ -914,7 +914,7 @@ function ToolRows(props: {
         <ConnectButtons
           client={client}
           model={props.pickedModels[client.id]}
-          primary={highlight}
+          primary={client.id === firstUpdateId}
           onDone={(n) => {
             props.setRowNote(client.id, n);
             if (n.tone === "ok") props.setOpen(undefined);
