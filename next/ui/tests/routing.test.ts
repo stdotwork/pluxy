@@ -20,6 +20,7 @@ import {
   providerOfModel,
   removeStep,
   skipsItself,
+  stepParts,
   stepsOf,
   stepWords,
   withName,
@@ -204,13 +205,22 @@ test("a model picked from the served list gives the provider that serves it", ()
   expect(providerOfModel("gpt-5.5", undefined)).toBeUndefined();
 });
 
-test("a fallback reads as one line of steps", () => {
+test("a fallback reads as one line of steps, and stepParts separates the model from its qualifier", () => {
   const name = (id: string) => ({ work: "Work", home: "Home" })[id] ?? id;
   expect(stepWords({ model: "claude-opus-4-7" }, name)).toBe("claude-opus-4-7");
   expect(stepWords({ model: "gpt-5.5", provider: "pluxy/codex" }, name)).toBe("gpt-5.5 (Codex)");
   expect(stepWords({ model: "gpt-5.5", provider: "pluxy/codex", accounts: ["work", "home"] }, name)).toBe(
     "gpt-5.5 (Codex, only Work, Home)",
   );
+  expect(stepParts({ model: "claude-opus-4-7" }, name)).toEqual({ model: "claude-opus-4-7" });
+  expect(stepParts({ model: "gpt-5.5", provider: "pluxy/codex" }, name)).toEqual({
+    model: "gpt-5.5",
+    detail: "Codex",
+  });
+  expect(stepParts({ model: "gpt-5.5", provider: "pluxy/codex", accounts: ["work", "home"] }, name)).toEqual({
+    model: "gpt-5.5",
+    detail: "Codex, only Work, Home",
+  });
 });
 
 test("the fallback calls name the model as one path segment and send the steps as written", async () => {

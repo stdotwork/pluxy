@@ -1,10 +1,7 @@
-// Fallbacks: what pluxy tries for a model when no account can serve it. Each is a line with its steps
-// in order; one at a time can be open in the editor under the list.
-
 import { Fragment } from "preact";
 import { useId, useState } from "preact/hooks";
 import { type Account, type Chain, problem, type ServedModel } from "../api";
-import { Phases, providerName, useNaming } from "../parts";
+import { ProviderMark, providerName, StatePane, tryAgainWord, useNaming } from "../parts";
 import { accountIdentities, usePrivacy } from "../privacy";
 import { strings } from "../strings";
 import { Button, ConfirmButton, type Loaded, Notice, useKit } from "../ui";
@@ -22,8 +19,8 @@ import {
   providerOfModel,
   removeStep,
   skipsItself,
+  stepParts,
   stepsOf,
-  stepWords,
   withName,
 } from "./routing.helpers";
 
@@ -73,6 +70,7 @@ function Editor(props: {
   providers: string[];
   problem?: string;
   saving: boolean;
+  inline?: boolean;
   onSave: () => void;
   onCancel: () => void;
 }) {
@@ -85,6 +83,7 @@ function Editor(props: {
     <form
       class="fallback-editor"
       data-part="fallback-editor"
+      data-inline={props.inline ? "" : undefined}
       onSubmit={(e) => {
         e.preventDefault();
         props.onSave();
@@ -120,7 +119,7 @@ function Editor(props: {
               : [...props.providers, s.provider];
           return (
             <li key={s.id} class="fallback-step">
-              <span class="fallback-n">{n}</span>
+              <span class="fallback-n num">{n}</span>
               <div class="fallback-fields">
                 <label class="field" data-part="field">
                   <span class="label">{t("model")}</span>
@@ -203,7 +202,11 @@ function Editor(props: {
                 >
                   {t("down")}
                 </Button>
-                <Button label={t("removeStepFor", { n })} onClick={() => props.onChange(removeStep(d, s.id))}>
+                <Button
+                  variant="ghost"
+                  label={t("removeStepFor", { n })}
+                  onClick={() => props.onChange(removeStep(d, s.id))}
+                >
                   {t("removeStep")}
                 </Button>
               </span>
@@ -240,11 +243,17 @@ export function Fallbacks(props: {
   yaml: boolean;
   /** Core refused a fallback because of it. */
   onYaml: () => void;
+  onOpenChange?: (open: boolean) => void;
+  onRetry?: () => void;
 }) {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
   const naming = useNaming(props.accounts);
-  const [draft, setDraft] = useState<FallbackDraft>();
+  const [draft, setDraftState] = useState<FallbackDraft>();
+  const setDraft = (next: FallbackDraft | undefined) => {
+    setDraftState(next);
+    props.onOpenChange?.(next !== undefined);
+  };
   const [why, setWhy] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [removeError, setRemoveError] = useState<string>();
@@ -289,6 +298,23 @@ export function Fallbacks(props: {
     props.chains.reload();
   };
 
+  const editingInline = !!(draft?.existing && names.includes(draft.name));
+  const renderEditor = (inline: boolean) =>
+    draft ? (
+      <Editor
+        draft={draft}
+        onChange={setDraft}
+        accounts={props.accounts}
+        models={props.models}
+        providers={providers}
+        problem={why}
+        saving={saving}
+        inline={inline}
+        onSave={save}
+        onCancel={() => setDraft(undefined)}
+      />
+    ) : null;
+
   return (
     <section class="routing-fallbacks" aria-labelledby="routing-fallbacks-h">
       <div class="routing-section-head">
@@ -302,70 +328,74 @@ export function Fallbacks(props: {
       <p class="routing-section-intro">{t("intro")}</p>
       {props.yaml && <Notice tone="warn">{t("yaml")}</Notice>}
       {removeError && <Notice tone="danger">{p.text(removeError, identities)}</Notice>}
-      <Phases
-        load={props.chains}
-        loading={t("loading")}
-        failed={{ title: t("failed") }}
-        isEmpty={(d) => d.chains.length === 0}
-        empty={<p class="muted">{t("none")}</p>}
-      >
-        {(data) => (
-          <div class="fallback-list">
-            {data.chains.map((chain) => (
-              <div
-                key={chain.name}
-                class="fallback"
-                data-part="fallback"
-                data-open={draft?.existing && draft.name === chain.name ? "" : undefined}
-              >
-                <span class="fallback-ask mono" title={chain.name}>
-                  {chain.name}
-                </span>
-                <span class="fallback-line mono">
-                  {chain.steps.map((s, i) => (
-                    <Fragment key={`${i}:${s.model}`}>
-                      {i > 0 && " "}
-                      <span class="fallback-step-text">
-                        {i > 0 && "→ "}
-                        {stepWords(s, naming.byId)}
-                      </span>
-                    </Fragment>
-                  ))}
-                </span>
-                <span class="fallback-actions">
-                  <Button
-                    label={t("editFor", { model: chain.name })}
-                    onClick={() => open(draftOf(chain.name, chain.steps))}
-                  >
-                    {t("edit")}
-                  </Button>
-                  <ConfirmButton
-                    label={t("removeFor", { model: chain.name })}
-                    confirmLabel={t("removeNow")}
-                    question={t("removeQuestion", { model: chain.name })}
-                    onConfirm={() => remove(chain.name)}
-                  >
-                    {t("remove")}
-                  </ConfirmButton>
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </Phases>
-      {draft && (
-        <Editor
-          draft={draft}
-          onChange={setDraft}
-          accounts={props.accounts}
-          models={props.models}
-          providers={providers}
-          problem={why}
-          saving={saving}
-          onSave={save}
-          onCancel={() => setDraft(undefined)}
+      {props.chains.phase === "loading" ? (
+        <StatePane kind="loading" title={t("loading")} />
+      ) : props.chains.data === undefined ? (
+        <StatePane
+          kind="failed"
+          title={t("failed")}
+          details={props.chains.error}
+          primary={{ label: tryAgainWord(), onClick: props.onRetry ?? props.chains.reload }}
         />
+      ) : props.chains.data.chains.length === 0 ? (
+        <div class="fallback-empty card">
+          <p class="muted">{t("none")}</p>
+        </div>
+      ) : (
+        <div class="fallback-list card">
+          {props.chains.data.chains.map((chain) => {
+            const isOpen = draft?.existing && draft.name === chain.name;
+            return (
+              <div key={chain.name} class="fallback" data-part="fallback" data-open={isOpen ? "" : undefined}>
+                <div class="fallback-head">
+                  <span class="fallback-ask mono" title={chain.name}>
+                    {chain.name}
+                  </span>
+                  <span class="fallback-actions">
+                    <Button
+                      label={t("editFor", { model: chain.name })}
+                      onClick={() => open(draftOf(chain.name, chain.steps))}
+                    >
+                      {t("edit")}
+                    </Button>
+                    <ConfirmButton
+                      label={t("removeFor", { model: chain.name })}
+                      confirmLabel={t("removeNow")}
+                      question={t("removeQuestion", { model: chain.name })}
+                      onConfirm={() => remove(chain.name)}
+                    >
+                      {t("remove")}
+                    </ConfirmButton>
+                  </span>
+                </div>
+                <div class="fallback-line">
+                  {chain.steps.map((s, i) => {
+                    const parts = stepParts(s, naming.byId);
+                    return (
+                      <Fragment key={`${i}:${s.model}`}>
+                        {i > 0 && (
+                          <span class="fallback-arrow" aria-hidden="true">
+                            {" → "}
+                          </span>
+                        )}
+                        <span class="fallback-chip">
+                          {s.provider && <ProviderMark extension={s.provider} size="small" />}
+                          <span class="fallback-step-text">
+                            <span class="fallback-chip-model mono">{parts.model}</span>
+                            {parts.detail && <span class="fallback-chip-detail">{` (${parts.detail})`}</span>}
+                          </span>
+                        </span>
+                      </Fragment>
+                    );
+                  })}
+                </div>
+                {isOpen && renderEditor(true)}
+              </div>
+            );
+          })}
+        </div>
       )}
+      {draft && !editingInline && renderEditor(false)}
     </section>
   );
 }

@@ -7,10 +7,14 @@ import { type Account, api } from "../kit/api";
 import type { CoreSettings } from "../kit/api/settings";
 import type { Host, Method, Reply } from "../kit/host";
 import { RoutingPage } from "../kit/pages/routing";
+import { forgetWindows } from "../kit/parts";
 import { type Kit, KitContext } from "../kit/ui";
 import { all, button, type FakeNode, mountIn, restoreDom, settle } from "./fakeDom";
 
-afterEach(restoreDom);
+afterEach(() => {
+  restoreDom();
+  forgetWindows();
+});
 
 const account = (id: string, more: Partial<Account> = {}): Account => ({
   id,
@@ -359,4 +363,335 @@ test("a fallback core refuses keeps the editor open with core's message", async 
   ]);
   expect(page.text()).toContain("pluxy could not save this fallback: no account serves step 2");
   expect(all(page.root, "form")).toHaveLength(1);
+});
+
+test("account rows use the shared AccountRow with live limits, plan pill and at most one filled fix", async () => {
+  const page = await mount({
+    "GET /accounts": ok({
+      accounts: [
+        account("need-1", { priority: 20, state: "reauth_required" }),
+        account("need-2", { priority: 10, state: "reauth_required" }),
+        account("paused-1", { priority: 5, disabled: true }),
+        account("live-1", {
+          priority: 0,
+          quota: {
+            fetched_at: new Date().toISOString(),
+            quota: {
+              plan: "Max 20x",
+              limits: [{ id: "5h", window_seconds: 5 * 3600, used_percent: 42 }],
+            },
+          },
+        }),
+      ],
+    }),
+  });
+  const rows = all(page.root, "div").filter((n) => attr(n, "data-part") === "account-row");
+  expect(rows).toHaveLength(4);
+  expect(page.text()).toContain("Max 20x");
+  expect(page.text()).toContain("58% left");
+  const fixes = all(page.root, "a").filter((n) => n.textContent === "Sign in again");
+  expect(fixes.map((n) => attr(n, "data-variant"))).toEqual(["primary", "quiet"]);
+  await act(async () => {
+    button(page.root, "+ Add a fallback").dispatchEvent(new Event("click"));
+  });
+  const fixesWithEditor = all(page.root, "a").filter((n) => n.textContent === "Sign in again");
+  expect(fixesWithEditor.map((n) => attr(n, "data-variant"))).toEqual(["quiet", "quiet"]);
+  await act(async () => {
+    button(page.root, "Cancel").dispatchEvent(new Event("click"));
+  });
+  await act(async () => {
+    button(page.root, "Turn on").dispatchEvent(new Event("click"));
+  });
+  await settle();
+  expect(page.changes()).toContainEqual({
+    method: "PATCH",
+    path: "/accounts/paused-1",
+    body: { disabled: false },
+  });
+});
+
+test("editing an existing fallback opens the editor inline inside its row and renders step chips", async () => {
+  const page = await mount({
+    "GET /chains": ok({
+      chains: [
+        {
+          name: "claude-opus-4-7",
+          steps: [
+            { model: "claude-opus-4-7", provider: "pluxy/claude" },
+            { model: "gpt-5.5", provider: "pluxy/codex" },
+          ],
+        },
+      ],
+    }),
+  });
+  const fallback = all(page.root, "div").find((n) => attr(n, "data-part") === "fallback");
+  if (!fallback) throw new Error("no fallback row");
+  const chips = all(fallback, "span").filter((n) => attr(n, "class") === "fallback-chip");
+  expect(chips).toHaveLength(2);
+  const marks = all(fallback, "span").filter((n) => attr(n, "data-part") === "provider-mark");
+  expect(marks).toHaveLength(2);
+  await act(async () => {
+    button(fallback, "Edit").dispatchEvent(new Event("click"));
+  });
+  expect(attr(fallback, "data-open")).toBe("");
+  expect(all(fallback, "form").filter((n) => attr(n, "data-part") === "fallback-editor")).toHaveLength(1);
+});
+
+test("a failed refresh over loaded data keeps the page under the stale notice", async () => {
+  let failAccounts = false;
+  const page = await mount();
+  expect(page.text()).toContain("Claude");
+  const callsBefore = page.calls.length;
+  restoreDom();
+  forgetWindows();
+  const base: Record<string, Answer> = {
+    "GET /accounts": ok({ accounts: [account("a1"), account("a2")] }),
+    "GET /settings": ok(settings()),
+    "GET /chains": ok({ chains: [] }),
+    "GET /models": ok({ models: [] }),
+    "GET /config": ok({ format: "json", hash: "x", content: "{}" }),
+    "GET /status": ok({ extensions: [{ id: "pluxy/claude" }] }),
+  };
+  const host = {
+    call: async (method: Method, path: string): Promise<Reply<unknown>> => {
+      if (method === "GET" && path === "/accounts" && failAccounts) return hiccup;
+      const ans = base[`${method} ${path}`];
+      return ans && ans !== "pending" ? ans : ok({});
+    },
+    signedIn: () => true,
+    prefs: { get: () => null, set: () => {} },
+    features: new Set(),
+  } as unknown as Host;
+  const kit = {
+    host,
+    api: api(host),
+    themes: { resolved: { layout: { tabs: "top" } }, subscribe: () => () => {} },
+    unauthorized: () => {},
+    extensionsChanged: () => {},
+  } as unknown as Kit;
+  const live = await mountIn(
+    <KitContext.Provider value={kit}>
+      <RoutingPage />
+    </KitContext.Provider>,
+  );
+  expect(callsBefore).toBeGreaterThan(0);
+  expect(live.text()).toContain("a1");
+  failAccounts = true;
+  await act(async () => {
+    button(live.root, "Refresh").dispatchEvent(new Event("click"));
+  });
+  await settle();
+  expect(live.text().match(/Could not refresh\./g)).toHaveLength(1);
+  expect(live.text()).toContain("a1");
+});
+
+test("a failed refresh keeps the previous freshness stamp instead of saying Updated just now", async () => {
+  const realNow = Date.now;
+  let clock = Date.UTC(2026, 10, 27, 22, 27, 0);
+  Date.now = () => clock;
+  try {
+    let failAccounts = false;
+    let failAll = false;
+    const base: Record<string, Answer> = {
+      "GET /accounts": ok({ accounts: [account("a1"), account("a2")] }),
+      "GET /settings": ok(settings()),
+      "GET /chains": ok({ chains: [] }),
+      "GET /models": ok({ models: [] }),
+      "GET /config": ok({ format: "json", hash: "x", content: "{}" }),
+      "GET /status": ok({ extensions: [{ id: "pluxy/claude" }] }),
+    };
+    const host = {
+      call: async (method: Method, path: string): Promise<Reply<unknown>> => {
+        if (method === "GET" && failAll) return hiccup;
+        if (method === "GET" && path === "/accounts" && failAccounts) return hiccup;
+        const ans = base[`${method} ${path}`];
+        return ans && ans !== "pending" ? ans : ok({});
+      },
+      signedIn: () => true,
+      prefs: { get: () => null, set: () => {} },
+      features: new Set(),
+    } as unknown as Host;
+    const kit = {
+      host,
+      api: api(host),
+      themes: { resolved: { layout: { tabs: "top" } }, subscribe: () => () => {} },
+      unauthorized: () => {},
+      extensionsChanged: () => {},
+    } as unknown as Kit;
+    const live = await mountIn(
+      <KitContext.Provider value={kit}>
+        <RoutingPage />
+      </KitContext.Provider>,
+    );
+    const fresh = () => all(live.root, "span").find((n) => attr(n, "class") === "routing-fresh");
+    expect(fresh()?.textContent).toBe("Updated just now");
+    const initialTitle = fresh() ? attr(fresh() as FakeNode, "title") : undefined;
+
+    clock += 5 * 60_000;
+    failAccounts = true;
+    await act(async () => {
+      button(live.root, "Refresh").dispatchEvent(new Event("click"));
+    });
+    await settle();
+    expect(fresh()?.textContent).not.toBe("Updated just now");
+    expect(fresh()?.textContent).toBe("Updated 5m ago");
+    expect(fresh() && attr(fresh() as FakeNode, "title")).toBe(initialTitle);
+
+    clock += 2 * 60_000;
+    failAll = true;
+    await act(async () => {
+      button(live.root, "Refresh").dispatchEvent(new Event("click"));
+    });
+    await settle();
+    expect(fresh()?.textContent).toBe("Updated 7m ago");
+    expect(fresh() && attr(fresh() as FakeNode, "title")).toBe(initialTitle);
+
+    failAccounts = false;
+    failAll = false;
+    await act(async () => {
+      button(live.root, "Refresh").dispatchEvent(new Event("click"));
+    });
+    await settle();
+    expect(fresh()?.textContent).toBe("Updated just now");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("one failed refresh across every read shows one stale notice, keeps an empty fallback list, and Try again reloads everything including limits", async () => {
+  let failRefresh = false;
+  const calls: string[] = [];
+  const base: Record<string, Answer> = {
+    "GET /accounts": ok({ accounts: [account("a1"), account("a2")] }),
+    "GET /accounts/a1/quota": ok({
+      quota: { plan: "Pro", limits: [{ id: "5h", window_seconds: 5 * 3600, used_percent: 15 }] },
+    }),
+    "GET /accounts/a2/quota": ok({
+      quota: { plan: "Pro", limits: [{ id: "5h", window_seconds: 5 * 3600, used_percent: 15 }] },
+    }),
+    "GET /settings": ok(settings()),
+    "GET /chains": ok({
+      chains: [
+        {
+          name: "claude-opus-4-7",
+          steps: [{ model: "claude-opus-4-7" }, { model: "gpt-5.5", provider: "pluxy/codex" }],
+        },
+      ],
+    }),
+    "GET /models": ok({ models: [] }),
+    "GET /config": ok({ format: "json", hash: "x", content: "{}" }),
+    "GET /status": ok({ extensions: [{ id: "pluxy/claude" }] }),
+  };
+  const host = {
+    call: async (method: Method, path: string): Promise<Reply<unknown>> => {
+      calls.push(`${method} ${path}`);
+      if (method === "GET" && failRefresh) return hiccup;
+      const ans = base[`${method} ${path}`];
+      return ans && ans !== "pending" ? ans : ok({});
+    },
+    signedIn: () => true,
+    prefs: { get: () => null, set: () => {} },
+    features: new Set(),
+  } as unknown as Host;
+  const kit = {
+    host,
+    api: api(host),
+    themes: { resolved: { layout: { tabs: "top" } }, subscribe: () => () => {} },
+    unauthorized: () => {},
+    extensionsChanged: () => {},
+  } as unknown as Kit;
+  const live = await mountIn(
+    <KitContext.Provider value={kit}>
+      <RoutingPage />
+    </KitContext.Provider>,
+  );
+  expect(live.text()).toContain("a1");
+  expect(live.text()).toContain("claude-opus-4-7");
+  expect(live.text()).toContain("How a group shares requests");
+
+  failRefresh = true;
+  await act(async () => {
+    button(live.root, "Refresh").dispatchEvent(new Event("click"));
+  });
+  await settle();
+  expect(live.text().match(/Could not refresh\./g)).toHaveLength(1);
+  expect(all(live.root, "button").filter((b) => b.textContent === "Try again")).toHaveLength(1);
+  expect(live.text()).toContain("a1");
+  expect(live.text()).toContain("claude-opus-4-7");
+  expect(live.text()).toContain("How a group shares requests");
+
+  failRefresh = false;
+  calls.length = 0;
+  await act(async () => {
+    button(live.root, "Try again").dispatchEvent(new Event("click"));
+  });
+  await settle();
+  for (const path of [
+    "GET /accounts",
+    "GET /settings",
+    "GET /chains",
+    "GET /models",
+    "GET /config",
+    "GET /status",
+    "GET /accounts/a1/quota",
+  ]) {
+    expect(calls).toContain(path);
+  }
+  expect(live.text()).not.toContain("Could not refresh.");
+
+  base["GET /chains"] = ok({ chains: [] });
+  await act(async () => {
+    button(live.root, "Refresh").dispatchEvent(new Event("click"));
+  });
+  await settle();
+  expect(live.text()).toContain("No fallbacks yet.");
+  failRefresh = true;
+  await act(async () => {
+    button(live.root, "Refresh").dispatchEvent(new Event("click"));
+  });
+  await settle();
+  expect(live.text().match(/Could not refresh\./g)).toHaveLength(1);
+  expect(live.text()).toContain("No fallbacks yet.");
+  expect(live.text()).not.toContain("Could not read the fallbacks.");
+});
+
+test("unchecked accounts are not counted as serving in the provider header when status failed", async () => {
+  const page = await mount({
+    "GET /accounts": ok({ accounts: [account("a1"), account("a2")] }),
+    "GET /status": hiccup,
+  });
+  expect(page.text()).toContain("2 accounts · 0 serving");
+  expect(page.text()).not.toContain("2 serving");
+  expect(page.text()).toContain("Not checked");
+});
+
+test("settings-file note collapses to one header link when every account in a provider is from config, and stays per-row on mixed providers", async () => {
+  const page = await mount({
+    "GET /accounts": ok({
+      accounts: [
+        account("c1", { extension: "pluxy/claude", source: "config", priority: 10 }),
+        account("c2", { extension: "pluxy/claude", source: "config", priority: 0 }),
+        account("g1", { extension: "pluxy/gemini", source: "config", priority: 10 }),
+        account("g2", { extension: "pluxy/gemini", source: "login", priority: 0 }),
+      ],
+    }),
+  });
+  const claude = all(page.root, "section").find((n) => attr(n, "data-extension") === "pluxy/claude");
+  const gemini = all(page.root, "section").find((n) => attr(n, "data-extension") === "pluxy/gemini");
+  if (!claude || !gemini) throw new Error("missing provider sections");
+
+  const claudeLinks = all(claude, "a").filter((a) => a.textContent === "In the settings file");
+  expect(claudeLinks).toHaveLength(1);
+  expect(attr(claudeLinks[0] as FakeNode, "href")).toBe("#/config/source");
+
+  const geminiLinks = all(gemini, "a").filter((a) => a.textContent === "In the settings file");
+  expect(geminiLinks).toHaveLength(1);
+  expect(attr(geminiLinks[0] as FakeNode, "href")).toBe("#/config/source?account=g1");
+});
+
+test("saving a rule shows a Saved tick beside it", async () => {
+  const page = await mount();
+  const box = toggle(page.root, "Keep a conversation on one account");
+  await flip(box);
+  expect(page.text()).toContain("Saved");
 });

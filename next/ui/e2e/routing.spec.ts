@@ -4,6 +4,7 @@ import { expect, type Page, test } from "@playwright/test";
 import type { Account } from "../kit/api/accounts";
 import type { Chain } from "../kit/api/chains";
 import type { CoreSettings } from "../kit/api/settings";
+import { measureContrast } from "./contrast";
 import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
@@ -118,10 +119,13 @@ test("an account set in the settings file has no handle, arrows or weight, and l
   await expect(file).toBeVisible();
   await expect(file.getByRole("button")).toHaveCount(0);
   await expect(file.locator("[draggable]")).toHaveCount(0);
-  await expect(file.getByRole("link", { name: "In the settings file", exact: true })).toHaveAttribute(
-    "href",
-    "#/config/source?account=alpha-1",
-  );
+  const fileLink = file.getByRole("link", { name: "In the settings file", exact: true });
+  await expect(fileLink).toHaveAttribute("href", "#/config/source?account=alpha-1");
+  const chipStyle = await fileLink.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { bg: s.backgroundColor, border: s.borderTopWidth };
+  });
+  expect(chipStyle).toEqual({ bg: "rgba(0, 0, 0, 0)", border: "0px" });
 });
 
 test("a sole account of the first group cannot go up and one of the last cannot go down", async ({
@@ -245,6 +249,11 @@ test("a fallback is made with its own model first, steps reordered, saved, read 
   ]);
   await page.reload();
   await expect(page.locator('[data-part="fallback"]')).toContainText("server-error (Alpha) → fake-model");
+  await expect(page.locator('[data-part="fallback"] .fallback-chip')).toHaveCount(2);
+  await page.getByRole("button", { name: "Edit the fallback for fake-model", exact: true }).click();
+  await expect(page.locator('[data-part="fallback"][data-open] [data-part="fallback-editor"]')).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.locator('[data-part="fallback-editor"]')).toHaveCount(0);
   // Remove asks first, and saying no keeps it.
   await page.getByRole("button", { name: "Remove the fallback for fake-model…", exact: true }).click();
   await expect(
@@ -387,6 +396,162 @@ test("a number rule checks itself and saves on Enter", async ({ page }) => {
   await expect.poll(async () => (await settings()).routing.retry["max-retry-credentials"]).toBe(2);
 });
 
+for (const appearance of ["light", "dark"] as const) {
+  test(`under a stale notice, words keep 4.5:1 contrast while only bars and marks fade (${appearance})`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ colorScheme: appearance });
+    let failAccounts = false;
+    const reset = Math.floor(Date.now() / 1000) + 7200;
+    const quota = {
+      plan: "Test plan",
+      limits: [
+        { id: "5h", window_seconds: 5 * 3600, used_percent: 50, resets_at: reset },
+        { id: "wk", window_seconds: 7 * 86400, used_percent: 90, resets_at: reset + 86400 },
+      ],
+    };
+    await page.route("**/v0/management/accounts/stale-warn/quota", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ quota }),
+      }),
+    );
+    await page.route("**/v0/management/accounts", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      if (failAccounts) {
+        return route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "internal", message: "refresh failed" } }),
+        });
+      }
+      const now = new Date().toISOString();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          accounts: [
+            {
+              id: "stale-warn",
+              label: "stale-warn",
+              source: "login",
+              state: "active",
+              priority: 10,
+              refreshable: false,
+              extension: "test/alpha",
+              quota: { fetched_at: now, quota },
+            },
+            {
+              id: "stale-ok",
+              label: "stale-ok",
+              source: "login",
+              state: "active",
+              priority: 0,
+              refreshable: false,
+              extension: "test/alpha",
+            },
+          ],
+        }),
+      });
+    });
+    await open(page);
+    await expect(page.getByText("50% left")).toBeVisible();
+    await expect(page.getByText("10% left")).toBeVisible();
+    failAccounts = true;
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(page.getByText(/Could not refresh\./)).toBeVisible();
+    await expect(page.getByText("50% left")).toBeVisible();
+    await expect(page.getByText("10% left")).toBeVisible();
+
+    const textParts = page.locator(
+      [
+        ".order-intro",
+        ".order-provider-count",
+        ".order-tier-priority",
+        ".order-row .account-word",
+        ".order-row .limit-left",
+      ].join(", "),
+    );
+    const measured = await measureContrast(textParts);
+    const texts = await textParts.allTextContents();
+    expect(measured.length).toBeGreaterThanOrEqual(6);
+    const low = measured
+      .map((m, i) => ({ text: texts[i]?.trim().slice(0, 30), ...m }))
+      .filter((m) => m.ratio < 4.5)
+      .map((m) => `"${m.text}": ${m.ratio.toFixed(2)}:1 (${m.fg} on ${m.bg})`);
+    expect(low).toEqual([]);
+
+    const opacities = await page.evaluate(() => ({
+      order: getComputedStyle(document.querySelector(".order") as Element).opacity,
+      meter: getComputedStyle(document.querySelector(".order .meter") as Element).opacity,
+      accountMark: getComputedStyle(document.querySelector(".order .account-mark") as Element).opacity,
+      providerMark: getComputedStyle(
+        document.querySelector(".order-provider-head > .provider-mark") as Element,
+      ).opacity,
+    }));
+    expect(opacities).toEqual({
+      order: "1",
+      meter: "0.6",
+      accountMark: "0.6",
+      providerMark: "0.6",
+    });
+  });
+}
+
+test("Clear cooldown shares the same quiet button border as Turn on", async ({ page }) => {
+  const until = new Date(Date.now() + 10 * 60_000).toISOString();
+  await page.route("**/v0/management/accounts", (route) =>
+    route.request().method() === "GET"
+      ? route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            accounts: [
+              {
+                id: "cooling-1",
+                label: "cooling-1",
+                source: "login",
+                state: "active",
+                priority: 10,
+                refreshable: false,
+                extension: "test/alpha",
+                cooldowns: [{ scope: "model", model: "fake-model", kind: "rate_limit", until }],
+              },
+              {
+                id: "paused-1",
+                label: "paused-1",
+                source: "login",
+                state: "active",
+                disabled: true,
+                priority: 0,
+                refreshable: false,
+                extension: "test/alpha",
+              },
+            ],
+          }),
+        })
+      : route.fallback(),
+  );
+  await open(page);
+  const clear = page.getByRole("button", { name: "Clear cooldown: cooling-1", exact: true });
+  const turnOn = page.getByRole("button", { name: "Turn on: paused-1", exact: true });
+  await expect(clear).toBeVisible();
+  await expect(turnOn).toBeVisible();
+  const [clearStyle, turnOnStyle] = await Promise.all([
+    clear.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { borderColor: s.borderTopColor, borderWidth: s.borderTopWidth };
+    }),
+    turnOn.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { borderColor: s.borderTopColor, borderWidth: s.borderTopWidth };
+    }),
+  ]);
+  expect(clearStyle.borderColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(clearStyle).toEqual(turnOnStyle);
+});
+
 for (const size of [
   { width: 640, height: 480 },
   { width: 1100, height: 760 },
@@ -414,6 +579,7 @@ for (const size of [
     // The arrows stay at their size, and the long name is cut with its full text in the tooltip.
     const box = await arrow(page, LONG, "down").boundingBox();
     expect(Math.min(box?.width ?? 0, box?.height ?? 0)).toBeGreaterThanOrEqual(24);
-    await expect(row(page, LONG).locator(".order-name")).toHaveAttribute("title", LONG);
+    await expect(row(page, LONG).locator(".account-name")).toHaveAttribute("title", LONG);
+    await expect(row(page, LONG).locator('[data-part="account-row"]')).toBeVisible();
   });
 }
