@@ -1,6 +1,6 @@
 // Package management holds the management API's request and reply types and a client for it.
 // Core's handlers write these types and the pluxy command reads them, so the two cannot drift.
-// README.md in this folder describes the API and the command.
+// docs/management-api.md describes the API; docs/cli.md describes the command.
 package management
 
 import (
@@ -135,7 +135,7 @@ type RegistriesReply struct {
 	Registries []Registry `json:"registries"`
 }
 
-// Health is an account's health (Account.Health; the README's "Accounts").
+// Health is an account's health (Account.Health; docs/management-api.md, "Account fields").
 type Health = route.Health
 
 // Health states (Health.State) and where a block's end came from (Health.Source).
