@@ -1753,7 +1753,7 @@ fn native_swap(
                 .map_err(|e| e.to_string())?
                 .join()
                 .map_err(|_| "the swap's thread failed".to_string())?
-                .map_err(|e| e.message)
+                .map_err(|e| e.user_message())
         })
     })();
     let prepared = match prepared {
@@ -2597,7 +2597,7 @@ async fn program_call(
             .state::<App>()
             .programs
             .begin_call(ticket.as_deref())
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.user_message())?;
         tauri::async_runtime::spawn_blocking(move || {
             // On a thread of its own that ends with the call: a tool this call starts is held by
             // the host's supervisor thread, never by the thread that started it.
@@ -2606,7 +2606,7 @@ async fn program_call(
                 .spawn(move || {
                     route::call_main_in(&app, call, &instance, &op, input, None, None)
                         .map(|(v, _)| v)
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| e.user_message())
                 })
                 .map_err(|e| e.to_string())?
                 .join()
@@ -2709,7 +2709,7 @@ async fn environment_add(webview: Webview, distro: String, user: String) -> Resu
             .state::<App>()
             .programs
             .begin_call(None)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.user_message())?;
         tauri::async_runtime::spawn_blocking(move || {
             std::thread::Builder::new()
                 .name("pluxy-prog-call".into())
@@ -2723,7 +2723,7 @@ async fn environment_add(webview: Webview, distro: String, user: String) -> Resu
                         input,
                         None,
                     )
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| e.user_message())?;
                     let r = environments::Record::from_check(
                         &distro,
                         &user,

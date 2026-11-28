@@ -471,6 +471,43 @@ describe("the head, by state", () => {
     await page.click("Try again");
     expect(ch.reads.length).toBe(2);
   });
+
+  test("an add-on error shows the message Rust sends without a protocol code, and a cancel stops quietly", async () => {
+    const claude = channel();
+    const claudePage = await mount(() => <ClaudeCodePage />, claude.invoke);
+    claude.reads[0]?.fail(
+      "/home/me/.claude does not exist yet: run Claude Code once (it makes the folder), then read the settings again",
+    );
+    await settle();
+    expect(claudePage.text()).toContain(
+      "Could not read Claude Code's settings. /home/me/.claude does not exist yet: run Claude Code once (it makes the folder), then read the settings again",
+    );
+    expect(claudePage.text()).not.toMatch(/invalid_request/i);
+
+    const pi = channel();
+    const piPage = await mount(() => <PiPage />, pi.invoke);
+    pi.reads[0]?.fail("What the add-on looked for could not be found.");
+    await settle();
+    expect(piPage.text()).toContain(
+      "Could not read Pi's settings. What the add-on looked for could not be found.",
+    );
+    expect(piPage.text()).not.toMatch(/not_found/i);
+
+    const { page } = await opened(TOOLS[0] as Tool, "not-configured", {
+      ops: { apply: () => new Error("settings.json is read-only") },
+    });
+    await page.click("Connect Claude Code");
+    expect(page.text()).toContain("settings.json is read-only");
+    expect(page.text()).not.toMatch(/permission:/i);
+
+    // A cancel with any message stops quietly because Rust keeps the `cancelled:` prefix.
+    const { page: cancelPage } = await opened(TOOLS[0] as Tool, "not-configured", {
+      ops: { apply: () => new Error("cancelled: confirmation window closed by desktop") },
+    });
+    await cancelPage.click("Connect Claude Code");
+    expect(cancelPage.text()).not.toContain("confirmation window closed by desktop");
+    expect(cancelPage.text()).not.toMatch(/cancelled/i);
+  });
 });
 
 describe("the add-on first", () => {
@@ -484,6 +521,20 @@ describe("the add-on first", () => {
     expect(ch.calls.filter((c) => c.cmd === "device_enable").map((c) => c.args)).toEqual([
       { id: "pluxy/claude-code", enabled: true },
     ]);
+  });
+
+  test("answering No to Turn on add-on on a tool page stops quietly", async () => {
+    const catalog = catalogOf(ADDONS.map((id) => ({ id, enabled: id !== "pluxy/claude-code" })));
+    const ch = channel({ catalog });
+    const invoke = (cmd: string, args?: Record<string, unknown>) =>
+      cmd === "device_enable"
+        ? Promise.reject("native enable cancelled; pluxy/claude-code stays disabled")
+        : ch.invoke(cmd, args);
+    const page = await mount(() => <ClaudeCodePage />, invoke);
+    await page.click("Turn on add-on");
+    expect(page.text()).not.toContain("native enable cancelled");
+    expect(page.text()).not.toContain("stays disabled");
+    expect(page.canPress("Turn on add-on")).toBe(true);
   });
 
   test("a missing add-on links to Add-ons and reads nothing", async () => {

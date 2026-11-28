@@ -345,9 +345,9 @@ fn call_of(
                 .state::<App>()
                 .programs
                 .begin_call(None)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| e.user_message())?;
             route::call_main_in(&app, call, &instance, &op, input, gesture, shown)
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.user_message())
         })
         .map_err(|e| e.to_string())?
         .join()
