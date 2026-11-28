@@ -933,10 +933,14 @@ func prettyJSON(v any) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
+// ModelPlaceholder stands in a snippet where the model's name goes, when none is chosen.
+const ModelPlaceholder = "<model-id>"
+
 // ClientSnippetFor is the snippet that points tool at the core at baseURL (its address, with
-// no /v1) with the client key key, false for a tool it does not know. Each file holds what the
+// no /v1) with the client key key, false for a tool it does not know. model is the model the
+// tool starts with (a name pluxy serves), ModelPlaceholder when empty. Each file holds what the
 // tool's writer in the desktop app writes for inspect to read it as configured.
-func ClientSnippetFor(tool, baseURL, key string) (ClientSnippet, bool) {
+func ClientSnippetFor(tool, baseURL, key, model string) (ClientSnippet, bool) {
 	id, ok := clientSnippetNames[strings.ToLower(strings.TrimSpace(tool))]
 	if !ok {
 		return ClientSnippet{}, false
@@ -944,24 +948,39 @@ func ClientSnippetFor(tool, baseURL, key string) (ClientSnippet, bool) {
 	base := strings.TrimRight(baseURL, "/")
 	spec, _ := clientSpecByID(id)
 	s := ClientSnippet{Tool: id, Name: spec.name}
+	if model == "" {
+		model = ModelPlaceholder
+	}
 	switch id {
 	case "claude-code":
+		// Claude Code asks for its own model names (claude-opus-5-5 and the like) unless told
+		// otherwise, and an account of another service serves none of them: `model` is the one it
+		// starts with, and the three ANTHROPIC_DEFAULT_*_MODEL are what its opus, sonnet and
+		// haiku choices, and the small model it uses in the background, resolve to.
 		s.Files = []ClientSnippetFile{{"~/.claude/settings.json", prettyJSON(map[string]any{
+			"model": model,
 			"env": map[string]string{
 				"ANTHROPIC_BASE_URL":                         base,
 				"ANTHROPIC_AUTH_TOKEN":                       key,
+				"ANTHROPIC_DEFAULT_OPUS_MODEL":               model,
+				"ANTHROPIC_DEFAULT_SONNET_MODEL":             model,
+				"ANTHROPIC_DEFAULT_HAIKU_MODEL":              model,
 				"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
 				"CLAUDE_CODE_AUTO_MODE_SERVER":               "0",
 			},
 		})}}
 	case "codex":
+		// The two keys at the top come before the table: in TOML a key written below a [table]
+		// line belongs to that table.
 		s.Files = []ClientSnippetFile{{"~/.codex/config.toml", fmt.Sprintf(`model_provider = "pluxy"
+model = %q
 
 [model_providers.pluxy]
 name = "pluxy"
 base_url = %q
 wire_api = "responses"
-experimental_bearer_token = %q`, codexBaseURL(base), key)}}
+experimental_bearer_token = %q`, model, codexBaseURL(base), key)}}
+		s.Note = codexTOMLNote
 	case "opencode":
 		s.Files = []ClientSnippetFile{{"~/.config/opencode/opencode.jsonc", prettyJSON(map[string]any{
 			"$schema": openCodeSchema,
@@ -970,10 +989,10 @@ experimental_bearer_token = %q`, codexBaseURL(base), key)}}
 					"npm":     "@ai-sdk/openai-compatible",
 					"name":    "pluxy",
 					"options": map[string]string{"baseURL": base + "/v1", "apiKey": key},
-					"models":  map[string]any{"<model-id>": map[string]string{"name": "<model-id>"}},
+					"models":  map[string]any{model: map[string]string{"name": model}},
 				},
 			},
-			"model": "pluxy/<model-id>",
+			"model": "pluxy/" + model,
 		})}}
 	case "pi":
 		s.Files = []ClientSnippetFile{
@@ -981,7 +1000,7 @@ experimental_bearer_token = %q`, codexBaseURL(base), key)}}
 			{"~/.pi/agent/settings.json", prettyJSON(map[string]any{
 				"packages":        []string{"./" + piAdapterFolder},
 				"defaultProvider": "cliproxyapi",
-				"defaultModel":    "<model-id>",
+				"defaultModel":    model,
 			})},
 		}
 		s.Note = "Pi also needs pluxy's adapter in ~/.pi/agent/" + piAdapterFolder + ", which the desktop app installs."
@@ -994,8 +1013,8 @@ experimental_bearer_token = %q`, codexBaseURL(base), key)}}
     api: openai-responses
     discovery:
       type: openai-models-list`, ompBaseURL(base), key)},
-			{"~/.omp/agent/config.yml", `modelRoles:
-  default: "pluxy/<model-id>"`},
+			{"~/.omp/agent/config.yml", fmt.Sprintf(`modelRoles:
+  default: %q`, "pluxy/"+model)},
 		}
 	}
 	return s, true

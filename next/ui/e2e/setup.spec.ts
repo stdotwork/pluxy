@@ -71,9 +71,12 @@ test("a first run opens Setup and its three steps lead to Finish setup and Home"
   // Step 3: one test request through the account passes.
   const three = page.getByRole("region", { name: "Check it works" });
   await expect(three).toContainText("This sends one short test message through");
-  await expect(three).toContainText("It counts against that account's use.");
+  await expect(three).toContainText("pluxy does not list it in Activity or Usage.");
   await three.getByRole("button", { name: "Send a test request", exact: true }).click();
   await expect(three.locator('[data-part="setup-test"]')).toContainText("It works:");
+  // As step 3 says, pluxy does not list the test in its usage record.
+  const events = await core.mgmt<{ events: unknown[] }>("GET", "/usage/events");
+  expect(events.body.events).toHaveLength(0);
 
   // Finish setup ends the first run and lands on Home.
   await three.getByRole("button", { name: "Finish setup", exact: true }).click();

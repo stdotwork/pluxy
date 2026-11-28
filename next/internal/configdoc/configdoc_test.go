@@ -1280,3 +1280,55 @@ func TestApplySettingsPayload(t *testing.T) {
 		t.Errorf("a misspelt list: err = %v", err)
 	}
 }
+
+// The listen address and the remote-management switch are written where each file keeps them.
+func TestApplySettingsListenAndAllowRemote(t *testing.T) {
+	patch := SettingsPatch{Listen: str("0.0.0.0:9000"), ManagementAllowRemote: flag(true)}
+	t.Run("json", func(t *testing.T) {
+		cfg := loads(t, edited(t, editJSON, false, func(d *Doc) error { return d.ApplySettings(patch) }), false)
+		if cfg.Listen != "0.0.0.0:9000" || !cfg.ManagementAllowRemote {
+			t.Errorf("listen %q, allow remote %v", cfg.Listen, cfg.ManagementAllowRemote)
+		}
+	})
+	for name, src := range map[string]string{"v8": editYAMLV8, "older layout": editYAMLOld} {
+		t.Run("yaml "+name, func(t *testing.T) {
+			got := edited(t, src, true, func(d *Doc) error { return d.ApplySettings(patch) })
+			cfg := loads(t, got, true)
+			if cfg.Listen != "0.0.0.0:9000" || !cfg.ManagementAllowRemote {
+				t.Errorf("listen %q, allow remote %v in\n%s", cfg.Listen, cfg.ManagementAllowRemote, got)
+			}
+			// The file keeps the layout it had: no second copy of host or port.
+			if strings.Count(got, "host:") != 1 || strings.Count(got, "port:") != 1 {
+				t.Errorf("host or port written twice:\n%s", got)
+			}
+		})
+	}
+	t.Run("an address that is no address is refused", func(t *testing.T) {
+		for _, bad := range []string{"", "8400", "127.0.0.1", "127.0.0.1:http", "127.0.0.1:70000", "127.0.0.1:-1"} {
+			d := mustParse(t, editJSON, false)
+			if err := d.ApplySettings(SettingsPatch{Listen: str(bad)}); !errors.Is(err, ErrInvalid) {
+				t.Errorf("listen %q: err = %v, want ErrInvalid", bad, err)
+			}
+		}
+	})
+	t.Run("no host is every interface", func(t *testing.T) {
+		cfg := loads(t, edited(t, editYAMLV8, true, func(d *Doc) error { return d.ApplySettings(SettingsPatch{Listen: str(":8317")}) }), true)
+		if cfg.Listen != ":8317" {
+			t.Errorf("listen = %q", cfg.Listen)
+		}
+	})
+}
+
+// "Check for mistakes" on a JSON file that does not parse says where: the line and the column.
+func TestParseJSONErrorsSayWhere(t *testing.T) {
+	for name, c := range map[string]struct{ src, want string }{
+		"a comma where a key goes": {"{\n  \"a\": 1,\n  ,\n  \"b\": 2\n}\n", "not valid JSON at line 3, column 3: invalid character ','"},
+		"a missing colon":          {"{\n  \"a\" 1\n}", "not valid JSON at line 2, column 7: invalid character '1'"},
+		"the file ends early":      {"{\n  \"a\": 1,\n", "the file ends early, after line 2, column 9"},
+	} {
+		_, err := Parse([]byte(c.src), false)
+		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want it to hold %q", name, err, c.want)
+		}
+	}
+}

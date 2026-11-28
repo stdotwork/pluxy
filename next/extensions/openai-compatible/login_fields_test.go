@@ -19,3 +19,23 @@ func TestAPIKeyLoginBaseURLIsRequired(t *testing.T) {
 		t.Fatalf("quota optional = %v (present %v), want present and optional", optional, ok)
 	}
 }
+
+// The form's labels explain each field in plain words and keep the accepted values exact, without
+// config jargon or Gemini-specific URL paths on an OpenAI-compatible form.
+func TestAPIKeyLoginFieldLabels(t *testing.T) {
+	want := map[string]string{
+		"base_url": "Service address (the API URL, including /v1 for most services, or /v1beta for gemini)",
+		"api_key":  "API key",
+		"wire_api": "How pluxy talks to it. Leave blank for most services (uses chat). Other values: responses, messages, gemini.",
+		"quota":    "How pluxy checks your remaining balance. Leave blank for most services (detected from the address). Values: openrouter, deepseek, none.",
+	}
+	got := map[string]string{}
+	for _, in := range loginMethods[0].Inputs {
+		got[in.Name] = in.Label
+	}
+	for name, wantLabel := range want {
+		if got[name] != wantLabel {
+			t.Errorf("input %q label = %q, want %q", name, got[name], wantLabel)
+		}
+	}
+}

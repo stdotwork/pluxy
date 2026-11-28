@@ -125,7 +125,7 @@ Copy a key from `client_keys` in `config.json`, or create a new one with `pluxy 
 ### No account serves the requested model
 
 ```json
-{"error":{"code":"model_not_found","message":"no account serves model \"nonexistent-model\"","pluxy":{"trace":"20261124091635-ce7ef4b16d5019cf","tried":[],"left_out":[]},"type":"invalid_request_error"}}
+{"error":{"code":"model_not_found","message":"no account serves model \"nonexistent-model\". pluxy serves: gpt-demo-large, gpt-demo-mini. Set the tool's model to one of them, or add a model alias to an account so that \"nonexistent-model\" goes to one of them.","pluxy":{"trace":"20261124091635-ce7ef4b16d5019cf","tried":[],"left_out":[]},"type":"invalid_request_error"}}
 ```
 
 HTTP 404. No enabled account serves that model name. `pluxy route nonexistent-model` fails with exit code 5 and prints:
@@ -133,6 +133,8 @@ HTTP 404. No enabled account serves that model name. `pluxy route nonexistent-mo
 ```text
 pluxy: no account serves nonexistent-model. See pluxy model list.
 ```
+
+A coding tool often causes this: it asks for a model of its own (Claude Code's `claude-opus-5-5`, Codex's `gpt-6.1-sol`) that an account of another service does not serve. The message names the models pluxy does serve. Either set the tool's model to one of them (`pluxy client show <tool>` prints the settings with a model filled in; add `--model <name>` to choose), or add a model alias to an account so the name the tool asks for goes to a model the account serves: in the panel, open **Activity**, open the failed request and choose **Add an alias**; in the config file, `model_alias` on the account.
 
 Run `pluxy model list` to see the model names your accounts serve. If a request failed after trying accounts or skipping blocked ones, the `pluxy` object lists `tried` and `left_out` with each account's public ID and state.
 
@@ -218,7 +220,9 @@ Then restart core.
 
 Open `http://127.0.0.1:8317/panel/` (or the `listen` address core printed). The sign-in screen asks for the **Management key**: paste `management_key` from `config.json` and click **Sign in**.
 
-If sign-in from another computer says "This pluxy answers only the computer it runs on", remote management is off: pluxy answers management calls only from the computer it runs on (its reply is 403 `remote_disabled`). On that computer, set `"management_allow_remote": true` in pluxy's `config.json` (`pluxy help` there shows where the file is) and save it. pluxy picks the change up by itself, so sign in again. Any other refusal at sign-in is shown as "The reply from pluxy was", the status and pluxy's own reason.
+If sign-in from another computer says "This pluxy answers only the computer it runs on", remote management is off: pluxy answers management calls only from the computer it runs on (its reply is 403 `remote_disabled`). On that computer, open the panel and turn on **Let other computers manage pluxy** in Config (Settings tab, Other computers), or set `"management_allow_remote": true` in pluxy's `config.json` (`pluxy help` there shows where the file is) and save it. pluxy picks the change up by itself, so sign in again.
+
+To open the panel from another computer at all, pluxy must listen on an address that computer can reach. The default, `127.0.0.1`, is the computer's own address and works only there. In Config, set **Address pluxy listens on** to `0.0.0.0:8317` (every address of the computer, keeping your port), or in `config.json` set `"listen": "0.0.0.0:8317"`, then stop pluxy and start it again: a new address is used only when pluxy starts. Then open `http://<that computer's address>:8317/panel/` from the other computer. Config asks before it saves a change that would shut out the computer you are using it from. Any other refusal at sign-in is shown as "The reply from pluxy was", the status and pluxy's own reason.
 
 If the panel says "This management key was not accepted." at sign-in, or prints `Core refused the management key. Sign in again.` once you were signed in, verify you used `management_key` rather than a client key from `client_keys`. Five wrong keys in a row from another machine block that address for 30 minutes (403 `blocked`); requests from core's own machine are never blocked.
 

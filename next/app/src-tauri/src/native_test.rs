@@ -396,6 +396,7 @@ const ACTING: &[&str] = &[
     "core_restart",
     "core_adopt",
     "key_entry",
+    "certificate_choose",
     "confirmation_settings",
     "management_key_rotate",
     "device_install_file",

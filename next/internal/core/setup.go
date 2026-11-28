@@ -431,9 +431,14 @@ func (c *Core) handleSetup(m *server.Management) {
 	})
 	m.Handle("GET /setup/clients/{id}/paste", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		if _, ok := ClientSnippetFor(id, "", ""); !ok {
+		if _, ok := ClientSnippetFor(id, "", "", ""); !ok {
 			writeError(w, http.StatusNotFound, "not_found",
 				fmt.Sprintf("no settings to paste for client tool %q (supported: %s)", id, strings.Join(ClientSnippetTools, ", ")))
+			return
+		}
+		model, err := checkClientModel(r.URL.Query().Get("model"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
 		key := "<client-key>"
@@ -462,8 +467,21 @@ func (c *Core) handleSetup(m *server.Management) {
 				return
 			}
 		}
-		snip, _ := ClientSnippetFor(id, baseURL, key)
-		reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: baseURL, Key: key, Note: snip.Note}
+		// The models pluxy serves, for the person to pick from; the tool starts with the one they
+		// picked, else the best match among them.
+		s, release := c.acquire()
+		served := s.Router.ServedModels(r.Context())
+		release()
+		names := make([]string, len(served))
+		for i, m := range served {
+			names[i] = m.ID
+		}
+		if model == "" {
+			model = SuggestClientModel(id, names)
+		}
+		snip, _ := ClientSnippetFor(id, baseURL, key, model)
+		reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: baseURL, Key: key, Note: snip.Note,
+			Model: model, Models: names}
 		for _, f := range snip.Files {
 			reply.Files = append(reply.Files, management.ClientPasteFile{Path: f.Path, Content: f.Content})
 		}

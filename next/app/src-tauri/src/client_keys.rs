@@ -280,6 +280,7 @@ pub fn enter(app: &AppHandle, label: &str, client: &str) -> Result<Value, String
             "An existing client key of the core at {origin} for {client}, to keep in this device's vault as \"{label}\". {client} gets it only after you confirm each use."
         ),
         false,
+        false,
     );
     drop(open);
     let input = match input {

@@ -46,6 +46,9 @@ const settings = (over: Partial<CoreSettings["routing"]> = {}): CoreSettings => 
   },
   token_count_estimate: false,
   "proxy-url": "",
+  management_allow_remote: false,
+  listen: "127.0.0.1:8317",
+  from_this_computer: true,
 });
 
 type Answer = Reply<unknown> | "pending";

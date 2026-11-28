@@ -413,7 +413,7 @@ func TestCLISetupAndClientShow(t *testing.T) {
 				return
 			}
 			tool := strings.Split(strings.TrimPrefix(r.URL.Path, "/v0/management/setup/clients/"), "/")[0]
-			snip, _ := core.ClientSnippetFor(tool, "http://"+r.Host, key)
+			snip, _ := core.ClientSnippetFor(tool, "http://"+r.Host, key, r.URL.Query().Get("model"))
 			reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: "http://" + r.Host, Key: key, Note: snip.Note}
 			for _, f := range snip.Files {
 				reply.Files = append(reply.Files, management.ClientPasteFile{Path: f.Path, Content: f.Content})
@@ -487,10 +487,8 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	const placeholderHint = "Replace <client-key> with a client key: core's config file holds them, and \"pluxy key add\" makes another.\n"
 	const modelHint = "Replace <model-id> with the name of a model your accounts serve: \"pluxy model list\" lists them.\n"
 	for _, tool := range []string{"claude-code", "codex", "opencode", "pi", "omp"} {
-		want := placeholderHint
-		if tool == "opencode" || tool == "pi" || tool == "omp" {
-			want += modelHint
-		}
+		// No model was asked for and this core serves none: every tool's text holds the placeholder.
+		want := placeholderHint + modelHint
 		out, errOut, code := runWith("", false, "client", "show", tool)
 		if code != 0 || errOut != want || !strings.Contains(out, srv.URL) || strings.Contains(out, "mgmt-secret") || strings.Contains(out, "Replace") {
 			t.Errorf("client show %s: code=%d err=%q out=%q", tool, code, errOut, out)
@@ -529,9 +527,17 @@ func TestCLISetupAndClientShow(t *testing.T) {
 			t.Errorf("client show pi: %s is not plain JSON: %q", f.Path, f.Content)
 		}
 	}
+	// --model is passed to core, and the text then names that model and asks for no model.
+	if out, errOut, code := runWith("", false, "client", "show", "claude-code", "--model", "gpt-demo"); code != 0 ||
+		errOut != placeholderHint || !strings.Contains(out, `"model": "gpt-demo"`) || strings.Contains(out, "<model-id>") {
+		t.Errorf("client show --model: code=%d err=%q out=%q", code, errOut, out)
+	}
+	if got, want := takePasteCalls(), []string{"GET /v0/management/setup/clients/claude-code/paste?model=gpt-demo"}; !slices.Equal(got, want) {
+		t.Errorf("client show --model called the paste route as %q, want %q", got, want)
+	}
 	// --key-id valid vs unknown.
 	const storedHint = "Replace <client-key:k1 (sk******ab)> with that key's full value from core's config file: pluxy never prints a stored key.\n"
-	if out, errOut, code := runWith("", false, "client", "show", "claude-code", "--key-id", "k1"); code != 0 || errOut != storedHint || !strings.Contains(out, "k1") || !strings.Contains(out, "sk******ab") || strings.Contains(out, "mgmt-secret") {
+	if out, errOut, code := runWith("", false, "client", "show", "claude-code", "--key-id", "k1"); code != 0 || errOut != storedHint+modelHint || !strings.Contains(out, "k1") || !strings.Contains(out, "sk******ab") || strings.Contains(out, "mgmt-secret") {
 		t.Errorf("client show --key-id k1: code=%d err=%q out=%q", code, errOut, out)
 	}
 	if got, want := takePasteCalls(), []string{"GET /v0/management/setup/clients/claude-code/paste?key_id=k1"}; !slices.Equal(got, want) {
@@ -1408,6 +1414,34 @@ func TestCLIExitCodesAndStreams(t *testing.T) {
 	} {
 		if o, e, code := run(args...); code != exitOK || e != "" || o != "{}\n" {
 			t.Errorf("%v: code=%d out=%q err=%q, want {}\n", args, code, o, e)
+		}
+	}
+}
+
+// The panel's address in the first-run start line is this computer's own: the line after it says
+// how to open the panel from another computer, and says nothing when it can be opened already.
+func TestOtherComputerLine(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		listen string
+		allow  bool
+		secure bool
+		want   string
+	}{
+		{"loopback", "127.0.0.1:8317", false, false,
+			`that address works only on this computer. To open the panel from another computer, set "listen" to "0.0.0.0:8317" and "management_allow_remote" to true in /etc/pluxy/config.json (Config in the panel sets both), restart pluxy, then open http://<this computer's address>:8317/panel/ there`},
+		{"loopback name over https", "localhost:9000", true, true,
+			`that address works only on this computer. To open the panel from another computer, set "listen" to "0.0.0.0:9000" and "management_allow_remote" to true in /etc/pluxy/config.json (Config in the panel sets both), restart pluxy, then open https://<this computer's address>:9000/panel/ there`},
+		{"every interface, remote management off", "[::]:8317", false, false,
+			`another computer opens the panel at http://<this computer's address>:8317/panel/, using this computer's address in place of the one above, after "management_allow_remote" is set to true in /etc/pluxy/config.json (Config in the panel sets it), or its sign-in is refused`},
+		{"every interface, remote management on", "0.0.0.0:8317", true, false,
+			`another computer opens the panel at http://<this computer's address>:8317/panel/, using this computer's address in place of the one above`},
+		{"a network address, remote management off", "10.0.0.2:8317", false, false,
+			`another computer opens the panel at the address above after "management_allow_remote" is set to true in /etc/pluxy/config.json (Config in the panel sets it), or its sign-in is refused`},
+		{"a network address, remote management on", "10.0.0.2:8317", true, false, ""},
+	} {
+		if got := otherComputerLine(c.listen, c.allow, "/etc/pluxy/config.json", c.secure); got != c.want {
+			t.Errorf("%s: otherComputerLine(%q, %v) =\n%q, want\n%q", c.name, c.listen, c.allow, got, c.want)
 		}
 	}
 }

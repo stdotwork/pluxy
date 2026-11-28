@@ -217,7 +217,7 @@
     justify-content: flex-end;
     align-items: center;
     height: 100%;
-    border-radius: var(--px-shape-radius);
+    border-radius: var(--r-small);
   }
 
   .day:hover {
@@ -260,7 +260,7 @@
     display: grid;
     grid-template-columns: repeat(7, minmax(0, 1fr));
     gap: calc(var(--s) * 2);
-    color: var(--px-color-text-muted);
+    color: var(--px-color-secondary-label);
     font-size: var(--px-font-size-small);
     text-align: center;
   }

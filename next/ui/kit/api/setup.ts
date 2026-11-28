@@ -119,6 +119,10 @@ export interface ClientPaste {
   files: { path: string; content: string }[];
   /** What the files need besides themselves. */
   note?: string;
+  /** The model the files name for the tool to start with; empty when none is served or asked for. */
+  model?: string;
+  /** The models pluxy serves now, to choose the tool's model from. */
+  models?: string[];
 }
 
 /**
@@ -159,9 +163,14 @@ export const setupApi = (host: Host) => ({
   importSetup: (config: string, authDir: string | undefined, dryRun: boolean) =>
     host.call<ImportReport>("POST", "/setup/import", { config, auth_dir: authDir, dry_run: dryRun }),
   finishSetup: () => host.call<{ first_run: boolean }>("POST", "/setup/done"),
-  /** keyId names a client key from clientKeys(); the placeholder then names it. */
-  clientPaste: (id: string, keyId?: string) =>
-    host.call<ClientPaste>("GET", `/setup/clients/${one(id)}/paste${keyId ? `?key_id=${one(keyId)}` : ""}`),
+  /**
+   * keyId names a client key from clientKeys(); the placeholder then names it. model is the model
+   * the tool should start with; without it pluxy picks the best match among those it serves.
+   */
+  clientPaste: (id: string, keyId?: string, model?: string) => {
+    const query = [keyId && `key_id=${one(keyId)}`, model && `model=${one(model)}`].filter(Boolean).join("&");
+    return host.call<ClientPaste>("GET", `/setup/clients/${one(id)}/paste${query ? `?${query}` : ""}`);
+  },
   /**
    * Core writes the tool's settings on its own machine, with a key made for it (named label), and
    * keeps the file as it was.

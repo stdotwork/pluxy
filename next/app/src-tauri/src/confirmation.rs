@@ -1597,6 +1597,29 @@ pub(crate) mod text {
         out
     }
 
+    /// The width a bottom button needs for label (GTK mnemonic form) in the dialog's own units: at
+    /// least min, otherwise per_char for each character that shows and pad for the button's edges.
+    #[cfg_attr(not(any(test, windows, target_os = "macos")), allow(dead_code))]
+    fn fitted(label: &str, min: f64, per_char: f64, pad: f64) -> f64 {
+        (plain(label).chars().count() as f64 * per_char + pad)
+            .max(min)
+            .ceil()
+    }
+
+    /// A bottom button's width in Windows' dialog units (about 4 to a character): 50, or more for
+    /// a label that does not fit in that.
+    #[cfg_attr(not(any(test, windows)), allow(dead_code))]
+    pub(crate) fn button_width_win(label: &str) -> f64 {
+        fitted(label, 50.0, 4.5, 12.0)
+    }
+
+    /// A bottom button's width on macOS, in points (about 7 to a character, and the button's
+    /// rounded edges): 110, or more for a label that does not fit in that.
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+    pub(crate) fn button_width_mac(label: &str) -> f64 {
+        fitted(label, 110.0, 7.0, 28.0)
+    }
+
     /// Label, GTK mnemonic form, in Win32's: `&` before the access key, `&&` for a `&`.
     #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn win32(label: &str) -> String {
@@ -1635,6 +1658,27 @@ pub(crate) mod text {
 
     #[cfg(test)]
     mod tests {
+        /// The key window's trust button (`key_entry::text::TRUST_OK`) is the longest label a bottom
+        /// button gets, and shows whole on Windows and macOS; the others keep the width they had.
+        #[test]
+        fn a_long_button_label_gets_a_wider_button() {
+            let trust = crate::key_entry::text::TRUST_OK;
+            let shown = super::plain(trust).chars().count() as f64;
+            assert_eq!(shown, 30.0);
+            assert!(super::button_width_win(trust) >= shown * 4.0 + 12.0);
+            assert!(super::button_width_mac(trust) >= shown * 7.0 + 12.0);
+            for short in [
+                super::CANCEL,
+                super::CONFIRM,
+                super::SETTINGS_CLOSE,
+                crate::key_entry::text::OK,
+                crate::key_entry::text::COPY,
+            ] {
+                assert_eq!(super::button_width_win(short), 50.0, "{short}");
+                assert_eq!(super::button_width_mac(short), 110.0, "{short}");
+            }
+        }
+
         #[test]
         fn labels_render_for_each_toolkit() {
             assert_eq!(super::plain("C_onfirm"), "Confirm");

@@ -73,6 +73,14 @@ func TestFirstStartWritesConfigAndInstallsNothing(t *testing.T) {
 	if !slices.Contains(strings.Split(logs.waitFor(t, "first-run setup"), "\n"), next) {
 		t.Errorf("the start's log has no line %q", next)
 	}
+	// The panel's address is this computer's own: the start says so, and how to open the panel from another computer.
+	if _, err := os.Stat(filepath.Join("..", "internal", "panel", "dist", "index.html")); err == nil {
+		_, port, _ := net.SplitHostPort(strings.TrimPrefix(base, "http://"))
+		want := `pluxy: that address works only on this computer. To open the panel from another computer, set "listen" to "0.0.0.0:` + port + `" and "management_allow_remote" to true in ` + path + ` (Config in the panel sets both), restart pluxy, then open http://<this computer's address>:` + port + `/panel/ there`
+		if !slices.Contains(strings.Split(logs.waitFor(t, "works only on this computer"), "\n"), want) {
+			t.Errorf("the start's log has no line %q", want)
+		}
+	}
 
 	info, err := os.Stat(path)
 	if err != nil {

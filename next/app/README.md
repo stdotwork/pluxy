@@ -32,15 +32,29 @@ server and to the person's other computers.
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
 | On this computer (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start has the core write that config (`pluxy init -port 0`): a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
-| Connect to a pluxy that is already running, on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address (`http://` is accepted only here) and management key. | Leaves it running. The app never starts or stops it. |
-| Connect to a pluxy that is already running, on another computer (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
+| Connect to a pluxy that is already running, on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`, also written `localhost.`), such as a system service. You give its address (`http://` or `https://`) and management key. | Leaves it running. The app never starts or stops it. |
+| Connect to a pluxy that is already running, on another computer (`remote`) | Connects over https, or over plain http. Plain http is taken as over Tailscale, which encrypts it, only when this computer has a Tailscale interface (an interface address in `100.64.0.0/10` or `fd7a:115c:a1e0::/48`, from the system's interface list) and the address the core's name resolves to is in those ranges and is not this computer's own; the shape of an address alone is not enough, since `100.64.0.0/10` is also the shared address space ISPs use. That is checked again before each new connection, and nothing is sent at a moment it does not hold. The status line says the connection is over Tailscale only while that check holds for the address a connection last went to; just after the app starts, before any connection, it says only that nothing is sent unless Tailscale is on and reaches the address. For any other plain http address, the key window warns that anyone on that network could read the key and everything the app and your tools send, and its confirm button, **Trust this network and connect**, is the person's answer that they trust the network; the app keeps that answer with that address only (`trust_network` in `connection.json`), and the page cannot give it. Plain http never goes through a proxy from the environment. You can name the PEM file of the certificate authority that signed its certificate, for a certificate you made yourself (the form's **Choose…** opens the file chooser, on Linux); without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
-Addresses are origins only (scheme, host and port). A key you give is checked against that core
-(`GET /v0/management/status`) before the app switches to it. It is kept in `connection.json` only
+Addresses are origins only (scheme, host and port). Before the key window opens, the app resolves
+the address once, and sends both the call with no key and the call with the key to the address it
+found (the request still names the host, and https still checks the certificate for that name;
+through a proxy from the environment, https only, the proxy's address is resolved instead). It
+asks that core `GET /v0/management/status` with no key, so a wrong address, a certificate it
+cannot check, or remote management being off is said before any key is typed (core refuses
+another computer before it looks for a key, and does not count a call with no key toward its
+lockout). A key you give is checked against that core (`GET /v0/management/status`) before the app
+switches to it. When that check fails for another reason than the key, the app holds the key in
+memory and uses it on the next try at the same address with the same certificate authority file
+instead of asking again; a key the core refused is not held. A held key is overwritten and dropped
+10 minutes after it was typed, at a try at another address or with another certificate authority
+file, when the connection is changed or signed out of, and when the window closes to the tray. It
+is kept in `connection.json` only
 when you tick "Keep the key on this device"; otherwise it lasts until the app quits.
 
 The native side holds the management key. "Enter management key" (on the not-running pane and on Where pluxy runs), and Continue and Connect on the address form, open a
-native dialog with a hidden entry, "Keep the key on this device", and OK/Cancel: a GTK dialog on
+native dialog with a hidden entry, "Keep the key on this device", and OK/Cancel (OK reads
+**Trust this network and connect**, and is not the default button, where the dialog asks about the
+network): a GTK dialog on
 Linux, a Win32 dialog with a password edit control on Windows, and a sheet on the window with an
 `NSSecureTextField` on macOS. On Windows and macOS the dialog is modal to the app's window only:
 the app's other native dialogs and the tray stay usable meanwhile.
@@ -443,6 +457,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `connection_get` | The connection, without the key |
 | `connection_set` | Changes connection settings without accepting a key |
 | `key_entry` | Opens native key entry, checks the key against core, and returns only signed-in, wrong-key, cancelled or error status plus the connection without its key |
+| `certificate_choose` | Opens the native file chooser (Linux only) for the certificate authority file of a pluxy to connect to, and returns its path, or null when cancelled; the file is read only when the person connects |
 | `core_start` | Starts the app's own core only if it is not running (managed mode) |
 | `core_stop` | Stops the app's own core, as the tray's Stop does (managed mode); refused in local and remote modes, which it never stops |
 | `core_restart` | Starts the app's own core again (managed mode) |
@@ -1270,7 +1285,10 @@ the tool is installed.
 The Claude Code page (`src/claudeCode.tsx`) needs the curated native tool `pluxy/claude-code`
 ([app tools](../app-tools/README.md#claude-code)). Its default file is Claude Code's user settings
 (`~/.claude/settings.json`); the others are a file (a link, as stow makes, is followed and kept)
-or a file in a folder. A file Claude Code would not take (not strict JSON, or another `$schema`)
+or a file in a folder. Before Claude Code has ever run, there is no `~/.claude`: the page reads that
+as not connected and says Claude Code has not run yet, and Connect makes the folder in the same
+write (its confirmation names it), so Claude Code's first start uses pluxy and asks for no sign-in.
+A file Claude Code would not take (not strict JSON, or another `$schema`)
 is one pluxy will not change. **Models** holds Opus, Sonnet, Haiku and Fable (each with **1M
 context**; Fable follows Sonnet when empty), **Starts with** (a model, or one of Claude Code's
 aliases), **Subagents**, and under **Context and auto-compaction** the **Auto-compact window**, the
@@ -1423,6 +1441,8 @@ default in its agent folder (`~/.pi/agent`), or in a folder (the one `PI_CODING_
 the folder may be a link, as chezmoi can make), or as the linked files in a folder (links, as stow
 makes, are followed and kept). While the plugin is not installed, Connect is **Install plugin**: one
 press makes the key, installs the plugin and writes pluxy's address, the key and Pi's defaults.
+Before Pi has ever run, there is no `~/.pi/agent`: the page says Pi has not run yet, and Install
+plugin makes the folder first, in the same write (its confirmation names it).
 When a folder of the plugin's name is there that pluxy did not install, the head says so and Install
 plugin is held until it is moved. The head also notes when `settings.json` still lists the npm copy
 an older app installed, which Connect replaces. **Models** holds the **Default model**, the model Pi

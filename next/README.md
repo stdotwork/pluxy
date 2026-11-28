@@ -2545,8 +2545,10 @@ in the middle of saving), is skipped; the file watcher waits until the file has 
 A reload that fails at any step, from broken JSON to an extension that does not start, leaves
 the running config in place, and management shows why. That reason, in the log, in status, and
 when core refuses to start, has the config's secrets replaced by placeholders, as `GET
-/v0/management/config` shows them. `listen`, `tls`, `credentials_dir`,
-`packages.dir` and `extension_pages.listen` cannot change without a restart.
+/v0/management/config` shows them. `tls`, `credentials_dir`, `packages.dir` and
+`extension_pages.listen` cannot change without a restart: a reload that changes one is refused. A
+new `listen` is no mistake: the rest of the file applies, core keeps serving on the address it has
+(and logs that the new one waits), and takes the new one when it next starts.
 A key a JSON config has that core does not read is not an error: each load logs one `warning:` line
 naming the file and the keys (such as `routing.explian`), and core ignores them; a wrong type or a
 syntax error names the key path or the line and column.
@@ -2746,6 +2748,9 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `observability.usage.usage-statistics-enabled` | `usage.enabled` | `true` or `false`: whether core keeps the [usage record](#usage-statistics). On unless the config turns it off. |
 | `token_count_estimate` (top level) | `token_count_estimate` (top level, in a `config.yaml` too) | `true` (the default) or `false`: whether a token count no account can give is answered with core's estimate or with an error. |
 | `proxy-url` (top level) | `proxy_url` | The [outbound proxy](#outbound-proxy) of every account without its own, shown with `redacted` in place of a user name and password; `""` removes it. Sending back the value as shown keeps the password. |
+| `management_allow_remote` (top level) | `management_allow_remote` (`management.allow-remote` in a `config.yaml`) | `true` or `false`: whether the management API also answers computers other than the one core runs on. A change applies at once. |
+| `listen` (top level) | `listen` (`server.host` and `server.port` in a `config.yaml`) | The address core serves on, as `host:port`; `host` may be empty or `0.0.0.0` for every address. A new address is checked (it must be an address and a port, on a host this computer has, or 400), written to the file, and used the next time core starts: until then `GET` shows the running address as `listen` (the port core picked, for a config that listens on port 0) and the new one as `listen_after_restart`, and every other setting applies as usual. |
+| `from_this_computer` (read only) | | `true` when this call came from the computer core runs on, `false` when it came from another computer. A page uses it to warn before a change that would shut the caller out. |
 | `payload` (top level) | `payload` (`requests.payload` in a `config.yaml`, or `payload` where the file has only that) | The [payload rules](#payload-rules), all five lists at once; absent when there are none. A change replaces them, `null` or `{}` removes them, and a field the rules do not have or a path outside the supported syntax is refused. |
 
 The settings shown are those of the running config. Today's other basic setting `ws-auth` is

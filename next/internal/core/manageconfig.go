@@ -9,7 +9,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -344,7 +346,7 @@ func settings(cfg *server.Config) settingsView {
 	}
 	v.SessionAffinity = r.AffinityOn()
 	v.SessionAffinityTTL = shortDuration(r.AffinityTTL())
-	return settingsView{TokenCountEstimate: cfg.TokenCountEstimateOn(), ProxyURL: proxyurl.Redact(cfg.ProxyURL), Payload: cfg.Payload, Routing: v, Observability: observabilityView{
+	return settingsView{TokenCountEstimate: cfg.TokenCountEstimateOn(), ProxyURL: proxyurl.Redact(cfg.ProxyURL), Payload: cfg.Payload, ManagementAllowRemote: cfg.ManagementAllowRemote, Listen: cfg.Listen, Routing: v, Observability: observabilityView{
 		Logs: logsView{LoggingToFile: cfg.Logs.ToFile, LogsMaxTotalSizeMB: cfg.Logs.MaxTotalSizeMB,
 			RequestLog: cfg.Logs.RequestLog, ErrorLogsMaxFiles: cfg.Logs.ErrorLogs()},
 		Usage: usageView{UsageStatisticsEnabled: cfg.Usage.On()}}}
@@ -360,6 +362,36 @@ func shortDuration(d time.Duration) string {
 		s = strings.TrimSuffix(s, "0m")
 	}
 	return s
+}
+
+// settingsFor is GET /settings's reply to the caller r: the active settings, the listen address
+// the config file holds when core has not taken it yet, and whether the call came from this computer.
+func (c *Core) settingsFor(r *http.Request) settingsView {
+	v := settings(c.Config())
+	v.FromThisComputer = server.FromThisMachine(r)
+	// The address pluxy is bound to: a config that listens on port 0 gets a free port at start.
+	v.Listen, _ = c.setupCoreTarget()
+	if b, err := os.ReadFile(c.opts.ConfigPath); err == nil {
+		if file, err := server.ParseConfig(b, c.opts.ConfigPath); err == nil && file.Listen != c.Config().Listen && file.Listen != v.Listen {
+			v.ListenAfterRestart = file.Listen
+		}
+	}
+	return v
+}
+
+// checkListenAddress refuses a listen address that pluxy could not start on: one that is not
+// host:port, or whose host this computer does not have. It tries the host with a free port, which
+// is as far as it can tell without taking the port itself.
+func checkListenAddress(listen string) error {
+	host, _, err := configdoc.CheckListen(listen)
+	if err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		return fmt.Errorf("%w: this computer cannot serve on the address %q, so pluxy could not start on %q; use an address this computer has, or 0.0.0.0 for all of them", configdoc.ErrInvalid, host, listen)
+	}
+	return ln.Close()
 }
 
 // handleConfig adds the config calls to the management API.
@@ -406,6 +438,10 @@ func (c *Core) handleConfig(m *server.Management) {
 		notices := []string{}
 		for _, n := range cfg.Notices {
 			notices = append(notices, c.scrub(n, cur, b))
+		}
+		// A new listen address is no mistake: core serves on it from its next start.
+		if now, _ := c.setupCoreTarget(); cfg.Listen != c.Config().Listen && cfg.Listen != now {
+			notices = append(notices, fmt.Sprintf("listen %q is used the next time pluxy starts; until then it keeps serving on %q", cfg.Listen, now))
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"valid": true, "notices": notices})
 	})
@@ -618,7 +654,7 @@ func (c *Core) handleConfig(m *server.Management) {
 	})
 
 	m.Handle("GET /settings", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, settings(c.Config()))
+		writeJSON(w, http.StatusOK, c.settingsFor(r))
 	})
 
 	m.Handle("PATCH /settings", func(w http.ResponseWriter, r *http.Request) {
@@ -630,6 +666,14 @@ func (c *Core) handleConfig(m *server.Management) {
 		if cur := c.Config().ProxyURL; p.ProxyURL != nil && len(proxyurl.Password(cur)) > 0 && strings.TrimSpace(*p.ProxyURL) == proxyurl.Redact(cur) {
 			p.ProxyURL = nil
 		}
+		// A new listen address is saved to the file and served on after a restart, so it must be one
+		// this computer has: an address it has not would stop pluxy from starting.
+		if p.Listen != nil && strings.TrimSpace(*p.Listen) != c.Config().Listen {
+			if err := checkListenAddress(*p.Listen); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_request", strings.TrimPrefix(err.Error(), configdoc.ErrInvalid.Error()+": "))
+				return
+			}
+		}
 		err := c.WriteConfig("management API: settings", c.edit(func(d *configdoc.Doc) error {
 			if err := d.ApplySettings(p); err != nil {
 				return &editError{http.StatusBadRequest, "invalid_request", err.Error()}
@@ -640,6 +684,6 @@ func (c *Core) handleConfig(m *server.Management) {
 			c.writeChangeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, settings(c.Config()))
+		writeJSON(w, http.StatusOK, c.settingsFor(r))
 	})
 }
