@@ -273,3 +273,49 @@ test("Themes search narrows only setting rows, keeping the gallery, Save/Remove 
     await core.mgmt("DELETE", "/themes/t3/nightfall");
   }
 });
+
+test("a long theme description expands in full on keyboard focus", async ({ page }) => {
+  const longText =
+    "A deliberately long theme description that wraps past three lines on a gallery card so a keyboard user tabbing to the card can read the fourth and fifth lines without hovering.";
+  expect(
+    (
+      await core.mgmt("PUT", "/themes/me/wordy", {
+        theme_version: 0,
+        id: "me/wordy",
+        name: "Wordy",
+        description: longText,
+        appearance: "both",
+      })
+    ).status,
+  ).toBe(200);
+  try {
+    await open(page, "me/wordy", "light", SIZES[0]);
+    await goTo(page, "Themes");
+    const card = page.locator(".theme-card", { hasText: "Wordy" });
+    const about = card.locator(".theme-about");
+    await expect(about).toBeVisible();
+    // Before focus, the description is clamped to three lines.
+    const before = await about.evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+    expect(before.scrollHeight).toBeGreaterThan(before.clientHeight);
+
+    // Tabbing from Remove Wordy lands on the checked Wordy radio with :focus-visible.
+    await page.getByRole("button", { name: "Remove Wordy", exact: true }).focus();
+    await page.keyboard.press("Tab");
+    const radio = card.locator('input[type="radio"]');
+    await expect(radio).toBeFocused();
+    expect(await radio.evaluate((el) => el.matches(":focus-visible"))).toBe(true);
+    const after = await about.evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+      overflow: getComputedStyle(el).overflow,
+    }));
+    expect(after.overflow).toBe("visible");
+    expect(after.scrollHeight).toBeLessThanOrEqual(after.clientHeight + 1);
+  } finally {
+    await core.mgmt("PUT", "/theme", { id: "" });
+    await core.mgmt("DELETE", "/themes/me/wordy");
+  }
+});

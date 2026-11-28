@@ -114,6 +114,14 @@
     overflow: hidden;
   }
 
+  /* A keyboard user sees the full description on focus, as a pointer user does on hover. */
+  .theme-card:has(:focus-visible) .theme-about {
+    display: block;
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    overflow: visible;
+  }
+
   .theme-modes {
     padding-inline: calc(var(--s) * 1);
     color: var(--px-color-secondary-label);
