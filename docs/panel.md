@@ -345,34 +345,93 @@ single notice linking to **Turn it on in Config** (`#/config/logging`).
 ## Tools
 
 - **Address:** `#/tools` (`data-page="tools"`).
-- **Header action:** **Refresh** re-scans installed coding tools and reloads keys and 7-day key
-  usage.
-- **Coding tools:** lists tools detected on the machine core runs on, connected tools first, then
-  other installed tools; uninstalled or unchecked tools sit under **Other tools ({count})**. Notes
-  that Claude Desktop, Grok Build and Hermes Agent are set up from the desktop app. Warns with an
-  **Add an account** link when pluxy has no accounts.
-  - **Set up** / **Hide** on a supported tool (Claude Code, Codex CLI, OpenCode, Pi, Oh My Pi) opens
-    three inline steps:
-    1. **Make key** (or **Make another key** if a key with that tool's name already exists): creates
-       a client key named after the tool and substitutes it directly into step 2's snippet in page
-       memory only.
-    2. Optional starting-model selector (when pluxy serves models) and config file snippet with
-       **Copy**.
-    3. Restart the tool to load the new settings.
+- **Header action:** **Refresh** runs a fresh tool scan and reloads keys and 7-day key usage. If
+  core has never scanned, opening the page starts one scan and polls every second while it runs.
+- **Coding tools:** lists coding tools detected on the computer core runs on, with a summary line
+  (`{installed} installed · {connected} connected · checked {when}`, plus
+  `Detected on the computer pluxy runs on.` when viewed from another computer). Connected tools
+  appear first, then other installed tools; uninstalled or unchecked tools sit under **Other tools
+  ({count})** (open automatically alongside **No coding tools found.** when no tool is installed).
+  - Each row shows the tool name (**Codex** for `codex`), version (when found), state badge
+    (**Connected**, **Installed · not connected**, **Settings need update**, **Cannot change
+    settings**, **Not installed**, or **Not checked**), settings file path, and action.
+  - Tools without paste snippets (**Claude Desktop**, **Grok Build**, **Hermes Agent**) read **Set
+    up from the desktop app** (and a note below the list says the same unless all three appear as
+    rows).
+  - Warns with an **Add an account** link (`#/add-account`) when pluxy has no accounts. On cores
+    without `GET /setup`, displays a note to use **Address for tools** and **Keys** below.
+- **Connecting and disconnecting a tool from the panel:**
+  - **Which tools:** **Claude Code** (`~/.claude/settings.json`) and **Codex**
+    (`~/.codex/config.toml`), when installed on core's computer and their settings file is neither
+    refused nor already connected by hand.
+  - **Buttons and hint:** an unconnected eligible row shows **Connect** and **Set up by hand**,
+    with a line naming the file and noting that **Connect** makes a key, writes it into that file
+    on core's computer, keeps a copy of the file as it was, and **Disconnect** puts it back. Once
+    connected by pluxy, the row shows **Disconnect** (and **Connect again** if the file later stops
+    pointing at pluxy). A tool connected by hand keeps **Set up** alone.
+  - **What Connect writes and where:** runs immediately without asking first. Core makes a client
+    key named after the tool (reusing an existing core key if the file already holds one), uses the
+    model picked in **Set up by hand** if any (otherwise the best-matching served chat model, or
+    leaves model settings alone when core serves no chat model yet), and merges only pluxy's
+    settings into the tool's file in the home folder of the user core runs as (preserving unrelated
+    settings and tightening permissions to owner-only: `0600` for new files, or removing group and
+    other bits on existing files):
+    - **Claude Code** (`~/.claude/settings.json`): merges `env` (`ANTHROPIC_BASE_URL`,
+      `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`,
+      `CLAUDE_CODE_AUTO_MODE_SERVER`, plus `ANTHROPIC_DEFAULT_OPUS_MODEL`,
+      `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` and top-level `model` when
+      a model is chosen) and removes `env.ANTHROPIC_API_KEY`.
+    - **Codex** (`~/.codex/config.toml`): sets root `model_provider = "pluxy"` (and `model` when
+      chosen) above tables, sets `[model_providers.pluxy]` (`name`, `base_url` ending in `/v1`,
+      `wire_api = "responses"`, `experimental_bearer_token`), and removes `env_key` and
+      `requires_openai_auth` from `[model_providers.pluxy]`.
+    - Core refuses symlinks, non-regular files, files larger than 2 MiB, files or folders owned by
+      another user, unexpected formats, or a file modified while being updated.
+    - Before writing, core saves a private backup record (original file contents, permissions,
+      whether the file or folder was created, applied bytes, and created key ID) in
+      `state/tools/<tool>.json` beside core's config. A note under the row prompts you to restart
+      the tool after connecting.
+  - **What Disconnect puts back:** runs immediately without asking first (available only for tools
+    pluxy connected). If the file still matches what **Connect** wrote, restores the original file
+    bytes and permissions (or deletes the file — and its folder if empty — when **Connect** created
+    them). If the file changed since, keeps those later changes and reverts or removes only the
+    settings **Connect** changed that still hold **Connect**'s values (and removes an empty
+    `[model_providers.pluxy]` table that **Connect** added). Deletes the backup record and removes
+    the client key **Connect** created unless another connected tool's record uses it or it is the
+    last client key. A note under the row reports whether the file was restored, merged, or
+    removed.
+- **Set up by hand** / **Set up** (**Claude Code**, **Codex**, **OpenCode**, **Pi**, **Oh My Pi**;
+  toggled with **Hide**, one row open at a time): opens three inline steps:
+  1. **Make key** (or **Make another key** if a key with that tool's name already exists): creates
+     a client key named after the tool and substitutes it directly into step 2's snippet in page
+     memory only (closing its one-time notice in **Keys**, deleting the key, or leaving the page
+     clears it from the snippet).
+  2. **Model {tool} starts with** selector (when pluxy serves models; picking a model here also
+     sets the model **Connect** writes for that tool; when none are served, keeps `<model-id>` and
+     links to **Models your tools can ask for** on **System**) and config file snippet(s) with
+     **Copy**.
+  3. Restart the tool to load the new settings.
 - **Address for tools:** displays pluxy's base address with **Copy**, notes whether other computers
-  on the network can reach it, and links to **Addresses for other programs** on **System**
-  (`#/system`).
-- **Keys:** lists every client key with its name (or masked key) and 7-day request count (`{count}
-  request(s) this week` or `Not used this week`).
-  - **New key:** opens a form with an optional **Name** (up to 64 characters) and **Make key**.
-    Creating a key displays its full value once with **Copy** and **Close** (held only in page
-    memory until closed, deleted, or you leave the page).
-  - **Rename:** edits the key's label (`client_key_labels`; saves with **Save**, cancels with
-    **Cancel**).
-  - **Delete:** asks for confirmation before deleting the key; disabled when only one key remains.
-- **Spends or deletes:** **Delete** permanently removes a client key after confirmation (tools using
-  it stop working).
-- **Settings keys:** `client_keys`, `client_key_labels` ([config.md](config.md#top-level)).
+  on your network can reach it (when viewing a local core), and links to **Addresses for other
+  programs** on **System** (`#/system`).
+- **Keys:** titled **Keys ({count})** once loaded, lists every client key with its name (and masked
+  value, or masked key if unnamed) and 7-day request count (`{count} request this week`,
+  `{count} requests this week`, or `Not used this week`). When no keys exist, shows **No keys.
+  Until there is one, any program that reaches pluxy can use it.** and **New key**.
+  - **New key:** opens a form with an optional **Name** (up to 64 characters), **Make key**, and
+    **Cancel**. Creating a key displays its full value once with **Copy** and **Close** (held only
+    in page memory until closed, deleted, or you leave the page).
+  - **Rename:** edits the key's label (`client_key_labels`, up to 64 characters; saves with
+    **Save**, cancels with **Cancel**).
+  - **Delete:** asks for confirmation (**Yes, delete** / **Cancel**) before deleting the key;
+    disabled when only one key remains.
+- **Spends or deletes:** nothing spends from an account. **Connect** and **Disconnect** write or
+  revert the tool's settings file on core's computer immediately without asking first (**Connect**
+  creates a client key and backs up the original file; **Disconnect** restores, merges, or removes
+  the file and deletes the created key if unused and not the last key). **Delete** in **Keys**
+  permanently removes a client key after confirmation (tools using it stop working).
+- **Settings keys:** `client_keys`, `client_key_labels` ([config.md](config.md#top-level)); backup
+  records in `state/tools/<tool>.json`.
 
 ## Settings
 
@@ -544,9 +603,10 @@ Settings lists its pages as topics in three groups: **This device** (**General**
      additional kinds sit under **More ({count})**), press **Add {names}** to install them, then
      sign in with the embedded **Add an account** form. Press **Continue** (once at least one
      account can take requests) or **Skip**.
-  2. **Your coding tool:** shows the same coding-tool list and three-step snippets as **Tools**
-     (keys created here stay in memory only while step 2 is open). Press **Continue** / **Skip**, or
-     **Refresh** to re-scan.
+  2. **Your coding tool:** shows the same coding-tool list, **Connect** / **Disconnect** actions
+     (for Claude Code and Codex), and three-step **Set up** / **Set up by hand** snippets as
+     **Tools** (keys made in **Set up** / **Set up by hand** stay in memory only while step 2 is
+     open). Press **Continue** / **Skip**, or **Refresh** to re-scan.
   3. **Check it works:** choose an account (when 2 or more can be tested) and optionally **Choose a
      model**, then press **Send a test request**. The test is not listed in Activity or Usage. Press
      **Finish setup** (after passing), **Test again**, **Finish anyway**, or **Finish without
@@ -555,7 +615,9 @@ Settings lists its pages as topics in three groups: **This device** (**General**
   (Setup stays under Settings). Afterwards, **Back to Home** returns to **Home**.
 - **Spends or deletes:** **Send a test request** spends one request against the chosen account
   (stated above the button). **Import now** writes imported accounts and settings only after you
-  preview and confirm.
+  preview and confirm. In step 2, **Connect** and **Disconnect** write or revert the tool's
+  settings file on core's computer (and create or remove its client key) immediately without asking
+  first.
 
 ### Extension pages
 
