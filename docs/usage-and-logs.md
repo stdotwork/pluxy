@@ -40,7 +40,7 @@ An event has these fields. `seq`, `timestamp`, `endpoint`, `stream`, `model`, `f
 | `served_model` | The model the upstream's reply says served it, when it names one. |
 | `provider`, `account` | The extension and the account the last attempt went to. |
 | `chain_step` | The step of the model's fallback chain the last attempt was for, from 1. Left out for a model with no chain. |
-| `why` | Why routing chose the last attempt's account over the others that serve the model (at that step of a fallback chain): `pinned` (the request named it in `X-Pluxy-Account`), `session` (it served the session's last request), `only` (no other account serves the model), `first` (it is alone at the highest `priority`), `only-free` (it shares the highest `priority` with others, and none of them could take the request then: tried already, busy or blocked), `backup` (no account of a higher `priority` could take it), or the strategy's name (`round-robin`, `weighted`, `fill-first`, `least-active`, `soonest-reset`) when it chose among several at the highest `priority`. Left out for a request that reached no account, and in events recorded before core kept it. |
+| `why` | Why routing chose the last attempt's account over the others that serve the model (at that step of a fallback chain): `pinned` (the request named it in `X-Pluxy-Account`), `session` (it served the session's last request), `only` (no other account serves the model), `first` (it is alone at the highest `priority`), `only-free` (it shares the highest `priority` with others, and none of them could take the request then: tried already, busy or blocked), `backup` (no account of a higher `priority` could take it), or the strategy's name (`round-robin`, `weighted`, `fill-first`, `least-active`, `soonest-reset`) when it chose among several at the highest `priority`. Left out for a request that reached no account, and in older events that do not carry it. |
 | `attempts`, `tried` | How many accounts the request went to, and what each attempt ended with (at most 16 entries). `tried` is left out for one attempt that succeeded. |
 | `left_out` | For a failed request, the accounts that serve the model and were not tried, and why (at most 8 entries). Recorded whatever `routing.explain` says. |
 | `key_id`, `label` | The ID of the client key the request used, as `pluxy key list` shows it, never the key itself, and the key's name at that time. |
@@ -90,7 +90,8 @@ written leaves the turn recorded as finished, with the tokens the upstream repor
 | `usage.keep_days` | UTC days of day files kept. Older day files are deleted at start and daily. `0` keeps all. Summaries are never deleted. | 90 |
 
 Lowering `max_events` or `max_age_ms` drops the oldest requests from memory at the next reload.
-Reading the record never removes anything.
+A read of the record also drops from memory the requests older than `max_age_ms`; nothing else is
+removed by a read, and the day files are not touched.
 
 In the panel, the **Logging** section of the **Config** page has the switch **Keep a record of
 requests**.
@@ -193,9 +194,9 @@ trace ID, and the account the last attempt went to. `-` stands for a field the r
 such as the account of a request refused before routing. A status of 400 or more is a `warn` line.
 
 **Rotation and size.** `main.log` is renamed `main-<time>.log` (a UTC time) before a write would take it past 10 MiB, and
-a new one begins. `logs.max_total_size_mb` caps the logs folder: when its `.log` files (`main.log`'s
-rotated files, request logs and error logs) take more, the oldest are deleted first, never
-`main.log`. The cap is applied when a file is rotated, when a request log is written and when the
+a new one begins. `logs.max_total_size_mb` caps the logs folder: when its `.log` files (`main.log`, its
+rotated files, request logs and error logs) take more, the oldest are deleted first. `main.log`
+counts toward the cap but is never deleted. The cap is applied when a file is rotated, when a request log is written and when the
 setting changes.
 
 ```json

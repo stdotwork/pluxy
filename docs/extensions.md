@@ -157,7 +157,8 @@ with the rest. A package that is running and cannot be prepared refuses the relo
 | An extension's accounts, or an account's `settings` field, change | Applied by the reload. An account whose `settings` change starts with fresh routing state. |
 | Settings edited on an extension's own page | Saved at once; no reload. |
 | `idle_stop_ms`, `drain_timeout_ms`, `restart` | Applied by the reload. |
-| `listen`, `tls`, `credentials_dir`, `packages.dir`, `extension_pages.listen` | Not applied while core runs: a reload that changes one is refused, and core says to restart. |
+| `listen` | Not applied while core runs: core goes on serving on the old address, logs that the new one waits for a restart, and uses it at its next start. |
+| `tls`, `credentials_dir`, `packages.dir`, `extension_pages.listen` | Not applied while core runs: a reload that changes one is refused, and core says to restart. |
 
 `pluxy serve -safe-mode` starts core with no extension running: client requests fail with a 503,
 and the config can still be checked and reloaded through management. The **Extensions** page says
@@ -269,7 +270,7 @@ All of these are beside the config file unless the config moves them.
 | What | Where |
 | --- | --- |
 | A package's files | `packages/<publisher>/<name>/<release>/`, under `packages.dir`. The program runs with this folder as its working directory. |
-| The record of what is installed | `packages.json` in the packages folder: each package's release, registry, archive address and digest, the digest of its unpacked files, and whether it is on. |
+| The record of what is installed | `packages.json` in the packages folder: each package's release, registry, archive address and digest, the digest of its unpacked manifest, program and pages, and whether it is on. |
 | An extension's settings, shown by its pages | `.settings/<publisher>/<name>.json` in the packages folder, readable only by core's user. They survive upgrades. |
 | Accounts added by sign-in | The credentials folder (`credentials_dir`, default `credentials`). They stay when a package is removed. |
 | Downloads in progress | `.staging` in the packages folder, cleared at start. |
@@ -328,7 +329,7 @@ archives to an `https://` address, is a registry for others to add.
 | `-out <folder>` | Where to write. Required. |
 | `-platforms <list>` | Comma-separated `GOOS/GOARCH` pairs. Default: this machine's platform. |
 | `-extensions <list>` | Pack only these extensions, by folder name or package ID. Default: all. With `-app-tools` it selects app tools instead. |
-| `-archived` | Also pack the extensions under `next/archive/`, which pluxy no longer ships. Each is a Go module of its own, built in its own folder, and is listed with the tier `unverified`. Without the flag they are neither packed nor named. |
+| `-archived` | Also pack the extensions under `next/archive/`, which pluxy does not ship. Each is a Go module of its own, built in its own folder, and is listed with the tier `unverified`. Without the flag they are neither packed nor named. |
 | `-app-tools <folder>` | Pack the desktop app's native tools in `next/app-tools/` instead, from programs built beforehand at `<folder>/<goos>-<goarch>/<program file name>`. It builds nothing, and writes to `dist/app-tools`. It skips the test fixture `usage-fixture`, and packs each tool only for the platforms its manifest names. Its `index.json` is for the desktop app's device registries. The app installs a native tool only with a curated signature, which `pluxy-pack` does not make. |
 
 `go run ./cmd/pluxy-pack -h` prints the flags. Each package's title, summary and kind in the index

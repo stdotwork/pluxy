@@ -42,7 +42,7 @@ whichever provider reports it and however the provider words it.
 | Reload data from the server | `Refresh` | `Query`, `Load` |
 | Spend a manual reset | `Reset quota` | |
 | A manual reset you can spend (Codex, Claude) | `manual reset`, `Manual resets` for the count | `reset credit`, `reset grant`, `Banked resets` |
-| End of a subscription | `Subscription ends {time}` | `Renewal time`, `Subscription expires` |
+| End of a subscription | `Subscription ends {date}` | `Renewal time`, `Subscription expires` |
 | End of a consumable | `Expires {time}` | |
 | Short durations | `{n}s`, `{n}m`, `{n}h`, `{n}d {n}h` | `{n} min`, `{n} hr` |
 
@@ -59,17 +59,16 @@ whichever provider reports it and however the provider words it.
 | The same, as a state | `cooling down` | `cooling` |
 | Clear that block | `Clear cooldown` | |
 | Fill a secret input from a file on this computer (a key a person saved in a file) | `Load from file` | |
-| Sign-in action | `Sign in` (owner to confirm; not yet applied) | `Log in`, `Login` |
+| Sign-in action | `Sign in` (owner to confirm) | `Log in`, `Login` |
 
-The old panel's health labels (`Healthy`, `Warning`, `Disabled`) were a separate scale from these terms.
 
 ### Provider names
 
 Use one display name per provider, from one shared list in each UI:
 `Claude`, `Codex`, `Gemini`, `Devin`, `Kimi`, `xAI`, `Muse (Meta)`, `Vertex AI`,
 `AI Studio`, `OpenAI Compatible`. Use `Grok` only for xAI's product, CLI or plan names (`Grok Build`,
-`SuperGrok`), not for the provider (owner to confirm). The Claude login card says `Claude OAuth`,
-not `Anthropic OAuth`.
+`SuperGrok`), not for the provider (owner to confirm). The Claude sign-in method is called `Claude subscription`,
+not `Claude OAuth` or `Anthropic OAuth`.
 
 ### Casing
 
@@ -80,15 +79,12 @@ string is touched for another reason; there is no repo-wide casing pass.
 
 The UI kit in `next/ui`, and so the panel and the desktop app, ships English only. Other locales
 come later as data files of texts ([Texts and locales](../next/ui/README.md#texts-and-locales)).
-The table below is the glossary for them: use its terms when a locale is added. It covers the
-languages the old desktop app and the old web panel had.
-
-The old desktop app (removed) had en, zh-CN, zh-TW and ja. The old panel (removed) had en, zh-CN,
-zh-TW, ko, ru, tr and vi.
+The table below is the glossary for them: use its terms when a locale is added. It covers zh-CN,
+zh-TW, ja, ko, ru, tr and vi.
 
 | Concept | zh-CN | zh-TW | ja | ko | ru | tr | vi |
 |---|---|---|---|---|---|---|---|
-| Quota | 额度 | 額度 (owner to confirm; the old panel's zh-TW used 配額) | クォータ | 할당량 | квота | kota | quota |
+| Quota | 额度 | 額度 (owner to confirm; or 配額) | クォータ | 할당량 | квота | kota | quota |
 | Limit | 限额 | 限額 | 制限 | 한도 | лимит | sınır | giới hạn |
 | Weekly limit | 周限额 | 週限額 | 週間制限 | 주간 한도 | Недельный лимит | Haftalık Sınır | Giới hạn tuần |
 | Monthly limit | 月限额 | 月限額 | 月間制限 | 월간 한도 | Месячный лимит | Aylık Sınır | Giới hạn tháng |
