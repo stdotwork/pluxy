@@ -560,10 +560,6 @@ func buildSetupPicks(regs []management.Registry, installed packages.State, found
 // setupSuggestions says which pick each find points to, and why: a client tool installed on
 // the machine (by its SetupClient ID) or a sign-in found there (by its provider). A pick is
 // suggested by its first row that holds.
-//
-// A provider pick (an account kind: Claude, Codex) needs a sign-in: an installed CLI does not say
-// the person has that subscription, and the panel and the app tick a suggested pick for them. A
-// client pick (a tool's setup package) is suggested by the tool being installed.
 var setupSuggestions = []struct {
 	pick, client, signIn, because string
 	// setsUp marks a pick that writes the client tool's config: not suggested while that
@@ -571,9 +567,11 @@ var setupSuggestions = []struct {
 	setsUp bool
 }{
 	{pick: "pluxy/claude", client: "claude-code", signIn: "pluxy/claude", because: "Claude Code is installed and signed in on this computer"},
+	{pick: "pluxy/claude", client: "claude-code", because: "Claude Code is installed on this computer"},
 	{pick: "pluxy/claude", signIn: "pluxy/claude", because: "Claude Code is signed in on this computer"},
 	{pick: "pluxy/claude-code", client: "claude-code", because: "Claude Code is installed on this computer", setsUp: true},
 	{pick: "pluxy/codex", client: "codex", signIn: "pluxy/codex", because: "Codex CLI is installed and Codex is signed in on this computer"},
+	{pick: "pluxy/codex", client: "codex", because: "Codex CLI is installed on this computer"},
 	{pick: "pluxy/codex", signIn: "pluxy/codex", because: "Codex is signed in on this computer"},
 	{pick: "pluxy/codex-setup", client: "codex", because: "Codex CLI is installed on this computer", setsUp: true},
 	{pick: "pluxy/opencode", client: "opencode", because: "OpenCode is installed on this computer", setsUp: true},

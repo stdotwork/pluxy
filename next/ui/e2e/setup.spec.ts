@@ -29,11 +29,11 @@ test("a first run opens Setup and its three steps lead to Finish setup and Home"
   await expect(steps).toHaveCount(3);
   await expect(steps.nth(0)).toHaveAttribute("data-state", "open");
 
-  // Step 1: the kind core suggests for a Claude Code sign-in is ticked, with why; Add adds it.
+  // Step 1: the kind core suggests for Claude Code is ticked, with why; Add adds it.
   const one = page.getByRole("region", { name: "Your AI accounts" });
   const kind = one.locator('[data-part="setup-pick"]').filter({ hasText: "Claude" });
   await expect(kind.getByRole("checkbox")).toBeChecked();
-  await expect(kind).toContainText("Claude Code is installed and signed in on this computer");
+  await expect(kind).toContainText("Claude Code is installed on this computer");
   await one.getByRole("button", { name: "Add Claude", exact: true }).click();
   await expect(one).toContainText("pluxy can now connect to Claude.");
   const packages = await core.mgmt<{ packages: { id: string; enabled: boolean }[] }>("GET", "/packages");
