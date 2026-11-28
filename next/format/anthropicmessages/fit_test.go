@@ -10,33 +10,24 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A reasoning effort becomes the thinking settings each model takes: a level the model has as
-// that level, another as the nearest one it has, and none as the model's way of not thinking, with
-// each difference from what was asked reported. One row per model family.
 func TestApplyEffortPerModel(t *testing.T) {
 	for _, c := range []struct {
 		model, effort string
-		want          string // thinking and output_config as JSON; "{}" for neither
+		want          string
 		losses        []string
 	}{
-		// Fable and Mythos: every level, thinking always on.
 		{"claude-fable-5-2", "xhigh", `{"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"}}`, nil},
 		{"claude-mythos-5-1", "max", `{"thinking":{"type":"adaptive"},"output_config":{"effort":"max"}}`, nil},
 		{"claude-fable-5-2", "none", `{"output_config":{"effort":"low"}}`, []string{"approximated thinking"}},
 		{"claude-mythos-5", "none", `{"output_config":{"effort":"low"}}`, []string{"approximated thinking"}},
-		// Opus 5.5: thinking always on.
 		{"claude-opus-5-5", "xhigh", `{"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"}}`, nil},
 		{"claude-opus-5-5", "none", `{"output_config":{"effort":"low"}}`, []string{"approximated thinking"}},
-		// Opus 5: thinking off is taken.
 		{"claude-opus-5", "xhigh", `{"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"}}`, nil},
 		{"claude-opus-5", "none", `{"thinking":{"type":"disabled"}}`, nil},
-		// Sonnet 5.5: between_tools in place of disabled.
 		{"claude-sonnet-5-5-20261001", "xhigh", `{"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"}}`, nil},
 		{"claude-sonnet-5-5", "none", `{"thinking":{"type":"between_tools"}}`, []string{"approximated thinking.type"}},
-		// Haiku 5.5.
 		{"claude-haiku-5-5", "xhigh", `{"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"}}`, nil},
 		{"claude-haiku-5-5", "none", `{"thinking":{"type":"disabled"}}`, nil},
-		// Claude 4.x: Opus 4.7 and 4.8 have xhigh, Opus and Sonnet 4.6 do not; older models take a budget.
 		{"claude-opus-4-8", "xhigh", `{"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"}}`, nil},
 		{"claude-opus-4-6", "xhigh", `{"thinking":{"type":"adaptive"},"output_config":{"effort":"max"}}`, []string{"approximated output_config.effort"}},
 		{"claude-sonnet-4-6", "minimal", `{"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}`, []string{"approximated output_config.effort"}},
@@ -64,7 +55,6 @@ func TestApplyEffortPerModel(t *testing.T) {
 	}
 }
 
-// fitCase runs FitThinking on a Messages body for model and checks the body and the losses.
 func fitCase(t *testing.T, name, model, body, want string, losses ...string) {
 	t.Helper()
 	out, got, err := FitThinking([]byte(body), model)
@@ -82,17 +72,13 @@ func fitCase(t *testing.T, name, model, body, want string, losses ...string) {
 
 const userHi = `"messages":[{"role":"user","content":"Hi"}]`
 
-// Thinking settings a model refuses are sent in a form it takes, per Anthropic's per-model table
-// (https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting).
 func TestFitThinkingTypes(t *testing.T) {
-	// Fable and Mythos always think: disabled is left out, at the lowest effort unless one is set.
 	fitCase(t, "fable disabled", "claude-fable-5-2",
 		`{"model":"claude-fable-5-2","thinking":{"type":"disabled"},`+userHi+`}`,
 		`{"model":"claude-fable-5-2","output_config":{"effort":"low"},`+userHi+`}`, "approximated thinking")
 	fitCase(t, "mythos disabled at high", "claude-mythos-5-2",
 		`{"model":"claude-mythos-5-2","thinking":{"type":"disabled"},"output_config":{"effort":"high"},`+userHi+`}`,
 		`{"model":"claude-mythos-5-2","output_config":{"effort":"high"},`+userHi+`}`, "approximated thinking")
-	// Opus 5.5: the same, and a budget becomes adaptive thinking at the effort it falls in.
 	fitCase(t, "opus 5.5 between_tools", "claude-opus-5-5",
 		`{"model":"claude-opus-5-5","thinking":{"type":"between_tools"},`+userHi+`}`,
 		`{"model":"claude-opus-5-5","output_config":{"effort":"low"},`+userHi+`}`, "approximated thinking")
@@ -100,7 +86,6 @@ func TestFitThinkingTypes(t *testing.T) {
 		`{"model":"claude-opus-5-5","thinking":{"type":"enabled","budget_tokens":16000,"display":"summarized"},`+userHi+`}`,
 		`{"model":"claude-opus-5-5","thinking":{"type":"adaptive","display":"summarized"},"output_config":{"effort":"high"},`+userHi+`}`,
 		"approximated thinking.budget_tokens")
-	// Opus 5: disabled only at high effort or below; display has no place with it.
 	fitCase(t, "opus 5 disabled at max", "claude-opus-5",
 		`{"model":"claude-opus-5","thinking":{"type":"disabled","display":"omitted"},"output_config":{"effort":"max"},`+userHi+`}`,
 		`{"model":"claude-opus-5","thinking":{"type":"disabled"},"output_config":{"effort":"high"},`+userHi+`}`,
@@ -108,7 +93,6 @@ func TestFitThinkingTypes(t *testing.T) {
 	fitCase(t, "opus 5 disabled at high", "claude-opus-5",
 		`{"model":"claude-opus-5","thinking":{"type":"disabled"},"output_config":{"effort":"high"},`+userHi+`}`,
 		`{"model":"claude-opus-5","thinking":{"type":"disabled"},"output_config":{"effort":"high"},`+userHi+`}`)
-	// Sonnet 5.5: between_tools in place of disabled, with no other field, at high effort or below.
 	fitCase(t, "sonnet 5.5 disabled", "claude-sonnet-5-5",
 		`{"model":"claude-sonnet-5-5","thinking":{"type":"disabled"},`+userHi+`}`,
 		`{"model":"claude-sonnet-5-5","thinking":{"type":"between_tools"},`+userHi+`}`, "approximated thinking.type")
@@ -116,12 +100,10 @@ func TestFitThinkingTypes(t *testing.T) {
 		`{"model":"claude-sonnet-5-5","thinking":{"type":"between_tools","display":"summarized"},"output_config":{"effort":"xhigh"},`+userHi+`}`,
 		`{"model":"claude-sonnet-5-5","thinking":{"type":"between_tools"},"output_config":{"effort":"high"},`+userHi+`}`,
 		"approximated output_config.effort", "dropped thinking.display")
-	// Haiku 5.5: disabled at high effort or below; between_tools is Sonnet 5.5's alone.
 	fitCase(t, "haiku 5.5 between_tools at max", "claude-haiku-5-5",
 		`{"model":"claude-haiku-5-5","thinking":{"type":"between_tools"},"output_config":{"effort":"max"},`+userHi+`}`,
 		`{"model":"claude-haiku-5-5","thinking":{"type":"disabled"},"output_config":{"effort":"high"},`+userHi+`}`,
 		"approximated output_config.effort", "approximated thinking.type")
-	// Claude 4.x: Opus 4.6 has no xhigh; Opus 4.8 has no budget; Sonnet 4.5 takes all of these as sent.
 	fitCase(t, "opus 4.6 xhigh", "claude-opus-4-6",
 		`{"model":"claude-opus-4-6","thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"},`+userHi+`}`,
 		`{"model":"claude-opus-4-6","thinking":{"type":"adaptive"},"output_config":{"effort":"max"},`+userHi+`}`,
@@ -136,8 +118,6 @@ func TestFitThinkingTypes(t *testing.T) {
 	fitCase(t, "sonnet 4.5 disabled with display", "claude-sonnet-4-5",
 		`{"model":"claude-sonnet-4-5","thinking":{"type":"disabled","display":"summarized"},`+userHi+`}`,
 		`{"model":"claude-sonnet-4-5","thinking":{"type":"disabled"},`+userHi+`}`, "dropped thinking.display")
-	// Budget-only models (Claude 3.7-4.5) refuse adaptive thinking: send as enabled with a budget
-	// (from output_config.effort when set, clamped below max_tokens), or drop when max_tokens leaves no room.
 	fitCase(t, "sonnet 4.5 adaptive", "claude-sonnet-4-5",
 		`{"model":"claude-sonnet-4-5","max_tokens":8000,"thinking":{"type":"adaptive"},`+userHi+`}`,
 		`{"model":"claude-sonnet-4-5","max_tokens":8000,"thinking":{"type":"enabled","budget_tokens":1024},`+userHi+`}`,
@@ -154,11 +134,9 @@ func TestFitThinkingTypes(t *testing.T) {
 		`{"model":"claude-sonnet-4-5","max_tokens":1024,"thinking":{"type":"adaptive"},`+userHi+`}`,
 		`{"model":"claude-sonnet-4-5","max_tokens":1024,`+userHi+`}`,
 		"dropped thinking")
-	// Adaptive-capable families stay byte-identical when sending adaptive thinking.
 	fitCase(t, "opus 4.6 adaptive unchanged", "claude-opus-4-6",
 		`{"model":"claude-opus-4-6","max_tokens":8000,"thinking":{"type":"adaptive"},`+userHi+`}`,
 		`{"model":"claude-opus-4-6","max_tokens":8000,"thinking":{"type":"adaptive"},`+userHi+`}`)
-	// Claude Mythos Preview: always thinks, supports both adaptive and extended, takes max but not xhigh.
 	fitCase(t, "mythos preview disabled", "claude-mythos-preview",
 		`{"model":"claude-mythos-preview","thinking":{"type":"disabled"},`+userHi+`}`,
 		`{"model":"claude-mythos-preview","output_config":{"effort":"low"},`+userHi+`}`, "approximated thinking")
@@ -169,7 +147,6 @@ func TestFitThinkingTypes(t *testing.T) {
 	fitCase(t, "mythos preview budget unchanged", "claude-mythos-preview",
 		`{"model":"claude-mythos-preview","thinking":{"type":"enabled","budget_tokens":4000},`+userHi+`}`,
 		`{"model":"claude-mythos-preview","thinking":{"type":"enabled","budget_tokens":4000},`+userHi+`}`)
-	// A name the parser cannot place is left alone.
 	fitCase(t, "unplaced", "claude-unknown-preview",
 		`{"model":"claude-unknown-preview","thinking":{"type":"disabled"},`+userHi+`}`,
 		`{"model":"claude-unknown-preview","thinking":{"type":"disabled"},`+userHi+`}`)
@@ -177,10 +154,6 @@ func TestFitThinkingTypes(t *testing.T) {
 
 const oneTool = `"tools":[{"name":"w","input_schema":{"type":"object"}}]`
 
-// A forced tool choice goes to a model that refuses it as auto, and a budget-thinking request
-// that forces a tool goes without thinking; top_k is left out where Claude refuses it.
-// (https://platform.claude.com/docs/en/build-with-claude/thinking, "Response prefill and forced
-// tool use" and "Sampling parameters".)
 func TestFitThinkingToolChoiceAndTopK(t *testing.T) {
 	fitCase(t, "fable 5.2 any", "claude-fable-5-2",
 		`{"model":"claude-fable-5-2",`+oneTool+`,"tool_choice":{"type":"any","disable_parallel_tool_use":true},`+userHi+`}`,
@@ -223,10 +196,6 @@ func TestFitThinkingToolChoiceAndTopK(t *testing.T) {
 		`{"model":"claude-mythos-preview",`+oneTool+`,"tool_choice":{"type":"any"},`+userHi+`}`, "dropped thinking")
 }
 
-// The conversation is repaired for thinking: an assistant turn in the middle of a tool call with
-// no thinking block first, while budget thinking is on, and a conversation that ends on an
-// assistant turn while thinking is on or on reasoning while it is off, on the models that take
-// a prefilled turn at all (Claude 4.6 and later refuse it, which RepairTurns handles).
 func TestFitThinkingHistory(t *testing.T) {
 	const toolTurn = `{"role":"user","content":"Weather?"},{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"w","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"sunny"}]}`
 	fitCase(t, "sonnet 4.5 tool turn without thinking", "claude-sonnet-4-5",
@@ -236,23 +205,19 @@ func TestFitThinkingHistory(t *testing.T) {
 		`{"model":"claude-opus-4-6","thinking":{"type":"enabled","budget_tokens":4000},"messages":[`+toolTurn+`]}`,
 		`{"model":"claude-opus-4-6","thinking":{"type":"adaptive"},"output_config":{"effort":"medium"},"messages":[`+toolTurn+`]}`,
 		"approximated thinking")
-	// Adaptive thinking needs no thinking block first.
 	fitCase(t, "opus 4.6 adaptive tool turn", "claude-opus-4-6",
 		`{"model":"claude-opus-4-6","thinking":{"type":"adaptive"},"messages":[`+toolTurn+`]}`,
 		`{"model":"claude-opus-4-6","thinking":{"type":"adaptive"},"messages":[`+toolTurn+`]}`)
-	// An earlier turn that thought keeps thinking on, as LiteLLM does.
 	const thought = `{"role":"user","content":"a"},{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"EqoB"},{"type":"text","text":"b"}]},`
 	fitCase(t, "sonnet 4.5 earlier thinking", "claude-sonnet-4-5",
 		`{"model":"claude-sonnet-4-5","thinking":{"type":"enabled","budget_tokens":4000},"messages":[`+thought+toolTurn+`]}`,
 		`{"model":"claude-sonnet-4-5","thinking":{"type":"enabled","budget_tokens":4000},"messages":[`+thought+toolTurn+`]}`)
-	// A prefilled turn while thinking is on.
 	fitCase(t, "sonnet 4.5 prefill with thinking", "claude-sonnet-4-5",
 		`{"model":"claude-sonnet-4-5","thinking":{"type":"enabled","budget_tokens":4000},"messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hel"}]}`,
 		`{"model":"claude-sonnet-4-5","thinking":{"type":"enabled","budget_tokens":4000},`+userHi+`}`, "dropped messages[1]")
 	fitCase(t, "sonnet 4.5 prefill without thinking", "claude-sonnet-4-5",
 		`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hel"}]}`,
 		`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hel"}]}`)
-	// A conversation that ends on reasoning, with thinking off: the trailing reasoning goes.
 	fitCase(t, "sonnet 4.5 ends on reasoning", "claude-sonnet-4-5",
 		`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":[{"type":"text","text":"Hel"},{"type":"thinking","thinking":"x","signature":"EqoB"},{"type":"redacted_thinking","data":"y"}]}]}`,
 		`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":[{"type":"text","text":"Hel"}]}]}`,
@@ -262,8 +227,6 @@ func TestFitThinkingHistory(t *testing.T) {
 		`{"model":"claude-sonnet-4-5",`+userHi+`}`, "dropped messages[1]")
 }
 
-// A Responses client's reasoning.summary becomes Claude's thinking display: auto, concise and
-// detailed as summarized, none as omitted. A Chat client cannot ask for one.
 func TestApplySummary(t *testing.T) {
 	for _, c := range []struct {
 		name, model, request, body, want string
@@ -310,12 +273,7 @@ func TestApplySummary(t *testing.T) {
 	}
 }
 
-// Claude signatures in the current CAIS envelope (base64 starting with C: a protobuf whose first
-// field is a varint, then field 2) are replayed from a Responses reasoning item like the older E
-// and R forms, and so is a signed block with no text, as Claude 5 models send with display
-// omitted. OpenAI's own encrypted content is still left out.
 func TestReplayedCAISSignature(t *testing.T) {
-	// 0x08 0x02 0x12 ...: field 1 varint 2, field 2 bytes.
 	const cais = "CAISBAoCEAE="
 	replay, err := openairesponses.ParseRequest([]byte(`{"model":"m","input":[
 	 {"type":"message","role":"user","content":"Weather?"},
@@ -343,8 +301,6 @@ func TestReplayedCAISSignature(t *testing.T) {
 	}
 }
 
-// Only Opus 4.5 among the budget-only models takes an effort, so adaptive thinking with an effort
-// on the others must not keep a field that gets a 400.
 func TestFitAdaptiveEffortOnBudgetOnlyModels(t *testing.T) {
 	const body = `{"model":"m","max_tokens":40000,"thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`
 	for model, keep := range map[string]bool{

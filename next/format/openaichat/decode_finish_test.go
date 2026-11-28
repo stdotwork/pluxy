@@ -6,8 +6,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// When every call of a reply was dropped for naming no function, the reply does not finish as
-// tool_calls; one surviving call keeps it.
 func TestStreamDecoderFinishAfterDroppedCalls(t *testing.T) {
 	for _, c := range []struct {
 		name   string

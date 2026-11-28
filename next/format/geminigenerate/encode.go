@@ -21,9 +21,6 @@ import (
 // call in the current turn that has no signature.
 const SkipSignature = "skip_thought_signature_validator"
 
-// safetyOff are the safety settings a translated request carries: every filter off, as today's
-// core sends with every request it translates to Gemini. Clients in other formats have no way to
-// name Gemini's safety settings, and their own providers do not filter this way.
 var safetyOff = []map[string]string{
 	{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"},
 	{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"},
@@ -40,8 +37,6 @@ func (e *encoder) lose(kind, path, detail string) {
 	e.losses = llm.AddLoss(e.losses, llm.Loss{Kind: kind, Path: path, Detail: detail})
 }
 
-// kept returns o's kept fields when o came from GenerateContent, so they are written back; for
-// another format it reports them as dropped.
 func (e *encoder) kept(o *llm.Origin) json.RawMessage {
 	if o == nil {
 		return nil
@@ -75,56 +70,18 @@ type outContent struct {
 	parts []json.RawMessage
 }
 
-// EncodeRequest builds a GenerateContent request body from req's items, tools and options, and
-// returns what it could not carry over. System and developer messages become the system
-// instruction; consecutive items of one role become one content (assistant items are the model's);
-// tool calls become functionCall parts and their results functionResponse parts named after the
-// call, in the order of the calls they answer. A function call Gemini did not issue carries
-// SkipSignature. Reasoning from another
-// provider cannot be replayed (Gemini checks thought signatures), so it is dropped and reported,
-// as is the reasoning effort (thinking settings depend on the model; the Gemini provider sets
-// them). It does not look at req.Native; callers that can pass the native body through do so
-// first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	return EncodeRequestWith(req, EncodeOptions{})
 }
 
-// EncodeOptions changes how EncodeRequestWith builds a body.
 type EncodeOptions struct {
-	// ServiceTier says the caller knows its upstream takes a service tier (the Gemini API does,
-	// Vertex AI does not): a request from another format then carries the client's tier, and
-	// without it the tier is left out and reported as dropped. A Gemini client's own tier is
-	// written either way.
-	ServiceTier bool
-	// WebSearch says the caller knows its upstream takes a GenerateContent googleSearch tool:
-	// a request from another format then carries a canonical web search tool (when no function
-	// tools are present), and without it the tool is left out and reported as dropped. A Gemini
-	// client's own googleSearch tool is written either way.
-	WebSearch bool
-	// CodeExecution says the caller knows its upstream takes a GenerateContent codeExecution
-	// tool: a request from another format then carries a canonical code execution tool on the
-	// documented Gemini model families when no function tools are present, and without it the
-	// tool is left out and reported as dropped. A Gemini client's own codeExecution tool is
-	// written either way.
-	CodeExecution bool
-	// Vertex says the upstream is Vertex AI. Its grounding page allows several tools in one
-	// generateContent request only when all are search tools
-	// (https://docs.cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search),
-	// so a codeExecution tool translated from another format is left out, and reported as
-	// dropped, when googleSearch is sent too. The same holds on any upstream for the Gemini 2.0
-	// models, which answer 400 "Code execution and search tool is not supported."
-	// (https://discuss.ai.google.dev/t/can-i-use-both-web-search-and-code-execution-tool/99056).
-	// The Gemini API documents the pair for its later models
-	// (https://ai.google.dev/gemini-api/docs/google-search#tool-combination).
-	Vertex bool
-	// CandidateCount says the caller knows its upstream takes generationConfig.candidateCount
-	// for this request (the Gemini API does for both streaming and non-streaming; Vertex AI does
-	// for non-streaming generateContent only). Without it a translated count > 1 is left out and
-	// reported as dropped. A Gemini client's own candidateCount > 1 is written either way.
+	ServiceTier    bool
+	WebSearch      bool
+	CodeExecution  bool
+	Vertex         bool
 	CandidateCount bool
 }
 
-// EncodeRequestWith builds a GenerateContent request body as EncodeRequest does, changed by opts.
 func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
 	e := &encoder{}
 	req, lowered := clienttools.Lower(req)
@@ -151,7 +108,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		case own:
 			gen["candidateCount"] = o.CandidateCount
 		case o.CandidateCount == 1:
-			// Count 1 is the default; send no field and report no loss on translation.
 		case !opts.CandidateCount:
 			e.lose(llm.LossDropped, llm.CandidateCountPath(req), llm.CandidateCountUnsent)
 		case !supportsCandidateCount(req.Model):
@@ -193,8 +149,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	var tools []json.RawMessage
 	hasOwnTools := false
 	droppedBuiltIn := false
-	// Translated codeExecution tools are placed in tools as the loop reaches them but judged
-	// after it, since a googleSearch that comes later in the list decides whether they may stay.
 	type translatedCode struct {
 		tool llm.Tool
 		at   int
@@ -221,9 +175,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				continue
 			}
 			if hasFunctionTools {
-				// Google documents combining built-in tools with custom function calling only in
-				// the Interactions API preview (https://aistudio.google.com/docs/tool-combination),
-				// not on GenerateContent; keep the function declarations and drop codeExecution.
 				e.lose(llm.LossDropped, p, "GenerateContent does not combine codeExecution with functionDeclarations")
 				droppedBuiltIn = true
 				continue
@@ -256,9 +207,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				continue
 			}
 			if hasFunctionTools {
-				// The Vertex grounding page notes: "The Gemini API doesn't support combining search
-				// tools (such as `googleSearch`) with non-search tools (such as function calling ...)
-				// in the same `generateContent` request." Keep the function tools and drop search with a loss.
 				e.lose(llm.LossDropped, p, "GenerateContent does not combine googleSearch with functionDeclarations")
 				continue
 			}
@@ -304,7 +252,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			why = fmt.Sprintf("GenerateContent model %q does not take codeExecution beside googleSearch", req.Model)
 		}
 		if why != "" {
-			for k := len(codeTools) - 1; k >= 0; k-- { // from the back, so the earlier indexes hold
+			for k := len(codeTools) - 1; k >= 0; k-- {
 				tools = slices.Delete(tools, codeTools[k].at, codeTools[k].at+1)
 			}
 		}
@@ -347,9 +295,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 
 	var system []json.RawMessage
 	var contents []*outContent
-	// pending is a thought signature replayed from another format, waiting for the model part it
-	// belongs on: the next one in the same turn, or an empty text part of its own at the turn's
-	// end.
 	var pending string
 	put := func(role string, part json.RawMessage) {
 		if n := len(contents); n > 0 && contents[n-1].role == role {
@@ -373,7 +318,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		}
 		put(role, part)
 	}
-	callName := map[string]string{} // call ID to function name
+	callName := map[string]string{}
 	for i, it := range req.Items {
 		p := pathOf(it.Origin, fmt.Sprintf("items[%d]", i))
 		switch it.Type {
@@ -425,8 +370,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				e.lose(llm.LossApproximated, p, "a tool result with no call before it, named after its call ID")
 				name = ToolName(toolNameMap, it.CallID)
 			}
-			// A failure goes under the response's error key, as GenerateContent's FunctionResponse
-			// documents it.
 			key := "result"
 			if it.IsError {
 				key = "error"
@@ -487,12 +430,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	return rawjson.Merge(b, e.kept(req.Origin)), e.losses, nil
 }
 
-// functionCalling returns the functionCallingConfig for a tool choice. A choice that names the
-// tools the model may call, and not just one, is ANY or VALIDATED with allowedFunctionNames, the
-// only modes Gemini takes them with: required as ANY, auto as VALIDATED, in which the model picks
-// from the allowed functions. Gemini cannot limit a reply to one call, so parallel_tool_calls
-// false turns function calling off (mode NONE), as today's core does rather than risk several
-// calls the client said it cannot take; it is reported.
 func (e *encoder) functionCalling(tc *llm.ToolChoice, parallel *bool, names map[string]string) map[string]any {
 	if parallel != nil && !*parallel {
 		e.lose(llm.LossApproximated, "parallel_tool_calls", "GenerateContent cannot limit a reply to one function call; function calling is turned off")
@@ -520,7 +457,6 @@ func (e *encoder) functionCalling(tc *llm.ToolChoice, parallel *bool, names map[
 	return nil
 }
 
-// allowedNames returns the GenerateContent names of an allowed tool list.
 func (e *encoder) allowedNames(allowed []string, names map[string]string) []string {
 	out := make([]string, len(allowed))
 	for i, name := range allowed {
@@ -529,8 +465,6 @@ func (e *encoder) allowedNames(allowed []string, names map[string]string) []stri
 	return out
 }
 
-// parts encodes a message's content as GenerateContent parts. sendable reports whether any part
-// with something in it was kept, dropped whether any part was dropped and reported.
 func (e *encoder) parts(it llm.Item, msgPath string, textDocs bool) (parts []json.RawMessage, sendable, dropped bool) {
 	for i, p := range it.Content {
 		pp := pathOf(p.Origin, fmt.Sprintf("%s.content[%d]", msgPath, i))
@@ -577,9 +511,6 @@ func (e *encoder) parts(it llm.Item, msgPath string, textDocs bool) (parts []jso
 	return parts, sendable, dropped
 }
 
-// responseParts encodes a tool result's images and files as a functionResponse's parts. Its text
-// is in Output, the response, and functionResponse.parts cannot hold a text part: a text part
-// that is that text is kept as already sent, and one that is not is reported dropped.
 func (e *encoder) responseParts(it llm.Item, itemPath string) []json.RawMessage {
 	var media []llm.Part
 	for i, p := range it.Content {
@@ -606,9 +537,6 @@ func (e *encoder) responseParts(it llm.Item, itemPath string) []json.RawMessage 
 	return parts
 }
 
-// media returns the GenerateContent part for an image or file, and the reason when it cannot be
-// sent: an inline image whose data is not base64 or whose media type Gemini does not document,
-// or a URL that is not one of the file URI forms Gemini documents. It never fetches the URL.
 func media(p llm.Part) (map[string]any, string) {
 	url := p.URL
 	if p.Type == llm.PartFile && p.FileData != "" {
@@ -620,8 +548,6 @@ func media(p llm.Part) (map[string]any, string) {
 			return nil, "it is not a base64 data URL"
 		}
 		if p.Origin == nil || p.Origin.Format != format {
-			// Only a part translated from another format is checked; one the client sent to
-			// GenerateContent is what Gemini accepts, and its media type goes back as written.
 			mediaType = mediainput.Type(mediaType)
 			if !mediainput.Base64(data) {
 				return nil, "its data is not valid base64"
@@ -635,7 +561,6 @@ func media(p llm.Part) (map[string]any, string) {
 		return map[string]any{"inlineData": map[string]any{"mimeType": mediaType, "data": data}}, ""
 	}
 	if url != "" && p.Origin != nil && p.Origin.Format == format {
-		// The MIME type is in the kept fields.
 		return map[string]any{"fileData": map[string]any{"fileUri": url}}, ""
 	}
 	if !geminiFileURI(url) {
@@ -644,15 +569,9 @@ func media(p llm.Part) (map[string]any, string) {
 	return map[string]any{"fileData": map[string]any{"fileUri": url}}, ""
 }
 
-// geminiFileURI reports whether url is a Files API file URI, which files.upload and files.get
-// return (https://ai.google.dev/gemini-api/docs/files): https, Google's host, and the path
-// /v1/files/<id> or /v1beta/files/<id>, where <id> is one segment of ASCII letters, digits, - or
-// _. Nothing else is accepted for a translated request. A Cloud Storage (gs://) URI is refused
-// because Vertex AI would read that object with the account's own permissions on behalf of
-// whoever holds the client key. The URL is parsed and checked, never fetched.
 func geminiFileURI(raw string) bool {
 	if strings.ContainsAny(raw, "?#") {
-		return false // a query or fragment, even an empty one
+		return false
 	}
 	u, err := url.Parse(raw)
 	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Opaque != "" {
@@ -666,14 +585,12 @@ func geminiFileURI(raw string) bool {
 	}
 	for _, prefix := range []string{"/v1/files/", "/v1beta/files/"} {
 		if id, ok := strings.CutPrefix(u.Path, prefix); ok && fileID(id) {
-			// The escaped path must be the same bytes: %2e%2e, %2F and %61bc are refused.
 			return u.EscapedPath() == prefix+id
 		}
 	}
 	return false
 }
 
-// fileID reports whether id is one path segment of ASCII letters, digits, - or _.
 func fileID(id string) bool {
 	if id == "" {
 		return false
@@ -687,7 +604,6 @@ func fileID(id string) bool {
 	return true
 }
 
-// withSignature puts sig on part as its thoughtSignature, replacing SkipSignature.
 func withSignature(part json.RawMessage, sig string) json.RawMessage {
 	m := rawjson.Object(part)
 	if m == nil {
@@ -701,9 +617,6 @@ func withSignature(part json.RawMessage, sig string) json.RawMessage {
 	return b
 }
 
-// replayedSignature returns the Gemini thought signature a reasoning item from another format
-// carries, or "": a Messages thinking block keeps it in signature, a Responses reasoning item in
-// encrypted_content, where the client put them when the reply came from Gemini.
 func replayedSignature(it llm.Item) string {
 	if it.Origin == nil {
 		return ""
@@ -724,16 +637,8 @@ func replayedSignature(it llm.Item) string {
 	return ""
 }
 
-// maxSignature bounds a thought signature this package carries between formats.
 const maxSignature = 1 << 20
 
-// IsThoughtSignature reports whether s has the shape of a Gemini thought signature: base64 of a
-// protocol buffer message that starts with field 1 (byte 0x0a). It tells one from an Anthropic
-// thinking signature (which starts with another field) and OpenAI's encrypted reasoning (a Fernet
-// token, version byte 0x80). It checks the shape only, never that Gemini accepts it.
-//
-// shortcut: told apart by shape, as the Messages format tells Claude signatures apart; an origin
-// record travelling with the item would be exact.
 func IsThoughtSignature(s string) bool {
 	if s == "" || len(s) > maxSignature || s[0] != 'C' {
 		return false
@@ -745,11 +650,6 @@ func IsThoughtSignature(s string) bool {
 	return err == nil && len(b) > 0 && b[0] == 0x0a
 }
 
-// serviceTier writes the request's service tier into out as GenerateContent's serviceTier: the
-// default tier is standard, flex and priority are themselves. GenerateContent has no auto, scale
-// or ultrafast tier, and none for a value the model does not know: those are dropped and
-// reported, never moved to the nearest tier. So is every tier of a request from another format
-// whose upstream is not known to take one (opts.ServiceTier).
 func (e *encoder) serviceTier(req llm.Request, opts EncodeOptions, out map[string]any) {
 	tier := req.Options.ServiceTier
 	if tier == "" {
@@ -769,14 +669,6 @@ func (e *encoder) serviceTier(req llm.Request, opts EncodeOptions, out map[strin
 	}
 }
 
-// googleSearchModels are the Gemini model families listed on Google's Grounding with Google Search
-// pages (https://ai.google.dev/gemini-api/docs/google-search and
-// https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search).
-// Each entry matches either the exact name or that name followed by "-" (for version, preview or
-// variant suffixes such as -preview, -001 or -cyber).
-//
-// shortcut: decided from a name list of documented model families, since protocol v0 has no
-// per-model search capability. Move this to per-model capabilities when describe carries them.
 var googleSearchModels = []string{
 	"gemini-4-carbon",
 	"gemini-4-argon",
@@ -802,9 +694,6 @@ var googleSearchModels = []string{
 	"gemini-nano-banana-2.1",
 }
 
-// supportsGoogleSearch reports whether model belongs to one of the Gemini model families listed in
-// googleSearchModels. Models neither page lists (such as gemini-3-pro-preview, gemini-2.0-flash-lite,
-// gemini-2.5-flash-image, Gemini 1.x, Gemma, embeddings or future unlisted families) return false.
 func supportsGoogleSearch(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	m = strings.TrimPrefix(m, "models/")
@@ -827,16 +716,11 @@ func supportsGoogleSearch(model string) bool {
 	return false
 }
 
-// allowsSearchWithCode reports whether model takes googleSearch and codeExecution in one request
-// on the Gemini API: every model but the Gemini 2.0 ones, for which Google's developer forum
-// reports a 400 (https://discuss.ai.google.dev/t/can-i-use-both-web-search-and-code-execution-tool/99056).
 func allowsSearchWithCode(model string) bool {
 	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
 	return !strings.HasPrefix(m, "gemini-2.0-")
 }
 
-// combinesStructuredOutput reports whether model takes structured output beside a built-in tool:
-// only the Gemini 3 and 4 series (https://ai.google.dev/gemini-api/docs/structured-output#tools).
 func combinesStructuredOutput(model string) bool {
 	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
 	for _, series := range []string{"gemini-3-", "gemini-3.", "gemini-4-", "gemini-4."} {
@@ -847,13 +731,6 @@ func combinesStructuredOutput(model string) bool {
 	return false
 }
 
-// codeExecutionModels are the Gemini model families whose official model pages
-// (https://aistudio.google.com/docs/models and https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/code-execution)
-// list Code execution as supported. Image, TTS, Live, native-audio, transcribe, embedding and
-// gemini-2.0-flash-lite models are excluded.
-//
-// shortcut: decided from a name list of documented model families, since protocol v0 has no
-// per-model code execution capability. Move this to per-model capabilities when describe carries them.
 var codeExecutionModels = []string{
 	"gemini-4-carbon",
 	"gemini-4-argon",
@@ -873,8 +750,6 @@ var codeExecutionModels = []string{
 	"gemini-robotics-er-1.6",
 }
 
-// supportsCodeExecution reports whether model belongs to one of the Gemini model families listed
-// in codeExecutionModels.
 func supportsCodeExecution(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	m = strings.TrimPrefix(m, "models/")
@@ -893,19 +768,8 @@ func supportsCodeExecution(model string) bool {
 	return false
 }
 
-// maxGeminiCandidates is the documented maximum for GenerateContent generationConfig.candidateCount
-// (https://firebase.google.com/docs/ai-logic/model-parameters: "Supported values: 1 - 8 (inclusive)").
 const maxGeminiCandidates = 8
 
-// candidateCountModels are the general-use Gemini model families documented to support
-// generationConfig.candidateCount > 1 across Google's GenerateContent reference
-// (https://ai.google.dev/api/generate-content), Gemini models page
-// (https://ai.google.dev/gemini-api/docs/models) and model parameters reference
-// (https://firebase.google.com/docs/ai-logic/model-parameters). The model parameters page
-// documents that general-use Gemini 4.x and 3.x models no longer support candidateCount (with
-// Gemini 4.x and 3.7/3.8 returning 400 errors), and that Nano Banana / image, TTS and Live API
-// models do not support it. Gemini 1.0, embedding, computer-use, transcribe and -latest aliases
-// (which route to 3.x/4.x) are excluded.
 var candidateCountModels = []string{
 	"gemini-2.5-pro",
 	"gemini-2.5-flash",
@@ -916,8 +780,6 @@ var candidateCountModels = []string{
 	"gemini-1.5-flash",
 }
 
-// supportsCandidateCount reports whether model belongs to one of the documented Gemini model
-// families in candidateCountModels.
 func supportsCandidateCount(model string) bool {
 	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
 	if strings.Contains(m, "embedding") || strings.Contains(m, "-tts") || strings.Contains(m, "-image") ||

@@ -11,10 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// maxNativeAnnotationsBytes and maxNativeAudioMetaBytes bound the raw same-format annotations and
-// non-data audio metadata (id, transcript, expires_at) kept per reply, so no event approaches
-// protocol.MaxFrame (64 MiB). Audio bytes travel on EventMedia.Media.Data (bounded at 24 MiB per
-// part by llm.MaxOutputMediaPartBytes) and are not duplicated in Event.Raw.
 const (
 	maxNativeAnnotationsBytes = 4 << 20
 	maxNativeAudioMetaBytes   = 4 << 20
@@ -86,9 +82,6 @@ func encodeFinishMeta(anns []json.RawMessage, audio json.RawMessage) json.RawMes
 	return b
 }
 
-// audioMetaWithoutData parses a Chat audio object, reporting whether it is a valid JSON object and
-// whether it had a non-empty "data" string, and returns the remaining fields (id, expires_at,
-// transcript and any vendor fields) as a compact JSON object.
 func audioMetaWithoutData(raw json.RawMessage) (meta json.RawMessage, hasData bool, ok bool) {
 	var obj map[string]json.RawMessage
 	if json.Unmarshal(raw, &obj) != nil || obj == nil {
@@ -114,18 +107,11 @@ func audioMetaWithoutData(raw json.RawMessage) (meta json.RawMessage, hasData bo
 	return b, hasData, true
 }
 
-// toolCall is one tool call of a streamed reply, open or waiting for its name.
-//
-// Chat streams identify a call by its tool_calls index, but some upstreams leave the index out
-// or reuse it for a later call, and some send a call's name in a later chunk than its id. A call
-// is therefore kept by the index it came with (a call without one is the last call opened until
-// a new id shows), and its item.start waits until the name is known: core rejects an item.start
-// without a name.
 type toolCall struct {
-	index int    // the upstream's tool_calls index, or -1 when it left the index out
-	id    string // the call's id, or one made for it
+	index int
+	id    string
 	name  string
-	item  int // the item.start's index, or -1 until the name is known
+	item  int
 	args  []string
 	extra json.RawMessage
 }
@@ -161,8 +147,6 @@ func decodeUsage(raw json.RawMessage) *llm.Usage {
 	return out
 }
 
-// reportsTokens reports whether the usage carries a count the upstream measured, as opposed to an
-// empty or zero-filled object some upstreams send after the usage they counted.
 func reportsTokens(u *llm.Usage) bool {
 	for _, p := range []*int64{u.InputTokens, u.OutputTokens, u.CachedInputTokens, u.CacheWriteInputTokens, u.ReasoningTokens} {
 		if p != nil && *p > 0 {
@@ -187,13 +171,8 @@ func decodeFinish(raw string) llm.Finish {
 	return llm.Finish{Reason: reason, RawReason: raw}
 }
 
-// maxErrorRaw limits the upstream bytes an error keeps for diagnostics. Longer data is not kept:
-// a cut of it could fall inside a credential, whose start core's redaction cannot recognise.
 const maxErrorRaw = 1 << 20
 
-// malformed returns the error for upstream data that is not the JSON it should be. The data, when
-// it is no longer than maxErrorRaw, is kept in Raw as a JSON string when it is not JSON, so the
-// error can still be sent to core.
 func malformed(msg string, data []byte) *llm.Error {
 	e := &llm.Error{Code: llm.CodeUpstream, Message: msg}
 	if len(data) <= maxErrorRaw {
@@ -202,9 +181,6 @@ func malformed(msg string, data []byte) *llm.Error {
 	return e
 }
 
-// replyFields returns the reply-level fields of a response or chunk that the model has no place
-// for (system_fingerprint, service_tier and the like), as a JSON object, or nil when there are
-// none.
 func replyFields(data []byte) json.RawMessage {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(data, &m) != nil {
@@ -223,11 +199,8 @@ func replyFields(data []byte) json.RawMessage {
 	return b
 }
 
-// modelledFields are the top-level fields of a response or chunk that the model carries.
 var modelledFields = []string{"id", "object", "created", "model", "choices", "usage", "error"}
 
-// otherChoices returns a native event holding the choices after the first, kept as the upstream
-// sent them, or nil when there are none.
 func otherChoices(choices []json.RawMessage) *llm.Event {
 	if len(choices) == 0 {
 		return nil
@@ -270,10 +243,6 @@ type streamChoice struct {
 	Logprobs     json.RawMessage `json:"logprobs"`
 }
 
-// extractChatAnnotations reads url_citation entries from a Chat message or delta annotations array.
-// prefixRunes is the number of leading runes stripped from content (for example a leading think
-// tag), and textRunes is the rune count of the message item's text. Out-of-range offsets produce a
-// citation with no range rather than a wrong range.
 func extractChatAnnotations(raw json.RawMessage, prefixRunes, textRunes int) []llm.Citation {
 	if len(raw) == 0 || raw[0] != '[' {
 		return nil
@@ -308,35 +277,32 @@ func extractChatAnnotations(raw json.RawMessage, prefixRunes, textRunes int) []l
 	return out
 }
 
-// StreamDecoder turns the data of an upstream Chat Completions stream into events. The first
-// choice (index 0) becomes items; other choices are passed on in native events. Use one decoder
-// per stream.
 type StreamDecoder struct {
 	started          bool
 	done             bool
 	next             int
-	text             int // open message item, or -1
-	reasoning        int // open reasoning item, or -1
+	text             int
+	reasoning        int
 	tools            map[int]*toolCall
-	last             *toolCall               // the tool call opened last, for chunks that leave the index out
-	extra            map[int]json.RawMessage // extra_content that came after a tool call opened, by item
-	choices          map[int]bool            // every choice index seen, true once it carried a finish reason
+	last             *toolCall
+	extra            map[int]json.RawMessage
+	choices          map[int]bool
 	finish           *llm.Finish
 	usage            *llm.Usage
-	calls            int             // tool calls made an id so far
-	opened           int             // tool calls whose item started
-	used             map[string]bool // tool call ids the stream has used or sent
-	think            thinkFilter     // a leading think tag in the content, split across chunks
-	refused          bool            // the reply carried a refusal
-	textRunes        int             // runes emitted in the current open message item
-	rawRunes         int             // runes of upstream content for it, with any leading think tag
+	calls            int
+	opened           int
+	used             map[string]bool
+	think            thinkFilter
+	refused          bool
+	textRunes        int
+	rawRunes         int
 	annRaws          []json.RawMessage
 	annRawBytes      int
 	cites            llm.CiteBudget
 	nativeAnns       []json.RawMessage
 	nativeAnnBytes   int
 	nativeAnnDropped bool
-	annOutsideText   bool // annotations that arrived with no text open were reported lost
+	annOutsideText   bool
 	pendingAudio     map[string]any
 	audioMetaBytes   int
 	audioMetaDropped bool
@@ -345,8 +311,6 @@ type StreamDecoder struct {
 	otherCands       map[int]*otherCand
 }
 
-// otherCand holds streaming decode state for a Chat choice with index >= 1, completely isolated
-// from choice 0.
 type otherCand struct {
 	think    thinkFilter
 	tools    map[int]*toolCall
@@ -358,10 +322,9 @@ type otherCand struct {
 	refused  bool
 	finish   *llm.Finish
 	finished bool
-	annLost  bool // its annotations were reported lost
+	annLost  bool
 }
 
-// NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
 	return &StreamDecoder{text: -1, reasoning: -1, tools: map[int]*toolCall{}, extra: map[int]json.RawMessage{}, choices: map[int]bool{}, used: map[string]bool{}}
 }
@@ -470,7 +433,6 @@ func (d *StreamDecoder) closeAll(ev *[]llm.Event) {
 	}
 	slices.Sort(open)
 	for _, idx := range open {
-		// extra_content sent after the call opened rides on its item.end.
 		*ev = append(*ev, llm.Event{Type: llm.EventItemEnd, Index: idx, Raw: d.extra[idx]})
 	}
 	for _, c := range all {
@@ -481,15 +443,12 @@ func (d *StreamDecoder) closeAll(ev *[]llm.Event) {
 	d.last = nil
 }
 
-// content feeds a content delta through the leading think tag's filter and writes what it
-// settles as reasoning or text, closing and opening the items as it goes.
 func (d *StreamDecoder) content(s string, ev *[]llm.Event) {
 	for _, p := range d.think.feed(s) {
 		d.piece(p, ev)
 	}
 }
 
-// piece writes one run of content as the reasoning or the text it turned out to be.
 func (d *StreamDecoder) piece(p thinkPiece, ev *[]llm.Event) {
 	if p.reasoning {
 		d.closeItem(&d.text, ev)
@@ -507,8 +466,6 @@ func (d *StreamDecoder) piece(p thinkPiece, ev *[]llm.Event) {
 	*ev = append(*ev, llm.Event{Type: llm.EventTextDelta, Index: d.text, Delta: p.text})
 }
 
-// refusalText returns the text of a Chat refusal field, or "" when the upstream sent something
-// other than a string: an odd value is no refusal, and must not fail the reply.
 func refusalText(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
@@ -520,7 +477,6 @@ func refusalText(raw json.RawMessage) string {
 	return s
 }
 
-// logprobs returns the logprobs a Chat reply carried, or nil when it carried none.
 func logprobs(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
@@ -528,9 +484,6 @@ func logprobs(raw json.RawMessage) json.RawMessage {
 	return raw
 }
 
-// attachTextMeta puts meta on the text event the delta produced, if it produced one: a Chat
-// client gets the choice's logprobs back, and the text a refusal, through the event's raw, which
-// only a client of the reply's own format receives.
 func (d *StreamDecoder) attachTextMeta(meta textMeta, from int, ev *[]llm.Event) {
 	raw := meta.raw()
 	if raw == nil {
@@ -544,16 +497,12 @@ func (d *StreamDecoder) attachTextMeta(meta textMeta, from int, ev *[]llm.Event)
 	}
 }
 
-// flushThink writes what the think filter still holds when the reply ends: reasoning short of its
-// closing tag, or content that never became the opening tag.
 func (d *StreamDecoder) flushThink(ev *[]llm.Event) {
 	for _, p := range d.think.flush() {
 		d.piece(p, ev)
 	}
 }
 
-// openCall opens the item of a tool call whose name is now known, writing first the arguments
-// that arrived before it.
 func (d *StreamDecoder) openCall(c *toolCall, ev *[]llm.Event) {
 	c.item = d.open(llm.ItemToolCall, ev, llm.ItemStart{CallID: c.id, Name: c.name})
 	d.opened++
@@ -567,7 +516,6 @@ func (d *StreamDecoder) openCall(c *toolCall, ev *[]llm.Event) {
 	c.args = nil
 }
 
-// closeCall ends an open tool call that a new call takes the place of.
 func (d *StreamDecoder) closeCall(c *toolCall, ev *[]llm.Event) {
 	if c.item >= 0 {
 		*ev = append(*ev, llm.Event{Type: llm.EventItemEnd, Index: c.item, Raw: d.extra[c.item]})
@@ -582,8 +530,6 @@ func (d *StreamDecoder) closeCall(c *toolCall, ev *[]llm.Event) {
 	}
 }
 
-// dropNameless records the loss of a tool call that never named its function: core refuses an
-// item.start without a name, so the call is left out of the reply.
 func (d *StreamDecoder) dropNameless(c *toolCall) {
 	if c.item >= 0 || c.name != "" {
 		return
@@ -596,9 +542,6 @@ func (d *StreamDecoder) dropNameless(c *toolCall) {
 		Detail: "a streamed tool call that never named its function"})
 }
 
-// callID returns the id of a tool call the upstream gave none: call_<index> when the chunk named
-// an index and that id is free, as today's core gives it, else the next call_<n> that no id in
-// this stream has used (an upstream may send a literal call_0 of its own).
 func (d *StreamDecoder) callID(index int) string {
 	if index >= 0 {
 		if id := "call_" + strconv.Itoa(index); !d.used[id] {
@@ -614,14 +557,8 @@ func (d *StreamDecoder) callID(index int) string {
 	}
 }
 
-// Losses returns what the reply had that the model could not carry, the calls that never named
-// their function, one loss each.
 func (d *StreamDecoder) Losses() []llm.Loss { return d.cites.WithLoss(d.losses) }
 
-// Decode takes the data of one SSE event and returns the events it produces. After "[DONE]" it
-// returns the finish event and the decoder is done; a "[DONE]" before every choice the upstream
-// returned carried a finish reason is an error, because the reply may have been cut short. An upstream error object becomes an
-// *llm.Error. Errors that end the stream carry the usage the upstream reported before them.
 func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	if d.done {
 		return nil, fmt.Errorf("openaichat: data after the end of the stream")
@@ -636,9 +573,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, d.withUsage(malformed("upstream sent a malformed stream chunk", data))
 	}
-	// Chat usage is cumulative and the last chunk usually carries it, but some upstreams send an
-	// empty or zero-filled usage after the real one. Such a chunk does not replace what the
-	// upstream already reported; one with counts does.
 	if u := decodeUsage(c.Usage); u != nil && (d.usage == nil || reportsTokens(u)) {
 		d.usage = u
 	}
@@ -657,7 +591,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			continue
 		}
 		if ch.Index < 0 {
-			// No candidate reads it, but a same-format client still gets it as it came.
 			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("choices[%d]", i), Detail: "candidate with negative index"})
 			others = append(others, raw)
 			continue
@@ -675,8 +608,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	var out []llm.Event
 	if !d.started {
 		d.started = true
-		// Reply-level fields are read from the first chunk only; later chunks are expected to
-		// repeat them.
 		out = append(out, llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{
 			ID: c.ID, Model: c.Model, Created: c.Created, Format: llm.FormatOpenAIChat, Raw: replyFields(data),
 		}})
@@ -700,8 +631,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			d.attachTextMeta(textMeta{Logprobs: logprobs(ch.Logprobs)}, before, &out)
 		}
 		if d.text >= 0 && len(ch.Delta.Annotations) > 0 && ch.Delta.Annotations[0] == '[' {
-			// The raw entries take about what the citations made of them will, so the citation
-			// limit bounds them while they wait for their item to end.
 			if d.annRawBytes+len(ch.Delta.Annotations) > llm.MaxCitationBytes {
 				d.cites.LeftOut()
 			} else {
@@ -709,8 +638,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 				d.annRaws = append(d.annRaws, append(json.RawMessage(nil), ch.Delta.Annotations...))
 			}
 		} else if d.text < 0 && !d.annOutsideText && len(extractChatAnnotations(ch.Delta.Annotations, 0, 0)) > 0 {
-			// A Chat client is given these as they came (the same-format body carries them); for
-			// any other client, an annotation with no open text has no item to cite.
 			d.annOutsideText = true
 			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: llm.LossPathCitations,
 				Detail: "annotations that arrived with no text open have no message text to cite"})
@@ -720,7 +647,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		}
 		if r := refusalText(ch.Delta.Refusal); r != "" {
 			d.refused = true
-			// Held content belongs before the refusal that interrupts it.
 			d.flushThink(&out)
 			before := len(out)
 			d.piece(thinkPiece{text: r}, &out)
@@ -752,7 +678,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			}
 		}
 		if len(ch.Delta.ToolCalls) > 0 {
-			// Held content belongs before the tool call that interrupts it.
 			d.flushThink(&out)
 		}
 		for _, tc := range ch.Delta.ToolCalls {
@@ -760,9 +685,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			if tc.Index != nil {
 				index = *tc.Index
 			}
-			// A call is continued by a chunk that names no new id (or the same one); a
-			// different id on the same index, or on the last call when the index is left
-			// out, is a new call.
 			var call *toolCall
 			if index >= 0 {
 				call = d.tools[index]
@@ -786,7 +708,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 				d.last = call
 			}
 			if call.item < 0 && call.name == "" && tc.Function.Name != "" {
-				// The name arrived in a later chunk than the call: the item starts now.
 				call.name = tc.Function.Name
 				d.closeItem(&d.reasoning, &out)
 				d.closeItem(&d.text, &out)
@@ -820,11 +741,8 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	return out, nil
 }
 
-// Usage returns the latest usage the upstream reported, or nil. A caller that fails the stream
-// for its own reasons (the connection broke, say) puts it on the error.
 func (d *StreamDecoder) Usage() *llm.Usage { return d.usage }
 
-// withUsage puts the usage reported so far on an error that ends the stream.
 func (d *StreamDecoder) withUsage(e *llm.Error) *llm.Error {
 	e.Usage = d.usage
 	return e
@@ -844,8 +762,6 @@ func (d *StreamDecoder) end() []llm.Event {
 		f = *d.finish
 	}
 	if f.Reason == llm.FinishToolCalls && d.opened == 0 {
-		// Every call the upstream sent was dropped for naming no function: a client that
-		// waits for a call would wait for one that is not in the reply.
 		f.Reason = llm.FinishStop
 	}
 	if d.refused {
@@ -856,9 +772,6 @@ func (d *StreamDecoder) end() []llm.Event {
 	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: d.usage, Raw: fRaw})
 }
 
-// Close is called when the upstream stream ends. A stream that ended without "[DONE]" counts
-// as finished only if every choice the upstream returned already carried a finish reason;
-// otherwise it is an error.
 func (d *StreamDecoder) Close() ([]llm.Event, error) {
 	if d.done {
 		return nil, nil
@@ -869,8 +782,6 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 	return d.end(), nil
 }
 
-// finished reports whether choice 0 and every other choice the upstream returned carried a
-// finish reason.
 func (d *StreamDecoder) finished() bool {
 	if d.finish == nil {
 		return false
@@ -883,7 +794,6 @@ func (d *StreamDecoder) finished() bool {
 	return true
 }
 
-// unfinished returns the error for a stream that ended before every choice finished.
 func (d *StreamDecoder) unfinished() *llm.Error {
 	d.done = true
 	return d.withUsage(&llm.Error{Code: llm.CodeUpstream, Message: "upstream stream ended before the reply finished"})
@@ -1152,11 +1062,8 @@ func (d *StreamDecoder) closeOtherCands(out *[]llm.Event) {
 	}
 }
 
-// hasError reports whether an error field holds an error.
 func hasError(raw json.RawMessage) bool { return len(raw) > 0 && string(raw) != "null" }
 
-// upstreamErrorObject turns an error object an upstream sent in place of a reply into an
-// *llm.Error; fallback is the message when the object has none.
 func upstreamErrorObject(raw json.RawMessage, fallback string) *llm.Error {
 	var e struct {
 		Message string `json:"message"`
@@ -1199,10 +1106,6 @@ type completionChoice struct {
 	Logprobs     json.RawMessage `json:"logprobs"`
 }
 
-// decodeChatAudio reads a Chat Completions message.audio or delta.audio object into canonical
-// output media, checking it against the safe-media and size rules. An object with no audio bytes
-// (id, transcript or expires_at alone) gives nil. sniff reads the media type from a whole clip's
-// header; a streamed piece has none.
 func decodeChatAudio(raw json.RawMessage, defaultMT string, sniff bool, path string, mediaBytes *int, losses *[]llm.Loss) *llm.OutputMedia {
 	var a struct {
 		Data string `json:"data"`
@@ -1234,10 +1137,6 @@ func decodeChatAudio(raw json.RawMessage, defaultMT string, sniff bool, path str
 	return &llm.OutputMedia{Kind: llm.MediaAudio, MediaType: mt, Data: a.Data}
 }
 
-// extraContent returns a tool call's extra_content as the raw of its item.start event:
-// {"extra_content": ...}, or nil when it has none. Gemini's OpenAI-compatible API carries a call's
-// thought signature there (extra_content.google.thought_signature), and a Gemini client needs it
-// back on the call.
 func extraContent(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
@@ -1246,19 +1145,11 @@ func extraContent(raw json.RawMessage) json.RawMessage {
 	return b
 }
 
-// DecodeResponse turns an upstream non-streamed Chat Completions response into the events a
-// stream of it would have produced. The first choice becomes items; other choices are passed on
-// in a native event. A body holding an error object, or without choice 0 and its message, is an
-// error: it is not an answer, even with status 200.
 func DecodeResponse(body []byte) ([]llm.Event, error) {
 	events, _, err := DecodeResponseLosses(body)
 	return events, err
 }
 
-// DecodeResponseLosses turns an upstream non-streamed Chat Completions response into the events a
-// stream of it would have produced, and returns what it had to leave out: a tool call that never
-// named its function, which core refuses as an item.start. It is the non-streamed counterpart of
-// StreamDecoder.Losses.
 func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	var c completion
 	if err := json.Unmarshal(body, &c); err != nil {
@@ -1281,7 +1172,6 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			continue
 		}
 		if ch.Index < 0 {
-			// No candidate reads it, but a same-format client still gets it as it came.
 			losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("choices[%d]", i), Detail: "candidate with negative index"})
 			others = append(others, raw)
 			continue
@@ -1314,7 +1204,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	var finishAudio json.RawMessage
 	refused := false
 	finish := llm.Finish{Reason: llm.FinishOther}
-	used := map[string]bool{} // ids the reply has used, whether sent or made
+	used := map[string]bool{}
 	made := 0
 	calls := 0
 	for _, ch := range choices {
@@ -1352,7 +1242,6 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			if text != "" {
 				meta := textMeta{}
 				if refusal == "" {
-					// The choice's logprobs belong on its last text delta.
 					meta.Logprobs = logprobs(ch.Logprobs)
 				}
 				out = append(out, llm.Event{Type: llm.EventTextDelta, Index: next, Delta: text, Raw: meta.raw()})
@@ -1394,8 +1283,6 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		}
 		for i, tc := range m.ToolCalls {
 			if tc.Function.Name == "" {
-				// core refuses an item.start without a name, so a call that never named
-				// its function is left out here too.
 				losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped,
 					Path:   fmt.Sprintf("choices[0].message.tool_calls[%d]", i),
 					Detail: "a tool call that never named its function"})
@@ -1416,8 +1303,6 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		finish = decodeFinish(ch.FinishReason)
 	}
 	if finish.Reason == llm.FinishToolCalls && calls == 0 {
-		// Every call was left out for naming no function: a client that waits for a call
-		// would wait for one that is not in the reply.
 		finish.Reason = llm.FinishStop
 	}
 	if refused {

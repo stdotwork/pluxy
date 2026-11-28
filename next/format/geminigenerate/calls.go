@@ -13,12 +13,8 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// MalformedFunctionCall is the finish reason Gemini gives a reply whose function call the model
-// wrote in a form Gemini could not parse (Google's GenerateContent reference, FinishReason).
 const MalformedFunctionCall = "MALFORMED_FUNCTION_CALL"
 
-// malformedCall returns the error for a reply that ended with MalformedFunctionCall; message is
-// Gemini's finishMessage, which quotes the call.
 func malformedCall(message string) *llm.Error {
 	msg := "Gemini ended the reply with finish reason " + MalformedFunctionCall + ": the model wrote a function call Gemini could not parse"
 	if message != "" {
@@ -27,17 +23,11 @@ func malformedCall(message string) *llm.Error {
 	return &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeRequest, ProviderCode: MalformedFunctionCall, Message: msg}
 }
 
-// IsMalformedCall reports whether err is the error for a reply that ended with
-// MALFORMED_FUNCTION_CALL.
 func IsMalformedCall(err error) bool {
 	var e *llm.Error
 	return errors.As(err, &e) && e.ProviderCode == MalformedFunctionCall
 }
 
-// callIDPrefix returns the part of the IDs made for one reply's calls that Gemini sent without an
-// ID: the reply's responseId, in the characters every client format takes in a call ID, or random
-// when there is none. Gemini gives every reply its own responseId, so the IDs are unique across
-// the replies of a conversation, not only within one.
 func callIDPrefix(responseID string) string {
 	var b strings.Builder
 	for _, r := range responseID {
@@ -56,7 +46,6 @@ func callIDPrefix(responseID string) string {
 	return hex.EncodeToString(r[:])
 }
 
-// fnRef is the id and name of a function call or response.
 type fnRef struct{ id, name string }
 
 // The two spellings Gemini takes for each part (its JSON uses lowerCamelCase; protobuf JSON
@@ -66,8 +55,6 @@ var (
 	responseKeys = []string{"functionResponse", "function_response"}
 )
 
-// fnOf returns the key and the id and name of part's function call or response, whichever keys
-// names, or "" when part has none.
 func fnOf(part json.RawMessage, keys []string) (string, fnRef) {
 	m := rawjson.Object(part)
 	for _, k := range keys {
@@ -82,7 +69,6 @@ func fnOf(part json.RawMessage, keys []string) (string, fnRef) {
 	return "", fnRef{}
 }
 
-// callsOf returns the function calls among a model turn's parts, in order.
 func callsOf(parts []json.RawMessage) []fnRef {
 	var calls []fnRef
 	for _, p := range parts {
@@ -93,15 +79,6 @@ func callsOf(parts []json.RawMessage) []fnRef {
 	return calls
 }
 
-// orderResponses puts the function responses among parts, the turn after the model turn that
-// made calls, in the order of the calls they answer, and gives a response with no name its call's
-// name. Gemini matches responses to calls by position: Google's function calling guide says to
-// "include the responses in the same order as they were requested", Vertex AI's says "in the exact
-// same order as the functionCall parts returned by the model". A response is matched to its call by
-// ID, then by name (in turn, for several calls to one function), then, when it has no name, to the
-// first call left. Responses that match no call keep their order after the matched ones. Other
-// parts keep their places; the responses fill the places responses held. It reports whether
-// anything changed; parts that did not change keep their bytes.
 func orderResponses(calls []fnRef, parts []json.RawMessage) ([]json.RawMessage, bool) {
 	var slots []int
 	var keys []string
@@ -172,7 +149,6 @@ func orderResponses(calls []fnRef, parts []json.RawMessage) ([]json.RawMessage, 
 	return out, true
 }
 
-// withName returns part with the name of its function response (under key) set to name.
 func withName(part json.RawMessage, key, name string) (json.RawMessage, bool) {
 	m := rawjson.Object(part)
 	fr := rawjson.Object(m[key])
@@ -191,7 +167,6 @@ func withName(part json.RawMessage, key, name string) (json.RawMessage, bool) {
 	return b, true
 }
 
-// marshalPlain encodes v without escaping <, > and &, so raw JSON text keeps its bytes.
 func marshalPlain(v any) (json.RawMessage, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -202,11 +177,6 @@ func marshalPlain(v any) (json.RawMessage, error) {
 	return bytes.TrimSpace(buf.Bytes()), nil
 }
 
-// OrderFunctionResponses applies orderResponses to every turn of a GenerateContent body's
-// contents that follows a model turn: function responses in the order of the calls they answer,
-// each with a name. A Gemini client's own body gets this repair from the Gemini provider, as a
-// body EncodeRequest builds has it already. It returns contents and whether anything changed; an
-// entry that does not change keeps its bytes.
 func OrderFunctionResponses(contents []json.RawMessage) ([]json.RawMessage, bool) {
 	var out []json.RawMessage
 	for i := 1; i < len(contents); i++ {
@@ -242,7 +212,6 @@ func OrderFunctionResponses(contents []json.RawMessage) ([]json.RawMessage, bool
 	return out, true
 }
 
-// isModelRole reports whether a turn's role (raw JSON) is the model's.
 func isModelRole(raw json.RawMessage) bool {
 	var role string
 	_ = json.Unmarshal(raw, &role)

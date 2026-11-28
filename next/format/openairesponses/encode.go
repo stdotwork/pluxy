@@ -13,7 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// encoder builds one Responses request and records what it could not carry over.
 type encoder struct {
 	losses []llm.Loss
 }
@@ -22,8 +21,6 @@ func (e *encoder) lose(kind, path, detail string) {
 	e.losses = append(e.losses, llm.Loss{Kind: kind, Path: path, Detail: detail})
 }
 
-// kept returns o's kept fields when o came from Responses, so they are written back; for another
-// format it reports them as dropped.
 func (e *encoder) kept(o *llm.Origin) json.RawMessage {
 	if o == nil {
 		return nil
@@ -35,10 +32,6 @@ func (e *encoder) kept(o *llm.Origin) json.RawMessage {
 	return nil
 }
 
-// toolArguments returns a tool call's arguments as Responses takes them. Another format can hold
-// arguments that are not a JSON object, and Responses would refuse them; such a string is sent as
-// {}, as the Messages and Gemini encoders already do with what they cannot carry. A Responses
-// client's own call keeps the bytes it sent, and a custom tool's free-form input is never JSON.
 func toolArguments(args string, o *llm.Origin, path string, e *encoder) string {
 	if o != nil && o.Format == format {
 		return args
@@ -92,46 +85,19 @@ type outFunctionTool struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 
-// EncodeRequest builds a Responses request body from req's items, tools and options, and returns
-// what it could not carry over. Every item keeps its place in input; system and developer
-// messages stay messages with their role. Fields kept from a Responses source (Origin) are written
-// back. Reasoning from another provider cannot be replayed to a Responses upstream, so it is
-// dropped and reported, except a Messages thinking block that carries a Responses upstream's
-// encrypted reasoning in its signature, which goes back as that reasoning item. A user turn left with nothing to send after its unsupported parts are
-// dropped is an invalid_request error, never sent empty. It does not look at req.Native; callers
-// that can pass the native body through do so first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	return EncodeRequestWith(req, EncodeOptions{})
 }
 
-// serviceTiers are the service tiers the Responses create reference lists
-// (https://developers.openai.com/api/reference/resources/responses/methods/create).
 var serviceTiers = []string{"auto", "default", "flex", "scale", "priority", "fast", "ultrafast"}
 
-// EncodeOptions changes how EncodeRequestWith builds a body.
 type EncodeOptions struct {
-	// ServiceTier and Verbosity say the caller knows its upstream takes the field: a request from
-	// another format then carries the client's service tier or verbosity, and without them it
-	// leaves it out and reports it as dropped, since a third-party upstream may refuse a field it
-	// does not list. A Responses client's own tier and verbosity are written either way.
 	ServiceTier, Verbosity bool
-	// WebSearch says the caller knows its upstream takes a Responses web_search tool: a request
-	// from another format then carries a canonical web search tool, and without it the tool is
-	// left out and reported as dropped. A Responses client's own web_search tool is written
-	// either way.
-	WebSearch bool
-	// WebSearchBare sends only the bare {"type":"web_search"} tool when WebSearch is true,
-	// leaving out filters, user_location and search_context_size and reporting each as dropped.
-	// Used for hosts such as chatgpt.com where those settings are not documented.
-	WebSearchBare bool
-	// CodeExecution says the caller knows its upstream takes a Responses code_interpreter tool:
-	// a request from another format then carries a canonical code execution tool on the
-	// documented OpenAI models, and without it the tool is left out and reported as dropped. A
-	// Responses client's own code_interpreter tool is written either way.
-	CodeExecution bool
+	WebSearch              bool
+	WebSearchBare          bool
+	CodeExecution          bool
 }
 
-// EncodeRequestWith builds a Responses request body as EncodeRequest does, changed by opts.
 func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
 	e := &encoder{}
 	o := req.Options
@@ -144,9 +110,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		TopP:              o.TopP,
 		ParallelToolCalls: o.ParallelToolCalls,
 	}
-	// A request from another format carries a tier or verbosity only if the Responses create
-	// reference lists it: another value would be refused. A Responses client's own is written as
-	// it is.
 	own := req.SourceFormat() == format
 	if o.ServiceTier != "" {
 		switch {
@@ -324,8 +287,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		switch it.Type {
 		case llm.ItemTypeMessage:
 			if len(it.Content) == 0 && !it.TextContent && it.Origin != nil && it.Origin.Format != format && len(it.Origin.Raw) > 0 {
-				// An empty message from another format only holds its own fields; they are
-				// reported, and nothing is sent for it.
 				e.kept(it.Origin)
 				break
 			}
@@ -355,7 +316,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		case llm.ItemTypeToolResult:
 			m := map[string]any{"type": "function_call_output", "call_id": it.CallID, "output": it.Output}
 			if len(it.Content) > 0 {
-				// The output's list takes the same parts as a user message's content.
 				if parts, _, _, err := e.content(llm.Item{Role: llm.RoleUser, Content: it.Content}, p); err != nil {
 					return nil, nil, err
 				} else if len(parts) > 0 {
@@ -379,10 +339,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				break
 			}
 			if sig, rest := carriedReasoning(it.Origin); sig != "" {
-				// A Messages thinking block whose signature is a Responses upstream's encrypted
-				// reasoning (see IsEncryptedReasoning) goes back as that reasoning item. Its
-				// thinking text was the upstream's summary; the encrypted content is what the
-				// upstream reads, so the summary is left empty, as today's core sends it.
 				m := map[string]any{"type": "reasoning", "summary": []any{}, "content": nil, "encrypted_content": sig}
 				out.Input = append(out.Input, marshal(m, nil))
 				e.losses = append(e.losses, rawjson.Losses(&llm.Origin{Format: it.Origin.Format, Path: it.Origin.Path, Raw: rest}, format)...)
@@ -409,9 +365,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	return rawjson.Merge(b, e.kept(req.Origin)), e.losses, nil
 }
 
-// content encodes a message's parts: input parts for user, system and developer messages,
-// output_text for assistant messages. sendable reports whether any part with something in it was
-// kept, dropped whether any part was dropped and reported.
 func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessage, sendable, dropped bool, err error) {
 	content = []json.RawMessage{}
 	textType := "input_text"
@@ -433,8 +386,6 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 				break
 			}
 			if (p.Origin == nil || p.Origin.Format != format) && mediainput.IsDataURL(p.URL) {
-				// Only a part translated from another format is checked: a Responses client's
-				// own image is what its upstream takes.
 				if _, problem := mediainput.AnyImage(p.URL); problem != "" {
 					e.lose(llm.LossDropped, pp, "Responses cannot take this inline image: "+problem)
 					dropped = true
@@ -448,7 +399,6 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 			if p.FileID != "" {
 				m["file_id"] = p.FileID
 			}
-			// Responses requires detail on an input image.
 			m["detail"] = "auto"
 			if p.Detail != "" {
 				m["detail"] = p.Detail
@@ -456,9 +406,6 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 			content = append(content, marshal(m, e.kept(p.Origin)))
 			sendable = true
 		case p.Type == llm.PartFile && it.Role != llm.RoleAssistant:
-			// Responses takes audio as input_audio, with its bytes inline in OpenAI's InputAudio
-			// shape ({"type":"input_audio","input_audio":{"data","format"}}); a file part holding
-			// audio is that audio however the client sent it.
 			if mediaType, data, ok := audioinput.Inline(p); ok {
 				m := map[string]any{"type": "input_audio", "input_audio": map[string]string{"data": data, "format": audioinput.Format(mediaType)}}
 				content = append(content, marshal(m, e.kept(p.Origin)))
@@ -514,9 +461,6 @@ func partFormat(p llm.Part) string {
 	return p.Type
 }
 
-// carriedReasoning returns the encrypted reasoning a Messages thinking block carries in its
-// signature, and the block's other kept fields, when the signature has the shape of a Responses
-// upstream's encrypted reasoning; otherwise "".
 func carriedReasoning(o *llm.Origin) (string, json.RawMessage) {
 	if o == nil || o.Format != llm.FormatAnthropicMessages {
 		return "", nil

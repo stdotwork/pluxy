@@ -11,8 +11,6 @@ import (
 )
 
 func TestCodeExecutionToolChoiceGemini(t *testing.T) {
-	// Responses request with tool_choice: {"type":"code_interpreter"} must NOT send
-	// toolConfig.functionCallingConfig and MUST report a dropped loss at tool_choice.
 	req, err := openairesponses.ParseRequest([]byte(`{
 		"model":"gemini-4-hydrogen",
 		"input":"compute",
@@ -43,7 +41,6 @@ func TestCodeExecutionToolChoiceGemini(t *testing.T) {
 		t.Errorf("dropped = %v, want tool_choice in losses %+v", (&llm.Translation{Losses: losses}).DroppedPaths(), losses)
 	}
 
-	// Gemini client's own native codeExecution keeps toolConfig preserved when rebuilt.
 	ownReq, err := geminigenerate.ParseRequest("gemini-4-hydrogen", false, []byte(`{
 		"contents":[{"role":"user","parts":[{"text":"hi"}]}],
 		"tools":[{"codeExecution":{}}],
@@ -72,7 +69,6 @@ func TestCodeExecutionToolChoiceGemini(t *testing.T) {
 	}
 }
 
-// Google documents structured output beside a built-in tool only on Gemini 3 and 4.
 func TestCodeExecutionWithStructuredOutput(t *testing.T) {
 	for model, want := range map[string]bool{
 		"gemini-2.5-flash":      false,

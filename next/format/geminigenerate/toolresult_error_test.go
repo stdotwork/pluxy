@@ -8,14 +8,10 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// requestWithErrorResponse holds a Gemini tool call answered by a functionResponse with an error
-// key, as Google documents a failed call.
 const requestWithErrorResponse = `{"contents":[
  {"role":"model","parts":[{"functionCall":{"id":"c1","name":"save","args":{}}}]},
  {"role":"user","parts":[{"functionResponse":{"id":"c1","name":"save","response":{"error":"disk full"}}}]}]}`
 
-// A functionResponse with an error key is a failed call: the error's value is the result's output,
-// as the encoder writes it, and GenerateContent gets the response back unchanged.
 func TestFunctionResponseError(t *testing.T) {
 	req := mustParse(t, requestWithErrorResponse)
 	it := req.Items[len(req.Items)-1]
@@ -48,7 +44,6 @@ func TestFunctionResponseError(t *testing.T) {
 		`{"error":"disk full"}`)
 }
 
-// Rebuilt as Messages, the same failed call is is_error with the error value as its text.
 func TestFunctionResponseErrorToMessages(t *testing.T) {
 	req := mustParse(t, requestWithErrorResponse)
 	body, _, err := anthropicmessages.EncodeRequest(req)

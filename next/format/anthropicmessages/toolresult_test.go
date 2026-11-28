@@ -11,8 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A tool result that holds a screenshot and a PDF besides its text, and says the tool failed, as
-// a computer-use or browser tool returns one.
 const richToolResult = `{"model":"m","max_tokens":100,
 "tools":[{"name":"screenshot","input_schema":{"type":"object"}}],
 "messages":[
@@ -26,7 +24,6 @@ const richToolResult = `{"model":"m","max_tokens":100,
   {"type":"text","text":"What do you see?"}]}
 ]}`
 
-// messagesAt returns the list under key in an encoded body.
 func listAt(t *testing.T, body []byte, key string) []json.RawMessage {
 	t.Helper()
 	var list []json.RawMessage
@@ -36,8 +33,6 @@ func listAt(t *testing.T, body []byte, key string) []json.RawMessage {
 	return list
 }
 
-// A tool result's images, documents and error flag are read into the model: the parts in order,
-// the text joined in Output for encoders that can send only text.
 func TestParseRichToolResult(t *testing.T) {
 	req, err := ParseRequest([]byte(richToolResult))
 	if err != nil {
@@ -65,7 +60,6 @@ func TestParseRichToolResult(t *testing.T) {
 	}
 }
 
-// Rebuilt as Messages, the result keeps its blocks and its error flag.
 func TestRichToolResultToMessages(t *testing.T) {
 	req, err := ParseRequest([]byte(richToolResult))
 	if err != nil {
@@ -87,9 +81,6 @@ func TestRichToolResultToMessages(t *testing.T) {
 	}
 }
 
-// Chat Completions takes only text in a tool message, so the images and files follow in the user
-// message after the tool messages, introduced by a line that says where they came from (as
-// CLIProxyAPI relays them). The error flag has no place.
 func TestRichToolResultToChat(t *testing.T) {
 	req, err := ParseRequest([]byte(richToolResult))
 	if err != nil {
@@ -119,7 +110,6 @@ func TestRichToolResultToChat(t *testing.T) {
 	}
 }
 
-// Responses takes the parts in function_call_output's output list.
 func TestRichToolResultToResponses(t *testing.T) {
 	req, err := ParseRequest([]byte(richToolResult))
 	if err != nil {
@@ -143,8 +133,6 @@ func TestRichToolResultToResponses(t *testing.T) {
 	}
 }
 
-// GenerateContent takes the media in functionResponse.parts and a failure under the response's
-// error key.
 func TestRichToolResultToGemini(t *testing.T) {
 	req, err := ParseRequest([]byte(richToolResult))
 	if err != nil {
@@ -168,7 +156,6 @@ func TestRichToolResultToGemini(t *testing.T) {
 	}
 }
 
-// An image a Chat client put in a tool message reaches Messages inside the tool_result.
 func TestChatToolImageToMessages(t *testing.T) {
 	req, err := openaichat.ParseRequest([]byte(`{"model":"m","messages":[
 	 {"role":"user","content":"Take a screenshot."},

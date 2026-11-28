@@ -8,20 +8,8 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Claude's server web search, for a Responses client. Claude reports a search as a
-// server_tool_use block (named web_search, its input holding the query) and a
-// web_search_tool_result block (the hits); the model has no item for either, so they reach the
-// writer as native events in Messages form. A Responses client gets them as one web_search_call
-// item, as today's core gives it: added when the search starts, done once its results are in
-// (when the next block starts) or when the reply ends. A search left without results when Claude
-// paused the turn (pause_turn) or stopped for a tool call stays in_progress, so the client sends it
-// back without results and Claude carries on. The Messages request builder turns a replayed
-// web_search_call back into the two blocks.
-
-// itemWebSearch is the kind of an item rebuilt from Claude's web search blocks.
 const itemWebSearch = "web_search_call"
 
-// claudeBlockEvent is the part of a Messages stream event a web search needs.
 type claudeBlockEvent struct {
 	Type         string `json:"type"`
 	Index        int    `json:"index"`
@@ -39,17 +27,12 @@ type claudeBlockEvent struct {
 	} `json:"delta"`
 }
 
-// searches tracks the web searches of one reply.
 type searches struct {
-	byBlock map[int]*item    // open server_tool_use blocks, by upstream block index
-	byID    map[string]*item // every search, by Claude's server tool ID
-	open    []*item          // searches not yet done, in order
+	byBlock map[int]*item
+	byID    map[string]*item
+	open    []*item
 }
 
-// searchEvent reads a native event of a reply from a Messages upstream. It returns the search a
-// server_tool_use or web_search_tool_result block starts (added true: the item is new), or
-// consumed true for an event that only feeds a search already open; an event that has nothing to
-// do with web search gives neither.
 func (b *builder) searchEvent(raw json.RawMessage) (it *item, added, consumed bool) {
 	if b.upFormat != llm.FormatAnthropicMessages {
 		return nil, false, false
@@ -86,7 +69,6 @@ func (b *builder) searchEvent(raw json.RawMessage) (it *item, added, consumed bo
 	case "content_block_delta":
 		if it := s.byBlock[ev.Index]; it != nil && ev.Delta != nil && ev.Delta.Type == "input_json_delta" {
 			if !it.streamed {
-				// A streamed block starts with an empty input; its deltas hold the query.
 				it.input.Reset()
 				it.streamed = true
 			}
@@ -101,7 +83,7 @@ func (b *builder) searchEvent(raw json.RawMessage) (it *item, added, consumed bo
 			}
 			_ = json.Unmarshal([]byte(it.input.String()), &in)
 			it.query = strings.TrimSpace(in.Query)
-			it.input = strings.Builder{} // read once; the query is what is kept
+			it.input = strings.Builder{}
 			return nil, false, true
 		}
 	}
@@ -121,8 +103,6 @@ func (b *builder) openSearch(id string) *item {
 	return it
 }
 
-// readySearches returns the open searches that have their results and marks them done: they end
-// when the next block starts.
 func (b *builder) readySearches() []*item {
 	var ready, still []*item
 	for _, it := range b.search.open {
@@ -137,8 +117,6 @@ func (b *builder) readySearches() []*item {
 	return ready
 }
 
-// endSearches marks every open search done at the end of the reply and returns them. A search
-// without results stays in_progress when Claude paused the turn or stopped for a tool call.
 func (b *builder) endSearches() []*item {
 	ended := b.search.open
 	b.search.open = nil
@@ -151,7 +129,6 @@ func (b *builder) endSearches() []*item {
 	return ended
 }
 
-// searchItem is a web_search_call item; added gives it as response.output_item.added does.
 func searchItem(it *item, added bool) obj {
 	o := obj{"id": it.id, "type": "web_search_call", "status": it.status, "action": obj{"type": "search", "query": it.query}}
 	if added {
@@ -164,9 +141,6 @@ func searchItem(it *item, added bool) obj {
 	return o
 }
 
-// searchResults turns the content of a web_search_tool_result block into a web_search_call's
-// results: each hit (a result with a URL) and each error entry as Claude sent it, so the hit's
-// encrypted_content, which Claude needs to replay it, survives; an error object as it is.
 func searchResults(content json.RawMessage) json.RawMessage {
 	if len(content) > 0 && content[0] == '{' {
 		return content
@@ -189,7 +163,6 @@ func searchResults(content json.RawMessage) json.RawMessage {
 	return b
 }
 
-// isBlockStart reports whether raw is a Messages content_block_start event.
 func isBlockStart(raw json.RawMessage) bool {
 	var ev struct {
 		Type string `json:"type"`

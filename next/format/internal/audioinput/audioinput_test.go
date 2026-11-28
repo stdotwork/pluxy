@@ -6,8 +6,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// MIME and Format map the audio format tokens the OpenAI APIs use to media types and back, as
-// today's core mapped them for Gemini.
 func TestFormatAndMIME(t *testing.T) {
 	for format, mime := range map[string]string{
 		"":           "audio/wav",

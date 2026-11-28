@@ -12,7 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Each block fits a frame, so the runs a stream collects must not outgrow one on finish.
 func TestCodeExecutionsFitOneFrame(t *testing.T) {
 	d := anthropicmessages.NewStreamDecoder()
 	feed := func(s string) []llm.Event {
@@ -64,8 +63,6 @@ func geminiReplyFrom(t *testing.T, body string) (string, []llm.Loss) {
 	return string(out), a.Losses()
 }
 
-// Gemini's language enum has only Python, so a shell command must not be shown as Python, while a
-// Python run beside it is shown.
 func TestBashRunIsNotShownAsPython(t *testing.T) {
 	out, losses := geminiReplyFrom(t, `{"id":"m","type":"message","role":"assistant","model":"claude-opus-4-5","content":[
 		{"type":"server_tool_use","id":"srvtoolu_p","name":"code_execution","input":{"code":"print(40+2)"}},
@@ -87,7 +84,6 @@ func TestBashRunIsNotShownAsPython(t *testing.T) {
 	}
 }
 
-// A block the decoder cannot read is reported as a code execution loss for a Gemini client.
 func TestUnreadCodeBlockIsReportedLost(t *testing.T) {
 	_, losses := geminiReplyFrom(t, `{"id":"m","type":"message","role":"assistant","model":"claude-opus-4-5","content":[
 		{"type":"server_tool_use","id":"srvtoolu_u","name":"bash_code_execution","input":{"command":"ls"}},

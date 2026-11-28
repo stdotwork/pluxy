@@ -1,7 +1,3 @@
-// Package media reads the inline media a request carries and checks it before a format encoder
-// hands it to an upstream. Nothing here decodes an image or fetches a URL: a data URL is split
-// into its media type and base64 text, and the base64 is checked in place, so the request body
-// stays the only copy of the bytes.
 package media
 
 import "strings"
@@ -14,9 +10,6 @@ func IsDataURL(s string) bool {
 	return len(s) >= len(dataScheme) && strings.EqualFold(s[:len(dataScheme)], dataScheme)
 }
 
-// DataURL splits a data: URL into its media type and base64 data. It does not decode the data.
-// ok is false for anything that is not a data URL carrying base64; the scheme and the ;base64
-// marker are matched case-insensitively, and data goes back as written.
 func DataURL(s string) (mediaType, data string, ok bool) {
 	if !IsDataURL(s) {
 		return "", "", false
@@ -36,9 +29,6 @@ func DataURL(s string) (mediaType, data string, ok bool) {
 	return mediaType, data, true
 }
 
-// FileDataOK reports whether a file part's FileData can be sent as file data. Part.FileData holds
-// a base64 data URL, raw base64, or an http or https URL; anything else would reach the upstream
-// as garbage.
 func FileDataOK(s string) bool {
 	if IsDataURL(s) {
 		_, data, ok := DataURL(s)
@@ -51,8 +41,6 @@ func FileDataOK(s string) bool {
 	return Base64(s)
 }
 
-// Type returns a data URL's media type normalised for comparison and for sending upstream: lower
-// case, with any parameters after the first semicolon removed.
 func Type(mediaType string) string {
 	if i := strings.IndexByte(mediaType, ';'); i >= 0 {
 		mediaType = mediaType[:i]
@@ -60,10 +48,6 @@ func Type(mediaType string) string {
 	return strings.ToLower(mediaType)
 }
 
-// Base64 reports whether s is base64 of the standard alphabet, padded or not, without decoding
-// it. CR and LF between characters are ignored, as MIME wrapping puts them there. A data URL
-// carries its bytes in the request body already, so validation reads them in place instead of
-// making a second copy of the image.
 func Base64(s string) bool {
 	chars := 0
 	pad := 0
@@ -93,10 +77,6 @@ func Base64(s string) bool {
 	return chars%4 != 1
 }
 
-// InlineImage checks an inline image against the media types a target accepts. url must be a
-// base64 data URL of one of allowed. It returns the media type it found and, when the image is
-// not acceptable, a short reason: "it is not a base64 data URL", "its data is not valid base64"
-// or "its media type is X". The empty reason means the image can be sent.
 func InlineImage(url string, allowed []string) (mediaType, problem string) {
 	mediaType, data, ok := DataURL(url)
 	if !ok {
@@ -114,10 +94,6 @@ func InlineImage(url string, allowed []string) (mediaType, problem string) {
 	return mediaType, "its media type is " + mediaType
 }
 
-// AnyImage checks an inline image without a target's media type list: its data must be base64
-// and its media type an image type. The Chat Completions and Responses encoders also serve
-// OpenAI-compatible vendors and Kimi, which take image types OpenAI's own list does not name,
-// so they check only this much.
 func AnyImage(url string) (mediaType, problem string) {
 	mediaType, data, ok := DataURL(url)
 	if !ok {
@@ -133,14 +109,7 @@ func AnyImage(url string) (mediaType, problem string) {
 	return mediaType, ""
 }
 
-// The image media types each target documents for its inline image input.
 var (
-	// ClaudeImages is what Claude accepts in an image block: JPEG, PNG, GIF and WebP
-	// (https://docs.anthropic.com/en/docs/build-with-claude/vision#supported-formats).
 	ClaudeImages = []string{"image/jpeg", "image/png", "image/gif", "image/webp"}
-	// GeminiImages is what GenerateContent's inlineData documents
-	// (https://ai.google.dev/api/generate-content#Blob); the vision guide lists the same set
-	// without the GIF and AVIF the API reference adds
-	// (https://ai.google.dev/gemini-api/docs/image-understanding#supported-formats).
 	GeminiImages = []string{"image/png", "image/jpeg", "image/jpg", "image/webp", "image/heic", "image/heif", "image/gif", "image/avif"}
 )

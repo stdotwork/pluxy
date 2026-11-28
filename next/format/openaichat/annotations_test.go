@@ -91,7 +91,6 @@ func TestAssistantAnnotationsKeptWhenAllowed(t *testing.T) {
 		t.Fatalf("expected annotations to be preserved: %s", body)
 	}
 
-	// Requests without annotations stay byte-identical regardless of AssistantAnnotations.
 	plainIn := `{"model":"gpt-4o","messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hello","name":"bot"}]}`
 	plainReq, err := ParseRequest([]byte(plainIn))
 	if err != nil {

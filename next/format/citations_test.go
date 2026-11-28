@@ -198,12 +198,7 @@ func renderMessagesStream(t *testing.T, evs []llm.Event) (string, []llm.Loss) {
 	return buf.String(), w.Losses()
 }
 
-// TestGeminiToAllFormatsNonASCII verifies Gemini groundingMetadata with UTF-8 byte offsets
-// on accents, CJK and emoji converts accurately to rune offsets in Responses & Chat,
-// preserves byte-identical output for Gemini, and drops with a loss for Messages.
 func TestGeminiToAllFormatsNonASCII(t *testing.T) {
-	// Text: "Café 東京 🚀 info"
-	// UTF-8 byte offsets: "Café " = 6 bytes (5 runes), "東京 🚀" = 11 bytes (4 runes: 東=3, 京=3, ' '=1, 🚀=4), end = 17 bytes (9 runes).
 	geminiBody := []byte(`{
 		"responseId": "resp_g1",
 		"modelVersion": "gemini-2.5-pro",
@@ -243,7 +238,6 @@ func TestGeminiToAllFormatsNonASCII(t *testing.T) {
 		{"stream", streamEvs},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
-			// -> Responses non-stream
 			respAgg, _ := renderResponsesAgg(t, mode.evs)
 			out := respAgg["output"].([]any)
 			msg := out[0].(map[string]any)
@@ -260,7 +254,6 @@ func TestGeminiToAllFormatsNonASCII(t *testing.T) {
 				t.Errorf("responses agg annotation = %+v, want start=5 end=9", ann)
 			}
 
-			// -> Responses stream
 			respSSE, _ := renderResponsesStream(t, mode.evs)
 			if !strings.Contains(respSSE, "event: response.output_text.annotation.added") {
 				t.Errorf("responses stream missing annotation.added:\n%s", respSSE)
@@ -269,7 +262,6 @@ func TestGeminiToAllFormatsNonASCII(t *testing.T) {
 				t.Errorf("responses stream wrong rune offsets:\n%s", respSSE)
 			}
 
-			// -> Chat non-stream
 			chatAgg := renderChatAgg(t, mode.evs)
 			chMsg := chatAgg["choices"].([]any)[0].(map[string]any)["message"].(map[string]any)
 			chatAnns, ok := chMsg["annotations"].([]any)
@@ -282,7 +274,6 @@ func TestGeminiToAllFormatsNonASCII(t *testing.T) {
 				t.Errorf("chat agg url_citation = %+v, want start=5 end=9", uc)
 			}
 
-			// -> Messages (must NOT emit citation block, must report loss)
 			msgBody, msgLosses := renderMessagesAgg(t, mode.evs)
 			if strings.Contains(string(msgBody), "citations") || strings.Contains(string(msgBody), "web_search_result_location") {
 				t.Errorf("messages agg unexpectedly emitted citations: %s", msgBody)
@@ -300,7 +291,6 @@ func TestGeminiToAllFormatsNonASCII(t *testing.T) {
 		})
 	}
 
-	// Same-format Gemini non-stream stays byte-identical (direct and after JSON compact round-trip).
 	directEvs, err := geminigenerate.DecodeResponse(geminiBody)
 	if err != nil {
 		t.Fatalf("direct gemini decode: %v", err)
@@ -318,9 +308,6 @@ func TestGeminiToAllFormatsNonASCII(t *testing.T) {
 	}
 }
 
-// TestMessagesToResponsesChatGemini verifies Claude web_search_result_location citations and
-// web_search_tool_result sources carry to Responses, Chat, and Gemini (with UTF-8 byte conversion),
-// while Messages-to-Messages stays byte-identical.
 func TestMessagesToResponsesChatGemini(t *testing.T) {
 	msgBody := []byte(`{
 		"id": "msg_1",
@@ -374,7 +361,6 @@ func TestMessagesToResponsesChatGemini(t *testing.T) {
 		{"stream", streamEvs},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
-			// -> Responses non-stream: second message item has url_citation [0, 6) ("Café 🚀" = 6 runes)
 			respAgg, _ := renderResponsesAgg(t, mode.evs)
 			out := respAgg["output"].([]any)
 			var foundAnn map[string]any
@@ -392,13 +378,11 @@ func TestMessagesToResponsesChatGemini(t *testing.T) {
 				t.Errorf("responses agg annotation = %+v, want [0, 6)", foundAnn)
 			}
 
-			// -> Responses stream: annotation.added emitted
 			respSSE, _ := renderResponsesStream(t, mode.evs)
 			if !strings.Contains(respSSE, "event: response.output_text.annotation.added") {
 				t.Errorf("responses stream missing annotation.added:\n%s", respSSE)
 			}
 
-			// -> Chat non-stream: "Intro: Café 🚀" -> "Intro: " is 7 runes, "Café 🚀" is 6 runes -> [7, 13)
 			chatAgg := renderChatAgg(t, mode.evs)
 			chMsg := chatAgg["choices"].([]any)[0].(map[string]any)["message"].(map[string]any)
 			chatAnns := chMsg["annotations"].([]any)
@@ -410,7 +394,6 @@ func TestMessagesToResponsesChatGemini(t *testing.T) {
 				t.Errorf("chat agg url_citation = %+v, want [7, 13)", uc)
 			}
 
-			// -> Gemini non-stream: part 1 is "Café 🚀" (10 UTF-8 bytes: C=1 a=1 f=1 é=2 ' '=1 🚀=4)
 			gemAgg, _ := renderGeminiAgg(t, mode.evs)
 			cand := gemAgg["candidates"].([]any)[0].(map[string]any)
 			gm, ok := cand["groundingMetadata"].(map[string]any)
@@ -423,7 +406,6 @@ func TestMessagesToResponsesChatGemini(t *testing.T) {
 				t.Errorf("gemini agg segment = %+v, want partIndex=1 start=0 end=10", seg)
 			}
 
-			// -> Gemini stream: final chunk carries groundingMetadata with concatenated UTF-8 byte offsets ("Intro: "=7 bytes, "Café 🚀"=10 bytes -> [7, 17))
 			gemSSE, _ := renderGeminiStream(t, mode.evs)
 			if !strings.Contains(gemSSE, `"groundingMetadata"`) || !strings.Contains(gemSSE, `"endIndex":17`) {
 				t.Errorf("gemini stream missing groundingMetadata or wrong byte offsets:\n%s", gemSSE)
@@ -431,7 +413,6 @@ func TestMessagesToResponsesChatGemini(t *testing.T) {
 		})
 	}
 
-	// Same-format Messages non-stream stays byte-identical.
 	directMsgEvs, err := anthropicmessages.DecodeResponse(msgBody)
 	if err != nil {
 		t.Fatalf("direct messages decode: %v", err)
@@ -442,9 +423,7 @@ func TestMessagesToResponsesChatGemini(t *testing.T) {
 	}
 }
 
-// TestResponsesToChatGeminiMessages verifies Responses url_citation annotations and web_search_call sources.
 func TestResponsesToChatGeminiMessages(t *testing.T) {
-	// Text: "Hi 東京!" -> "東京" is rune [3, 5), UTF-8 byte [3, 9)
 	respBody := []byte(`{
 		"id": "resp_1",
 		"object": "response",
@@ -485,7 +464,6 @@ func TestResponsesToChatGeminiMessages(t *testing.T) {
 		{"stream", streamEvs},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
-			// -> Chat non-stream
 			chatAgg := renderChatAgg(t, mode.evs)
 			chMsg := chatAgg["choices"].([]any)[0].(map[string]any)["message"].(map[string]any)
 			uc := chMsg["annotations"].([]any)[0].(map[string]any)["url_citation"].(map[string]any)
@@ -493,7 +471,6 @@ func TestResponsesToChatGeminiMessages(t *testing.T) {
 				t.Errorf("chat agg url_citation = %+v", uc)
 			}
 
-			// -> Gemini non-stream (UTF-8 bytes [3, 9))
 			gemAgg, _ := renderGeminiAgg(t, mode.evs)
 			gm := gemAgg["candidates"].([]any)[0].(map[string]any)["groundingMetadata"].(map[string]any)
 			seg := gm["groundingSupports"].([]any)[0].(map[string]any)["segment"].(map[string]any)
@@ -501,13 +478,11 @@ func TestResponsesToChatGeminiMessages(t *testing.T) {
 				t.Errorf("gemini agg segment = %+v, want [3, 9)", seg)
 			}
 
-			// -> Gemini stream
 			gemSSE, _ := renderGeminiStream(t, mode.evs)
 			if !strings.Contains(gemSSE, `"groundingMetadata"`) || !strings.Contains(gemSSE, `"endIndex":9`) {
 				t.Errorf("gemini stream missing groundingMetadata:\n%s", gemSSE)
 			}
 
-			// -> Messages: no citation block, reports loss
 			msgBody, msgLosses := renderMessagesAgg(t, mode.evs)
 			if strings.Contains(string(msgBody), "citations") {
 				t.Errorf("messages agg emitted citations: %s", msgBody)
@@ -518,7 +493,6 @@ func TestResponsesToChatGeminiMessages(t *testing.T) {
 		})
 	}
 
-	// Same-format Responses non-stream stays byte-identical.
 	directRespEvs, err := openairesponses.DecodeResponse(respBody)
 	if err != nil {
 		t.Fatalf("direct responses decode: %v", err)
@@ -536,7 +510,6 @@ func TestResponsesToChatGeminiMessages(t *testing.T) {
 	}
 }
 
-// TestChatToResponsesGeminiMessages verifies Chat Completions annotations carry to Responses and Gemini.
 func TestChatToResponsesGeminiMessages(t *testing.T) {
 	chatBody := []byte(`{
 		"id": "chatcmpl_1",
@@ -577,20 +550,17 @@ func TestChatToResponsesGeminiMessages(t *testing.T) {
 		{"stream", streamEvs},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
-			// -> Responses non-stream
 			respAgg, _ := renderResponsesAgg(t, mode.evs)
 			ann := respAgg["output"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["annotations"].([]any)[0].(map[string]any)
 			if ann["url"] != "https://example.com/rocket" || int(ann["start_index"].(float64)) != 3 || int(ann["end_index"].(float64)) != 4 {
 				t.Errorf("responses agg ann = %+v", ann)
 			}
 
-			// -> Responses stream
 			respSSE, _ := renderResponsesStream(t, mode.evs)
 			if !strings.Contains(respSSE, "event: response.output_text.annotation.added") {
 				t.Errorf("responses stream missing annotation.added:\n%s", respSSE)
 			}
 
-			// -> Gemini non-stream ("Hi "=3 bytes, "🚀"=4 bytes -> [3, 7))
 			gemAgg, _ := renderGeminiAgg(t, mode.evs)
 			gm := gemAgg["candidates"].([]any)[0].(map[string]any)["groundingMetadata"].(map[string]any)
 			seg := gm["groundingSupports"].([]any)[0].(map[string]any)["segment"].(map[string]any)
@@ -598,7 +568,6 @@ func TestChatToResponsesGeminiMessages(t *testing.T) {
 				t.Errorf("gemini agg segment = %+v, want [3, 7)", seg)
 			}
 
-			// -> Messages: no citation block, reports loss
 			msgBody, msgLosses := renderMessagesAgg(t, mode.evs)
 			if strings.Contains(string(msgBody), "citations") {
 				t.Errorf("messages agg emitted citations: %s", msgBody)
@@ -610,10 +579,7 @@ func TestChatToResponsesGeminiMessages(t *testing.T) {
 	}
 }
 
-// TestBadMetadataAndNonHTTPURLsNeverFailReply verifies malformed grounding, out-of-range
-// indices, mid-UTF-8 byte offsets, unknown citation types, and non-http URLs are dropped safely.
 func TestBadMetadataAndNonHTTPURLsNeverFailReply(t *testing.T) {
-	// 1. Malformed Gemini groundingMetadata -> reply text still arrives whole.
 	badGemini := []byte(`{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Still works"}]},"finishReason":"STOP","groundingMetadata":"not-an-object"}]}`)
 	evs, err := geminigenerate.DecodeResponse(badGemini)
 	if err != nil {
@@ -625,8 +591,6 @@ func TestBadMetadataAndNonHTTPURLsNeverFailReply(t *testing.T) {
 		t.Errorf("malformed groundingMetadata chat msg = %+v", msg)
 	}
 
-	// 2. Out-of-range chunk index, mid-rune byte offset, and non-http URLs in Gemini.
-	// Text "café" -> 'é' is bytes 3..5, byte 4 is mid-rune!
 	mixedGemini := []byte(`{
 		"candidates": [{
 			"index": 0,
@@ -669,7 +633,6 @@ func TestBadMetadataAndNonHTTPURLsNeverFailReply(t *testing.T) {
 		t.Errorf("mid-rune offset produced range [%v, %v], want nil range", itemCits[0].StartIndex, itemCits[0].EndIndex)
 	}
 
-	// 3. Non-http URL and unknown citation type in Messages.
 	badMsg := []byte(`{
 		"id":"msg_bad","type":"message","role":"assistant","model":"claude-opus-4-6",
 		"content":[{"type":"text","text":"Hi","citations":[
@@ -689,9 +652,6 @@ func TestBadMetadataAndNonHTTPURLsNeverFailReply(t *testing.T) {
 	}
 }
 
-// TestNextTurnReplayAcrossAllTargets verifies that a reply rendered for each client format
-// can be replayed on the next turn through that client's parser into every target encoder,
-// including Claude, without failing or sending unverified vendor fields.
 func TestNextTurnReplayAcrossAllTargets(t *testing.T) {
 	targets := []struct {
 		name   string

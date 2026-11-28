@@ -8,14 +8,11 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// translatedCall builds a tool call replayed from another format.
 func translatedCall(format, args string) llm.Item {
 	return llm.Item{Type: llm.ItemTypeToolCall, CallID: "call_1", Name: "get_weather", Arguments: args,
 		Origin: &llm.Origin{Format: format, Path: "items[0]"}}
 }
 
-// encodeCallArgs returns the arguments string of the first tool call in a Chat body EncodeRequest
-// built from one call.
 func encodeCallArgs(t *testing.T, it llm.Item) (string, []llm.Loss) {
 	t.Helper()
 	body, losses, err := EncodeRequest(llm.Request{Model: "m", Items: []llm.Item{it}})
@@ -40,8 +37,6 @@ func encodeCallArgs(t *testing.T, it llm.Item) (string, []llm.Loss) {
 	return out.Messages[0].ToolCalls[0].Function.Arguments, losses
 }
 
-// A tool call replayed from another format whose arguments are not a JSON object is sent as {},
-// and the loss is reported, as the Messages and Gemini encoders already do.
 func TestEncodeRequestRepairsTranslatedToolArguments(t *testing.T) {
 	for _, args := range []string{`{"city":`, `[1,2]`, `"Oslo"`, `null`, ``} {
 		for _, origin := range []*llm.Origin{{Format: llm.FormatAnthropicMessages, Path: "items[0]"}, nil} {
@@ -60,8 +55,6 @@ func TestEncodeRequestRepairsTranslatedToolArguments(t *testing.T) {
 	}
 }
 
-// A Chat client's own call is sent back as it came, even with arguments that are not JSON: a
-// same-format request keeps its bytes.
 func TestEncodeRequestKeepsSameFormatToolArguments(t *testing.T) {
 	for _, it := range []llm.Item{
 		translatedCall(llm.FormatOpenAIChat, `{"city":`),
@@ -76,7 +69,6 @@ func TestEncodeRequestKeepsSameFormatToolArguments(t *testing.T) {
 	}
 }
 
-// A custom tool's input is free-form text, not JSON: it is never replaced.
 func TestEncodeRequestKeepsCustomToolInput(t *testing.T) {
 	it := translatedCall(llm.FormatAnthropicMessages, "*** Begin Patch\n")
 	it.Custom = true

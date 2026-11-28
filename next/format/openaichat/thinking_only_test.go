@@ -8,7 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// onlyThinkingEvents is a reply that reasons and then stops, with no text and no tool call.
 func onlyThinkingEvents() []llm.Event {
 	return []llm.Event{
 		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "c1", Model: "m", Format: llm.FormatOpenAIChat}},
@@ -19,8 +18,6 @@ func onlyThinkingEvents() []llm.Event {
 	}
 }
 
-// A reply that only thinks is a complete Chat reply: the reasoning reaches the client, the
-// message still has its content field, and the reply carries its finish reason.
 func TestReasoningOnlyReplyIsComplete(t *testing.T) {
 	a := NewAggregator()
 	for _, ev := range onlyThinkingEvents() {

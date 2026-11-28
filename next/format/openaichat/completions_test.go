@@ -23,7 +23,6 @@ func jsonEqual(t *testing.T, got []byte, want string) {
 	}
 }
 
-// A completions request is carried as the Chat request today's core makes of it.
 func TestParseCompletionsRequest(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
 		{`{"model":"m","prompt":"Say hello"}`, `{"model":"m","messages":[{"role":"user","content":"Say hello"}]}`},
@@ -76,8 +75,6 @@ func TestCompletionsAggregator(t *testing.T) {
 		"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`)
 }
 
-// The role chunk, which has no text, is left out; text, finish and usage chunks are converted;
-// [DONE] ends the stream. An error after the start goes as the Chat stream writes it.
 func TestCompletionsStreamWriter(t *testing.T) {
 	var out strings.Builder
 	w := NewCompletionsStreamWriter(&out, true)

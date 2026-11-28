@@ -14,11 +14,9 @@ type logprobOut struct {
 	} `json:"content"`
 }
 
-// logprobsBody is a choice's logprobs: OpenAI's Chat API puts it on the choice, streamed or not.
 const logprobsBody = `{"content":[{"token":"Hi","logprob":-0.1,"bytes":[72,105],"top_logprobs":[]},` +
 	`{"token":"!","logprob":-0.2,"bytes":[33],"top_logprobs":[]}],"refusal":null}`
 
-// choiceLogprobs returns the tokens of the first choice's logprobs in a whole response.
 func choiceLogprobs(t *testing.T, body []byte) []string {
 	t.Helper()
 	var out struct {
@@ -38,8 +36,6 @@ func choiceLogprobs(t *testing.T, body []byte) []string {
 	return tokens
 }
 
-// streamLogprobs returns the tokens the stream's chunks carry on their choices, and how many
-// chunks carried logprobs.
 func streamLogprobs(t *testing.T, stream string) ([]string, int) {
 	t.Helper()
 	var tokens []string
@@ -70,14 +66,11 @@ func streamLogprobs(t *testing.T, stream string) ([]string, int) {
 	return tokens, chunks
 }
 
-// logprobsChunk is a Chat stream chunk whose choice carries logprobs, as the API writes them.
 func logprobsChunk(delta, logprobs string) string {
 	return `{"id":"x","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":` + delta +
 		`,"logprobs":` + logprobs + `,"finish_reason":null}]}`
 }
 
-// A Chat client that asked for logprobs gets them back on the choice, from a Chat upstream,
-// streamed or not.
 func TestLogprobsReachChatClient(t *testing.T) {
 	t.Run("nonstream", func(t *testing.T) {
 		body := `{"id":"x","object":"chat.completion","model":"m","choices":[{"index":0,` +

@@ -11,15 +11,8 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Tool names. Messages takes a tool name of 1 to 64 letters, digits, underscores and hyphens; a
-// client in another format may use others (MCP tools often have dots or colons). Such a name is
-// sent under a Messages name, and the reply's calls go back to the client under its own (the
-// Claude provider maps them back with ToolNames). The names are those today's core gives them.
-
-// maxToolName is the longest tool name Messages takes.
 const maxToolName = 64
 
-// validToolName reports whether Messages takes name as it is.
 func validToolName(name string) bool {
 	if name == "" || len(name) > maxToolName {
 		return false
@@ -32,14 +25,10 @@ func validToolName(name string) bool {
 	return true
 }
 
-// portable reports whether c is a letter, digit, underscore or hyphen, the characters Messages
-// takes in tool names and tool call IDs.
 func portable(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'
 }
 
-// sanitizeToolName replaces each character Messages does not take with an underscore and cuts
-// the name to 64 bytes.
 func sanitizeToolName(name string) string {
 	b := []byte(name)
 	for i, c := range b {
@@ -53,15 +42,8 @@ func sanitizeToolName(name string) string {
 	return string(b)
 }
 
-// ToolNames returns the Messages name of each function name in req that Messages does not take
-// as it is, keyed by the client's name: the tools' names first, then the names of the tool calls
-// replayed in its items. Every name sent is distinct. A name is kept when it is valid and not
-// taken, otherwise sanitized (each other character an underscore, at most 64 bytes); when two
-// sanitized names would be the same, or one is already taken, each gets a hash of the client's
-// name after the first 53 bytes. The result depends only on req, so the request and its reply
-// agree.
 func ToolNames(req llm.Request) map[string]string {
-	req, _ = clienttools.Lower(req) // the names the encoder sends
+	req, _ = clienttools.Lower(req)
 	n := toolNames{to: map[string]string{}, taken: map[string]bool{}}
 	var declared, called []string
 	for _, t := range req.Tools {
@@ -141,7 +123,6 @@ func (n *toolNames) allocate(names []string) {
 	}
 }
 
-// toolName returns the Messages name for a client's function name.
 func toolName(names map[string]string, name string) string {
 	if to, ok := names[name]; ok {
 		return to
@@ -152,15 +133,8 @@ func toolName(names map[string]string, name string) string {
 	return sanitizeToolName(name)
 }
 
-// emptySchema is the input schema of a tool that takes no arguments.
 const emptySchema = `{"type":"object","properties":{}}`
 
-// inputSchema makes a tool's parameter schema one Messages takes: an object schema without anyOf,
-// oneOf or allOf at its root. The properties of the root branches that can be objects are merged
-// into the root's (a property the root has wins), and the required names of allOf branches are
-// added to the root's. A schema that is missing or not a JSON object becomes the empty object
-// schema. This is what today's core does to a translated tool's schema. Patterns are left as
-// they are: Messages takes Unicode property escapes such as \p{L}.
 func inputSchema(schema json.RawMessage) json.RawMessage {
 	var root map[string]json.RawMessage
 	if len(schema) == 0 || json.Unmarshal(schema, &root) != nil || root == nil {
@@ -205,7 +179,6 @@ func inputSchema(schema json.RawMessage) json.RawMessage {
 	return out
 }
 
-// schemaObject reads a JSON object of subschemas; anything else is an empty one.
 func schemaObject(raw json.RawMessage) map[string]json.RawMessage {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(raw, &m) != nil || m == nil {
@@ -214,8 +187,6 @@ func schemaObject(raw json.RawMessage) map[string]json.RawMessage {
 	return m
 }
 
-// canBeObject reports whether a schema allows an object: it names no type, or names object
-// among its types.
 func canBeObject(schema map[string]json.RawMessage) bool {
 	raw, ok := schema["type"]
 	if !ok {
@@ -229,7 +200,6 @@ func canBeObject(schema map[string]json.RawMessage) bool {
 	return json.Unmarshal(raw, &many) == nil && slices.Contains(many, "object")
 }
 
-// addRequired adds a branch's required names to the root's, each once.
 func addRequired(root map[string]json.RawMessage, branch json.RawMessage) {
 	var names []string
 	if json.Unmarshal(branch, &names) != nil {

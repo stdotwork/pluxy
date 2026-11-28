@@ -22,8 +22,6 @@ func compactJSON(t *testing.T, s string) string {
 	return b.String()
 }
 
-// A Chat request read into items and written back out keeps its conversation, with tool calls
-// regrouped onto their assistant message.
 func TestParseThenEncodeRequest(t *testing.T) {
 	in := `{"model":"m","stream":true,"max_tokens":50,"temperature":0.5,"stop":"END",
 	"tools":[{"type":"function","function":{"name":"get_weather","description":"Weather","parameters":{"type":"object"}}}],
@@ -68,8 +66,6 @@ func TestParseThenEncodeRequest(t *testing.T) {
 	}
 }
 
-// An input_audio part is carried as a file part whose inline data is audio, so that other
-// formats can take it, and Chat writes it back as input_audio with its bytes and its format.
 func TestInputAudioPart(t *testing.T) {
 	in := `{"model":"m","stream":false,"messages":[{"role":"user","content":[
 		{"type":"text","text":"Transcribe this."},
@@ -99,8 +95,6 @@ func TestInputAudioPart(t *testing.T) {
 		t.Errorf("encoded:\n got %s\nwant %s", out, compactJSON(t, in))
 	}
 
-	// A file part carrying inline audio is Chat's audio input too: Chat's own file part is for
-	// documents, and audio goes in input_audio.
 	file, err := ParseRequest([]byte(`{"model":"m","messages":[{"role":"user","content":[
 		{"type":"file","file":{"file_data":"data:audio/wav;base64,UklGRg=="}}]}]}`))
 	if err != nil {
@@ -123,10 +117,6 @@ func TestInputAudioPart(t *testing.T) {
 	}
 }
 
-// Fields the model does not interpret survive a Chat request read into items and written back
-// as Chat: a message's name, an assistant's reasoning_content, vendor fields on the request, a
-// message, a part, a tool call and a tool, a tool's strict flag and a tool type the model does
-// not know. (The encoder always writes stream, so the input states it.)
 func TestParseThenEncodeKeepsUnmodelledFields(t *testing.T) {
 	in := `{"model":"m","stream":false,"metadata":{"team":"a"},"x_vendor":{"k":1},
 	"tools":[{"type":"function","x_tool":true,"function":{"name":"f","parameters":{"type":"object"},"strict":true,"x_fn":2}},
@@ -160,9 +150,6 @@ func TestParseThenEncodeKeepsUnmodelledFields(t *testing.T) {
 	}
 }
 
-// More shapes survive a Chat round trip: an empty text part keeps its text field, fields inside
-// stream_options, response_format and a custom tool call are kept, and an assistant message that
-// only carries tool calls keeps its own fields.
 func TestParseThenEncodeKeepsNestedFields(t *testing.T) {
 	in := `{"model":"m","stream":true,"stream_options":{"include_usage":true,"include_obfuscation":false},
 	"response_format":{"type":"json_schema","json_schema":{"name":"r","schema":{"type":"object"},"x_schema":1}},
@@ -194,8 +181,6 @@ func TestParseThenEncodeKeepsNestedFields(t *testing.T) {
 	}
 }
 
-// An assistant message with empty content keeps content "" (Chat Completions needs content when a
-// message has no tool calls); one that only carries tool calls has none.
 func TestEncodeEmptyAssistantContent(t *testing.T) {
 	req := llm.Request{Model: "m", Items: []llm.Item{
 		{Type: llm.ItemTypeMessage, Role: llm.RoleAssistant, Origin: &llm.Origin{Format: llm.FormatOpenAIResponses}},
@@ -229,7 +214,6 @@ func TestParseRequestRejects(t *testing.T) {
 	}
 }
 
-// Streaming chunks shaped like OpenAI's documented streamed reasoning and parallel tool calls.
 func TestStreamDecoder(t *testing.T) {
 	head := `"id":"x","object":"chat.completion.chunk","created":5,"model":"up"`
 	chunks := []string{
@@ -297,8 +281,6 @@ func TestStreamDecoderEndsEarly(t *testing.T) {
 		t.Fatal("a stream that ended without a finish reason or [DONE] was accepted")
 	}
 
-	// [DONE] does not finish a reply that never carried a finish reason: the upstream may have
-	// cut it short.
 	d = NewStreamDecoder()
 	if _, err := d.Decode([]byte(`{"id":"x","model":"m","choices":[{"index":0,"delta":{"content":"Hi"}}]}`)); err != nil {
 		t.Fatal(err)
@@ -310,8 +292,6 @@ func TestStreamDecoderEndsEarly(t *testing.T) {
 	}
 }
 
-// A reply with several choices is finished only when every choice it returned carried a finish
-// reason: an unfinished choice after the first may have been cut short as much as the first.
 func TestStreamDecoderWaitsForEveryChoice(t *testing.T) {
 	const (
 		both      = `{"id":"x","model":"m","choices":[{"index":0,"delta":{"content":"A"}},{"index":1,"delta":{"content":"B"}}]}`
@@ -321,7 +301,7 @@ func TestStreamDecoderWaitsForEveryChoice(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		chunks []string
-		end    string // "[DONE]", or "" for the stream closing without it
+		end    string
 		ok     bool
 	}{
 		{"choice 1 unfinished at [DONE]", []string{both, firstDone}, "[DONE]", false},
@@ -353,8 +333,6 @@ func TestStreamDecoderWaitsForEveryChoice(t *testing.T) {
 	}
 }
 
-// Upstream bytes that are not JSON become an upstream error that can still be sent to core: the
-// error event must encode, with the bytes kept in raw.
 func TestMalformedUpstreamGivesError(t *testing.T) {
 	const garbage = "{not json"
 	_, respErr := DecodeResponse([]byte(garbage))
@@ -378,9 +356,6 @@ func TestMalformedUpstreamGivesError(t *testing.T) {
 	}
 }
 
-// A 200 body is a reply only if it has the shape of a completion: an object whose choices hold
-// choice 0 with a message. Anything else, including an error object sent with status 200, is an
-// upstream error rather than an empty successful answer.
 func TestDecodeResponseNeedsACompletion(t *testing.T) {
 	for _, c := range []struct{ name, body, msg, code string }{
 		{"empty object", `{}`, "", ""},
@@ -411,8 +386,6 @@ func TestDecodeResponseNeedsACompletion(t *testing.T) {
 	}
 }
 
-// A streamed reply keeps what the internal model has no field for: reply-level fields on every
-// chunk, choices after the first, and usage fields such as a vendor cost.
 func TestStreamKeepsUpstreamFields(t *testing.T) {
 	head := `"id":"x","object":"chat.completion.chunk","created":5,"model":"up","system_fingerprint":"fp_1"`
 	chunks := []string{
@@ -443,8 +416,6 @@ func TestStreamKeepsUpstreamFields(t *testing.T) {
 			}
 		}
 	}
-	// The first choice's finish chunk comes at the end, with the finish event; the other
-	// choices' chunks are passed on as they arrive.
 	want := []string{
 		`{` + head + `,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
 		`{` + head + `,"choices":[{"index":1,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
@@ -511,10 +482,6 @@ func TestStreamWriter(t *testing.T) {
 	}
 }
 
-// Putting streamed extra choices together takes work in proportion to the fragments: the
-// reviewer's case, one fragment with 4,000 tool calls, took about 16 million allocations because
-// every call searched the calls before it. Doubling the calls must not much more than double the
-// allocations, whether they come in one fragment or one per fragment.
 func TestAggregatorMergesExtraChoicesInLinearWork(t *testing.T) {
 	call := func(i int) string {
 		return fmt.Sprintf(`{"index":%d,"id":"call_%d","type":"function","function":{"name":"f","arguments":"{}"}}`, i, i)
@@ -558,9 +525,6 @@ func TestAggregatorMergesExtraChoicesInLinearWork(t *testing.T) {
 	}
 }
 
-// Joining streamed text or tool arguments takes work in proportion to the bytes. Joining each
-// delta onto the string so far copies about 190 MiB for 2,000 deltas of 100 bytes, where the
-// joined text is 200 KB.
 func TestAggregatorJoinsStreamedStringsInLinearBytes(t *testing.T) {
 	const deltas, size = 2000, 100
 	const maxAlloc = 32 << 20
@@ -571,7 +535,6 @@ func TestAggregatorJoinsStreamedStringsInLinearBytes(t *testing.T) {
 	}
 	want := joined.String()
 	start := llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "c1", Model: "m", Format: llm.FormatOpenAIChat}}
-	// feed adds the events and returns the response body and the bytes the Add calls allocated.
 	feed := func(t *testing.T, evs []llm.Event) (respBody, uint64) {
 		t.Helper()
 		a := NewAggregator()
@@ -629,7 +592,6 @@ func TestAggregatorJoinsStreamedStringsInLinearBytes(t *testing.T) {
 	})
 }
 
-// respBody is the part of a Chat Completions response the aggregator tests read.
 type respBody struct {
 	Choices []struct {
 		Message struct {
@@ -643,8 +605,6 @@ type respBody struct {
 	} `json:"choices"`
 }
 
-// A tool-input delta for an index no tool call opened must not crash core or end up in another
-// call's arguments: the aggregator leaves it out, as the Gemini aggregator does.
 func TestAggregatorLeavesOutToolInputForUnknownIndex(t *testing.T) {
 	start := llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "c1", Model: "m", Format: llm.FormatOpenAIChat}}
 	finish := llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishToolCalls}}
@@ -811,7 +771,6 @@ func TestRenderUsageCacheWrite(t *testing.T) {
 		t.Errorf("usage with zero cache write:\n got %s\nwant %s", zero, wantZero)
 	}
 
-	// A cached count nobody reported is not a zero: only the write is written.
 	writeOnly := render(&llm.Usage{
 		InputTokens:           llm.Int64(12000),
 		OutputTokens:          llm.Int64(50),
@@ -823,9 +782,6 @@ func TestRenderUsageCacheWrite(t *testing.T) {
 	}
 }
 
-// A later Chat chunk whose usage is empty, all zeros or null does not overwrite the usage the
-// upstream reported before it. A later chunk with counts does replace it, because Chat usage is
-// cumulative.
 func TestStreamUsageLaterChunks(t *testing.T) {
 	const head = `"id":"chatcmpl-u1","object":"chat.completion.chunk","created":1700000000,"model":"m"`
 	chunk := func(fields string) string { return `{` + head + `,"choices":[],` + fields + `}` }
@@ -875,8 +831,6 @@ func TestStreamUsageLaterChunks(t *testing.T) {
 	})
 }
 
-// A Chat usage with any count at all carries the three counts OpenAI's CompletionUsage requires,
-// a missing one as 0; a usage with no counts is left out, and a count reported as zero stays zero.
 func TestRenderUsageUnknownStaysAbsent(t *testing.T) {
 	render := func(u *llm.Usage) string {
 		t.Helper()

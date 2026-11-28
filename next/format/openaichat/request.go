@@ -1,6 +1,3 @@
-// Package openaichat converts between OpenAI Chat Completions and pluxy's internal model, in
-// both directions: core uses it to read client requests and write client replies, and provider
-// extensions use it to build upstream requests and read upstream replies.
 package openaichat
 
 import (
@@ -37,8 +34,6 @@ type chatRequest struct {
 	} `json:"stream_options"`
 }
 
-// requestFields are the top-level request fields the model carries. stream_options is written
-// by the encoder itself.
 var requestFields = []string{"model", "messages", "stream", "stream_options", "max_tokens", "max_completion_tokens",
 	"temperature", "top_p", "stop", "tools", "tool_choice", "parallel_tool_calls", "response_format", "reasoning_effort"}
 
@@ -71,7 +66,6 @@ type chatToolCall struct {
 	} `json:"function"`
 }
 
-// customToolCall is a call to a custom (freeform) tool.
 type customToolCall struct {
 	ID     string `json:"id"`
 	Type   string `json:"type"`
@@ -96,8 +90,6 @@ type chatPart struct {
 	InputAudio *chatInputAudio `json:"input_audio"`
 }
 
-// chatInputAudio is Chat's input_audio part: the base64 bytes of an audio blob and the format
-// token that names them.
 type chatInputAudio struct {
 	Data   string `json:"data"`
 	Format string `json:"format,omitempty"`
@@ -107,9 +99,6 @@ func invalid(msg string, args ...any) *llm.Error {
 	return &llm.Error{Code: llm.CodeInvalidRequest, Message: fmt.Sprintf(msg, args...), Scope: llm.ScopeRequest}
 }
 
-// ParseRequest reads a Chat Completions request body. The result keeps body as its Native form,
-// and every request, message, part and tool keeps the fields the model has no place for in its
-// Origin, so EncodeRequest can write them back. Errors are *llm.Error with code invalid_request.
 func ParseRequest(body []byte) (llm.Request, error) {
 	var in chatRequest
 	if err := json.Unmarshal(body, &in); err != nil {
@@ -145,8 +134,6 @@ func ParseRequest(body []byte) (llm.Request, error) {
 			return llm.Request{}, invalid("stop must be a string or a list of strings")
 		}
 	}
-	// Request fields the model reads but whose shape it does not know stay in Origin.Raw, and
-	// so do the fields it does not read inside the ones it does.
 	nested := map[string]json.RawMessage{}
 	if raw, ok := top["stream_options"]; ok {
 		nested["stream_options"] = rawjson.Rest(rawjson.Object(raw), "include_usage")
@@ -174,8 +161,6 @@ func ParseRequest(body []byte) (llm.Request, error) {
 			nested["response_format"] = raw
 		}
 	}
-	// service_tier and verbosity are carried when they are strings; any other value stays in
-	// Origin.Raw.
 	modelled := requestFields
 	if tier, ok := rawjson.Text(top["service_tier"]); ok {
 		req.Options.ServiceTier = tier
@@ -225,7 +210,6 @@ func parseTool(raw json.RawMessage, path string) (llm.Tool, error) {
 	}
 	m := rawjson.Object(raw)
 	if t.Type != "function" {
-		// A tool the model cannot interpret survives whole, for an upstream that speaks Chat.
 		return llm.Tool{Type: llm.ToolNative, Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)}}, nil
 	}
 	fn := rawjson.Rest(rawjson.Object(m["function"]), "name", "description", "parameters", "strict")
@@ -235,8 +219,6 @@ func parseTool(raw json.RawMessage, path string) (llm.Tool, error) {
 	}, nil
 }
 
-// chatAllowedTool is one entry of a tool choice's allowed_tools list: a function, named in
-// function.name as Chat writes it or, as some clients write it, in name.
 type chatAllowedTool struct {
 	Type     string `json:"type"`
 	Function struct {
@@ -277,10 +259,6 @@ func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
 	return nil
 }
 
-// allowedToolChoice reads a tool choice's allowed_tools object: its mode (auto or required) and
-// the function tools it names, as the model's allowed list. One that names anything else, or no
-// tool, is nil, so the choice stays whole in the request's fields rather than losing the entries
-// the model has no place for.
 func allowedToolChoice(o *struct {
 	Mode  string            `json:"mode"`
 	Tools []chatAllowedTool `json:"tools"`
@@ -337,8 +315,6 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 	switch m.Role {
 	case llm.RoleSystem, llm.RoleDeveloper, llm.RoleUser, llm.RoleAssistant:
 	case "tool":
-		// Text parts are the result's text; a result that holds images, files or other parts
-		// keeps them all, in order, as its parts.
 		parts, _, err := parseContent(m.Content, path+".content")
 		if err != nil {
 			return nil, err
@@ -368,8 +344,6 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 			Origin: &llm.Origin{Format: format, Path: path + ".reasoning_content"}})
 	}
 	origin := rawjson.Origin(format, path, obj, []string{"role", "content", "tool_calls", "tool_call_id", "reasoning_content"}, nil)
-	// A message that only carries tool calls still becomes an item when it has fields of its
-	// own (such as name), so they survive; its tool calls are written back onto it.
 	if len(parts) > 0 || len(m.ToolCalls) == 0 || len(origin.Raw) > 0 {
 		items = append(items, llm.Item{Type: llm.ItemTypeMessage, Role: m.Role, Content: parts, TextContent: textContent, Origin: origin})
 	}
@@ -406,7 +380,6 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 	return items, nil
 }
 
-// parseContent reads message content: a string (textContent true) or a list of parts.
 func parseContent(raw json.RawMessage, path string) (parts []llm.Part, textContent bool, err error) {
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return nil, false, nil
@@ -461,12 +434,12 @@ type outMessage struct {
 	ToolCalls        []json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallID       string            `json:"tool_call_id,omitempty"`
 
-	raw json.RawMessage // kept fields from a Chat source
+	raw json.RawMessage
 }
 
 type outPart struct {
 	Type     string  `json:"type"`
-	Text     *string `json:"text,omitempty"` // set for text parts, even when empty
+	Text     *string `json:"text,omitempty"`
 	ImageURL *struct {
 		URL    string `json:"url"`
 		Detail string `json:"detail,omitempty"`
@@ -485,17 +458,12 @@ type outRequest struct {
 	outTail
 }
 
-// outTail holds the request body's fields after its messages, in the body's order, so that one
-// marshal of it gives the body's tail. It is in three parts so that the tools, which are already
-// compact JSON, can be written between the other two without a marshal that would compact them
-// again.
 type outTail struct {
 	tailHead
 	Tools []json.RawMessage `json:"tools,omitempty"`
 	tailRest
 }
 
-// tailHead holds the fields before the tools. It always has stream, so it is never empty.
 type tailHead struct {
 	Stream        bool `json:"stream"`
 	StreamOptions *struct {
@@ -507,7 +475,6 @@ type tailHead struct {
 	Stop        []string `json:"stop,omitempty"`
 }
 
-// tailRest holds the fields after the tools.
 type tailRest struct {
 	ToolChoice        any             `json:"tool_choice,omitempty"`
 	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
@@ -519,12 +486,8 @@ type tailRest struct {
 	WebSearchOptions  json.RawMessage `json:"web_search_options,omitempty"`
 }
 
-// encoder builds one Chat Completions request and records what it could not carry over.
 type encoder struct {
-	losses []llm.Loss
-	// foreign is set when a content part or a tool was taken as a client sent it, so it may not be
-	// the compact, escaped JSON a marshal writes. The body is then built by marshaling each
-	// message, which writes it so.
+	losses  []llm.Loss
 	foreign bool
 }
 
@@ -532,8 +495,6 @@ func (e *encoder) lose(kind, path, detail string) {
 	e.losses = append(e.losses, llm.Loss{Kind: kind, Path: path, Detail: detail})
 }
 
-// kept returns o's kept fields when o came from Chat, so they are written back; for another
-// format it reports them as dropped.
 func (e *encoder) kept(o *llm.Origin) json.RawMessage {
 	if o == nil {
 		return nil
@@ -545,11 +506,6 @@ func (e *encoder) kept(o *llm.Origin) json.RawMessage {
 	return nil
 }
 
-// toolArguments returns a tool call's arguments as Chat takes them. Another format can hold
-// arguments that are not a JSON object (Messages takes an input object, a Responses client's
-// custom call holds free text), and Chat would refuse them; such a string is sent as {}, as the
-// Messages and Gemini encoders already do with what they cannot carry. A Chat client's own call
-// keeps the bytes it sent.
 func toolArguments(args string, o *llm.Origin, path string, e *encoder) string {
 	if o != nil && o.Format == format {
 		return args
@@ -579,47 +535,19 @@ func marshal(v any, raw json.RawMessage) json.RawMessage {
 	return rawjson.Merge(b, raw)
 }
 
-// EncodeRequest builds a Chat Completions request body from req's items, tools and options, and
-// returns what it could not carry over. Fields kept from a Chat source (Origin) are written back.
-// Streamed requests ask for usage. A user turn left with nothing to send after its unsupported
-// parts are dropped is an invalid_request error, never sent empty. It does not look at
-// req.Native; callers that can pass the native body through do so first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	return EncodeRequestWith(req, EncodeOptions{})
 }
 
-// serviceTiers are the service tiers the Chat Completions create reference lists
-// (https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
 var serviceTiers = []string{"auto", "default", "flex", "scale", "priority", "fast"}
 
-// EncodeOptions changes how EncodeRequestWith builds a body.
 type EncodeOptions struct {
-	// ServiceTier and Verbosity say the caller knows its upstream takes the field: a request from
-	// another format then carries the client's service tier or verbosity, and without them it
-	// leaves it out and reports it as dropped, since a third-party upstream may refuse a field it
-	// does not list. A Chat client's own tier and verbosity are written either way.
 	ServiceTier, Verbosity bool
-	// WebSearch says the caller knows its upstream takes web_search_options (only specialized
-	// search models such as gpt-5-search-api accept it): a request from another format then
-	// carries a canonical web search tool on those models and without function tools, and
-	// without it the tool is left out and reported as dropped. A Chat client's own
-	// web_search_options is written either way.
-	WebSearch bool
-	// CandidateCount says the caller knows its upstream takes Chat Completions n (api.openai.com):
-	// a request from another format then carries a candidate count > 1 on documented models
-	// (up to 128), and without it the count is left out and reported as dropped. A Chat client's
-	// own n >= 1 is written back unchanged; a translated count <= 1 sends no field.
-	CandidateCount bool
-	// AssistantAnnotations says the caller knows its upstream takes annotations on replayed
-	// assistant messages (such as OpenRouter's file annotations,
-	// https://openrouter.ai/docs/features/multimodal/pdfs). Without it, annotations on a replayed
-	// Chat assistant message are stripped and reported as approximated, since OpenAI's Chat
-	// Completions request reference lists no such field and strict upstreams such as Mistral
-	// (additionalProperties: false) reject unknown assistant message fields.
-	AssistantAnnotations bool
+	WebSearch              bool
+	CandidateCount         bool
+	AssistantAnnotations   bool
 }
 
-// EncodeRequestWith builds a Chat Completions request body as EncodeRequest does, changed by opts.
 func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
 	e := &encoder{}
 	req, lowered := clienttools.Lower(req)
@@ -638,8 +566,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			tailRest: tailRest{ReasoningEffort: req.Options.ReasoningEffort},
 		},
 	}
-	// A request from another format carries a tier or verbosity only if the Chat Completions
-	// reference lists it: another value would be refused. A Chat client's own is written as it is.
 	own := req.SourceFormat() == format
 	if t := req.Options.ServiceTier; t != "" {
 		switch {
@@ -694,8 +620,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	for i, t := range req.Tools {
 		p := path(t.Origin, fmt.Sprintf("tools[%d]", i))
 		if t.Type == llm.ToolCodeExecution {
-			// OpenAI Chat Completions has no code execution / code interpreter tool
-			// (https://developers.openai.com/api/docs/guides/tools-code-interpreter).
 			e.lose(llm.LossDropped, p, "Chat Completions has no code execution tool")
 			droppedCodeExec = true
 			continue
@@ -777,7 +701,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			out.ParallelToolCalls = req.Options.ParallelToolCalls
 		}
 	} else if len(out.Tools) > 0 {
-		// Chat Completions accepts these only with tools.
 		out.ParallelToolCalls = req.Options.ParallelToolCalls
 		if tc := req.Options.ToolChoice; tc != nil {
 			out.ToolChoice = encodeToolChoice(tc, toolNameMap)
@@ -787,7 +710,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 
 	var msgs []*outMessage
-	reasoning := "" // reasoning waiting for the assistant message it belongs to
+	reasoning := ""
 	flushReasoning := func() {
 		if reasoning != "" {
 			empty := ""
@@ -795,9 +718,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			reasoning = ""
 		}
 	}
-	// Chat Completions takes only text in a tool message, so a tool result's images and files
-	// wait for the first item after the run of tool results: a user message takes them at its
-	// start, anything else gets a user message of its own before it.
 	var relay toolMedia
 	flushRelay := func() {
 		if content := relay.take(); content != nil {
@@ -828,8 +748,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			reasoning = joinReasoning(reasoning, it.Text)
 		case llm.ItemTypeMessage:
 			if emptyForeign(it, format) {
-				// An empty message from another format only holds its own fields; they are
-				// reported, and nothing is sent for it.
 				e.kept(it.Origin)
 				break
 			}
@@ -943,9 +861,6 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	return rawjson.Merge(body, rawOrigin), e.losses, nil
 }
 
-// encodeBody returns out as the request body's JSON, writing the messages' JSON as it stands.
-// Each message is already compact JSON (json.Marshal of a value, merged with its kept fields), so
-// marshaling the whole body again would only scan them once more.
 func encodeBody(out *outRequest) ([]byte, error) {
 	model, err := json.Marshal(out.Model)
 	if err != nil {
@@ -968,23 +883,16 @@ func encodeBody(out *outRequest) ([]byte, error) {
 			b = append(b, ',')
 		}
 		if m == nil {
-			// marshal gave nothing for it: the same null a marshal of the whole body writes.
 			b = append(b, "null"...)
 			continue
 		}
 		b = append(b, m...)
 	}
 	b = append(b, ']')
-	// The tail always holds stream, so it starts with the object's brace and its fields follow
-	// the messages' array after a comma.
 	b = append(b, ',')
 	return append(b, tail[1:]...), nil
 }
 
-// toolResult returns a tool message's content for a tool result: its text. Its images, files and
-// other parts go to relay, for the user message after the tool messages, as CLIProxyAPI sends
-// them; a result that had nothing but those says so in its text. Chat Completions has no place
-// for the error flag.
 func (e *encoder) toolResult(it llm.Item, itemPath string, relay *toolMedia) (string, error) {
 	if it.IsError {
 		e.lose(llm.LossDropped, rawjson.Join(itemPath, "is_error"), "Chat Completions has no error flag on a tool result")
@@ -993,7 +901,6 @@ func (e *encoder) toolResult(it llm.Item, itemPath string, relay *toolMedia) (st
 	for i, p := range it.Content {
 		pp := path(p.Origin, fmt.Sprintf("%s.content[%d]", itemPath, i))
 		if p.Type == llm.PartText {
-			// Its text is in Output.
 			e.kept(p.Origin)
 			continue
 		}
@@ -1031,7 +938,6 @@ func partFormat(p llm.Part) string {
 	return p.Type
 }
 
-// toolMedia collects the images and files of tool results for the user message that follows them.
 type toolMedia struct {
 	parts         []json.RawMessage
 	images, files bool
@@ -1059,8 +965,6 @@ func (m *toolMedia) what() string {
 	return "files"
 }
 
-// take returns the collected parts after a line that says where they came from, or nil when there
-// are none, and empties m.
 func (m *toolMedia) take() any {
 	if len(m.parts) == 0 {
 		return nil
@@ -1073,10 +977,6 @@ func (m *toolMedia) take() any {
 	return out
 }
 
-// geminiSignature takes the thought signature off a function call from a Gemini request and
-// returns it as the call's extra_content.google.thought_signature, where Gemini's
-// OpenAI-compatible API carries it (https://ai.google.dev/gemini-api/docs/openai), with the
-// origin left without it. Other origins come back unchanged.
 func geminiSignature(o *llm.Origin) (*llm.Origin, json.RawMessage) {
 	if o == nil || o.Format != llm.FormatGeminiGenerate {
 		return o, nil
@@ -1090,15 +990,10 @@ func geminiSignature(o *llm.Origin) (*llm.Origin, json.RawMessage) {
 	return &llm.Origin{Format: o.Format, Path: o.Path, Raw: rawjson.Rest(m, "thoughtSignature")}, extra
 }
 
-// emptyForeign reports whether it is a message from a format other than format that has no
-// content and only holds fields of its own (as an Anthropic message whose blocks all became tool
-// calls or results does).
 func emptyForeign(it llm.Item, format string) bool {
 	return len(it.Content) == 0 && !it.TextContent && it.Origin != nil && it.Origin.Format != format && len(it.Origin.Raw) > 0
 }
 
-// joinContent appends the content of one assistant message to another's: as one string when both
-// are strings, otherwise as one list of parts.
 func joinContent(have, next any) any {
 	hs, hok := have.(string)
 	ns, nok := next.(string)
@@ -1125,7 +1020,6 @@ func joinContent(have, next any) any {
 	return append(parts(have), parts(next)...)
 }
 
-// joinReasoning joins the reasoning of consecutive reasoning items, as today's core does.
 func joinReasoning(have, next string) string {
 	switch {
 	case strings.TrimSpace(have) == "":
@@ -1166,14 +1060,11 @@ func encodeResponseFormat(rf *llm.ResponseFormat) any {
 	}{rf.Type, schema{rf.Name, rf.Description, rf.Schema, rf.Strict}}
 }
 
-// content encodes a message's parts. sendable reports whether any part with something in it
-// was kept, dropped whether any part was dropped and reported because Chat Completions cannot
-// carry it.
 func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, dropped bool, err error) {
 	parts := it.Content
 	if len(parts) == 0 {
 		if it.Role == llm.RoleAssistant && !it.TextContent {
-			return nil, false, false, nil // set to "" later unless tool calls are grouped onto it
+			return nil, false, false, nil
 		}
 		return "", false, false, nil
 	}
@@ -1207,8 +1098,6 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				continue
 			}
 			if (p.Origin == nil || p.Origin.Format != format) && mediainput.IsDataURL(p.URL) {
-				// Only a part translated from another format is checked: a Chat client's own
-				// image is what its upstream takes.
 				if _, problem := mediainput.AnyImage(p.URL); problem != "" {
 					e.lose(llm.LossDropped, pp, "Chat Completions cannot take this inline image: "+problem)
 					dropped = true
@@ -1228,8 +1117,6 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				dropped = true
 				continue
 			}
-			// Chat takes audio as input_audio, with its bytes inline; a file part holding audio
-			// is that audio however the client sent it.
 			if mediaType, data, ok := audioinput.Inline(p); ok {
 				op := outPart{Type: "input_audio", InputAudio: &chatInputAudio{Data: data, Format: audioinput.Format(mediaType)}}
 				out = append(out, partJSON(op, e.kept(p.Origin)))
@@ -1237,7 +1124,6 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				continue
 			}
 			if p.FileID == "" && p.FileData == "" {
-				// Chat Completions takes a file id or inline data, not a URL.
 				e.lose(llm.LossDropped, pp, "Chat Completions cannot take a file by URL")
 				dropped = true
 				continue

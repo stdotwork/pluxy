@@ -13,8 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// maxErrorRaw limits the upstream bytes an error keeps for diagnostics. Longer data is not kept:
-// a cut of it could fall inside a credential, whose start core's redaction cannot recognise.
 const maxErrorRaw = 1 << 20
 
 func malformed(msg string, data []byte) *llm.Error {
@@ -69,8 +67,6 @@ func decodeUsage(raw json.RawMessage) *llm.Usage {
 	return out
 }
 
-// mergeUsage overlays the usage of a message_delta on what the stream reported so far: Messages
-// stream usage is cumulative, and a field a later event leaves out keeps its earlier value.
 func mergeUsage(have, next json.RawMessage) json.RawMessage {
 	if len(have) == 0 || string(have) == "null" {
 		return next
@@ -91,7 +87,6 @@ func mergeUsage(have, next json.RawMessage) json.RawMessage {
 	return rawjson.Encode(m)
 }
 
-// finishOf maps a stop reason to the model's. The raw value always travels with it.
 func finishOf(reason string) llm.Finish {
 	f := llm.Finish{Reason: llm.FinishOther, RawReason: reason}
 	switch reason {
@@ -107,8 +102,6 @@ func finishOf(reason string) llm.Finish {
 	return f
 }
 
-// kindOf returns the model's item kind for a content block type, or "" when the model has no such
-// item.
 func kindOf(typ string) string {
 	switch typ {
 	case "text":
@@ -121,7 +114,6 @@ func kindOf(typ string) string {
 	return ""
 }
 
-// errorOf reads an Anthropic error object ({"type": ..., "message": ...}).
 func errorOf(raw json.RawMessage, fallback string) *llm.Error {
 	var e struct {
 		Type    string `json:"type"`
@@ -147,12 +139,6 @@ type contentBlock struct {
 	Citations json.RawMessage `json:"citations"`
 }
 
-// maxCodeExecInput bounds the input JSON of a code execution server_tool_use block: what a stream
-// buffers for it, across every such block open at once, so a broken stream cannot grow memory
-// without bound, and what a reply not streamed accepts for one block. It holds the most JSON a run's
-// code of llm.MaxCodeExecutionCodeBytes can take (six bytes per byte, as \u0000). An input over it
-// is left out in both modes, whatever fields it holds, so a stream and the same reply not streamed
-// keep the same runs.
 const maxCodeExecInput = 6*llm.MaxCodeExecutionCodeBytes + 1<<10
 
 type pendingCodeCall struct {
@@ -161,7 +147,7 @@ type pendingCodeCall struct {
 	initialInput json.RawMessage
 	partial      strings.Builder
 	overflow     bool
-	held         int // bytes of the input this block counts against the decoder's budget
+	held         int
 }
 
 type decodedCodeCall struct {
@@ -170,8 +156,6 @@ type decodedCodeCall struct {
 	lang string
 }
 
-// hold sets what a code block's input holds to size bytes. When that would take the blocks open
-// together past maxCodeExecInput, the block overflows instead: it is left out and holds nothing.
 func (d *StreamDecoder) hold(pc *pendingCodeCall, size int) bool {
 	if size > maxCodeExecInput || d.codeHeld-pc.held+size > maxCodeExecInput {
 		d.codeHeld -= pc.held
@@ -330,8 +314,6 @@ func decodeCodeExecResult(blockType string, call decodedCodeCall, raw json.RawMe
 	return llm.CodeExecution{}, false
 }
 
-// extractWebSearchSources reads web_search_result entries from a web_search_tool_result block's
-// content array, keeping valid http/https URLs deduplicated in first-seen order.
 func extractWebSearchSources(raw json.RawMessage, seen map[string]bool, out []llm.Source, budget *llm.CiteBudget) []llm.Source {
 	if len(raw) == 0 || raw[0] != '[' {
 		return out
@@ -358,7 +340,6 @@ func extractWebSearchSources(raw json.RawMessage, seen map[string]bool, out []ll
 	return out
 }
 
-// extractCitation reads one Anthropic web_search_result_location citation object.
 func extractCitation(raw json.RawMessage) (llm.Citation, bool) {
 	if len(raw) == 0 || raw[0] != '{' {
 		return llm.Citation{}, false
@@ -374,7 +355,6 @@ func extractCitation(raw json.RawMessage) (llm.Citation, bool) {
 	return llm.Citation{URL: c.URL, Title: c.Title}, true
 }
 
-// applyBlockRange sets [0, runeLen) on each citation when runeLen > 0.
 func applyBlockRange(cits []llm.Citation, runeLen int) []llm.Citation {
 	if len(cits) == 0 || runeLen <= 0 {
 		return cits
@@ -386,7 +366,6 @@ func applyBlockRange(cits []llm.Citation, runeLen int) []llm.Citation {
 	return cits
 }
 
-// extractCitations reads the web_search_result_location entries from a text block's citations array.
 func extractCitations(raw json.RawMessage, runeLen int) []llm.Citation {
 	if len(raw) == 0 || raw[0] != '[' {
 		return nil
@@ -428,9 +407,6 @@ type streamEvent struct {
 	Error        json.RawMessage `json:"error"`
 }
 
-// scanTextDelta reads a text delta, which is nearly every event of a reply, without decoding it:
-// an event of exactly the members type "content_block_delta", index and a delta of exactly type
-// "text_delta" and text, each once. It reports false for any other event, which Decode decodes.
 func scanTextDelta(data []byte) (index int, text string, ok bool) {
 	var space [4]jsonscan.Member
 	members, ok := jsonscan.AppendObject(space[:0], data)
@@ -500,39 +476,30 @@ func scanTextDelta(data []byte) (index int, text string, ok bool) {
 	return index, text, true
 }
 
-// MaxSignature bounds the thinking signature the stream decoder collects for one block. Claude's
-// signatures run to kilobytes; one this large means a broken stream.
 const MaxSignature = 1 << 20
 
-// StreamDecoder turns the events of an upstream Messages stream into model events. Every model
-// event carries the upstream event it came from in Raw; upstream events the model has no event
-// for (ping, message_delta, signature deltas, redacted thinking, server tool blocks, unknown
-// events) become native events, so a Messages client still gets every upstream event once. Use
-// one decoder per stream.
 type StreamDecoder struct {
 	started   bool
 	done      bool
 	next      int
-	items     map[int]int              // upstream block index -> open model item index
-	sigs      map[int]*strings.Builder // model item index -> signature of an open thinking block
-	textLens  map[int]int              // model item index -> rune count of text seen so far
-	citations map[int][]llm.Citation   // model item index -> web citations collected from citations_delta
+	items     map[int]int
+	sigs      map[int]*strings.Builder
+	textLens  map[int]int
+	citations map[int][]llm.Citation
 	sources   []llm.Source
 	seenSrc   map[string]bool
 	cites     llm.CiteBudget
-	finishCut []llm.Loss               // what the finish event left out to fit a frame
-	codeBlock map[int]*pendingCodeCall // upstream block index -> open server_tool_use for code execution
+	finishCut []llm.Loss
+	codeBlock map[int]*pendingCodeCall
 	codeCalls map[string]decodedCodeCall
-	codeDone  map[string]bool // IDs of calls a result has answered, so a repeated result is ignored
+	codeDone  map[string]bool
 	codeExecs llm.CodeRuns
-	// codeHeld is the input JSON the open code blocks hold together; it stays within maxCodeExecInput.
-	codeHeld int
-	codeLost bool // a code call or result that gave no run, so the runs end with the left-out record
-	stop     string
-	usage    json.RawMessage
+	codeHeld  int
+	codeLost  bool
+	stop      string
+	usage     json.RawMessage
 }
 
-// NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
 	return &StreamDecoder{
 		items:     map[int]int{},
@@ -546,7 +513,6 @@ func NewStreamDecoder() *StreamDecoder {
 	}
 }
 
-// closeAll closes items the upstream left open; the events it adds carry no Raw.
 func (d *StreamDecoder) closeAll(out []llm.Event) []llm.Event {
 	open := make([]int, 0, len(d.items))
 	for _, idx := range d.items {
@@ -566,8 +532,6 @@ func (d *StreamDecoder) closeAll(out []llm.Event) []llm.Event {
 	return out
 }
 
-// Decode takes the data of one SSE event and returns the events it produces. message_stop ends
-// the stream; an error event becomes an *llm.Error that keeps the upstream event in Raw.
 func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	if d.done {
 		return nil, fmt.Errorf("anthropicmessages: data after the end of the stream")
@@ -587,7 +551,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	}
 	var out []llm.Event
 	if ev.Type == "message_start" && ev.Message != nil {
-		// Read even when other events (a ping) came first.
 		d.usage = mergeUsage(ev.Message.Usage, d.usage)
 	}
 	if !d.started {
@@ -596,8 +559,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		if ev.Message != nil {
 			info.ID, info.Model = ev.Message.ID, ev.Message.Model
 		}
-		// The first event's raw goes on response.start, whatever it is, so a Messages client
-		// still gets every upstream event once.
 		out = append(out, llm.Event{Type: llm.EventResponseStart, Response: &info, Raw: raw})
 		if ev.Type == "message_start" {
 			return out, nil
@@ -636,7 +597,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 					d.codeExecs.Append(ce)
 				}
 			}
-			// A result repeated for a call already answered adds nothing, and loses nothing.
 			if !ok && !repeated {
 				d.codeLost = true
 			}
@@ -656,7 +616,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			start.CallID, start.Name = b.ID, b.Name
 		}
 		out = append(out, llm.Event{Type: llm.EventItemStart, Index: idx, Item: &start, Raw: raw})
-		// A block may start with content in it; carry it as a delta that keeps no raw.
 		switch {
 		case b.Type == "text" && b.Text != "":
 			d.textLens[idx] += utf8.RuneCountInString(b.Text)
@@ -702,7 +661,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			}
 		}
 		if ev.Delta.Type == "signature_delta" {
-			// Carried on the item's end as well, for clients in other formats.
 			sig := d.sigs[idx]
 			if sig == nil {
 				sig = &strings.Builder{}
@@ -715,7 +673,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			}
 			sig.WriteString(ev.Delta.Signature)
 		}
-		// signature_delta, citations_delta and deltas the model has no place for.
 		return native(), nil
 	case "content_block_stop":
 		if pc := d.codeBlock[ev.Index]; pc != nil {
@@ -764,7 +721,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		out = d.closeAll(out)
 		f := finishOf(d.stop)
 		if d.codeLost || len(d.codeCalls) > 0 || len(d.codeBlock) > 0 {
-			// A call with no result, or a call or result the decoder could not read, is a run left out.
 			d.codeExecs.LeaveOut()
 		}
 		fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(d.usage), Sources: d.sources, CodeExecutions: d.codeExecs.List(), Raw: raw}
@@ -773,16 +729,11 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		}
 		return append(out, fin), nil
 	}
-	// ping, message_start after the first event, and event types added later.
 	return native(), nil
 }
 
-// Losses returns what the reply had that the model could not carry: the citations and sources, and
-// the runs the finish event left out, that did not fit.
 func (d *StreamDecoder) Losses() []llm.Loss { return d.cites.WithLoss(slices.Clip(d.finishCut)) }
 
-// Close is called when the upstream stream ends. A stream that ends before message_stop is an
-// error: the reply may have been cut short.
 func (d *StreamDecoder) Close() ([]llm.Event, error) {
 	if d.done {
 		return nil, nil
@@ -791,11 +742,8 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 	return nil, d.withUsage(&llm.Error{Code: llm.CodeUpstream, Message: "upstream stream ended before the reply finished"})
 }
 
-// Usage returns the usage the upstream reported so far, or nil. A caller that fails the stream
-// for its own reasons (the connection broke, say) puts it on the error.
 func (d *StreamDecoder) Usage() *llm.Usage { return decodeUsage(d.usage) }
 
-// withUsage puts the usage reported so far on an error that ends the stream.
 func (d *StreamDecoder) withUsage(e *llm.Error) *llm.Error {
 	e.Usage = d.Usage()
 	return e
@@ -816,20 +764,11 @@ func eventJSON(fields map[string]any) json.RawMessage {
 	return b
 }
 
-// DecodeResponse turns an upstream non-streamed Message into the events a stream of it would have
-// produced, each carrying in Raw the Messages stream event it stands for, so a streaming Messages
-// client gets every block whole: signatures as signature_delta, and blocks the model has no place
-// for (redacted thinking, server tool results) as they were. The finish event carries the whole
-// body in Raw, so a non-streaming Messages client gets it unchanged. A body of type error becomes
-// an *llm.Error.
 func DecodeResponse(body []byte) ([]llm.Event, error) {
 	events, _, err := DecodeResponseLosses(body)
 	return events, err
 }
 
-// DecodeResponseLosses turns an upstream non-streamed message into events and returns what the
-// reply had that the model could not carry. It is the non-streamed counterpart of
-// StreamDecoder.Losses.
 func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	var m message
 	top := rawjson.Object(body)
@@ -848,7 +787,6 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	for k, v := range top {
 		head[k] = v
 	}
-	// The stop fields come at the end of a stream, in message_delta.
 	stopFields := []string{"stop_reason", "stop_sequence", "stop_details", "container"}
 	head["content"] = json.RawMessage("[]")
 	for _, k := range stopFields {

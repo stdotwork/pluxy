@@ -7,20 +7,8 @@ import (
 	"strings"
 )
 
-// Encrypted reasoning carried through another format. A Responses reasoning item's
-// encrypted_content is opaque: only the upstream that made it can read it. A client in a format
-// with its own opaque reasoning field (an Anthropic Messages thinking block's signature) can hold
-// it there and replay it, so the reasoning survives a turn through that client.
-
-// maxEncryptedReasoning bounds the encrypted content this package carries between formats.
 const maxEncryptedReasoning = 32 << 20
 
-// IsEncryptedReasoning reports whether s has the shape of the encrypted content OpenAI puts on
-// reasoning items: a Fernet token (version byte 0x80, 8-byte timestamp, 16-byte IV, ciphertext in
-// whole AES blocks, 32-byte HMAC) in base64url, optionally followed by a dot and a short
-// alphanumeric tag that some routers append. It checks the shape only, never that the token
-// decrypts; it tells an OpenAI reasoning token from another provider's opaque data, such as an
-// Anthropic thinking signature, which is standard base64 of something else.
 func IsEncryptedReasoning(s string) bool {
 	if len(s) > maxEncryptedReasoning || !strings.HasPrefix(s, "gAAAA") {
 		return false
@@ -50,8 +38,6 @@ func routerTag(s string) bool {
 	return true
 }
 
-// reasoningSignature returns the encrypted content of item, an output item, when it is a reasoning
-// item whose encrypted content has the shape IsEncryptedReasoning checks; otherwise "".
 func reasoningSignature(item json.RawMessage) string {
 	var it struct {
 		Type             string `json:"type"`
@@ -63,9 +49,6 @@ func reasoningSignature(item json.RawMessage) string {
 	return it.EncryptedContent
 }
 
-// ReasoningSignatures returns, for each reasoning item in raw (an output_item.done event, a
-// terminal event or a Response object) whose encrypted content has the shape IsEncryptedReasoning
-// checks, that content, by the path OpaqueOutput reports it under.
 func ReasoningSignatures(raw json.RawMessage) map[string]string {
 	out := map[string]string{}
 	outputItems(raw, func(i int, item json.RawMessage) {
