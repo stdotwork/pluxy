@@ -6,7 +6,7 @@ differ, core and the provider's extension translate the request on the way in an
 back. This page is a reference for that translation: what carries over unchanged, what is changed and
 how, what is dropped or refused, and what the client then sees. Sign-in, account settings and model
 lists are on [Providers](providers.md). Routing between accounts is on [Routing](routing.md). The
-reasons for this design are in [Design](design.md); what is planned is in `plans.md`.
+reasons for this design are in [Design](design/design.md); what is planned is in [Plans](design/plans.md).
 
 ## How to read the tables and sections
 
@@ -61,11 +61,11 @@ below and in each provider's section.
 | Speech and transcription | not supported | not supported | changed | works | not supported | not supported | not supported | not supported |
 | Images out (Images API) | not supported | works | changed | works | not supported | not supported | not supported | not supported |
 | Web search | changed | changed | changed | dropped | dropped | dropped | dropped | dropped |
-| Code execution | changed | dropped | changed | dropped | dropped | dropped | dropped | dropped |
+| Code execution | changed | changed | changed | dropped | dropped | dropped | dropped | dropped |
 | Citations | changed | changed | changed | dropped | dropped | changed | dropped | dropped |
 | Structured output | changed | changed | changed | changed | changed | changed | changed | dropped |
 | Service tier | changed | changed | changed | dropped | dropped | dropped | dropped | dropped |
-| Verbosity | dropped | dropped | dropped | dropped | dropped | dropped | dropped | dropped |
+| Verbosity | dropped | changed | dropped | dropped | dropped | dropped | dropped | dropped |
 | Prompt caching | changed | changed | dropped | dropped | dropped | dropped | dropped | dropped |
 | Multiple candidates (`n`) | dropped | dropped | changed | dropped | dropped | dropped | dropped | dropped |
 | Embeddings | not supported | not supported | changed | works | not supported | not supported | not supported | not supported |
@@ -86,8 +86,9 @@ Notes to the table:
   of 64000 or more to 64000.
 - **Function tools**: Gemini and Devin drop `strict` (Devin only `strict: true`).
 - **Service tier and verbosity**: Devin neither sends nor reports them, so `drop_policy: "reject"`
-  does not refuse them. Codex's service tier is `changed` because what it takes depends on the
-  routed model's catalog entry and on the host.
+  does not refuse them. Codex's service tier and verbosity are `changed` because what they take
+  depends on the routed model's catalog entry and on the host; its code execution is `changed`
+  because it goes to `api.openai.com` only (an API key's default host), not to `chatgpt.com`.
 - **Verbosity, service tier, web search, code execution and `n`** from another format are sent only to
   the hosts the provider's section names ("Service tier, verbosity and gated features" in the shared
   rules). A client whose format is the provider's own sends them as written.
@@ -511,7 +512,8 @@ Which upstream produces them depends on the provider and format.
 - `n` (Chat Completions, 1 or more) and `generationConfig.candidateCount` (GenerateContent) are the
   candidate count. A count of 1 sends no field. To the same format it is sent as it is.
 - To a different format: Chat Completions upstreams get `n` only for a documented OpenAI model
-  (`gpt-3.5-turbo`, `gpt-4`, `gpt-4-turbo`, `gpt-4o`, `gpt-4o-mini`, `gpt-4.1` family,
+  (`gpt-3.5-turbo`, `gpt-3.5-turbo-16k`, `gpt-4`, `gpt-4-32k`, `gpt-4-turbo`,
+  `gpt-4-turbo-preview`, `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`,
   `chatgpt-4o-latest`) and at most 128; GenerateContent upstreams get it only for the `gemini-2.5`,
   `gemini-2.0` and `gemini-1.5` model families and at most 8. Otherwise it is `dropped`. Messages
   and Responses upstreams have no setting: `dropped`.
@@ -600,10 +602,11 @@ Every error is one internal error with a code and a status. The client format de
   and the Google status name from a Google upstream. No field is copied into a format that does not
   have it.
 - `Retry-After` is sent on `429`, `503` and `529` when the upstream said how long to wait.
-  `X-Should-Retry: false` is sent when no account can take the request for more than 5 minutes, and
-  for a rejected client key.
+  `X-Should-Retry: false` is sent when no account can take the request for more than 5 minutes or
+  until a person acts, and for a rejected client key.
 - An error after the stream started: Chat Completions writes `data: {"error":...}` and no
-  `[DONE]` (so the client sees the reply is incomplete); Responses writes an `error` event; Messages
+  `[DONE]` (so the client sees the reply is incomplete), except after the usage-limit reply, which
+  ends with `[DONE]`; Responses writes an `error` event; Messages
   and GenerateContent write `event: error`. An endpoint stream gets `event: error` with an OpenAI
   shaped body.
 - A prompt that does not fit the model's context window: `400`, code `context_length_exceeded` on
@@ -1937,7 +1940,7 @@ gets none of them.
 | --- | --- | --- |
 | `api.openai.com` | `chat` | service tier (`auto`, `default`, `flex`, `scale`, `priority`, `fast`), verbosity (`low`, `medium`, `high`), web search, candidate count |
 | `api.openai.com` | `responses` | service tier (the same list and `ultrafast`), verbosity, web search, code execution (on documented models) |
-| `api.anthropic.com` | `messages` | service tier `auto` and `default` (priority needs a beta header the extension does not add), web search, code execution; a JSON schema from another format is fitted to Anthropic's structured-output rules (see Claude: Structured output), or left out with a reported loss. Other Messages hosts get the schema as written. `json_object` is reported dropped on every Messages host |
+| `api.anthropic.com` | `messages` | service tier `auto` and `default` (priority is dropped: Messages takes it only as fast mode, which this extension does not send), web search, code execution; a JSON schema from another format is fitted to Anthropic's structured-output rules (see Claude: Structured output), or left out with a reported loss. Other Messages hosts get the schema as written. `json_object` is reported dropped on every Messages host |
 | `generativelanguage.googleapis.com` | `gemini` | service tier, web search, code execution, candidate count |
 | `openrouter.ai` | `chat` | replayed assistant `annotations` |
 
@@ -2061,7 +2064,7 @@ CLI's identity on every request: `User-Agent: xai-grok-workspace/<client_version
 | Tool count | At most 200 tools: the first 200 are kept after namespaces and injected search, and the rest are cut with no report. |
 | `additional_tools` input items | Their tools move to the end of the tools list and the item is removed (xAI does not take that item), before the rules below. A function or custom tool whose name an earlier tool has is dropped: the tools list beats an item, and an earlier item beats a later one. Namespaces are all kept and merged by name. |
 | Custom tool call and output items in history | Sent as `function_call` and `function_call_output` items. An item with no call ID or no name is dropped. |
-| `automation_update` | The Codex app's tool of that name (in a `codex_app` or `codex_apps` namespace, with or without an `mcp__` prefix) is sent with parameters that accept any object and `strict: false`, because its own schema (a large `oneOf` with `$ref`) makes xAI accept the request and send no events. |
+| `automation_update` | The Codex app's tool of that name (in a `codex_app` or `codex_apps` namespace, with or without an `mcp__` prefix, or flat as `codex_app__automation_update` or `codex_apps__automation_update`) is sent with parameters that accept any object and `strict: false`, because its own schema (a large `oneOf` with `$ref`) makes xAI accept the request and send no events. |
 
 ### Tools
 

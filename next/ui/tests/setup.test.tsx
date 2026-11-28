@@ -989,6 +989,211 @@ test("a preview is dropped when the auth folder changes under it: Import now can
   ]);
 });
 
+test("a background scan finishing during or after a refused preview keeps the refusal, and a newer import clears refusals", async () => {
+  let finishImport:
+    | ((reply: { status: number; body?: unknown; error?: { code: string; message: string } }) => void)
+    | undefined;
+  let hold = true;
+  let scanCount = 0;
+  const w = world({
+    imports: [IMPORT],
+    reply: (c) => {
+      if (c.path === "/setup/scan") {
+        scanCount++;
+        w.state.setup.scanned_at = `2026-11-20T10:0${scanCount}:00Z`;
+        return { status: 200, body: structuredClone(w.state.setup) };
+      }
+      if (c.path === "/setup/import") {
+        if (hold) {
+          return new Promise((resolve) => {
+            finishImport = resolve;
+          });
+        }
+        const dry = (c.body as { dry_run: boolean }).dry_run;
+        return dry
+          ? { status: 200, body: REPORT }
+          : { status: 422, error: { code: "refused", message: "bad config" } };
+      }
+      return undefined;
+    },
+  });
+  const m = await w.mount(<SetupPage />);
+  // Start Preview import; while it is in flight, a background scan reads the broken config
+  // (falling back to 0 accounts and a newer scanned_at).
+  await press(buttonIn(line(m.root), "Preview import"));
+  w.state.setup.found.imports = [{ ...IMPORT, auth_dir: "~/.cli-proxy-api", accounts: 0 }];
+  fakeWindow().dispatch("focus");
+  await flush();
+  finishImport?.({ status: 422, error: { code: "refused", message: "bad yaml" } });
+  await flush();
+  expect(line(m.root).textContent).toContain("This setup cannot be imported: bad yaml. Nothing changed.");
+  // Another same-setup background scan afterwards still keeps the refusal visible.
+  fakeWindow().dispatch("focus");
+  await flush();
+  expect(line(m.root).textContent).toContain("This setup cannot be imported: bad yaml. Nothing changed.");
+  // A newer import record clears the preview refusal and shows the imported line again.
+  w.state.setup.found.imports = [
+    { ...IMPORT, last_import: { at: "2026-11-20T10:30:00Z", brought: 2, changed: 1, not_brought: 1 } },
+  ];
+  fakeWindow().dispatch("focus");
+  await flush();
+  expect(line(m.root).textContent).not.toContain("bad yaml");
+  expect(line(m.root).textContent).toContain("Imported a CLIProxyAPI setup");
+  expect(attribute(line(m.root), "data-state")).toBe("imported");
+  // A non-lost Import now refusal also survives a same-setup scan and clears on a newer import record.
+  hold = false;
+  await press(buttonIn(line(m.root), "Import again"));
+  await press(buttonIn(line(m.root), "Import now"));
+  expect(line(m.root).textContent).toContain("This setup cannot be imported: bad config. Nothing changed.");
+  fakeWindow().dispatch("focus");
+  await flush();
+  expect(line(m.root).textContent).toContain("This setup cannot be imported: bad config. Nothing changed.");
+  w.state.setup.found.imports = [
+    { ...IMPORT, last_import: { at: "2026-11-20T10:45:00Z", brought: 2, changed: 1, not_brought: 1 } },
+  ];
+  fakeWindow().dispatch("focus");
+  await flush();
+  expect(line(m.root).textContent).not.toContain("bad config");
+  expect(line(m.root).textContent).toContain("Imported a CLIProxyAPI setup");
+});
+
+test("a later scan drops an open or in-flight preview and keeps a completed import report", async () => {
+  let finishPreview: ((reply: { status: number; body: ImportReport }) => void) | undefined;
+  let holdPreview = false;
+  let scanCount = 0;
+  const w = world({
+    imports: [IMPORT],
+    reply: (c) => {
+      if (c.path === "/setup/scan") {
+        scanCount++;
+        w.state.setup.scanned_at = `2026-11-20T10:0${scanCount}:00Z`;
+        return { status: 200, body: structuredClone(w.state.setup) };
+      }
+      if (c.path === "/setup/import") {
+        const dry = (c.body as { dry_run: boolean }).dry_run;
+        if (dry && holdPreview) {
+          return new Promise((resolve) => {
+            finishPreview = resolve;
+          });
+        }
+        if (!dry) {
+          w.state.setup.found.imports = [
+            {
+              ...IMPORT,
+              last_import: { at: "2026-11-20T10:30:00Z", brought: 2, changed: 1, not_brought: 1 },
+            },
+          ];
+        }
+        return { status: 200, body: { ...REPORT, dry_run: dry } };
+      }
+      return undefined;
+    },
+  });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(line(m.root), "Preview import"));
+  expect(hasButton(line(m.root), "Import now")).toBe(true);
+  // A focus scan returns the same config, auth folder and account count with a newer scanned_at:
+  // the open preview is dropped and Import now is not offered.
+  fakeWindow().dispatch("focus");
+  await flush();
+  expect(hasButton(line(m.root), "Import now")).toBe(false);
+  expect(withPart(m.root, "setup-report")).toHaveLength(0);
+  expect(line(m.root).textContent).toContain(
+    "Setup looked again, so the preview was cleared. Preview again before importing.",
+  );
+  // A preview reply that lands after a newer scan also shows as dropped, not as an open preview.
+  holdPreview = true;
+  await press(buttonIn(line(m.root), "Preview import"));
+  fakeWindow().dispatch("focus");
+  await flush();
+  finishPreview?.({ status: 200, body: REPORT });
+  await flush();
+  expect(hasButton(line(m.root), "Import now")).toBe(false);
+  expect(withPart(m.root, "setup-report")).toHaveLength(0);
+  expect(line(m.root).textContent).toContain(
+    "Setup looked again, so the preview was cleared. Preview again before importing.",
+  );
+  // Once imported from a fresh preview, a later scan still keeps the completion report until Close.
+  holdPreview = false;
+  await press(buttonIn(line(m.root), "Preview import"));
+  await press(buttonIn(line(m.root), "Import now"));
+  expect(line(m.root).textContent).toContain("Imported.");
+  fakeWindow().dispatch("focus");
+  await flush();
+  expect(line(m.root).textContent).toContain("Imported.");
+  expect(hasButton(line(m.root), "Close")).toBe(true);
+});
+
+test("a dropped preview does not come back when the key matches again", async () => {
+  const w = importing();
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(line(m.root), "Preview import"));
+  expect(hasButton(line(m.root), "Import now")).toBe(true);
+  // Count changes from 3 to 4 (same scanned_at): preview is cleared, not merely hidden.
+  w.state.setup.found.imports = [{ ...IMPORT, accounts: 4 }];
+  fakeWindow().dispatch("focus");
+  await flush();
+  expect(hasButton(line(m.root), "Import now")).toBe(false);
+  expect(withPart(m.root, "setup-report")).toHaveLength(0);
+  // Count returns to 3 (the exact same key as before): the old preview must not return.
+  w.state.setup.found.imports = [{ ...IMPORT, accounts: 3 }];
+  fakeWindow().dispatch("focus");
+  await flush();
+  expect(hasButton(line(m.root), "Import now")).toBe(false);
+  expect(withPart(m.root, "setup-report")).toHaveLength(0);
+});
+
+test("after a lost Import now reply, an unchanged background scan keeps the warning and not-run, and a new record clears them", async () => {
+  let scanCount = 0;
+  const w = world({
+    imports: [IMPORT],
+    reply: (c) => {
+      if (c.path === "/setup/scan") {
+        scanCount++;
+        w.state.setup.scanned_at = `2026-11-20T10:0${scanCount}:00Z`;
+        return { status: 200, body: structuredClone(w.state.setup) };
+      }
+      if (c.path === "/setup/import") {
+        const dry = (c.body as { dry_run: boolean }).dry_run;
+        return dry ? { status: 200, body: REPORT } : { status: 0 };
+      }
+      return undefined;
+    },
+  });
+  const m = await w.mount(<SetupPage />);
+  await press(buttonIn(line(m.root), "Preview import"));
+  await press(buttonIn(line(m.root), "Import now"));
+  expect(line(m.root).textContent).toContain("not known whether the import ran");
+  // Background scan with no new record: keep the warning.
+  fakeWindow().dispatch("focus");
+  await flush();
+  expect(line(m.root).textContent).toContain("not known whether the import ran");
+  // Refresh finds no new record: shows not-run, kept across an unchanged scan, cleared by a new record.
+  await press(buttonIn(line(m.root), "Refresh"));
+  expect(line(m.root).textContent).toContain("The import did not run: pluxy has no record of it.");
+  fakeWindow().dispatch("focus");
+  await flush();
+  expect(line(m.root).textContent).toContain("The import did not run: pluxy has no record of it.");
+  w.state.setup.found.imports = [
+    { ...IMPORT, last_import: { at: "2026-11-20T10:30:00Z", brought: 2, changed: 1, not_brought: 1 } },
+  ];
+  fakeWindow().dispatch("focus");
+  await flush();
+  expect(line(m.root).textContent).not.toContain("did not run");
+  expect(line(m.root).textContent).toContain("Imported a CLIProxyAPI setup");
+  // A lost-reply warning itself also clears directly when a background scan finds a newer record.
+  await press(buttonIn(line(m.root), "Import again"));
+  await press(buttonIn(line(m.root), "Import now"));
+  expect(line(m.root).textContent).toContain("not known whether the import ran");
+  w.state.setup.found.imports = [
+    { ...IMPORT, last_import: { at: "2026-11-20T10:45:00Z", brought: 2, changed: 1, not_brought: 1 } },
+  ];
+  fakeWindow().dispatch("focus");
+  await flush();
+  expect(line(m.root).textContent).not.toContain("not known whether the import ran");
+  expect(line(m.root).textContent).toContain("Imported a CLIProxyAPI setup");
+});
+
 test("an import that needs a kind this pluxy does not offer says so by name, with Open Extensions", async () => {
   const report = {
     ...REPORT,

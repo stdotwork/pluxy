@@ -1388,7 +1388,7 @@ through a conversation whose state lives upstream. A crash or stop of the progra
 
 Liveness: the extension checks its upstream connection itself (for example, a read deadline between
 upstream messages), one of the named liveness checks that [core's
-design](../../docs/design.md#inside-core) allows in place of time limits. The local session
+design](../../docs/design/design.md#inside-core) allows in place of time limits. The local session
 connection needs none: either end sees the other go when the connection closes.
 
 ### `openai.responses` sessions

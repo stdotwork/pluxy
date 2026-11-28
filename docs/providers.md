@@ -168,9 +168,9 @@ lists nothing, pluxy uses the extension's built-in list.
   A setup token shows usage without the plan. An API key has no quota.
 - Anthropic's 429 replies say which limit was hit, and pluxy blocks accordingly:
   - A refused shared 5-hour or weekly window, or a refusal of the whole subscription, blocks the
-    account (only the model, with `model_level_cooling`). The block lasts until the latest reset
-    among the refused windows, or until `Retry-After` when that is at most 7 days and an hour away.
-    When neither gives a usable time, core's usual backoff applies.
+    account (only the model, with `model_level_cooling`). The block lasts until the latest of the
+    refused windows' resets and `Retry-After`, counting only times at most 7 days and an hour away.
+    When none gives a usable time, core's usual backoff applies.
   - A model's own weekly window (`7d_oi`), overage, and any other 429 block only that model on the
     account.
   - A per-minute refusal (requests, input tokens or output tokens per minute) waits for its
@@ -205,7 +205,7 @@ Sign in with ChatGPT (SIWC).
 
 **Models.** For a ChatGPT subscription, pluxy reads the model catalog of the ChatGPT backend. When
 that fails or is empty it uses the built-in list for the account's plan (free, plus, team, pro;
-business and go use the team list; any other plan gets the pro list). An API key and a SIWC account
+business and go use the team list; a sign-in that names no plan gets the free list, and any other plan the pro list). An API key and a SIWC account
 always use the built-in list: an API key gets the pro list. Every list ends with the image models `gpt-image-1.5`, `gpt-image-2`,
 `gpt-image-2.5`, `gpt-image-2.5-flare` and `gpt-image-2.5-sunburst`, except a SIWC account's, which
 has none.
@@ -385,7 +385,7 @@ video and speech models, which need endpoints pluxy does not send to.
   `x-authenticateresponse: authenticate-response`. The version is the `client_version` setting. An
   API key's requests name `pluxy-xai/<version>`.
 - xAI's errors count as: a 401, or a 403 whose body says the credential is bad, an authentication
-  error; any other 403, a permission error; a 404, a model error; a 5xx, an upstream error; a 429, a
+  error; any other 403, a permission error; a 404, a model error; a 503 or 529, the upstream being unavailable; any other 5xx, an upstream error; a 429, a
   rate limit for that model that keeps xAI's `Retry-After`, unless it says the free usage is used up
   (below).
 - Every client format goes to xAI's Responses API. A request with more than 200 tools keeps the first
@@ -425,9 +425,10 @@ Extension `pluxy/kimi`. Moonshot AI's Kimi Code subscription.
 
 - The token is renewed five minutes before it expires.
 - Each client format goes to Kimi's matching endpoint (Chat Completions, Responses, Messages). A
-  Gemini request is translated to Chat Completions. Kimi names its coding models differently: `kimi-k2.8`
-  and the other `kimi-k2.x-code` names are sent as `kimi-for-coding` (or `kimi-for-coding-highspeed`),
-  and any other name loses its `kimi-` prefix.
+  Gemini request is translated to Chat Completions. Kimi names its coding models differently: `kimi-k2.8`,
+  `kimi-k2.8-code`, `kimi-k2.8-preview` and `kimi-k2.7-code` are sent as `kimi-for-coding`, and
+  `kimi-k2.7-code-highspeed` as `kimi-for-coding-highspeed` (each also when named without `kimi-`);
+  any other name loses its `kimi-` prefix.
 - Chat Completions and Responses requests name pluxy in Kimi's device headers, with a device ID made
   at sign-in (an API key has none). A Messages request carries the client's own Messages headers.
 - A token count goes to Kimi's own count endpoint, `POST {base_url}/v1/messages/count_tokens?beta=true`,

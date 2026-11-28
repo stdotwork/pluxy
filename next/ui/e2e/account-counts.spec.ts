@@ -39,22 +39,38 @@ test("Accounts and Home give the same accounts the same numbers", async ({ page 
   await expect(page.getByRole("main")).toContainText("Gone is not running, so nothing reaches this account.");
 
   await goTo(page, "Home");
-  // Home sorts the same six: banned-1 and ghost-1 need the person, cool-1 waits (it serves other
-  // models, but its cooldown is on the whole account), ok-1 and err-1 serve, off-1 is turned off.
-  const group = (name: string) => page.getByRole("region", { name, exact: true });
+  // Home sorts the same six: banned-1 and ghost-1 need the person and are in the band with their
+  // fixes; the others are under their provider, Alpha: cool-1 first (it waits: its cooldown is on
+  // the whole account), then ok-1 and err-1, which serve, then off-1, turned off.
   await expect(page.getByRole("heading", { level: 2, name: "2 accounts need you." })).toBeVisible();
   await expect(page.locator(".home-counts")).toHaveText("1 waiting · 2 serving · 1 turned off");
-  for (const [name, ids] of [
-    ["Needs you", ["banned-1", "ghost-1"]],
-    ["Waiting", ["cool-1"]],
-    ["Serving", ["ok-1", "err-1"]],
-    ["Turned off", ["off-1"]],
-  ] as const) {
-    await expect(group(name).locator('[data-part="account-row"]')).toHaveCount(ids.length);
-    for (const id of ids)
-      await expect(group(name).getByRole("link", { name: id, exact: true })).toBeVisible();
-  }
-  await expect(group("Needs you").locator('[data-part="account-row"]', { hasText: "ghost-1" })).toContainText(
+  const band = page.locator('[data-part="needs-band"]');
+  await expect(band).toHaveAttribute("aria-label", "Needs you");
+  await expect(band.locator('[data-part="account-row"]')).toHaveCount(2);
+  for (const id of ["banned-1", "ghost-1"])
+    await expect(band.getByRole("link", { name: id, exact: true })).toBeVisible();
+  await expect(band.locator('[data-part="account-row"]', { hasText: "ghost-1" })).toContainText(
     "Open Extensions",
+  );
+  const alpha = page.locator(".home-group").and(page.getByRole("region", { name: "Alpha", exact: true }));
+  const rows = alpha.locator('[data-part="account-row"]');
+  await expect(rows).toHaveCount(4);
+  const expected = [
+    ["cool-1", "waiting"],
+    ["ok-1", "serving"],
+    ["err-1", "serving"],
+    ["off-1", "off"],
+  ] as const;
+  for (const [i, [id, group]] of expected.entries()) {
+    await expect(rows.nth(i).getByRole("link", { name: id, exact: true })).toBeVisible();
+    await expect(rows.nth(i)).toHaveAttribute("data-group", group);
+  }
+  // Each provider's pool counts all of its accounts (including turned-off as unable to serve):
+  // two of Alpha's five serve, and Gone's one cannot.
+  await expect(page.locator('[data-part="pool-card"][data-provider="alpha"]')).toContainText(
+    "2 of 5 serving",
+  );
+  await expect(page.locator('[data-part="pool-card"][data-provider="gone"]')).toContainText(
+    "Nothing is serving",
   );
 });

@@ -147,4 +147,4 @@ instead.
 ## First launch
 
 Written from the product as it stands; see the panel and app pages: [Web panel](panel.md) and
-`app.md`.
+[Desktop app](app.md).

@@ -134,6 +134,10 @@ colour role take that role's name (`color.chrome`, `color.message-action`); the
 | `color.chart-4` | The fourth series | `var(--px-color-text)` |
 | `color.chart-5` | The fifth series | `#0f9a8b` / `#2dd4bf` |
 | `color.chart-6` | The sixth series | `#a855f7` / `#b875f8` |
+| `color.provider-claude` | Claude's mark beside an account, a pool and a request | `#d97757` / `#e08a6d` |
+| `color.provider-codex` | Codex's mark | `#5b5ff5` / `#8b93ff` |
+| `color.provider-gemini` | Gemini's mark (also Vertex AI and AI Studio) | `#3186ff` / `#5b9dff` |
+| `color.provider-kimi` | The dot of Kimi's mark; the rest of it, and the marks of xAI and OpenAI, are in `color.text` | `#1783ff` / `#4ea1ff` |
 | `color.plan-top` | Background of the plan pill of the largest plans (`data-plan-tier="top"`): a warm metal | `linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 20%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 40%, var(--px-color-surface)))` / `linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 26%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 14%, var(--px-color-surface)))` |
 | `color.plan-top-text` | Its text | `color-mix(in srgb, var(--px-color-warning) 35%, var(--px-color-text))` / `color-mix(in srgb, var(--px-color-warning) 55%, var(--px-color-text))` |
 | `color.plan-top-border` | Its border | `color-mix(in srgb, var(--px-color-warning) 55%, var(--px-color-surface))` / `color-mix(in srgb, var(--px-color-warning) 40%, var(--px-color-surface))` |
@@ -385,7 +389,7 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="upload-results"` | The result of each CLIProxyAPI auth file imported on Add an account: the account it became, or why it was not added |
 | `data-part="key-notice"` | A notice revealing a newly generated key until closed or its tab is left |
 | `data-part="key-value"` | The selectable value of a newly generated key inside its notice |
-| `data-part="method"` | One way to sign in on Add an account: its name, how it signs in and Start; its sign-in shows under it once started. |
+| `data-part="method"` | One way to sign in on Add an account: its name, a sentence on how it signs in, "Recommended" when pluxy suggests it, and Start; its sign-in shows under it once started. |
 | `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
 | `data-part="device-code"` | The user code to enter on a device sign-in page. |
 | `data-part="tier"` | One group of a provider's accounts on Order & fallback (First, Backup 1…), with its name, its priority and its accounts; `data-priority` is its priority |
@@ -416,16 +420,22 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="auth-import"` | Add an account's "Have auth files from CLIProxyAPI?" line and its results |
 | `data-part="round-notice"` | The notice above a page's lists when a round of reads did not all work: what could not be read, and Try again |
 | `data-part="method-group"` | One provider on Add an account, under its name: its ways to sign in, each a row with Start |
+| `data-part="provider-tiles"` | The row of providers to pick from on Add an account: the main kinds as tiles, then More providers opens a second, smaller set (`data-more`) |
+| `data-part="provider-tile"` | One provider to pick on Add an account: its mark, its name and what accounts it takes; `data-compact` is set on the ones under More |
 | `data-part="more-options"` | A sign-in's optional inputs, folded under More options |
 | `data-part="login-details"` | The Details fold of a sign-in that ended with a message from pluxy, such as signing in to a different account |
 | `data-part="account-added"` | What Add an account shows once the sign-in is done: Added, the optional Name, Save name, Open account and Add another |
-| `data-part="account-row"` | One account on one line, the same on every page: its group's mark, name, provider, plan and limits, and why and its fix when it needs the person or waits. `data-group` is `needs`, `waiting`, `serving` or `off`; `data-condition` is `serving`, `cooling`, `exhausted`, `needs_login`, `banned`, `broken`, `no_provider` or `off`, or `unchecked` when the status that says whether its provider runs could not be read (its mark then has `data-group="unchecked"`); `data-tall` is set on a row that says why under the name; `data-wide` on the Accounts list's wider row |
-| `data-part="request-row"` | One request on one line: its time, model, account, key, tokens, time taken and result. `data-failed` is set on a failed one; `data-open` while it shows its details; `data-compact` on Home's shorter row, a link to the request |
+| `data-part="account-row"` | One account, the same on every page: its provider's mark with a dot for its condition on the mark's corner, its name with its condition word under it (and why, when it is not simply serving; else its provider), its plan, its limits and its one fix. `data-group` is `needs`, `waiting`, `serving` or `off`; `data-condition` is `serving`, `cooling`, `exhausted`, `needs_login`, `banned`, `broken`, `no_provider` or `off`, or `unchecked` when the status that says whether its provider runs could not be read (its mark then has `data-group="unchecked"`); `data-tall` is set on a row that says why under the name; `data-wide` on the Accounts list's wider row |
+| `data-part="request-row"` | One request on one line: its time, model, account, key, tokens, time taken and result. `data-failed` is set on a failed one; `data-open` while it shows its details; `data-compact` on Home's shorter row, a link to the request, with its provider's mark and, for a request a backup answered, how many tries it took ("2nd") |
 | `data-part="setting-row"` | One setting: its name and what it does beside its control. `data-disabled` is set while the control cannot be used |
 | `data-part="tool-row"` | One coding tool: its name, version, state and settings file. `data-state` is `configured`, `not-configured`, `needs-update`, `refused`, `not_installed` or `unchecked` |
 | `data-part="state-pane"` | What a whole pane shows while it loads, when it is empty, or when it could not be read; `data-kind` is `loading`, `empty` or `failed` |
 | `data-part="plan-pill"` | An account's plan as a word; `data-plan-tier` is `top` (the largest plans: Max 20x, Ultra, API), `high` (the next: Max 5x), `mid` (any other plan) or `free`. The default theme draws them as a warm metal pill, a cool metal pill, an outline and plain text, from the `color.plan-*` tokens; never in a state's colour |
 | `data-part="limits"` | An account's limits on its row; `data-state` is `read`, `unread`, `reading`, `none` or `failed` |
+| `data-part="provider-mark"` | A provider's mark, beside the name of an account, a pool or a request; `data-provider` is the part of its extension ID after `/` (`claude`). A provider without a known mark gets a tile with its initial (a key for an OpenAI-compatible service), in one of `color.chart-1` to `color.chart-6` by its ID (`data-series`) |
+| `data-part="pool-card"` | One provider's pool on Home: its mark and name, the limit it pools, the share left on average over the accounts that can serve (or a balance, or a sentence when no limit is reported), a bar with one segment per account, how many serve and what comes back next; `data-provider` as on its mark |
+| `data-part="connection-card"` | Home's "Point a tool at pluxy": the API a tool speaks, the base URL for it with Copy, a client key's masked value, and the coding tools already set up |
+| `data-part="needs-band"` | Home's band of the accounts that need the person, above the pools, each with its one fix |
 | `data-part="activity"` | The body of the Requests and Usage tabs |
 | `data-part="activity-filters"` | The Requests tab's filter row: All or Failed, then the lists of providers, accounts, models and keys |
 | `data-part="usage-chart"` | The Usage tab's chart of requests, a bar per hour or per day; its bars carry `data-outcome` (`success` or `failure`) |

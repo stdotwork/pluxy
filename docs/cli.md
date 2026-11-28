@@ -181,8 +181,8 @@ starts none exits 2.
 
 ### `pluxy status`
 
-Shows core's state: the config version it wants and the one serving, each extension's state, and the
-build.
+Shows core's state: its build, the config revision it serves (and a newer revision it refused, with
+the reason), whether first-run setup is still to do or safe mode is on, and each extension's state.
 
 ### `pluxy reload`
 
@@ -391,8 +391,9 @@ amounts, and when it resets.
 
 ### `pluxy account models <id>`
 
-Lists the models the account serves, from the list routing keeps (not a fresh read): ID, the names
-clients use, owner, context length, longest output and whether it is excluded.
+Lists the models the account serves: the account's own `models` list when it has one, else the list
+routing keeps, else a list read from its extension. For each: ID, the names clients use, owner,
+context length, longest output and whether it is excluded.
 
 ### `pluxy account import <file>`
 
@@ -624,7 +625,7 @@ Stores a theme JSON file and prints its ID.
 
 | Flag | What it does |
 | --- | --- |
-| `--id <publisher/name>` | The theme's ID. Default: for a pluxy theme file, the `id` it holds; for any other theme file, `t3/` and its `id` or a name made from its `name`; failing both, `t3/` and a name made from the file's name. |
+| `--id <publisher/name>` | The theme's ID. Default: for a pluxy theme file, the `id` it holds when that is a valid `publisher/name`; for any other theme file, `t3/` and its `id` or a name made from its `name`; failing both, `t3/` and a name made from the file's name. |
 
 ### `pluxy theme remove <id>`
 

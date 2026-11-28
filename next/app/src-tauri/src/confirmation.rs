@@ -17,7 +17,18 @@ use tauri::Manager;
 const PAGE_PENDING_LIMIT: usize = 16;
 const TRUSTED_PENDING_LIMIT: usize = 64;
 const SETTINGS_VERSION: u32 = 1;
+/// How long a confirmation waits for its dialog to show, and how long an issued token lasts:
+/// native code shows the dialog, and spends the token, at once.
 const LIFETIME: Duration = Duration::from_secs(60);
+/// How long a confirmation's dialog stays open once it shows: the person's time to read it, not a
+/// freshness check (an answer checks the action's files and program again and refuses one that
+/// changed; quitting the app or closing its window withdraws the dialog). A dialog nobody answers
+/// in that time closes as cancelled, so the call waiting for it ends.
+pub(crate) const SHOWN_LIFETIME: Duration = Duration::from_secs(10 * 60);
+/// How long a native caller waits for a confirmation's answer: its time to show, its time shown,
+/// and a little more for the answer to arrive.
+pub(crate) const WAIT: Duration =
+    Duration::from_secs(LIFETIME.as_secs() + SHOWN_LIFETIME.as_secs() + 15);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Package {
     pub id: String,
@@ -314,7 +325,8 @@ pub struct Prepared {
     /// its description alone, and no launch notice follows it.
     own: bool,
     /// An action native code built and described in full, in plain words (`prepare_plain`): its
-    /// review is that description alone, as an own action's; a launch notice still follows it.
+    /// review is that description alone, as an own action's. It is the window's own (`Main`), so
+    /// no notice follows its answer either (`Review::quiet`).
     plain: bool,
     exact: ExactAction,
     files: Vec<OpenTarget>,
@@ -329,8 +341,18 @@ pub struct Prepared {
     /// The confirming button's label (GTK mnemonic form): `text::CONFIRM` unless the app's own
     /// action names what it does (`confirm_app_as`).
     confirm: &'static str,
+    /// What will happen, in plain words, which native code wrote from the records it checked
+    /// (`set_headline`): shown first, above the exact details. Without one the description is.
+    headline: Option<String>,
 }
 impl Prepared {
+    /// Sets what its dialog says first, in plain words, above the exact details: written by
+    /// native code from records it checked, each value in it escaped to one line (`one_line`),
+    /// never page data. It binds nothing: the details below, and what an approval binds, stay
+    /// the exact action.
+    pub(crate) fn set_headline(&mut self, text: String) {
+        self.headline = Some(text);
+    }
     fn check(&self) -> Result<(), String> {
         for f in &self.files {
             f.check()?;
@@ -389,24 +411,54 @@ impl Prepared {
             .map(|l| l.environment_revision.as_str())
     }
     /// Requester and action, for the launch notice: each on its own line. Only a description
-    /// native code wrote keeps its own lines; any other shows its line breaks escaped.
+    /// native code wrote keeps its own lines; any other shows its line breaks escaped. With plain
+    /// words (`set_headline`), the exact action follows them under `text::DETAILS`: the plain words
+    /// name no input, and the notice is what stays once the dialog has closed.
     pub(crate) fn notice(&self) -> String {
-        let what = if self.own || self.plain {
-            escape_lines(&self.exact.what)
-        } else {
-            escape_format_characters(&self.exact.what)
+        let what = match &self.headline {
+            Some(h) => format!(
+                "{}\n{}: {}",
+                escape_lines(h),
+                text::DETAILS,
+                escape_format_characters(&self.exact.what)
+            ),
+            None if self.own || self.plain => escape_lines(&self.exact.what),
+            None => escape_format_characters(&self.exact.what),
         };
         format!(
-            "Requester: {}\nAction: {what}",
-            escape_format_characters(&self.exact.chain[0].id)
+            "{}: {}\n{}: {what}",
+            text::ASKED_BY,
+            escape_format_characters(&self.exact.chain[0].id),
+            text::WHAT
         )
     }
-    pub fn review(&self) -> Result<String, String> {
+    /// Everything its dialog shows, as one text: the plain words, then the details under
+    /// `text::DETAILS`.
+    #[cfg(test)]
+    pub(crate) fn shown_text(&self) -> String {
+        match self.review().unwrap() {
+            (words, Some(details)) => format!("{words}\n\n{}\n{details}", text::DETAILS),
+            (words, None) => words,
+        }
+    }
+    /// What its dialog shows: what will happen in plain words first, and, unless it is an action
+    /// native code described in full (`own`, `plain`), the exact action below it.
+    pub fn review(&self) -> Result<(String, Option<String>), String> {
         if self.own || self.plain {
-            return Ok(escape_lines(&self.exact.what));
+            return Ok((escape_lines(&self.exact.what), None));
         }
         // JSON quoting makes argv boundaries, newlines and control characters unambiguous.
-        let mut s = review_text(&self.exact)?;
+        let details = review_text(&self.exact)?;
+        let mut s = match &self.headline {
+            Some(h) => escape_lines(h),
+            None => {
+                let mut s = escape_format_characters(&self.exact.what);
+                if self.exact.native_tool {
+                    s.push_str(&format!("\n\n{}", text::FULL_ACCESS));
+                }
+                s
+            }
+        };
         // What a launch that opens a file opens, with which program, from the resolved paths.
         if let Some(l) = &self.exact.launch {
             if let Some(o) = &l.opens {
@@ -429,19 +481,11 @@ impl Prepared {
                 s.insert_str(0, &format!("{line}\n\n"));
             }
         }
-        if self.exact.native_tool {
-            s.insert_str(
-                0,
-                "This native tool has full access to your user account.
-
-",
-            );
-        }
         // Where it runs, when that is not this computer, first of all.
         if let Some(line) = &self.exact.environment {
             s.insert_str(0, &format!("{}\n\n", escape_format_characters(line)));
         }
-        Ok(s)
+        Ok((s, Some(details)))
     }
 }
 /// The content types a launch may open: plain text and text data, which the desktop opens with a
@@ -677,6 +721,11 @@ fn format_character(ch: char) -> bool {
         crate::format_chars::is_format(ch)
     }
 }
+/// value, for a headline (`Prepared::set_headline`): on one line, its line breaks, control and
+/// format characters escaped, so a name or description cannot add a line of its own.
+pub(crate) fn one_line(value: &str) -> String {
+    escape_format_characters(value)
+}
 pub(crate) fn escape_format_characters(text: &str) -> String {
     let mut out = String::new();
     for ch in text.chars() {
@@ -746,9 +795,31 @@ impl Authorized {
 }
 struct Pending {
     prepared: Prepared,
-    expires: Instant,
+    /// When it was queued, or confirmed.
+    created: Instant,
+    /// When its dialog showed: from then on the person's reading time counts, not `LIFETIME`.
+    shown: Option<Instant>,
     page: bool,
     reviewed: bool,
+}
+impl Pending {
+    fn new(prepared: Prepared, page: bool, reviewed: bool) -> Self {
+        Self {
+            prepared,
+            created: Instant::now(),
+            shown: None,
+            page,
+            reviewed,
+        }
+    }
+    /// Whether it still stands at now: `SHOWN_LIFETIME` after its dialog showed, otherwise
+    /// `LIFETIME` after it was queued or confirmed.
+    fn live(&self, now: Instant) -> bool {
+        match self.shown {
+            Some(shown) => now < shown + SHOWN_LIFETIME,
+            None => now < self.created + LIFETIME,
+        }
+    }
 }
 struct Issued {
     action: String,
@@ -1249,6 +1320,7 @@ impl Confirmations {
             own: false,
             plain: false,
             confirm: text::CONFIRM,
+            headline: None,
             exact: ExactAction {
                 what: action.what,
                 chain: action.chain,
@@ -1300,7 +1372,7 @@ impl Confirmations {
     }
     fn prune(&mut self) {
         let now = Instant::now();
-        self.pending.retain(|_, p| p.expires > now);
+        self.pending.retain(|_, p| p.live(now));
         self.saving_warnings
             .retain(|id, _| self.pending.contains_key(id));
         self.issued.retain(|_, t| t.expires > now);
@@ -1383,18 +1455,21 @@ impl Confirmations {
             return Err("too many pending confirmations".into());
         }
         let id = crate::managed::random_key();
-        self.pending.insert(
-            id.clone(),
-            Pending {
-                prepared,
-                expires: Instant::now() + LIFETIME,
-                page,
-                reviewed: false,
-            },
-        );
+        self.pending
+            .insert(id.clone(), Pending::new(prepared, page, false));
         Ok(id)
     }
-    pub(crate) fn review(&mut self, id: &str) -> Result<(String, bool), String> {
+    /// Marks pending confirmation id as shown in its dialog: from now on it lasts
+    /// `SHOWN_LIFETIME`, the person's time to read it.
+    pub(crate) fn shown(&mut self, id: &str) {
+        if let Some(p) = self.pending.get_mut(id) {
+            p.shown.get_or_insert_with(Instant::now);
+        }
+    }
+    /// What pending confirmation id's dialog shows (`Prepared::review`), and whether it offers
+    /// Remember.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn review(&mut self, id: &str) -> Result<((String, Option<String>), bool), String> {
         self.prune();
         let p = self.pending.get(id).ok_or("no fresh prepared action")?;
         if p.reviewed {
@@ -1458,6 +1533,9 @@ impl Confirmations {
             None
         };
         p.reviewed = true;
+        // Confirmed: its token's time from now on, not the time it was open.
+        p.created = Instant::now();
+        p.shown = None;
         self.pending.insert(id.into(), p);
         Ok(Some(self.issue(id, approval)))
     }
@@ -1494,15 +1572,8 @@ impl Confirmations {
             return Err(Box::new(p));
         };
         let id = crate::managed::random_key();
-        self.pending.insert(
-            id.clone(),
-            Pending {
-                prepared: p,
-                expires: Instant::now() + LIFETIME,
-                page: false,
-                reviewed: true,
-            },
-        );
+        self.pending
+            .insert(id.clone(), Pending::new(p, false, true));
         Ok(self.issue(&id, Some(approval)))
     }
     /// Native consumers supply both token and preparation ID. Even a mismatch spends the token.
@@ -1566,14 +1637,27 @@ impl Confirmations {
 /// Labels are in GTK's mnemonic form (`_` before the access key, `__` for a `_`); `mnemonic`
 /// renders them for Win32 and AppKit.
 pub(crate) mod text {
-    pub(crate) const CONFIRM_TITLE: &str = "pluxy native confirmation";
+    pub(crate) const CONFIRM_TITLE: &str = "pluxy needs your OK";
     pub(crate) const SETTINGS_TITLE: &str = "pluxy remembered launches";
-    pub(crate) const NOTICE_TITLE: &str = "pluxy launch notice";
+    pub(crate) const NOTICE_TITLE: &str = "pluxy notice";
+    /// Above a confirmation's exact details, below what it says in plain words, and before them
+    /// in its notice.
+    pub(crate) const DETAILS: &str = "Details";
+    /// What a native tool's confirmation says when its caller wrote no headline of its own.
+    pub(crate) const FULL_ACCESS: &str =
+        "This add-on runs as you, with full access to your user account.";
+    /// The notice's lines: who asked, what, and how it ended.
+    pub(crate) const ASKED_BY: &str = "Asked by";
+    pub(crate) const WHAT: &str = "What";
+    pub(crate) const RESULT: &str = "Result";
     pub(crate) const CANCEL: &str = "_Cancel";
     pub(crate) const CONFIRM: &str = "C_onfirm";
     /// The confirming button of a management key rotation, which the app calls replacing the key.
     pub(crate) const REPLACE_KEY: &str = "_Replace key";
     pub(crate) const SETTINGS_CLOSE: &str = "Close";
+    /// The launch notice's button.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) const NOTICE_CLOSE: &str = "_Close";
     pub(crate) const NO_LAUNCHES: &str = "No remembered launches.";
     pub(crate) const REVOKE: &str = "_Revoke remembered launch";
     pub(crate) const REVOKED: &str = "Revoked";
@@ -1704,8 +1788,11 @@ pub(crate) mod text {
 
 /// What a confirmation dialog shows, from `begin`.
 pub(crate) struct Review {
-    /// The whole review text.
+    /// What will happen, in plain words: shown first.
     pub review: String,
+    /// The exact action, shown below it under `text::DETAILS`; none for an action native code
+    /// described in full.
+    pub details: Option<String>,
     /// The Remember choice's text (GTK mnemonic form), when the dialog offers it: only a launch
     /// from the window, the tray or native UI, while remembering works. A page or import chain
     /// never uses a remembered approval, so it would save one nothing can use.
@@ -1714,8 +1801,10 @@ pub(crate) struct Review {
     pub summary: String,
     /// Started by a page: Cancel focused, Confirm only after a second.
     pub page: bool,
-    /// The app's own action, which shows its own outcome (no launch notice).
-    pub own: bool,
+    /// Asked by the app itself or its own window, the tray or native UI, which show the outcome
+    /// themselves: no launch notice follows, unless remembering it failed. A page's or a tool's
+    /// request always gets one, as the page cannot be trusted to report it.
+    pub quiet: bool,
     /// The confirming button's label (GTK mnemonic form).
     pub confirm: &'static str,
 }
@@ -1725,31 +1814,34 @@ pub(crate) struct Review {
 pub(crate) fn begin(app: &tauri::AppHandle, id: &str) -> Result<Review, String> {
     let st = app.state::<crate::App>();
     let mut c = st.confirmations.lock().unwrap();
-    let (review, launch) = c.review(id)?;
+    let ((review, details), launch) = c.review(id)?;
     if !c.showing.insert(id.to_string()) {
         return Err("confirmation already showing".into());
     }
+    c.shown(id);
     let pending = c.pending.get(id).unwrap();
     Ok(Review {
         review,
+        details,
         remember: (launch && !pending.page).then(|| pending.prepared.remember_text()),
         summary: pending.prepared.notice(),
         page: pending.page,
-        own: pending.prepared.own,
+        quiet: pending.prepared.own || !pending.page,
         confirm: pending.prepared.confirm,
     })
 }
 
 /// The answer to confirmation id's dialog, from its native handler only (every toolkit's calls
-/// this once): finishes it, keeps the result for its native caller and, unless it is the app's
-/// own action, shows the launch notice with the outcome.
+/// this once): finishes it, keeps the result for its native caller and, for a page's or a tool's
+/// request or when remembering it failed, shows the launch notice with the outcome (`quiet`:
+/// `Review::quiet`).
 pub(crate) fn respond(
     app: &tauri::AppHandle,
     id: &str,
     confirmed: bool,
     remember: bool,
     summary: &str,
-    own: bool,
+    quiet: bool,
 ) {
     let st = app.state::<crate::App>();
     let mut c = st.confirmations.lock().unwrap();
@@ -1760,8 +1852,9 @@ pub(crate) fn respond(
         Ok(None) => "cancelled",
         Err(_) => "expired, changed or revoked",
     };
-    let mut text = format!("{summary}\nOutcome: {outcome}");
-    if let Some(warning) = c.saving_warning(id) {
+    let mut text = format!("{summary}\n{}: {outcome}", text::RESULT);
+    let warning = c.saving_warning(id).map(String::from);
+    if let Some(warning) = &warning {
         text.push_str(&format!("\n{warning}"));
     }
     if c.results.len() >= 64 {
@@ -1769,8 +1862,8 @@ pub(crate) fn respond(
     }
     c.results.insert(id.to_string(), result);
     drop(c);
-    // The app's own action shows its own outcome (such as the window with a new key).
-    if !own {
+    // The window that asked shows its own outcome (such as the window with a new key).
+    if !quiet || warning.is_some() {
         notice(app, text);
     }
 }
@@ -1855,11 +1948,7 @@ pub(crate) fn confirm_app_as(
         return Err(e);
     }
     // The dialog cancels itself when its lifetime ends; this is only a backstop.
-    wait_app(
-        &st.confirmations,
-        &id,
-        Instant::now() + LIFETIME + Duration::from_secs(10),
-    )
+    wait_app(&st.confirmations, &id, Instant::now() + WAIT)
 }
 
 /// Waits for the result of app confirmation id until deadline: true after Confirm, with its
@@ -1902,10 +1991,10 @@ pub fn page_start(app: &tauri::AppHandle, prepared: Prepared) -> Result<String, 
         .unwrap()
         .queue(prepared);
     let outcome = match &result {
-        Ok(_) => "awaiting native confirmation".to_string(),
+        Ok(_) => "waiting for you to confirm".to_string(),
         Err(e) => e.clone(),
     };
-    notice(app, format!("{review}\nOutcome: {outcome}"));
+    notice(app, format!("{review}\n{}: {outcome}", text::RESULT));
     let id = result?;
     request(app, id.clone())?;
     Ok(id)

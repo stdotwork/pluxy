@@ -297,6 +297,6 @@ attributes there, and does it again on every `theme` event.
 
 - The desktop app shows each page in a webview of its own, which can call no app command, with
   the page in the same sandboxed frame and the same channel, and enforces the channel's limits
-  natively ([the app's README](../../app/README.md#extension-pages)).
+  natively ([the desktop app design note](../../../docs/design/app-design.md#extension-pages)).
 - A package needs a program even when it only brings pages.
 - The page's frame has a fixed size within the panel's content area; a page cannot resize it.

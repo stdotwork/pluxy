@@ -109,8 +109,8 @@ JSON object named in its row; `204` means an empty reply.
 
 ## Changing the config
 
-These calls read and change the config file core runs on, whether it is the JSON config or a
-`config.yaml` ([`docs/config.md`](config.md)). A change goes through the same steps as a reload: core
+These calls read and change the config file core runs on, whether it is the JSON config
+([`docs/config.md`](config.md)) or a `config.yaml` ([`docs/config-yaml.md`](config-yaml.md)). A change goes through the same steps as a reload: core
 checks and prepares the new contents, and only when they are ready to serve does it write the file
 and switch to them. The file is replaced in one step (a new file renamed over it, through a symbolic
 link if the path is one), so nothing reads half of it. The new file keeps the old one's permissions:
@@ -535,7 +535,7 @@ An account's credential goes only to the extension the account belongs to, the o
 | Member | Meaning |
 | --- | --- |
 | `disabled` | `true` or `false` |
-| `label` | The account's name for people: trimmed, one line, at most 64 characters (400 otherwise). `""` or `null` takes it away, which leaves the last label the provider gave the account (an imported credential file's e-mail address, for example), or none when it never gave one. An account stored before core kept the two apart keeps its old label as the provider's |
+| `label` | The account's name for people: trimmed, one line, at most 64 characters (400 otherwise). `""` or `null` takes it away, which leaves the last label the provider gave the account (an imported credential file's e-mail address, for example), or none when it never gave one. An account with no provider's label on record treats its label as the provider's |
 | `settings` | The extension's settings for the account, an object that replaces all of its settings (core passes them to the extension as they are); `null` removes them. A placeholder as `GET /accounts` shows it is accepted only where that secret is now: a list item may move within its list, a placeholder anywhere else is 400 `invalid_request`, and one that matches no secret the account's settings hold now (or that was made before core restarted) is 409 `conflict` |
 | `priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `proxy_url`, `headers`, `timeouts` | The account's routing fields, by their config names; `null` sets one back to its default |
 
