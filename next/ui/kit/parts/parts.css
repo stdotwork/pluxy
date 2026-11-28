@@ -875,9 +875,8 @@
     padding: calc(var(--s) * 2) calc(var(--s) * 2) 0;
   }
 
-  /* The row names its control, so the control's own label is only for assistive technology. */
   .setting-control .choices > .label,
-  .setting-control .switch .label {
+  .setting-control fieldset > .switch .label {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -886,12 +885,11 @@
     white-space: nowrap;
   }
 
-  /* With its label hidden, the switch is its track alone: the input under it takes the press. */
-  .setting-control .switch {
+  .setting-control fieldset > .switch {
     gap: 0;
   }
 
-  .setting-control .switch .track {
+  .setting-control fieldset > .switch .track {
     pointer-events: none;
   }
 

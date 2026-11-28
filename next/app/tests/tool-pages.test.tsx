@@ -620,6 +620,93 @@ describe("models", () => {
     expect(page.shown("Haiku")).toBe("my-haiku");
   });
 
+  test("Claude Code model pickers offer every served model whatever they hold, and Other model lets a custom name be typed", async () => {
+    const ch = channel();
+    const page = await mount(() => <ClaudeCodePage />, ch.invoke, ["walk-model-1", "walk-model-2"]);
+    ch.reads[0]?.answer(claudeCode("not-configured", { opus: "", sonnet: "", haiku: "" }));
+    await settle();
+
+    const selectOf = (label: string) =>
+      all(page.root, "select").find(
+        (s) => s.getAttribute("aria-label") === label || s.getAttribute("aria-label") === `Choose ${label}`,
+      );
+    const optionValues = (sel: ReturnType<typeof selectOf>) =>
+      sel ? all(sel, "option").map((o) => o.value) : [];
+
+    const opusSelect = selectOf("Opus");
+    expect(opusSelect).toBeDefined();
+    expect(opusSelect?.value).toBe("walk-model-1");
+    expect(optionValues(opusSelect)).toContain("walk-model-1");
+    expect(optionValues(opusSelect)).toContain("walk-model-2");
+
+    await page.select("Opus", "walk-model-2");
+    expect(selectOf("Opus")?.value).toBe("walk-model-2");
+
+    const fableSelect = selectOf("Fable");
+    expect(fableSelect).toBeDefined();
+    expect(fableSelect?.value).toBe("");
+    expect(optionValues(fableSelect)).toContain("");
+    expect(optionValues(fableSelect)).toContain("walk-model-1");
+    expect(optionValues(fableSelect)).toContain("walk-model-2");
+
+    const startsSelect = selectOf("Starts with");
+    expect(startsSelect).toBeDefined();
+    expect(startsSelect?.value).toBe("opus");
+    expect(optionValues(startsSelect)).toContain("opus");
+    expect(optionValues(startsSelect)).toContain("walk-model-1");
+    expect(optionValues(startsSelect)).toContain("walk-model-2");
+
+    await page.select("Sonnet", "Other model…");
+    await page.type("Sonnet", "claude-sonnet-9");
+    await settle();
+    expect(page.shown("Sonnet")).toBe("claude-sonnet-9");
+    expect(optionValues(selectOf("Sonnet"))).toContain("walk-model-1");
+    expect(optionValues(selectOf("Sonnet"))).toContain("walk-model-2");
+
+    await page.select("Sonnet", "walk-model-2");
+    expect(selectOf("Sonnet")?.value).toBe("walk-model-2");
+
+    await page.click("Connect Claude Code");
+    const input = applies(ch)[0]?.input;
+    expect([input?.opus, input?.sonnet, input?.haiku]).toEqual([
+      "walk-model-2",
+      "walk-model-2",
+      "walk-model-1",
+    ]);
+  });
+
+  test("Claude Code explains what the 1M context switch writes", async () => {
+    const ch = channel();
+    const page = await mount(() => <ClaudeCodePage />, ch.invoke, ["walk-model-1"]);
+    ch.reads[0]?.answer(claudeCode("not-configured", { opus: "", sonnet: "", haiku: "" }));
+    await settle();
+    expect(page.text()).toContain("1M context");
+    expect(page.text()).toContain("[1m]");
+    expect(page.text()).toContain("1,000,000");
+    const appCss = await Bun.file(new URL("../src/app.css", import.meta.url)).text();
+    expect(appCss).not.toMatch(/\.setting-control\s+\.switch\b/);
+    const toolCss = await Bun.file(new URL("../src/toolPage.css", import.meta.url)).text();
+    expect(toolCss).toMatch(/\.tool-model.*:is\(input,\s*select\)/);
+  });
+
+  test("an unserved model warning says what to do, with or without served models", async () => {
+    const ch = channel();
+    const page = await mount(() => <ClaudeCodePage />, ch.invoke, ["walk-model-1"]);
+    ch.reads[0]?.answer(claudeCode("configured", { opus: "claude-opus-9" }));
+    await settle();
+    expect(page.text()).toContain(
+      "Your accounts do not offer claude-opus-9. Choose a served model, or add an account that offers it; Connect still saves this name.",
+    );
+
+    const chNone = channel();
+    const pageNone = await mount(() => <ClaudeCodePage />, chNone.invoke, []);
+    chNone.reads[0]?.answer(claudeCode("not-configured", { opus: "claude-opus-9" }));
+    await settle();
+    expect(pageNone.text()).toContain(
+      "Your accounts do not offer claude-opus-9. Add an account that offers it on Accounts; Connect still saves this name.",
+    );
+  });
+
   test("Codex clears what an import could not bring once its files are read again", async () => {
     const ch = channel({ ops: { import: () => ({ models: [], missing: ["odd-model"] }) } });
     const page = await mount(() => <CodexPage />, ch.invoke);
@@ -1218,6 +1305,7 @@ describe("why Connect or Save is held", () => {
 
   test("Save held by the form says why beside it", async () => {
     const { page } = await opened(TOOLS[0] as Tool, "configured", {}, true);
+    await page.select("Opus", "Other model…");
     await page.type("Opus", "");
     expect(page.hasButton("Save")).toBe(true);
     expect(page.canPress("Save")).toBe(false);
@@ -1297,6 +1385,7 @@ describe("OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi", () => {
   ] as const) {
     test(`${tool?.name}: a default model pluxy's accounts do not serve has its line, and Connect still writes it`, async () => {
       const { ch, page } = await opened(tool as Tool, "not-configured");
+      await page.select(label, "Other model…");
       await page.type(label, "odd-model");
       await settle();
       expect(page.text()).toContain("Your accounts do not offer odd-model.");
@@ -1324,10 +1413,10 @@ describe("OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi", () => {
 
   test(`Hermes Agent: a model ID it cannot write holds Connect and says why`, async () => {
     const { ch, page } = await opened(rest[3] as Tool, "not-configured");
+    await page.select("Default model", "Other model…");
     await page.type("Default model", "my model");
     await settle();
     expect(page.text()).toContain('Enter one model ID, with no spaces and no "${".');
-    // Not a model ID at all, so not said to be missing from pluxy.
     expect(page.text()).not.toContain("Your accounts do not offer my model");
     expect(page.canPress("Connect Hermes Agent")).toBe(false);
     await page.type("Default model", `x${"${"}HOME}`);
@@ -1342,6 +1431,7 @@ describe("OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi", () => {
 
   test("Hermes Agent: an ID Hermes would read as a number, a date or yes/no holds Connect and says why", async () => {
     const { ch, page } = await opened(rest[3] as Tool, "not-configured");
+    await page.select("Default model", "Other model…");
     for (const bad of ["1.5", "yes", "2026-11-14", "0x1F", "1:30"]) {
       await page.type("Default model", bad);
       await settle();
@@ -1360,6 +1450,7 @@ describe("OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi", () => {
 
   test("Oh My Pi: a list, a role, a long ID or a control character is not one model, and Connect waits", async () => {
     const { page } = await opened(rest[1] as Tool, "not-configured");
+    await page.select("Default model", "Other model…");
     for (const bad of ["a,b", "@slow", "x".repeat(241), "a\u0007b"]) {
       await page.type("Default model", bad);
       await settle();
@@ -1384,6 +1475,7 @@ describe("OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi", () => {
 
   test("Pi: a control character is not a model ID, and Connect waits", async () => {
     const { page } = await opened(rest[4] as Tool, "not-configured");
+    await page.select("Default model", "Other model…");
     await page.type("Default model", "a\u0000b");
     await settle();
     expect(page.text()).toContain(

@@ -342,9 +342,8 @@
     align-self: stretch;
   }
 
-  /* A setting's control already has its name in the row, so the control's own label is only read aloud. */
   .setting-control .field > .label,
-  .setting-control .switch .label {
+  .setting-control fieldset > .switch .label {
     position: absolute;
     width: 1px;
     height: 1px;

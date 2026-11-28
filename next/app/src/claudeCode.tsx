@@ -7,7 +7,7 @@
 // Code is set up and started: every call to the add-on and the launch then go to that environment
 // (environmentBlock.tsx).
 
-import { useEffect, useId, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { strings } from "../../ui/kit/strings";
 import { PageHead, Switch } from "../../ui/kit/ui";
@@ -33,7 +33,6 @@ import {
   FileKeyBackups,
   fileDefault,
   ModelInput,
-  ModelList,
   NumberInput,
   SaveButton,
   Section,
@@ -65,11 +64,16 @@ const t = strings("claudeCode", {
     "Claude Code's own model names are not served by your accounts, so these start with {model}, one your accounts serve.",
   roleNote: "The model Claude Code uses for {role}.",
   fableNote: "Empty: the same as Sonnet.",
+  sameAsSonnet: "Same as Sonnet",
   oneM: "1M context",
+  oneMNote:
+    "Turning on 1M context writes [1m] after that model's name in Claude Code's settings and raises the auto-compact window to 1,000,000 tokens. Leave it off unless that model supports a 1M window (Claude Code may still add [1m] itself).",
   startup: "Starts with",
   startupNote: "The model Claude Code starts with: a model, or one of opus, sonnet, haiku and fable.",
+  claudeDefault: "Claude Code's default",
   subagent: "Subagents",
   subagentNote: "The model subagents use. Empty: the same as the main model.",
+  sameAsMain: "Same as the main model",
   context: "Context and auto-compaction",
   window: "Auto-compact window",
   windowNote: "Tokens. 200000, or 1000000 with 1M context on; another number you enter is kept.",
@@ -126,7 +130,6 @@ export function ClaudeCodePage() {
   });
   const start = useStart({ s, client: CLIENT, folder: true });
   const shown = useShown();
-  const listId = useId();
   const served = servedNames(s);
   // A file pluxy has not set up starts with models pluxy serves when Claude Code's own are not.
   const [preselected, setPreselected] = useState<string>();
@@ -203,14 +206,13 @@ export function ClaudeCodePage() {
           subtitle={t("modelsNote")}
           aside={<SaveButton s={s} dirty={dirty} form={input} held={held} />}
         >
-          <ModelList id={listId} s={s} />
           <SettingRow name={t("startup")} description={t("startupNote")}>
             <ModelInput
               label={t("startup")}
               value={form.startup}
-              list={listId}
               served={served}
               known={ROLES}
+              empty={t("claudeDefault")}
               onInput={(v) => edit({ startup: v })}
             />
           </SettingRow>
@@ -218,16 +220,19 @@ export function ClaudeCodePage() {
             <ModelInput
               label={t("subagent")}
               value={form.subagent}
-              list={listId}
               served={served}
               known={ROLES}
+              empty={t("sameAsMain")}
               onInput={(v) => edit({ subagent: v })}
             />
           </SettingRow>
           <div class="tool-subgroup">{t("modelMappings")}</div>
-          {preselected !== undefined && form.models.opus === preselected && (
-            <p class="muted">{t("preselected", { model: preselected })}</p>
-          )}
+          <div class="tool-say">
+            {preselected !== undefined && form.models.opus === preselected && (
+              <p class="muted">{t("preselected", { model: preselected })}</p>
+            )}
+            <p class="muted">{t("oneMNote")}</p>
+          </div>
           {(["opus", "sonnet", "haiku", "fable"] as const).map((role) => (
             <SettingRow
               key={role}
@@ -238,8 +243,8 @@ export function ClaudeCodePage() {
                 <ModelInput
                   label={LABELS[role]}
                   value={form.models[role]}
-                  list={listId}
                   served={served}
+                  empty={role === "fable" ? t("sameAsSonnet") : undefined}
                   onInput={(v) => edit({ models: { ...form.models, [role]: v } })}
                 />
                 <Switch label={t("oneM")} checked={form.oneM[role]} onChange={(on) => setOneM(role, on)} />

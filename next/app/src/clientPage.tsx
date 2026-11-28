@@ -49,7 +49,12 @@ const t = strings("toolPage", {
   done: "Done. If {tool} is running, start it again so it reads the new settings.",
   keyFailed: "Could not make a key for {tool}. {reason}",
   noBackup: "There is no copy from before pluxy changed this file.",
-  unserved: "Your accounts do not offer {model}.",
+  unserved:
+    "Your accounts do not offer {model}. Choose a served model, or add an account that offers it; Connect still saves this name.",
+  unservedNone:
+    "Your accounts do not offer {model}. Add an account that offers it on Accounts; Connect still saves this name.",
+  chooseModel: "Choose {label}",
+  otherModel: "Other model…",
   refreshSuggestions: "Refresh suggestions",
   suggestionsFailed: "Could not read the models pluxy serves. {reason}",
   connect: "Connect {tool}",
@@ -972,47 +977,85 @@ export function ModelList(props: { id: string; s: ToolSetup; more?: readonly str
   );
 }
 
-/**
- * A model field: what the person types or picks from what pluxy serves (list), with a line under
- * it when pluxy's accounts do not offer that model. Connect still writes it, for an account added
- * later. known are names that are not models (a tool's own aliases), never said to be missing.
- */
+const OTHER_MODEL = "\0other";
+
 export function ModelInput(props: {
   id?: string;
   label: string;
   value: string;
   onInput: (v: string) => void;
-  list: string;
+  list?: string;
   served: Set<string> | undefined;
+  choices?: readonly string[];
   known?: readonly string[];
+  empty?: string;
   placeholder?: string;
 }) {
+  const shown = useShown();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [custom, setCustom] = useState(false);
   const model = props.value.trim();
+  const base = props.choices ?? (props.served ? [...props.served] : []);
+  const allChoices = [...new Set([...(props.known ?? []), ...base])];
+  const isChoice = model === "" ? props.empty !== undefined : allChoices.includes(model);
+  const hasChoices = allChoices.length > 0;
+  const showInput = !hasChoices || custom || !isChoice;
+
+  useEffect(() => {
+    if (custom) {
+      inputRef.current?.focus();
+      inputRef.current?.select?.();
+    }
+  }, [custom]);
+
   return (
     <span class="tool-model">
-      <input
-        id={props.id}
-        type="text"
-        class="mono"
-        aria-label={props.label}
-        autocomplete="off"
-        spellcheck={false}
-        list={props.list}
-        placeholder={props.placeholder}
-        value={props.value}
-        onInput={(e) => props.onInput(e.currentTarget.value)}
-      />
+      {hasChoices && (
+        <select
+          id={showInput ? undefined : props.id}
+          data-slot="select-trigger"
+          class="mono"
+          aria-label={showInput ? t("chooseModel", { label: props.label }) : props.label}
+          value={showInput ? OTHER_MODEL : model}
+          onChange={(e) => {
+            const v = e.currentTarget.value;
+            if (v === OTHER_MODEL) {
+              setCustom(true);
+            } else {
+              setCustom(false);
+              props.onInput(v);
+            }
+          }}
+        >
+          {props.empty !== undefined && <option value="">{props.empty}</option>}
+          {allChoices.map((m) => (
+            <option key={m} value={m}>
+              {shown.text(m)}
+            </option>
+          ))}
+          <option value={OTHER_MODEL}>{t("otherModel")}</option>
+        </select>
+      )}
+      {showInput && (
+        <input
+          ref={inputRef}
+          id={props.id}
+          data-slot="input"
+          type="text"
+          class="mono"
+          aria-label={props.label}
+          autocomplete="off"
+          spellcheck={false}
+          placeholder={props.placeholder}
+          value={props.value}
+          onInput={(e) => props.onInput(e.currentTarget.value)}
+        />
+      )}
       {!props.known?.includes(model) && <Unserved model={model} served={props.served} />}
     </span>
   );
 }
 
-/**
- * A tool's one default model (Oh My Pi, Hermes Agent, Pi): a field that suggests what pluxy serves,
- * and Refresh suggestions, which reads those again; it changes only the suggestions, never the
- * field. note goes under the name. valid says whether the field holds a model ID the tool takes:
- * one it does not take is not said to be missing from pluxy (the head says what is wrong with it).
- */
 export function DefaultModel(props: {
   s: ToolSetup;
   name: string;
@@ -1023,16 +1066,14 @@ export function DefaultModel(props: {
 }) {
   const { s } = props;
   const shown = useShown();
-  const id = useId();
   return (
     <SettingRow name={props.name} description={props.note}>
-      <ModelList id={id} s={s} />
       <span class="tool-inline">
         <ModelInput
           label={props.name}
           value={props.value}
           onInput={props.onInput}
-          list={id}
+          choices={s.served.data?.models.map((m) => m.id)}
           served={props.valid ? servedNames(s) : undefined}
         />
         <Button busy={s.served.loading} disabled={s.served.loading} onClick={s.served.reload}>
@@ -1048,13 +1089,12 @@ export function DefaultModel(props: {
   );
 }
 
-/** The line under a model's field when pluxy's accounts do not offer it (nothing until what they
- * serve is read). Connect still writes the model, for an account added later. */
 export function Unserved(props: { model: string; served: Set<string> | undefined }) {
   const shown = useShown();
   const model = props.model.trim();
   if (!props.served || model === "" || props.served.has(model)) return null;
-  return <small class="tool-unserved">{t("unserved", { model: shown.text(model) })}</small>;
+  const key = props.served.size > 0 ? "unserved" : "unservedNone";
+  return <small class="tool-unserved">{t(key, { model: shown.text(model) })}</small>;
 }
 
 // ---- Start -------------------------------------------------------------------------------------
