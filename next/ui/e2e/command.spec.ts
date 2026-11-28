@@ -89,6 +89,34 @@ test("a click on a heading or the footer leaves focus in the field, so Escape st
   await expect(menu(page)).toHaveCount(0);
 });
 
+test("the shortcut held down opens the menu once and does not close it with its repeats", async ({
+  page,
+}) => {
+  await page.keyboard.press("Control+k");
+  await expect(input(page)).toBeFocused();
+  // What the platform sends while the keys stay down: the same key again, marked as a repeat.
+  const closed = await page.evaluate(() => {
+    const repeat = () =>
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "k",
+          ctrlKey: true,
+          repeat: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    repeat();
+    repeat();
+    return !document.querySelector('[data-part="command"]');
+  });
+  expect(closed).toBe(false);
+  await expect(menu(page)).toBeVisible();
+  // A fresh press still closes it.
+  await page.keyboard.press("Control+k");
+  await expect(menu(page)).toHaveCount(0);
+});
+
 test("a menu opened by the keyboard is there at once, and one opened by the pointer fades in", async ({
   page,
 }) => {

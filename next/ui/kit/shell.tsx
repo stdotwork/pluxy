@@ -350,7 +350,7 @@ export function Shell(props: {
   useLayoutEffect(() => {
     if (!signedIn) return setMenu(undefined);
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || !opensMenu(e)) return;
+      if (e.defaultPrevented || e.repeat || !opensMenu(e)) return;
       if (document.querySelector('dialog[open], [data-part="dialog"], [data-part="command"]')) return;
       e.preventDefault();
       setMenu("keyboard");

@@ -264,7 +264,10 @@ export function CommandMenu(props: CommandMenuProps) {
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Escape" || opensMenu(e)) {
+    if (e.repeat && opensMenu(e)) {
+      // The shortcut held down repeats: only its first press counts.
+      e.preventDefault();
+    } else if (e.key === "Escape" || opensMenu(e)) {
       // The key that opens the menu closes it.
       e.preventDefault();
       e.stopPropagation();
