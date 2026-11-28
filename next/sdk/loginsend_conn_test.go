@@ -129,7 +129,7 @@ func TestUpstreamKeepsBaseProtocol(t *testing.T) {
 	}{
 		{"a zero transport", func() *http.Transport {
 			// net/http gives a zero transport its TLS config, offering h2, on first use (here
-			// Clone); the test then trusts the server's certificate in it.
+			// Clone).
 			base := &http.Transport{}
 			_ = base.Clone()
 			base.TLSClientConfig.RootCAs = roots

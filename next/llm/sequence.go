@@ -103,5 +103,4 @@ func (s *Sequence) Check(ev Event) error {
 
 func (s *Sequence) Done() bool { return s.done }
 
-// NextIndex returns the index the next item.start must use.
 func (s *Sequence) NextIndex() int { return s.next }

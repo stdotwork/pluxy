@@ -148,14 +148,13 @@ type Extension struct {
 	// 4). Core calls it when it starts, and when a reload or a login adds or changes an account.
 	Check CheckHandler
 	// Quota, when set, reads an account's quota (protocol minor version 5). Login, when set,
-	// should also report each grant's Identity (minor version 5), so core can check a new login
-	// to an existing account.
+	// should also report each grant's Identity (minor version 5).
 	Quota QuotaHandler
 	// Endpoint, when set, serves endpoint calls (protocol minor version 7): client requests to a
 	// provider endpoint beyond generation, named by call.Request.Native.Format (such as
 	// llm.FormatOpenAIResponsesCompact). It answers with out.StartBody, out.Body for each piece
 	// of the reply's body, and out.Finish; an account or endpoint it does not serve returns code
-	// unsupported with scope credential, retryable, so core tries another account.
+	// unsupported with scope credential, retryable.
 	Endpoint Handler
 }
 
@@ -844,7 +843,6 @@ type Stream struct {
 	capture *captureLog
 }
 
-// Send writes one event after checking it against the ordering rules.
 func (s *Stream) Send(ev llm.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -979,7 +977,6 @@ func (w *BodyWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Close sends what the writer still holds.
 func (w *BodyWriter) Close() error {
 	if len(w.tail) == 0 {
 		return nil

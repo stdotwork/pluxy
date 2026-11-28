@@ -71,8 +71,7 @@ func (e *timeoutError) Timeout() bool { return true }
 func (e *timeoutError) Temporary() bool { return true }
 
 // Retryable reports whether err from an upstream HTTP request happened before the upstream could
-// have processed or answered the request (a failed dial or a timeout before any response byte),
-// so trying another account is safe.
+// have processed or answered the request (a failed dial or a timeout before any response byte).
 func Retryable(err error) bool {
 	var op *net.OpError
 	if errors.As(err, &op) && op.Op == "dial" {

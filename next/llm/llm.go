@@ -32,8 +32,7 @@ type Request struct {
 	// Caller stands for the client key the request came with (protocol minor version 8): the
 	// same for every request with that key to one extension, different for another key or
 	// another extension, and not derivable from the key. Empty when the client sent no key. An
-	// extension that keeps state from replies across requests keys it by Caller, so one client
-	// never gets another's.
+	// extension that keeps state from replies across requests keys it by Caller.
 	Caller string `json:"caller,omitempty"`
 }
 
@@ -44,8 +43,8 @@ const (
 
 // Origin records where a request, item, part or tool came from: its format, its path in the
 // source body (for example messages[2]) and, in Raw, its fields that have no place in the model,
-// as one JSON object in Format. An encoder for Format writes Raw back, so those fields survive;
-// an encoder for another format reports each of them as dropped.
+// as one JSON object in Format. An encoder for Format writes Raw back; an encoder for another
+// format reports each of them as dropped.
 type Origin struct {
 	Format string          `json:"format"`
 	Path   string          `json:"path,omitempty"`
@@ -69,9 +68,7 @@ type Loss struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// MaxLosses is how many losses a translation lists in full. A stream can produce losses without
-// end (one per upstream field or content type), so past MaxLosses one more entry says that more
-// were left out, and nothing after it is listed.
+// MaxLosses is how many losses a translation lists in full.
 const MaxLosses = 100
 
 // AddLoss appends l to losses. The loss that would be the one past MaxLosses gets one entry in its
@@ -141,8 +138,6 @@ type Native struct {
 	Parsed json.RawMessage `json:"-"`
 }
 
-// IsParsed reports whether n's Body is the body its request's Items, Tools and Origin were parsed
-// from (Parsed).
 func (n *Native) IsParsed() bool {
 	return n != nil && len(n.Body) > 0 && bytes.Equal(n.Parsed, n.Body)
 }
@@ -230,14 +225,12 @@ const (
 	RoleAssistant = "assistant"
 )
 
-// Item is one entry in a conversation. Type selects which fields apply.
 type Item struct {
 	Type string `json:"type"`
 	// ID is the item's own identifier in its source format, when it had one (Responses item
 	// ids). It names the item; it is not content.
 	ID string `json:"id,omitempty"`
 
-	// message
 	Role string `json:"role,omitempty"`
 	// Content is a message's parts. On a tool_result (protocol minor 25) it is the result's parts
 	// when the result holds more than text: images, files or parts core could not interpret, in
@@ -248,15 +241,12 @@ type Item struct {
 	// of parts; an encoder that has both forms keeps the source's.
 	TextContent bool `json:"text_content,omitempty"`
 
-	// tool_call and tool_result
-	CallID string `json:"call_id,omitempty"`
-	// tool_call
+	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
 	// Custom marks a call to a custom (freeform) tool: Arguments is the tool's raw input, not
 	// JSON.
-	Custom bool `json:"custom,omitempty"`
-	// tool_result
+	Custom bool   `json:"custom,omitempty"`
 	Output string `json:"output,omitempty"`
 	// IsError marks a tool result that reports the tool failed (protocol minor 25).
 	IsError bool `json:"is_error,omitempty"`
@@ -274,14 +264,11 @@ const (
 	PartNative = "native"
 )
 
-// Part is one piece of message content. Type selects which fields apply.
 type Part struct {
-	Type string `json:"type"`
-	// text
-	Text string `json:"text,omitempty"`
-	// image and file
+	Type   string `json:"type"`
+	Text   string `json:"text,omitempty"`
 	URL    string `json:"url,omitempty"`
-	Detail string `json:"detail,omitempty"` // image
+	Detail string `json:"detail,omitempty"`
 	// file: one of FileID (a file stored with the provider), FileData (inline, as a data: URL
 	// or base64) or URL.
 	FileID   string `json:"file_id,omitempty"`
@@ -307,25 +294,23 @@ const (
 	ToolNative = "native"
 )
 
-// Tool is a tool the model may call. An empty Type means function.
+// An empty Type means function.
 type Tool struct {
 	Type        string          `json:"type,omitempty"`
 	Name        string          `json:"name,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	// Strict asks the provider to make arguments follow Parameters exactly.
-	Strict *bool `json:"strict,omitempty"`
-	// WebSearch holds the settings of a ToolWebSearch tool (protocol minor version 29).
+	Strict    *bool          `json:"strict,omitempty"`
 	WebSearch *WebSearchTool `json:"web_search,omitempty"`
 	Origin    *Origin        `json:"origin,omitempty"`
 }
 
-// IsFunction reports whether t is a function tool (Type is empty or ToolFunction).
 func (t Tool) IsFunction() bool {
 	return t.Type == "" || t.Type == ToolFunction
 }
 
-// Options are generation options. Nil or empty means not set.
+// Nil or empty means not set.
 type Options struct {
 	MaxOutputTokens   *int            `json:"max_output_tokens,omitempty"`
 	Temperature       *float64        `json:"temperature,omitempty"`
@@ -334,9 +319,7 @@ type Options struct {
 	ToolChoice        *ToolChoice     `json:"tool_choice,omitempty"`
 	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
 	ResponseFormat    *ResponseFormat `json:"response_format,omitempty"`
-	// ReasoningEffort is the reasoning effort the client asked for, as it named it (for
-	// example low, medium or high).
-	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	ReasoningEffort   string          `json:"reasoning_effort,omitempty"`
 	// ThinkingSuffix is the thinking setting the client wrote after the model name, as in
 	// gpt-5(high): a level, none or auto, or a token budget (see SplitThinkingSuffix). Core has
 	// taken it off Model and off the model in Native.Body. It wins over ReasoningEffort and over
@@ -379,8 +362,7 @@ type ToolChoice struct {
 	// required, and Name is empty. A format that has no allowed list carries the narrowing by
 	// defining only these tools. An extension below protocol minor 0.26 cannot read it: core
 	// sends the choice without the list and cuts the request's tools to the function tools it
-	// names, so the narrowing still holds, and refuses the request as invalid when it names none
-	// of them.
+	// names, and refuses the request as invalid when it names none of them.
 	Allowed []string `json:"allowed,omitempty"`
 }
 
@@ -412,28 +394,25 @@ const (
 	EventError          = "error"
 )
 
-// Event is one step of a streamed reply. Type selects which fields apply.
 type Event struct {
 	Type string `json:"type"`
 
-	// item.start, the deltas and item.end
-	Index int `json:"index"`
-	// text.delta, reasoning.delta, tool_input.delta
+	Index int    `json:"index"`
 	Delta string `json:"delta,omitempty"`
 
-	Response *ResponseInfo `json:"response,omitempty"` // response.start
-	Item     *ItemStart    `json:"item,omitempty"`     // item.start
+	Response *ResponseInfo `json:"response,omitempty"`
+	Item     *ItemStart    `json:"item,omitempty"`
 	// Opaque, on the item.end of a reasoning item, is the provider's opaque record of that
 	// reasoning, which the provider needs back to continue from it (an Anthropic thinking
 	// signature, a Responses reasoning item's encrypted_content). A client format with a place
 	// for it (a Responses reasoning item's encrypted_content, a thinking block's signature)
-	// carries it, so the client can replay it.
+	// carries it.
 	Opaque *Opaque `json:"opaque,omitempty"`
 	// Citations, on the item.end of a message item (protocol minor version 31), are the web
 	// citations attached to that message item's text.
 	Citations Citations `json:"citations,omitempty"`
-	Finish    *Finish   `json:"finish,omitempty"` // finish
-	Usage     *Usage    `json:"usage,omitempty"`  // finish
+	Finish    *Finish   `json:"finish,omitempty"`
+	Usage     *Usage    `json:"usage,omitempty"`
 	// Sources, on finish (protocol minor version 31), are the web sources returned by the
 	// upstream's hosted web searches in this reply.
 	Sources Sources `json:"sources,omitempty"`
@@ -446,7 +425,7 @@ type Event struct {
 	// Candidate, on a candidate event (protocol minor version 35), is one step of a candidate
 	// reply after candidate 0 (index >= 1).
 	Candidate *CandidateEvent `json:"candidate,omitempty"`
-	Error     *Error          `json:"error,omitempty"` // error
+	Error     *Error          `json:"error,omitempty"`
 
 	// Raw is the upstream data the event came from, for diagnostics. In a native event it is the
 	// event's content: upstream data the model has no place for, such as OpenAI choices after
@@ -656,7 +635,7 @@ func (e *Error) Pluxy(o map[string]any) {
 }
 
 // RawJSON returns upstream bytes for a Raw field, which must hold valid JSON: b itself when it is
-// valid JSON, otherwise b as a JSON string. An event carrying it can then always be encoded.
+// valid JSON, otherwise b as a JSON string.
 func RawJSON(b []byte) json.RawMessage {
 	if json.Valid(b) {
 		return append(json.RawMessage(nil), b...)

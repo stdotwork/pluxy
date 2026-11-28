@@ -126,11 +126,10 @@ func ValidRateLimitHeaderValue(v string) bool {
 }
 
 // PlainRateLimitValue reports whether v is a value whose characters are too few and too fixed to
-// hold a piece of a key, so removing the account's key pieces from it would only cut a real
-// value: an RFC 3339 time with no fractional seconds ("2026-11-22T08:00:00Z"), or a duration
-// whose every number has at most 4 digits, with one fraction of at most 3 digits on the seconds
-// or on a sub-second unit ("6m0s", "1h2m3.5s", "17ms"). A longer number or a fraction is not
-// plain: a key's digits could be in it.
+// hold a piece of a key: an RFC 3339 time with no fractional seconds ("2026-11-22T08:00:00Z"), or
+// a duration whose every number has at most 4 digits, with one fraction of at most 3 digits on the
+// seconds or on a sub-second unit ("6m0s", "1h2m3.5s", "17ms"). A longer number or a fraction is
+// not plain: a key's digits could be in it.
 func PlainRateLimitValue(v string) bool {
 	if len(v) == 0 || len(v) > maxRateLimitShapedValue {
 		return false
@@ -145,8 +144,6 @@ func PlainRateLimitValue(v string) bool {
 	return err == nil
 }
 
-// RateLimitInteger reports whether v is a non-negative integer of at most 20 digits: the one
-// rate-limit shape that is plain digits, which a number in a credential can look like.
 func RateLimitInteger(v string) bool {
 	if len(v) == 0 || len(v) > 20 {
 		return false

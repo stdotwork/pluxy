@@ -1,8 +1,7 @@
 package llm
 
 // Service tiers an Options.ServiceTier names (protocol minor version 28). A tier is the client's
-// request for how its request is served and billed. The vocabulary is OpenAI's, since it names
-// the most tiers; a format with fewer says the same tier in its own words (see ServiceTier).
+// request for how its request is served and billed.
 const (
 	// ServiceTierAuto leaves the choice to the upstream's project or account settings: OpenAI's
 	// auto, Messages' auto.
@@ -30,8 +29,6 @@ func CanonicalServiceTier(tier string) string {
 	return tier
 }
 
-// SourceFormat returns the format r's body came from (the format of Native, else of Origin), or ""
-// when it has none.
 func (r Request) SourceFormat() string {
 	switch {
 	case r.Native != nil && r.Native.Format != "":

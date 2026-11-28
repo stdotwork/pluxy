@@ -12,7 +12,7 @@ var ThinkingLevels = []string{"minimal", "low", "medium", "high", "xhigh", "max"
 // SplitThinkingSuffix splits a model name that ends in a thinking suffix into the model and the
 // suffix: a level, none or auto (any case and spacing, written in lower case), or a token budget (a whole
 // number of 0 or more; -1 is auto). A name without such a suffix is returned unchanged with an
-// empty suffix, so a model whose own name ends in other bracketed text keeps it.
+// empty suffix.
 func SplitThinkingSuffix(name string) (model, suffix string) {
 	i := strings.LastIndexByte(name, '(')
 	if i <= 0 || !strings.HasSuffix(name, ")") {

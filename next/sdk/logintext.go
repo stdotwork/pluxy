@@ -38,10 +38,7 @@ const MaxUpstreamText = 1000
 // AccountSecrets of the call's account and any it holds itself: first, every run of token
 // characters that holds 4 or more consecutive characters of one, not all of them in its public
 // vendor prefix such as "sk-proj-" (protocol.RemovePieces), is replaced, and 8 or more of a long
-// token or of a PEM private key's body. A run also takes any other character one of secrets holds,
-// such as a password's "@" or ":", but never whitespace, control characters, quotes, brackets,
-// commas or backslashes. A run is read with its escapes decoded too (JSON's \/, \\ and \uXXXX and
-// percent-encoding's %XX, nested up to 8 times).
+// token or of a PEM private key's body.
 func UpstreamText(s string, secrets ...string) string {
 	return boundText(s, MaxUpstreamText, secrets)
 }

@@ -12,12 +12,11 @@ import (
 // an error, call the function: false means nothing of the request was written to the connection,
 // so the provider cannot have seen it and sending it again is safe. req itself is not changed.
 //
-// A request counts as sent as soon as writing its headers began. That is on purpose: it errs
-// toward "sent", which makes the error not retryable. HTTP/2 encodes the headers before it writes
-// them to the connection, and a header field may sit in a buffer when the connection breaks, so
-// the function can say true for a request that never left this machine, but never false for one
-// that did. A connection refused, a failed DNS lookup, a failed TLS handshake and a timeout
-// while connecting all happen before any header is written, so they report false.
+// A request counts as sent as soon as writing its headers began. HTTP/2 encodes the headers before
+// it writes them to the connection, and a header field may sit in a buffer when the connection
+// breaks, so the function can say true for a request that never left this machine, but never false
+// for one that did. A connection refused, a failed DNS lookup, a failed TLS handshake and a
+// timeout while connecting all happen before any header is written, so they report false.
 //
 // Through a client whose transport is wrapped in Upstream, the request goes through a copy of the
 // transport made for it alone, with keep-alives off: it dials its own connection, which no other
@@ -30,8 +29,8 @@ func TrackSend(req *http.Request) (*http.Request, func() bool) {
 }
 
 // TrackSendContext does what TrackSend does for every request made with the returned context,
-// each on its own connection. Use it when the request is made by a function you call but do not
-// own. The function it returns reports whether any of those requests may have been written.
+// each on its own connection. The function it returns reports whether any of those requests may
+// have been written.
 func TrackSendContext(ctx context.Context) (context.Context, func() bool) {
 	var sent atomic.Bool
 	mark := func() { sent.Store(true) }

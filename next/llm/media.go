@@ -54,7 +54,7 @@ var (
 // MediaBaseType returns the lower-cased type/subtype of mediaType, parsed strictly (RFC 2045
 // tokens, then optional well-formed parameters) after surrounding whitespace is trimmed. ok is
 // false when mediaType is not exactly a media type: trailing text, a comma, an empty part or a
-// malformed parameter all fail, so nothing after the subtype can be hidden from a comparison.
+// malformed parameter all fail.
 func MediaBaseType(mediaType string) (base string, ok bool) {
 	base, _, err := mime.ParseMediaType(strings.TrimSpace(mediaType))
 	if err != nil || base == "" {
@@ -167,8 +167,8 @@ func decodeBase64Prefix(b64 string) []byte {
 }
 
 // SniffImageMediaType inspects the leading bytes of a base64-encoded image and returns its MIME
-// type. It recognises PNG, JPEG, GIF, WebP and SVG (so an unlabelled SVG can be rejected), and
-// falls back to image/png when the header is unrecognised.
+// type. It recognises PNG, JPEG, GIF, WebP and SVG, and falls back to image/png when the header is
+// unrecognised.
 func SniffImageMediaType(b64 string) string {
 	head := decodeBase64Prefix(b64)
 	switch {

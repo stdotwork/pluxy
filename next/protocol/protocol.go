@@ -25,7 +25,8 @@ const Version = 0
 
 // Minor is the minor version this package implements within Version. An extension reports it in
 // describe (Info.ProtocolMinor); core uses what a minor version adds only with an extension that
-// reports it.
+// reports it. Minor 21 adds what a package is (title, summary, kind) to the manifest and registry
+// index, and changes no call.
 const Minor = 36
 
 // MaxFrame is the largest frame either side may send.
@@ -73,14 +74,10 @@ const (
 	TypeDescribeResult = "describe.result"
 	// TypeLoginInput is a frame core sends during a login call, after the call frame: what the
 	// user entered for the extension's last prompt.
-	TypeLoginInput = "login.input"
-	// TypeLoginPrompt is a frame an extension sends during a login call: what to show the user.
-	TypeLoginPrompt = "login.prompt"
-	// TypeLoginDone ends a login call successfully, with the new credential.
-	TypeLoginDone = "login.done"
-	// TypeRefreshDone ends a refresh call successfully, with the renewed credential.
-	TypeRefreshDone = "refresh.done"
-	// TypeSessionReady is the extension's answer to a session call that it accepts.
+	TypeLoginInput   = "login.input"
+	TypeLoginPrompt  = "login.prompt"
+	TypeLoginDone    = "login.done"
+	TypeRefreshDone  = "refresh.done"
 	TypeSessionReady = "session.ready"
 	// TypeSessionTurn is a frame core sends on a session: one request, answered with events.
 	TypeSessionTurn = "session.turn"
@@ -99,7 +96,6 @@ const (
 	TypeAlive = "alive"
 )
 
-// Session kinds (SessionInfo.Format).
 const (
 	// SessionOpenAIResponses is a Responses WebSocket session: turns are Responses requests and
 	// may continue the session's previous response with previous_response_id.
@@ -112,17 +108,15 @@ type SessionInfo struct {
 
 // Call is the first frame core sends on a connection.
 type Call struct {
-	Type    string       `json:"type"`
-	ID      string       `json:"id"`
-	Op      string       `json:"op"`
-	Account *Account     `json:"account,omitempty"`
-	Request *llm.Request `json:"request,omitempty"`
-	Login   *Login       `json:"login,omitempty"`
-	// Input is what the user entered, in a login.input frame.
+	Type    string            `json:"type"`
+	ID      string            `json:"id"`
+	Op      string            `json:"op"`
+	Account *Account          `json:"account,omitempty"`
+	Request *llm.Request      `json:"request,omitempty"`
+	Login   *Login            `json:"login,omitempty"`
 	Input   map[string]string `json:"input,omitempty"`
 	Session *SessionInfo      `json:"session,omitempty"`
-	// Raw is the client's control message, in a session.interrupt frame.
-	Raw json.RawMessage `json:"raw,omitempty"`
+	Raw     json.RawMessage   `json:"raw,omitempty"`
 	// Capture asks a generate, count_tokens or endpoint call, or a session.turn, to report its
 	// upstream exchanges in a diagnostic frame before its terminal event (minor version 13).
 	Capture bool `json:"capture,omitempty"`
@@ -139,7 +133,7 @@ type Call struct {
 	// NativeOnly says core left the request's items, tools and origin out of a generate call
 	// (minor version 27), to an extension that parses with core's parsers (Info.NativeParser): they are
 	// what the parser of the request's native format makes of its native body, which the
-	// extension parses itself (nativeonly.Parse). The request's other fields are as in any call.
+	// extension parses itself. The request's other fields are as in any call.
 	NativeOnly bool `json:"native_only,omitempty"`
 }
 
@@ -169,8 +163,7 @@ type Account struct {
 	Timeouts *Timeouts `json:"timeouts,omitempty"`
 }
 
-// Timeouts bounds how long an upstream request waits for response headers, gaps between raw
-// body bytes or completion (minor version 22). Zero turns a limit off.
+// Zero turns a limit off.
 type Timeouts struct {
 	HeaderMS *int64 `json:"header_ms,omitempty"`
 	IdleMS   *int64 `json:"idle_ms,omitempty"`
@@ -202,7 +195,7 @@ func ParseProxyURL(s string) (*url.URL, error) {
 }
 
 // SecretName reports whether a header or query parameter name is about authentication
-// (Authorization, X-Api-Key, Cookie, key, ...), so its value is a secret.
+// (Authorization, X-Api-Key, Cookie, key, ...).
 func SecretName(name string) bool {
 	n := strings.ToLower(name)
 	for _, part := range []string{"auth", "key", "token", "secret", "cookie", "session", "password", "passphrase", "signature"} {
@@ -232,14 +225,13 @@ type Credential struct {
 	// expire or the extension does not know.
 	ExpiresAt int64 `json:"expires_at,omitempty"`
 	// RefreshAt is when core should renew the credential, in Unix seconds. 0: 5 minutes
-	// before ExpiresAt. Providers whose tokens are best renewed earlier (days ahead, say) set it.
+	// before ExpiresAt.
 	RefreshAt int64 `json:"refresh_at,omitempty"`
 	// Data holds anything else the provider needs, as a JSON object (an ID token, a
 	// service-account key, an account ID). Core stores and passes it on without reading it.
 	Data json.RawMessage `json:"data,omitempty"`
 }
 
-// Info is the reply to describe.
 type Info struct {
 	ID       string `json:"id"`
 	Version  string `json:"version"`
@@ -249,9 +241,9 @@ type Info struct {
 	Operations    []string `json:"operations"`
 	// NativeParser says the extension takes native-only generate calls (Call.NativeOnly,
 	// minor version 27): it parses a request's items, tools and origin from its native body
-	// itself, so core need not send them twice, with the format parsers of this version
-	// (format.ParserVersion). Core sends native-only calls only when it equals core's own
-	// version; 0 or absent: the extension does not parse.
+	// itself with the format parsers of this version (format.ParserVersion). Core sends
+	// native-only calls only when it equals core's own version; 0 or absent: the extension does
+	// not parse.
 	NativeParser int `json:"native_parser,omitempty"`
 	// LoginMethods are the ways login can add an account; present when Operations includes
 	// login.
@@ -270,8 +262,7 @@ const (
 )
 
 type LoginMethod struct {
-	// Method names it in a login call. Kind says how it works; an extension with two browser
-	// logins (say, two account types) gives them different methods of the same kind.
+	// Method names it in a login call. Kind says how it works.
 	Method string       `json:"method"`
 	Kind   string       `json:"kind"`
 	Label  string       `json:"label,omitempty"`
@@ -304,12 +295,10 @@ type Prompt struct {
 	VerificationURIComplete string `json:"verification_uri_complete,omitempty"`
 	// ExpiresIn is how long the prompt stays valid, in seconds.
 	ExpiresIn int64 `json:"expires_in,omitempty"`
-	// Inputs the user may send back with login.input. A browser prompt usually accepts the
-	// redirect URL, for when the extension's own callback cannot be reached.
+	// Inputs the user may send back with login.input.
 	Inputs []LoginInput `json:"inputs,omitempty"`
 }
 
-// Grant is the result of a login or refresh.
 type Grant struct {
 	Credential *Credential `json:"credential"`
 	// Settings supplies non-secret defaults for a new account (minor version 9). Explicit
@@ -319,9 +308,8 @@ type Grant struct {
 	// secret; login only.
 	Label string `json:"label,omitempty"`
 	// Identity names the upstream account the credential signs in to, by the fields the
-	// provider knows it by (for example "email", "account_id", "organization_id"), so core can
-	// check that a new login to an existing account signs in to the same one (minor version 5).
-	// Not secret; login only. At most MaxIdentityFields fields.
+	// provider knows it by (for example "email", "account_id", "organization_id") (minor
+	// version 5). Not secret; login only. At most MaxIdentityFields fields.
 	Identity map[string]string `json:"identity,omitempty"`
 }
 
@@ -356,7 +344,6 @@ type ModelList struct {
 
 // Only ID is required; every other field is shown where a client's model list has a place for it.
 type Model struct {
-	// ID is the model's name upstream, as requests name it.
 	ID string `json:"id"`
 	// Name is the model's resource name in Gemini's model list (for example
 	// "models/gemini-2.5-pro"); default ID.
@@ -406,8 +393,7 @@ type Quota struct {
 	// PlanEndsAt is when the subscription ends, in Unix seconds; zero means unknown (0.10).
 	PlanEndsAt int64        `json:"plan_ends_at,omitempty"`
 	Limits     []QuotaLimit `json:"limits"`
-	// Raw holds the provider's replies the quota was read from, as one JSON object, for what
-	// Limits has no place for.
+	// Raw holds the provider's replies the quota was read from, as one JSON object.
 	Raw json.RawMessage `json:"raw,omitempty"`
 }
 
@@ -498,13 +484,10 @@ type CapturedBody struct {
 	// BodySize is the body's full length in bytes; for a response, as much as had been read.
 	BodySize int64 `json:"body_size,omitempty"`
 	// BodyStopped is true when the body was not read to its end (minor version 17): the reader
-	// stopped, a read failed, or the frame was sent first. Its last bytes may then be the start
-	// of a secret cut off there.
+	// stopped, a read failed, or the frame was sent first.
 	BodyStopped bool `json:"body_stopped,omitempty"`
 }
 
-// Reply is a frame an extension sends: an event, an alive frame, the result of describe, models,
-// check or quota, a login or refresh frame, or a diagnostic frame.
 type Reply struct {
 	llm.Event
 	Info       *Info        `json:"info,omitempty"`

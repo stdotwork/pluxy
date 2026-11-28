@@ -14,16 +14,14 @@ import (
 
 const minSideSecret = 8
 
-// AccountSecrets returns the secrets of account a whose pieces an upstream may echo, for
-// RemovePieces. They are the ones an extension sends upstream (sdk.Upstream) or core holds as
-// secret:
+// AccountSecrets returns the secrets of account a:
 //
 //   - the credential's api_key, access_token and refresh_token;
 //   - the value of each header whose name is secret (SecretName);
 //   - the user name and password of proxy_url;
 //   - in settings, every string or number below a key whose name is secret (SecretName), and the
-//     user name, password and secret query or fragment values (secretQueryName) of every URL; a
-//     URL below a secret key counts by those parts only.
+//     user name, password and secret query or fragment values of every URL; a URL below a secret
+//     key counts by those parts only.
 //
 // A secret other than the credential's that is shorter than 8 bytes is left out, and so is such a
 // part. A credential's field keeps parts of any length. The credential's data is left out too.
@@ -42,8 +40,8 @@ func AccountSecrets(a Account) []string {
 
 // AccountSecretsWith is AccountSecrets with settings in place of the secrets AccountSecrets
 // finds in a's settings. A value that is an absolute URL counts by its user name,
-// password and secret query or fragment values only (its other words, such as "https", are no
-// secret), and like every secret but the credential's, one under 8 bytes adds nothing.
+// password and secret query or fragment values only, and like every secret but the credential's,
+// one under 8 bytes adds nothing.
 func AccountSecretsWith(a Account, settings []string) []string {
 	var plain, values []string
 	for _, s := range settings {
@@ -288,17 +286,15 @@ var escapedRun = regexp.MustCompile(`(?:[A-Za-z0-9_\-.+/=~]|\\u[0-9A-Fa-f]{4}|\\
 
 // RemovePieces returns s with every run of token characters (letters, digits and "_-.+/=~") that
 // holds minPiece or more consecutive characters of one of secrets replaced by Redacted, or
-// longPiece or more for a long token (longToken). A run is read as written and with its escapes
-// decoded (ReplaceRuns), so a piece written with escapes between its characters is replaced, and so
-// is one of a secret that holds such an escape itself.
+// longPiece or more for a long token. A run is read as written and with its escapes decoded
+// (ReplaceRuns).
 //
-// A run also takes any other character one of secrets holds (secretRunBytes), such as a password's
-// "@" or a letter outside ASCII, so a cut of such a secret is one run too. Whitespace, control
-// characters, quotes, brackets, commas and backslashes always end a run.
+// A run also takes any other character one of secrets holds, such as a password's "@" or a letter
+// outside ASCII. Whitespace, control characters, quotes, brackets, commas and backslashes always
+// end a run.
 //
-// A secret's public vendor prefix (publicKeyPrefix), such as "sk-proj-", gives no piece of its
-// own: a piece counts only when it holds at least one byte after the prefix, so words such as
-// "project" stay.
+// A secret's public vendor prefix, such as "sk-proj-", gives no piece of its own: a piece counts
+// only when it holds at least one byte after the prefix.
 //
 // A PEM private key counts by its lines and its unwrapped body, at longPiece bytes too.
 //
@@ -450,7 +446,7 @@ func publicKeyPrefix(secret string) int {
 // ReplaceRuns returns s with every run of token characters and escapes for which match reports
 // true replaced by Redacted. match gets the run as written and decoded: JSON's \/, \\ and \uXXXX
 // (a surrogate pair as one character) and percent-encoding's %XX, nested up to 8 times. The word
-// of a Redacted already in s is never a run, so it never becomes "[[redacted]]".
+// of a Redacted already in s is never a run.
 func ReplaceRuns(s string, match func(run, decoded string) bool) string {
 	var b strings.Builder
 	last := 0

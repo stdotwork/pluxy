@@ -44,9 +44,7 @@ func (u *UsageLimit) Message() string {
 func (u *UsageLimit) resetIn() time.Duration { return max(u.ResetsAt.Sub(u.At), 0) }
 
 // ErrorObject is the error object of the reply's JSON body ({"error": ...}) for OpenAI, Responses
-// and Gemini clients: code model_cooldown, type usage_limit_reached, the reset as Unix seconds
-// (resets_at) and as a countdown (reset_seconds, reset_time), retryable false, and the window,
-// provider and last upstream error when known.
+// and Gemini clients.
 func (u *UsageLimit) ErrorObject() map[string]any {
 	in := u.resetIn()
 	shown := WholeSeconds(in)

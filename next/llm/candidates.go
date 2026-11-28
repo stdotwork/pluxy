@@ -15,27 +15,21 @@ const (
 
 // CandidateEvent is one step of a candidate reply after candidate 0 (Index >= 1), added in
 // protocol minor version 35. Candidate 0 continues to use the top-level item, delta, media and
-// finish events unchanged so consumers that show only one candidate never see or mix in later
-// candidates.
+// finish events unchanged.
 type CandidateEvent struct {
 	// Index is the 1-based candidate index (must be >= 1).
-	Index int `json:"index"`
-	// Kind selects which fields apply (the Candidate* constants).
-	Kind string `json:"kind"`
+	Index int    `json:"index"`
+	Kind  string `json:"kind"`
 	// Item identifies a tool call within this candidate for tool_call.start, tool_input.delta
 	// and tool_call.end.
-	Item  int    `json:"item,omitempty"`
-	Delta string `json:"delta,omitempty"`
-	// CallID and Name identify a tool call on tool_call.start.
-	CallID string `json:"call_id,omitempty"`
-	Name   string `json:"name,omitempty"`
-	// Media carries one generated image or audio part on media.
-	Media *OutputMedia `json:"media,omitempty"`
-	// Finish carries this candidate's own finish reason on finish.
-	Finish *Finish `json:"finish,omitempty"`
+	Item   int          `json:"item,omitempty"`
+	Delta  string       `json:"delta,omitempty"`
+	CallID string       `json:"call_id,omitempty"`
+	Name   string       `json:"name,omitempty"`
+	Media  *OutputMedia `json:"media,omitempty"`
+	Finish *Finish      `json:"finish,omitempty"`
 }
 
-// ValidCandidateEvent checks that c satisfies the protocol 0.35 invariants for a candidate event.
 func ValidCandidateEvent(c *CandidateEvent) error {
 	if c == nil {
 		return fmt.Errorf("candidate event without candidate payload")

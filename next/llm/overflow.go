@@ -45,8 +45,7 @@ func isContextOverflow(message string) bool {
 
 // MarkContextOverflow gives err, when it is an upstream's refusal of a prompt too long for the
 // model, the code ProviderContextLengthExceeded, status 400 and ScopeRequest: it fails this request
-// only, and is not tried on another account. Any other error comes back unchanged. An extension
-// calls it on the errors of its upstream's replies.
+// only, and is not tried on another account. Any other error comes back unchanged.
 func MarkContextOverflow(err error) error {
 	var e *Error
 	if !errors.As(err, &e) || (e.Status != 0 && e.Status != 400) ||

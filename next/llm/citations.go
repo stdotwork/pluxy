@@ -142,7 +142,6 @@ func (b *CiteBudget) AddSource(s Source) bool {
 	return b.take(&b.sources, &b.srcFull, len(s.URL)+len(s.Title)+citationOverhead)
 }
 
-// KeepCitations returns the leading citations of cs that fit.
 func (b *CiteBudget) KeepCitations(cs []Citation) []Citation {
 	for i, c := range cs {
 		if !b.AddCitation(c) {
@@ -155,7 +154,6 @@ func (b *CiteBudget) KeepCitations(cs []Citation) []Citation {
 // LeftOut records that a citation or source was left out for a reason of the caller's.
 func (b *CiteBudget) LeftOut() { b.cut = true }
 
-// Cut reports whether any citation or source was left out.
 func (b *CiteBudget) Cut() bool { return b.cut }
 
 // LossPathCitations and LossPathFinish are the paths of the losses for what a reply's size limits
@@ -166,7 +164,6 @@ const (
 	LossPathFinish    = "finish"
 )
 
-// WithLoss adds the loss for citations and sources left out, if there were any, to losses.
 func (b *CiteBudget) WithLoss(losses []Loss) []Loss {
 	if !b.cut {
 		return losses

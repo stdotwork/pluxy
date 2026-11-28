@@ -88,22 +88,19 @@ func NewRedactor(cs ...*Credential) *Redactor {
 // SecretParts returns the parts of the secret s that are secret on their own, each at least min
 // bytes long, in the order found; none when s has none of the structures below. These structures
 // are split, and each part split again, up to 4 times; of what is still left to split then, the
-// last word and the parts nothing splits further are parts too, so a token behind more schemes or
-// prefixes than that is still found:
+// last word and the parts nothing splits further are parts too:
 //
 //   - an authorization value, "Bearer <token>" or "Basic <base64>" (the scheme in any letter case):
 //     the token, or the base64 text (standard or URL-safe, padded or not), what it decodes to when
 //     that is text or holds a ":" ("user:password", in any encoding) and the password, or
-//     the user name when the password is empty, as a key sent as Basic's user name is;
+//     the user name when the password is empty;
 //   - a token behind a public prefix, "<prefix>$<token>" or "<prefix>:<token>" (such as Devin's
 //     "devin-session-token$<jwt>", Meta's "dca:<token>" or a header line "Name: value"), where
 //     the prefix is a letter and up to 31 more letters, digits, "-", "_" or ".", and the token
-//     (spaces and tabs after the "$" or ":" aside) does not start with "/", so a URL's
-//     "scheme://" is not one: the token;
+//     (spaces and tabs after the "$" or ":" aside) does not start with "/": the token;
 //   - a cookie list, "name=value; name=value" (or one pair): each value, its double quotes
 //     aside, where the name is an HTTP token and the value holds only cookie characters. A value
-//     that is empty or only "=" characters, its quotes aside, adds no part: after a key's first
-//     "=" that is base64 padding, so "abc==" is no pair, while "abc=def==" still is.
+//     that is empty or only "=" characters, its quotes aside, adds no part.
 //
 // A prefix, a scheme or a cookie name is never a part.
 func SecretParts(s string, min int) []string {
@@ -280,9 +277,9 @@ func cookieChar(r rune) bool {
 const minCutFragment = 4
 
 // TrimCut returns head and tail, the start and the end of a body with the middle cut out, without
-// the bytes beside the cut that could be the two parts of a secret cut in two, which String
-// cannot recognise: a run at the end of head that is the start of a form of the credential, and a
-// run at the start of tail that is the end of one, each of at least 4 bytes.
+// the bytes beside the cut that could be the two parts of a secret cut in two: a run at the end of
+// head that is the start of a form of the credential, and a run at the start of tail that is the
+// end of one, each of at least 4 bytes.
 func (r *Redactor) TrimCut(head, tail string) (string, string) {
 	if r == nil || r.r == nil {
 		return head, tail
@@ -349,7 +346,7 @@ func encodings(s string) []string {
 }
 
 // String returns s with the credential removed, also where s holds it only once its escapes are
-// decoded: s may quote a JSON body or a URL, as error text often does.
+// decoded.
 func (r *Redactor) String(s string) string {
 	if r == nil || r.r == nil {
 		return s
@@ -451,6 +448,7 @@ const (
 	allEscapes = jsonEscapes | percentEscapes
 )
 
+// As encoding/json does, an unpaired surrogate decodes to U+FFFD.
 func escapeAt(s string, i int, kinds int) (v rune, n int) {
 	if s[i] == '%' && kinds&percentEscapes != 0 {
 		if i+2 < len(s) && isHex(s[i+1]) && isHex(s[i+2]) {

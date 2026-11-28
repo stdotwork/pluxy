@@ -9,11 +9,9 @@ import (
 const ToolCodeExecutionUnsent = "nothing says this upstream takes a code execution tool, so it is not sent"
 
 // CodeExecution is one server-side code execution run reported in a reply (protocol minor version
-// 32). It carries only what more than one format can express: the code or command that ran, its
-// language if given, its text output, whether it failed, and whether non-text outputs (files or
-// images) were omitted. A last record with only FilesOmitted set (see CodeRuns)
-// stands for runs the reply had that are not in the list: runs past MaxCodeExecutionBytes, a run
-// whose code passes MaxCodeExecutionCodeBytes, and a run with no result a decoder could use.
+// 32). A last record with only FilesOmitted set (see CodeRuns) stands for runs the reply had that
+// are not in the list: runs past MaxCodeExecutionBytes, a run whose code passes
+// MaxCodeExecutionCodeBytes, and a run with no result a decoder could use.
 type CodeExecution struct {
 	Code         string `json:"code,omitempty"`
 	Language     string `json:"language,omitempty"`
@@ -26,8 +24,7 @@ type CodeExecution struct {
 const MaxCodeExecutionBytes = 4 << 20
 
 // MaxCodeExecutionCodeBytes bounds the code or command of one run. A run whose code is longer is
-// left out whole, never cut, so the code a client is shown is always the code that ran. The limit
-// is the same for streamed and non-streamed replies.
+// left out whole, never cut. The limit is the same for streamed and non-streamed replies.
 const MaxCodeExecutionCodeBytes = 1 << 20
 
 var codeExecutionsLeftOut = CodeExecution{FilesOmitted: true}
@@ -62,7 +59,6 @@ func (c *CodeRuns) Append(run CodeExecution) {
 // LeaveOut ends the list with the one record that says runs were left out.
 func (c *CodeRuns) LeaveOut() { c.leftOut = true }
 
-// Remove takes out the last run equal to run, if the list has one.
 func (c *CodeRuns) Remove(run CodeExecution) {
 	for i := len(c.runs) - 1; i >= 0; i-- {
 		codeRunSteps.Add(1)

@@ -61,8 +61,7 @@ const (
 	// is cancelled sends only bytes that carry nothing the extension passes on (such as SSE
 	// comments or pings), at least every 2 seconds. The alive check cancels once an alive frame
 	// arrives, about 10 seconds after the quiet starts. An extension that reports protocol 0.23
-	// must send core alive frames meanwhile (sdk.Upstream does). Only used when Target.Quiet is
-	// set.
+	// must send core alive frames meanwhile. Only used when Target.Quiet is set.
 	ScenarioQuiet Scenario = "quiet"
 )
 
@@ -94,8 +93,7 @@ const (
 	// extension must report code auth, scope credential, not retryable.
 	RefreshRejected LoginScenario = "refresh_rejected"
 	// RefreshUnavailable: the provider's token endpoint answers, but with a server failure
-	// (5xx). The extension must report an error that is not code auth and not retryable: the
-	// request reached the provider, so it may have run.
+	// (5xx). The extension must report an error that is not code auth and not retryable.
 	RefreshUnavailable LoginScenario = "refresh_unavailable"
 )
 
@@ -168,8 +166,7 @@ func BuildExtension(t *testing.T, manifest, pkg string) string {
 }
 
 // Run runs every check as a subtest of t. It starts the extension with protocol.EnvTestLoginHosts
-// set to 1 (see sdk.TestLoginHost), so an extension that signs in can send its login and token
-// requests to the fixture's fake provider, which its account settings name.
+// set to 1.
 func Run(t *testing.T, target Target) {
 	t.Helper()
 	t.Setenv(protocol.EnvTestLoginHosts, "1")

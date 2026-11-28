@@ -275,6 +275,8 @@ func splice(b []byte, lo, hi int, ins ...[]byte) []byte {
 	return append(out, b[hi:]...)
 }
 
+// quote writes s as a JSON string the way sjson does: printable ASCII without a quote or a
+// backslash goes in as it is (so `<`, `>` and `&` stay unescaped).
 func quote(s string) []byte {
 	plain := true
 	for i := 0; i < len(s); i++ {
@@ -313,6 +315,8 @@ func build(comps []string) (pre, post []byte, err error) {
 	return pre, closers, nil
 }
 
+// It writes the way sjson does: a new object member goes before the closing brace, and an array
+// grown past its end is rewritten without whitespace and padded with nulls.
 func setValue(b []byte, comps []string, val []byte) ([]byte, error) {
 	i := skipSpace(b, 0)
 	root := true
@@ -394,6 +398,8 @@ func setValue(b []byte, comps []string, val []byte) ([]byte, error) {
 	}
 }
 
+// deleteValue removes the value at comps, with sjson's handling of commas: a later member goes
+// together with the comma before it, a first one with the comma after it.
 func deleteValue(b []byte, comps []string) ([]byte, bool) {
 	i := skipSpace(b, 0)
 	for ; len(comps) > 1; comps = comps[1:] {

@@ -71,8 +71,7 @@ type Input struct {
 	// another object (for example `request`).
 	Root string
 	// Original is the body as the client sent it. Default rules check it, not the body being
-	// built, for whether a field is missing, so a field the pipeline added is still defaulted.
-	// Without it they check the body.
+	// built, for whether a field is missing. Without it they check the body.
 	Original []byte
 	// Selected says the rules are what Select returned for this call: their models were matched
 	// to the call already, so Apply checks only each model's body conditions (match, not-match,
@@ -81,10 +80,9 @@ type Input struct {
 }
 
 // Select returns the rules that apply to the call in (its model names, protocol, client format
-// and client headers), for a caller that knows the call but not the final body: each rule keeps
-// only the models that match the call, each reduced to its body conditions, and a rule with none
-// left is dropped. Apply with Selected then gives the same body as Apply with r and in. It
-// returns nil when no rule applies.
+// and client headers): each rule keeps only the models that match the call, each reduced to its
+// body conditions, and a rule with none left is dropped. Apply with Selected then gives the same
+// body as Apply with r and in. It returns nil when no rule applies.
 func Select(r *Rules, in Input) *Rules {
 	if r == nil || r.empty() {
 		return nil
@@ -594,10 +592,9 @@ func matchPattern(pattern, s string) bool {
 	return true
 }
 
-// Validate checks the rules the way a config loader should before it keeps them: every path
-// (rule params, filter params, match, not-match, exist, not-exist) must be inside the supported
-// syntax, and every raw value must be valid JSON. The error lists every problem, each naming the
-// rule and the path or value.
+// Validate checks the rules: every path (rule params, filter params, match, not-match, exist,
+// not-exist) must be inside the supported syntax, and every raw value must be valid JSON. The
+// error lists every problem, each naming the rule and the path or value.
 func Validate(r *Rules) error {
 	if r == nil {
 		return nil

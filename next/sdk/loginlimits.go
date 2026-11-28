@@ -11,7 +11,7 @@ const (
 )
 
 // BoundSeconds turns a provider's number of seconds into a duration of at most max. Zero or
-// less returns 0, so a caller can fall back to its default; a huge number does not overflow.
+// less returns 0; a huge number does not overflow.
 func BoundSeconds(secs int64, max time.Duration) time.Duration {
 	if secs <= 0 {
 		return 0

@@ -120,6 +120,10 @@ func (t upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	return rt.RoundTrip(req)
 }
 
+// withHeaders returns a copy of req (a RoundTripper must not change the request it is given). On a
+// redirect away from the first request's scheme and host, a header whose name is secret
+// (upheader.Secret) is removed instead, whoever set it, as net/http leaves Authorization and
+// Cookie out there.
 func withHeaders(req *http.Request, headers map[string]string) *http.Request {
 	r := req.Clone(req.Context())
 	if r.Header == nil {
@@ -155,6 +159,9 @@ func redirectedAway(req *http.Request) bool {
 	return !strings.EqualFold(from.Scheme, to.Scheme) || !strings.EqualFold(from.Host, to.Host)
 }
 
+// A body that is not JSON (by its Content-Type), or is encoded (Content-Encoding), is sent as it
+// is. The rules apply to the body req carries, once: net/http sends the same new bytes again when
+// it retries the request on another connection.
 func withPayload(req *http.Request) (*http.Request, error) {
 	if req.Body == nil || req.Body == http.NoBody || !jsonBody(req.Header) {
 		return req, nil
@@ -320,6 +327,7 @@ func (d *dialedConns) closeAll() {
 	d.conns = nil
 }
 
+// CloseIdleConnections preserves http.Client.CloseIdleConnections through the wrapper.
 func (t upstreamTransport) CloseIdleConnections() {
 	t.base.CloseIdleConnections()
 	t.proxies.closeIdle()
@@ -391,8 +399,7 @@ func (p *proxyPool) closeIdle() {
 
 // Info describes the call making an upstream request. It contains only the account's ID,
 // settings, proxy and headers and the call's payload rules, never its credential or the request
-// body. Settings are
-// read-only.
+// body. Settings are read-only.
 type Info struct {
 	AccountID string
 	Settings  json.RawMessage
@@ -412,7 +419,7 @@ type Info struct {
 	Payload *payload.Rules
 	Stream  bool
 	// Timeouts holds the upstream timeouts core resolved for the account (protocol minor version
-	// 22). Nil uses the SDK defaults when hasTimeouts is set.
+	// 22). Nil uses the SDK defaults.
 	Timeouts *protocol.Timeouts
 
 	capture *captureLog
