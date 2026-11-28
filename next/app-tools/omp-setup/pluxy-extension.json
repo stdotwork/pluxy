@@ -77,7 +77,7 @@
       },
       {
         "id": "apply",
-        "description": "Point Oh My Pi at pluxy's core: write a pluxy provider with the core's address, the client key, the OpenAI Responses API and model discovery from the core into the previewed models file, and make pluxy's model the default model role in the previewed settings file, keeping everything else in them. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "description": "Point Oh My Pi at pluxy: write a pluxy provider with pluxy's address, the client key, the OpenAI Responses API and model discovery from pluxy into the previewed models file, and make pluxy's model the default model role in the previewed settings file, keeping everything else in them. Saving replaces the file; an edit made in the same instant by another program may be lost.",
         "effect": "write",
         "secrets": {
           "key": "value"

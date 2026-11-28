@@ -1,7 +1,9 @@
 // What the app puts on the rows of the Tools page and of the guided setup's step 2: the button that
 // installs or turns on a tool's add-on (one at a time for each add-on, however often the row is
-// drawn again), and, on a tool's page opened from setup, the way back. The words are the app's own
-// (A3); the rows, their states and their other words are the kit's.
+// drawn again), and, on a tool's page opened from setup, the way back. One press goes as far as it
+// can: Install add-on installs, then turns the add-on on (its one confirmation window), then opens
+// the tool's page; Turn on add-on does the last two. The words are the app's own (A3); the rows,
+// their states and their other words are the kit's.
 
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
@@ -59,14 +61,15 @@ function useAddonStatus(pkg: string): AddonStatus {
  * Runs one step of an add-on, unless one is running for it already. A person's cancel of the
  * confirmation window ends it quietly; any other failure is kept, with its reason, until the
  * step is pressed again. changed runs once the step is over, so the page reads the device again.
+ * The device's add-ons as the step left them, once it went through.
  */
 export async function runAddon(
   pkg: string,
   step: AddonStep,
   call: () => Promise<Reply<DeviceCatalog>>,
   changed: () => void,
-) {
-  if (statuses.get(pkg)?.working) return;
+): Promise<DeviceCatalog | undefined> {
+  if (statuses.get(pkg)?.working) return undefined;
   setStatus(pkg, { working: step });
   let reply: Reply<DeviceCatalog>;
   try {
@@ -78,6 +81,31 @@ export async function runAddon(
   if (message === undefined || answeredNo(message)) setStatus(pkg);
   else setStatus(pkg, { failed: { step, reason: message } });
   changed();
+  return message === undefined ? reply.body : undefined;
+}
+
+/**
+ * Takes an add-on from where step finds it as far as one press goes: installs it (install), turns
+ * it on, which asks in its confirmation window, and once it is on calls opens (the tool's page).
+ * An install that leaves it on already skips the turn-on; a failure or a No stops where it is.
+ */
+export async function setUpAddon(
+  pkg: string,
+  step: AddonStep,
+  install: () => Promise<Reply<DeviceCatalog>>,
+  changed: () => void,
+  opens?: () => void,
+) {
+  const on = (c?: DeviceCatalog) => c?.packages.find((p) => p.id === pkg)?.enabled === true;
+  if (step === "install") {
+    const after = await runAddon(pkg, "install", install, changed);
+    if (!after?.packages.some((p) => p.id === pkg)) return;
+    if (on(after)) {
+      opens?.();
+      return;
+    }
+  }
+  if (on(await runAddon(pkg, "enable", () => device.setEnabled(pkg, true), changed))) opens?.();
 }
 
 /** Where the add-on's step stands, for a test. */
@@ -92,6 +120,8 @@ export function AddonAction(props: {
   registry?: string;
   version?: string;
   changed: () => void;
+  /** Opens the tool's page, once the add-on is on. */
+  opens?: () => void;
 }) {
   const status = useAddonStatus(props.pkg);
   const shown = useShown();
@@ -100,13 +130,12 @@ export function AddonAction(props: {
     props.step === "install" ? (working === "install" ? t("installing") : t("install")) : t("turnOn");
   // Nothing is returned: the button's own busy mark would sit on the words "Installing…".
   const press = () => {
-    void runAddon(
+    void setUpAddon(
       props.pkg,
       props.step,
-      props.step === "install"
-        ? () => device.install(props.registry ?? "", props.pkg, props.version)
-        : () => device.setEnabled(props.pkg, true),
+      () => device.install(props.registry ?? "", props.pkg, props.version),
       props.changed,
+      props.opens,
     );
   };
   const failed = status.failed?.step === props.step ? status.failed.reason : undefined;

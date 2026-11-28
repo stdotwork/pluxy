@@ -3,6 +3,11 @@ use gtk::prelude::*;
 use tauri::Manager;
 
 fn text_view(text: &str) -> gtk::ScrolledWindow {
+    text_view_of(text, 320)
+}
+
+/// text, read-only and selectable, in a scrolled area at least height pixels tall.
+fn text_view_of(text: &str, height: i32) -> gtk::ScrolledWindow {
     let label = gtk::Label::new(Some(text));
     label.set_selectable(true);
     label.set_xalign(0.0);
@@ -10,13 +15,102 @@ fn text_view(text: &str) -> gtk::ScrolledWindow {
     label.set_line_wrap(true);
     let scroll = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
     scroll.set_min_content_width(640);
-    scroll.set_min_content_height(320);
+    scroll.set_min_content_height(height);
     scroll.add(&label);
     scroll
 }
 
+/// A confirmation's plain words above its exact details: the words wrapped at the dialog's width,
+/// in an area as tall as they are up to `WORDS_MAX_HEIGHT` (scrolled past that, so a long
+/// description cannot push Confirm and Cancel off the screen), then `text::DETAILS` and the
+/// details in a scrolled area of their own.
+fn review_view(review: &str, details: &str) -> gtk::Box {
+    let words = wrapped(review, WORDS_WIDTH_CHARS, WORDS_MAX_HEIGHT);
+    let heading = gtk::Label::new(Some(text::DETAILS));
+    heading.set_xalign(0.0);
+    let b = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    b.set_border_width(8);
+    b.pack_start(&words, false, false, 0);
+    b.pack_start(&heading, false, false, 4);
+    b.pack_start(&text_view_of(details, 200), true, true, 0);
+    b
+}
+/// The plain words' width, in characters.
+const WORDS_WIDTH_CHARS: i32 = 72;
+/// The most the plain words' area grows to, in pixels; longer words scroll.
+const WORDS_MAX_HEIGHT: i32 = 240;
+
+/// text, selectable, wrapped at width characters, so the window is measured at that width (a
+/// wrapped label with no width of its own asks for its height at one word a line, taller than any
+/// screen), in an area as tall as its lines up to max_height pixels, scrolled past that. (A
+/// scrolled area does not take its text's height here by itself, so the lines are counted.) The
+/// notice's text and a confirmation's plain words.
+fn wrapped(text: &str, width: i32, max_height: i32) -> gtk::ScrolledWindow {
+    let label = gtk::Label::new(Some(text));
+    label.set_line_wrap(true);
+    label.set_line_wrap_mode(gtk::pango::WrapMode::WordChar);
+    label.set_width_chars(width);
+    label.set_max_width_chars(width);
+    label.set_xalign(0.0);
+    label.set_yalign(0.0);
+    label.set_selectable(true);
+    let scroll = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    let line = label.create_pango_layout(Some("Xg")).pixel_size().1.max(1);
+    // Lines a little shorter than the width, as wrapping breaks between words.
+    let per_line = (width - 5).max(1) as usize;
+    let lines: usize = text
+        .split('\n')
+        .map(|l| l.chars().count().div_ceil(per_line).max(1))
+        .sum();
+    let height = i32::try_from(lines)
+        .unwrap_or(i32::MAX)
+        .saturating_mul(line);
+    scroll.set_min_content_height(height.min(max_height));
+    scroll.set_max_content_height(max_height);
+    scroll.add(&label);
+    scroll
+}
+/// The notice's text width, in characters.
+const NOTICE_WIDTH_CHARS: i32 = 60;
+/// The most the notice's text area grows to, in pixels; longer text scrolls.
+const NOTICE_MAX_HEIGHT: i32 = 320;
+
+/// Puts text in the notice window, in place of what it showed, with its Close button, which
+/// hides it and is given the focus once it shows.
+fn fill_notice(window: &gtk::Window, text: &str) -> gtk::Button {
+    if let Some(child) = window.child() {
+        window.remove(&child);
+    }
+    let close = gtk::Button::with_mnemonic(text::NOTICE_CLOSE);
+    let weak = window.downgrade();
+    close.connect_clicked(move |_| {
+        if let Some(w) = weak.upgrade() {
+            w.hide();
+        }
+    });
+    let buttons = gtk::ButtonBox::new(gtk::Orientation::Horizontal);
+    buttons.set_layout(gtk::ButtonBoxStyle::End);
+    buttons.add(&close);
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    body.set_border_width(12);
+    body.pack_start(
+        &wrapped(text, NOTICE_WIDTH_CHARS, NOTICE_MAX_HEIGHT),
+        true,
+        true,
+        0,
+    );
+    body.pack_start(&buttons, false, false, 0);
+    window.add(&body);
+    // Back to the size the new text asks for, not the last one's.
+    window.resize(1, 1);
+    close
+}
+
 /// Always host-owned, including the result of a refused page Start. Later ingress calls this
-/// with the host-resolved requester/action; a page cannot provide the notice or outcome.
+/// with the host-resolved requester/action; a page cannot provide the notice or outcome. It has
+/// its own Close button, and Escape closes it, as a desktop without a window manager gives no
+/// other way to.
 pub(crate) fn notice(app: &tauri::AppHandle, text: String) {
     let _ = app.run_on_main_thread(move || {
         thread_local! { static NOTICE: std::cell::RefCell<Option<gtk::Window>> = const { std::cell::RefCell::new(None) }; }
@@ -25,13 +119,23 @@ pub(crate) fn notice(app: &tauri::AppHandle, text: String) {
             let window = slot.get_or_insert_with(|| {
                 let w = gtk::Window::new(gtk::WindowType::Toplevel);
                 w.set_title(text::NOTICE_TITLE);
-                w.set_default_size(560, 100);
-                w.connect_delete_event(|w, _| { w.hide(); gtk::glib::Propagation::Stop });
+                w.set_position(gtk::WindowPosition::Center);
+                w.connect_delete_event(|w, _| {
+                    w.hide();
+                    gtk::glib::Propagation::Stop
+                });
+                w.connect_key_press_event(|w, e| {
+                    if e.keyval() == gtk::gdk::keys::constants::Escape {
+                        w.hide();
+                        return gtk::glib::Propagation::Stop;
+                    }
+                    gtk::glib::Propagation::Proceed
+                });
                 w
             });
-            if let Some(child) = window.child() { window.remove(&child); }
-            let label = gtk::Label::new(Some(&text)); label.set_line_wrap(true);
-            window.add(&label); window.show_all();
+            let close = fill_notice(window, &text);
+            window.show_all();
+            close.grab_focus();
         });
     });
 }
@@ -39,10 +143,11 @@ pub(crate) fn notice(app: &tauri::AppHandle, text: String) {
 pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> {
     let Review {
         review,
+        details,
         remember: remember_text,
         summary,
         page,
-        own,
+        quiet,
         confirm,
     } = begin(app, &id)?;
     let handle = app.clone();
@@ -81,9 +186,17 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
                 }
             });
         }
-        dialog
-            .content_area()
-            .pack_start(&text_view(&review), true, true, 8);
+        // What will happen in plain words first, the exact details below it.
+        match &details {
+            Some(details) => {
+                dialog
+                    .content_area()
+                    .pack_start(&review_view(&review, details), true, true, 8)
+            }
+            None => dialog
+                .content_area()
+                .pack_start(&text_view(&review), true, true, 8),
+        }
         let remember = gtk::CheckButton::with_mnemonic(remember_text.as_deref().unwrap_or(""));
         if remember_text.is_some() {
             dialog.content_area().pack_start(&remember, false, false, 8);
@@ -93,7 +206,7 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
         let completed = std::rc::Rc::new(std::cell::Cell::new(false));
         let timed = completed.clone();
         // Closing/expiry cannot manufacture a confirm response. The engine checks its own clock.
-        gtk::glib::timeout_add_local_once(LIFETIME, move || {
+        gtk::glib::timeout_add_local_once(SHOWN_LIFETIME, move || {
             if timed.get() {
                 return;
             }
@@ -128,7 +241,7 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
                 response == gtk::ResponseType::Accept,
                 remember.is_active(),
                 &summary,
-                own,
+                quiet,
             );
             d.hide();
             // No GTK state is queried after destroying this completed dialog.

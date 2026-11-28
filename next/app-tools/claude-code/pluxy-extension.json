@@ -75,7 +75,7 @@
       },
       {
         "id": "apply",
-        "description": "Point Claude Code at pluxy's core: write the core's address, the client key, the Opus, Sonnet, Haiku and Fable models, the startup and subagent models and the context settings into the previewed settings file, keeping everything else in it. With create_folder, first make that folder, Claude Code's ~/.claude, as Claude Code makes it when it first runs (Claude Code has not run here yet). Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "description": "Point Claude Code at pluxy: write pluxy's address, the client key, the Opus, Sonnet, Haiku and Fable models, the startup and subagent models and the context settings into the previewed settings file, keeping everything else in it. With create_folder, first make that folder, Claude Code's ~/.claude, as Claude Code makes it when it first runs (Claude Code has not run here yet). Saving replaces the file; an edit made in the same instant by another program may be lost.",
         "effect": "write",
         "secrets": {
           "key": "value"
