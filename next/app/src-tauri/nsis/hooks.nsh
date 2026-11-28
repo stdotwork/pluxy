@@ -1,6 +1,6 @@
 ; The per-user setup program's hooks (`bundle.windows.nsis.installerHooks`), which Tauri's NSIS
 ; template (tauri-bundler 2.10.4, installer.nsi) includes and inserts into its Install and
-; Uninstall sections. next/app/README.md ("Packages") says what the setup does.
+; Uninstall sections.
 ;
 ; - Before installing and before uninstalling: refused while the app runs from the install folder.
 ;   The template's own check that follows asks Restart Manager whether the app's program is in

@@ -32,7 +32,8 @@ these:
 - a licence header;
 - behaviour forced by something outside pluxy that it cannot reshape (a dependency, a platform, a
   vendor or a protocol), where the code alone does not make the reason clear;
-- a lint suppression for a style-only rule;
+- a lint suppression whose rule is wrong for that line, pedantic or style-only (one that silences a
+  correctness or safety rule goes, and the code is fixed instead);
 - a doc comment that defines a public API's contract;
 - a link to an issue or RFC for a constraint the code cannot express.
 
@@ -41,6 +42,10 @@ explanations of a workaround in pluxy's own code (change the code so it needs no
 whether a comment fits the list, delete it. The standard this follows is the
 [no-comments skill](https://github.com/cursor/plugins/blob/main/pstack/skills/no-comments/SKILL.md)
 and its [comment-sicko agent](https://github.com/cursor/plugins/blob/main/pstack/agents/comment-sicko.md).
+
+Lines that a tool reads are not comments under this rule, and stay: `//go:build`, `//go:generate`,
+`//go:embed`, a generated file's `// Code generated ... DO NOT EDIT.` line, `// prettier-ignore` and
+the like.
 
 If `.private/AGENTS.md` exists, read it too: it holds the owner's private instructions and notes.
 Start with [`docs/map.md`](docs/map.md) to find the entry files, tests, fakes and handbook sections

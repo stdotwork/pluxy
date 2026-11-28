@@ -46,7 +46,7 @@ The Go code is one module, `github.com/stdotwork/pluxy/next`. To use pluxy, star
 | `internal/usage` | The usage record: one event per request, kept in memory and written asynchronously to daily JSONL files. |
 | `internal/extconfig` | Extensions' settings: the schema from the manifest, checking values, and the store core keeps them in. |
 | `ui/` | The UI kit the panel and the desktop app share, the panel's browser build, and the [theme contract](ui/themes/README.md) ([README](ui/README.md)). |
-| `app/` | The desktop app: the kit's second build in a Tauri window, with a tray icon and three ways to reach core ([README](app/README.md)). Linux only for now. |
+| `app/` | The desktop app: the kit's second build in a Tauri window, with a tray icon and three ways to reach core ([README](app/README.md)). Linux only for now; how to use it is in [docs/app.md](../docs/app.md). |
 | `app-tools/` | The desktop app's optional native tools and the libraries they share: a cargo workspace of its own ([README](app-tools/README.md)). |
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
 | `corpus/` | Differential test corpus: cases replayed against core and compared with recorded replies, with listed exceptions ([README](corpus/README.md)). |
@@ -69,10 +69,4 @@ fakes exist.
 
 ## Docs
 
-- [docs/README.md](../docs/README.md): every page.
-- [Setup](../docs/setup.md), [Providers](../docs/providers.md), [Accounts and routing](../docs/routing.md),
-  [Extensions](../docs/extensions.md), [Usage and logs](../docs/usage-and-logs.md).
-- [Configuration](../docs/config.md), [Command line](../docs/cli.md),
-  [Management API](../docs/management-api.md), [Translation](../docs/translation.md).
-- [Extension tutorial](protocol/TUTORIAL.md) and [protocol](protocol/README.md).
-- [Design](../docs/design/design.md).
+[docs/README.md](../docs/README.md) lists the user guide, references, extension docs and design notes.

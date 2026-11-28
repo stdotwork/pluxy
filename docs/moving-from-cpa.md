@@ -93,7 +93,8 @@ Four things to know about the result:
   `config.json` yourself and restart pluxy, then import a copy of the file without its `tls`
   section.
 - **A core that runs on a `config.yaml` takes dry runs only.** The real import writes pluxy's JSON
-  config, and a core started with `-config <file>.yaml` reads a CPA-style file itself, so it answers
+  config, and a core started with `-config <file>.yaml` reads a CPA-style file itself
+  ([config.yaml keys](config-yaml.md)), so it answers
   `core runs on a config.yaml, which it reads with today's core's names already; an import writes core's JSON config (pluxy init writes one)`.
   Run the import on a core that uses a `config.json`.
 
@@ -208,8 +209,8 @@ From the auth folder, the `.json` files at its top of these types: `codex`, `cla
 - A symbolic link, a subfolder and any file that is not a `.json` file are not read.
 - An `antigravity` account serves only once the Antigravity extension is installed (step 4).
 
-The reference for every setting is [What each setting does](config.md#what-each-setting-does), and
-for every auth-file field [Auth files](config.md#auth-files), both in the configuration reference.
+The reference for every setting is [What each setting does](config-yaml.md#what-each-setting-does), and
+for every auth-file field [Auth files](config-yaml.md#auth-files), both in [config.yaml keys](config-yaml.md).
 
 ## What does not carry over
 
