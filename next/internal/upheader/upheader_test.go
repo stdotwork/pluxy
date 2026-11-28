@@ -12,11 +12,10 @@ import (
 
 const value = "fake-header-value-91"
 
-// Check refuses what net/http would refuse or override, and its message never holds a value.
 func TestCheck(t *testing.T) {
 	for _, c := range []struct {
 		h    map[string]string
-		want string // part of the error; "" for none
+		want string
 	}{
 		{map[string]string{"X-Gateway-Key": value, "User-Agent": "pluxy"}, ""},
 		{nil, ""},
@@ -28,12 +27,10 @@ func TestCheck(t *testing.T) {
 		{map[string]string{"X-A": "  "}, "header X-A has no value"},
 		{map[string]string{"X-A": value + "\r\nX-Injected: 1"}, "line break"},
 		{map[string]string{"X-A": "a\tb"}, ""},
-		// A value of "$" and a header name copies that header from the client's request.
 		{map[string]string{"X-Opencode-Session": "$x-opencode-session", "User-Agent": "$User-Agent"}, ""},
 		{map[string]string{"X-A": "$"}, "it must be $ and a header name"},
 		{map[string]string{"X-A": "$X B"}, "it must be $ and a header name"},
 		{map[string]string{"X-A": "$ X-B"}, "it must be $ and a header name"},
-		// Never the client's key, a proxy password or its cookies, whatever the letter case.
 		{map[string]string{"X-A": "$authorization"}, "cannot copy the client's Authorization header"},
 		{map[string]string{"X-A": "$X-API-KEY"}, "cannot copy the client's X-Api-Key header"},
 		{map[string]string{"X-A": "$x-goog-api-key"}, "cannot copy the client's X-Goog-Api-Key header"},
@@ -41,7 +38,6 @@ func TestCheck(t *testing.T) {
 		{map[string]string{"X-A": "$Proxy-Authorization"}, "cannot copy the client's Proxy-Authorization header"},
 		{map[string]string{"X-A": "$CPA-SESSION-ID"}, "$CPA-SESSION-ID (a CLIProxyAPI session ID, which pluxy does not have) is not supported"},
 		{map[string]string{"X-A": "id-$cpa-session-id"}, "$CPA-SESSION-ID (a CLIProxyAPI session ID, which pluxy does not have) is not supported"},
-		// "$" elsewhere is part of a value sent as written.
 		{map[string]string{"X-Price": "5$"}, ""},
 	} {
 		err := Check("headers", c.h)
@@ -56,8 +52,6 @@ func TestCheck(t *testing.T) {
 	}
 }
 
-// Import trims and drops empty pairs as today's core does, brings the values that copy a client
-// header as "$" and its name, and leaves out, saying why, those this core does not send.
 func TestImport(t *testing.T) {
 	got, left, err := Import(map[string]string{" X-Test ": " v ", "": "x", "X-Empty": " ", "X-Copy": " $ X-Client ",
 		"X-Session": "id-$cpa-session-id", "X-Price": "5$", "X-Key": "$Authorization", "X-Nothing": "$", "X-Spaced": "$X B"})
@@ -78,15 +72,11 @@ func TestImport(t *testing.T) {
 	if len(left) == 2 && (!strings.Contains(left[0].Why, "client's Authorization header") || left[1].Why != wantSessionWhy) {
 		t.Errorf("left out %v: want client's Authorization header and %q", left, wantSessionWhy)
 	}
-	// What Import brings, Check accepts.
 	if err := Check("headers", got); err != nil {
 		t.Errorf("Check(Import) = %v", err)
 	}
 }
 
-// Fill copies each named client header's first value, letter case aside, leaves out a copy the
-// client did not send (or sent empty or with a control character), and sends values written
-// as they are. Without a client request every copy is left out.
 func TestFill(t *testing.T) {
 	h := map[string]string{"X-Opencode-Session": "$x-opencode-session", "Session-Id": "$Session-Id", "X-Title": "pluxy",
 		"User-Agent": "$User-Agent", "X-Bad": "$X-Bad", "X-Odd": "$session_id"}
@@ -95,7 +85,7 @@ func TestFill(t *testing.T) {
 		"Session-Id":         {"codex-1"},
 		"User-Agent":         {""},
 		"X-Bad":              {"a\nb"},
-		"session_id":         {"odd-1"}, // not in canonical form, as a map built by hand may hold it
+		"session_id":         {"odd-1"},
 		"X-Unnamed":          {"never-copied"},
 	}
 	want := map[string]string{"X-Opencode-Session": "oc-1", "Session-Id": "codex-1", "X-Title": "pluxy", "X-Odd": "odd-1"}
@@ -124,15 +114,12 @@ func TestSecrets(t *testing.T) {
 	}
 }
 
-// Names that are the same once trimmed or with the letter case ignored are refused, both named and
-// no value shown, instead of one pair being kept by chance; a pair dropped for its empty value
-// does not clash.
 func TestImportRefusesSameHeaderTwice(t *testing.T) {
 	for _, h := range []map[string]string{
 		{"X-Api-Key": "fake-value-one", " X-Api-Key ": "fake-value-two"},
 		{"X-Api-Key": "fake-value-one", "x-api-key": "fake-value-two"},
 	} {
-		for range 20 { // map order is random: the refusal must not depend on it
+		for range 20 {
 			out, _, err := Import(h)
 			if err == nil {
 				t.Fatalf("Import(%v) = %v, want an error", h, out)
@@ -153,9 +140,6 @@ func TestImportRefusesSameHeaderTwice(t *testing.T) {
 	}
 }
 
-// A secret header's value alone is removed from text only from 8 bytes, as a proxy's password is: a
-// shorter one ("1") would also scrub unrelated text. Next to its name, as text shows a header, it
-// is always removed.
 func TestForms(t *testing.T) {
 	got := Forms(map[string]string{"x-api-key": "1", "Authorization": "Bearer abcdefgh", "X-Title": "plain-title", "Cookie": "sid=12345", "X-Token": "12345678"})
 	for _, f := range got {
@@ -171,8 +155,6 @@ func TestForms(t *testing.T) {
 	if got[0] != "Authorization: Bearer abcdefgh" || got[len(got)-1] != `"X-API-KEY": "1"` {
 		t.Errorf("Forms are not in name order: %q", got)
 	}
-	// The forms remove each way an error or a log shows the short value next to its name, and
-	// leave other 1s.
 	text := `model-1 failed: x-api-key=1, X-API-KEY=1, {"X-Api-Key": "1"}, {"x-api-key":"1"}, X-Api-Key: 1, X-Api-Key:1, retry 1`
 	for _, f := range got {
 		text = strings.ReplaceAll(text, f, "[redacted]")
