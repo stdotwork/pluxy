@@ -142,7 +142,8 @@ All of this is built.
   memory (10,000 events and 24 hours by default) and writes each to a file of JSON lines for its UTC
   day. At start it reads yesterday's and today's files back. Day files are kept for 90 days by
   default (`usage.keep_days`); a summary of a closed day is written the first time a report covers
-  it. Usage is broken down by model, provider, account and key, and counts cache writes. Planned:
+  it. Usage is broken down by model, provider, account and key, counts cache writes, and records
+  why routing chose each request's account and which accounts were tried on a fallback. Planned:
   the cost of each request.
 
 Details: [routing](routing.md) (accounts, routing, fallback chains, window ignition),
@@ -220,8 +221,7 @@ much alike; all three are meant to work well for agents too.
   interface here, and the resolved address in Tailscale's ranges), or over plain HTTP on a network
   the person says, in the native key window, that they trust. It also sets up coding tools on its
   own machine. Built, on Linux only (CI also builds and tests it on Windows and macOS, but the app
-  is not supported there yet). See [app.md](app.md) and, for how it works inside,
-  [app-design.md](app-design.md).
+  is not supported there yet). See `app.md` and, for how it works inside, `app-design.md`.
 
 Setup should mostly detect, so a person clicks a few buttons instead of filling in forms, in all
 three surfaces. Built:
@@ -264,7 +264,9 @@ terminal find the same core. Beside its `config.json`, core keeps:
 | `state/` | routing blocks and closed accounts, the model catalogue, setup's last scan, themes, and the key that derives client key IDs |
 
 Credentials are plain files, protected by being readable only by their user (folders `0700` and
-files `0600`; an owner-only access list on Windows). Planned: credentials encrypted at rest.
+files `0600`; an owner-only access list on Windows). When writing a first config, core refuses a
+home folder that is a link, owned by another user, or (on Unix) writable by group or others, and on
+Windows gives it an owner-only access list. Planned: credentials encrypted at rest.
 
 Why one folder, and why this one:
 
@@ -313,8 +315,9 @@ the computer it runs on. Both read the same themes and put shared pages in the s
 Themes reach far into the UI, within limits that keep it safe:
 
 - **Themes are data.** A theme is a JSON file of tokens (colour, type, spacing, density, shape,
-  motion) and layout options (where the navigation sits, lists as tables or cards, where details
-  open, page width, where tabs sit). The UI never runs anything from a theme.
+  shadows, motion and limit-gauge cutoffs) and layout options (inset or flat content frame, where
+  the navigation sits, lists as tables or cards, where details open, page width, where tabs sit).
+  The UI never runs anything from a theme.
 - **Custom CSS can be switched off.** A theme, or the person, can add CSS on top. A switch on the
   Themes page turns all custom CSS off, and so does opening the panel with `?safe` in its address,
   for when custom CSS has broken the UI.

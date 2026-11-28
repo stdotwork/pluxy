@@ -45,7 +45,7 @@ from the accounts you already have. These pages say how to set it up, use it and
 ## Design notes
 
 - [Design](design.md): why pluxy is built this way, and what core keeps apart from extensions.
-- `plans.md`: confirmed plans that are not built yet.
+- [Plans](plans.md): confirmed plans that are not built yet.
 - `app-design.md`: how the desktop app works inside.
 - [Corpus](corpus.md): how the differential test corpus holds core to recorded replies.
 - [Performance](perf.md): the time and memory pluxy adds, and the budgets CI holds it to.
