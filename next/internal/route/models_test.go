@@ -26,9 +26,6 @@ func (s *slowModelStream) Next() llm.Event {
 }
 func (s *slowModelStream) Close() {}
 
-// Adapted from prototype 3: replacing an account's model list via RefreshModels while requests
-// stream never cuts or changes an in-flight stream mid-reply; requests keep the accounts and
-// names they started with.
 func TestRefreshMidStream(t *testing.T) {
 	attempt := func(ctx context.Context, ext string, a protocol.Account, req llm.Request) Stream {
 		return &slowModelStream{}
@@ -63,8 +60,6 @@ func TestRefreshMidStream(t *testing.T) {
 		}
 	})
 
-	// Read both accounts' lists first, so a read from here on is a refresh doing its work, not a
-	// first read.
 	r.Models(context.Background())
 	readsBefore := reads.Load()
 	if readsBefore == 0 {
@@ -108,16 +103,11 @@ func TestRefreshMidStream(t *testing.T) {
 	if served.Load() == 0 {
 		t.Fatalf("expected at least one served stream, got 0")
 	}
-	// RefreshModels ran throughout, and each run re-read both accounts' lists: the streams stayed
-	// whole while the lists they route over were replaced, which is what this test is about. A
-	// refresh that does nothing would leave the count at 0.
 	if readsDuring < 2 {
 		t.Fatalf("%d account model list reads while the streams ran, want a refresh of both accounts: no refresh did anything", readsDuring)
 	}
 }
 
-// Known model lists refresh every 30 minutes with jitter (driven here with a fake clock and
-// controllable jitter).
 func TestModelListRefreshTimerAndJitter(t *testing.T) {
 	h := newHarness(t, Config{}, Account{ID: "a"})
 	var (
@@ -144,14 +134,12 @@ func TestModelListRefreshTimerAndJitter(t *testing.T) {
 	models = []string{"m1", "m2"}
 	mu.Unlock()
 
-	// Before 30 minutes: RefreshDue does nothing.
 	h.now = h.now.Add(catalogRefresh - time.Minute)
 	h.r.RefreshDue(context.Background())
 	if calls != 1 {
 		t.Fatalf("calls at 29m = %d, want 1", calls)
 	}
 
-	// At 30 minutes (rand=0): RefreshDue picks up m2.
 	h.now = h.now.Add(time.Minute)
 	h.r.RefreshDue(context.Background())
 	if calls != 2 {
@@ -161,9 +149,8 @@ func TestModelListRefreshTimerAndJitter(t *testing.T) {
 		t.Fatalf("models after 30m refresh = %v, want [m1 m2]", got)
 	}
 
-	// With non-zero jitter, refresh waits past 30 minutes until jitter elapses.
 	h.r.rand = func() float64 { return 1.0 }
-	h.r.RefreshModels(context.Background(), "a") // schedules next refresh at now + 30m + 3m
+	h.r.RefreshModels(context.Background(), "a")
 	mu.Lock()
 	callsBefore := calls
 	models = []string{"m1", "m2", "m3"}
@@ -184,8 +171,6 @@ func TestModelListRefreshTimerAndJitter(t *testing.T) {
 	}
 }
 
-// A refresh that fails, times out or comes back empty keeps the last good list and never puts a
-// known list back to unknown; requests arriving while a slow refresh runs do not wait for it.
 func TestModelListRefreshKeepsLastGood(t *testing.T) {
 	oldTimeout := catalogTimeout
 	catalogTimeout = 40 * time.Millisecond
@@ -236,7 +221,6 @@ func TestModelListRefreshKeepsLastGood(t *testing.T) {
 		}
 	}
 
-	// Requests arriving during an in-flight refresh keep using the kept list without waiting.
 	g := make(chan struct{})
 	mu.Lock()
 	mode, gate = "gated", g
@@ -245,7 +229,6 @@ func TestModelListRefreshKeepsLastGood(t *testing.T) {
 	go func() {
 		refreshDone <- h.r.RefreshModels(context.Background(), "a")
 	}()
-	// Even before g closes, a request succeeds immediately with m1.
 	h.runOK("m1")
 	close(g)
 	res := <-refreshDone
@@ -254,10 +237,6 @@ func TestModelListRefreshKeepsLastGood(t *testing.T) {
 	}
 }
 
-// A refresh that falls back to the extension's built-in list keeps the account's last live list,
-// as a failed read does: the models only the live list had still route, and the refresh reports
-// the list as kept. A built-in list still replaces one that is not the account's live list, and a
-// live list replaces anything.
 func TestModelListRefreshKeepsLiveListOverFallback(t *testing.T) {
 	live := func(ids ...string) *protocol.ModelList {
 		out := make([]protocol.Model, len(ids))
@@ -278,7 +257,6 @@ func TestModelListRefreshKeepsLiveListOverFallback(t *testing.T) {
 		return modelIDs(&protocol.ModelList{Models: h.r.Models(context.Background())})
 	}
 
-	// start makes a router whose first read answers first, returning the list it answers next.
 	start := func(first *protocol.ModelList) (*harness, func(*protocol.ModelList)) {
 		h := newHarness(t, Config{}, Account{ID: "a"})
 		var (
@@ -317,7 +295,7 @@ func TestModelListRefreshKeepsLiveListOverFallback(t *testing.T) {
 
 	t.Run("fallback then fallback replaces", func(t *testing.T) {
 		h, set := start(builtin("f1"))
-		h.runOK("f1") // a first read's built-in list is kept as known
+		h.runOK("f1")
 		set(builtin("f2"))
 		res := h.r.RefreshModels(context.Background(), "a")
 		if len(res) != 1 || res[0].Models != 1 || res[0].Kept || res[0].Error != "" {
@@ -343,8 +321,6 @@ func TestModelListRefreshKeepsLiveListOverFallback(t *testing.T) {
 	})
 }
 
-// SetAccounts with a same predicate keeps model lists for unchanged accounts and drops them
-// only for changed or removed accounts.
 func TestSetAccountsRetainsUnchangedModelLists(t *testing.T) {
 	h := newHarness(t, Config{},
 		Account{ID: "a", Settings: json.RawMessage(`{"v":1}`)},
@@ -382,9 +358,6 @@ func TestSetAccountsRetainsUnchangedModelLists(t *testing.T) {
 	}
 }
 
-// An empty list on the first read is kept as a known empty list (not retried after
-// catalogRetry); served lists no models for that account, and a later refresh that returns a
-// non-empty list replaces it.
 func TestEmptyFirstReadIsKeptWithoutRetry(t *testing.T) {
 	h := newHarness(t, Config{}, Account{ID: "a"})
 	var (
@@ -407,7 +380,6 @@ func TestEmptyFirstReadIsKeptWithoutRetry(t *testing.T) {
 		t.Fatalf("first read calls = %d, want 1", calls)
 	}
 
-	// Advancing past catalogRetry must not trigger a second read: the empty list is known.
 	mu.Lock()
 	models = []protocol.Model{{ID: "m1"}}
 	mu.Unlock()
@@ -419,7 +391,6 @@ func TestEmptyFirstReadIsKeptWithoutRetry(t *testing.T) {
 		t.Fatalf("calls after catalogRetry = %d, want 1 (empty first read must not retry every minute)", calls)
 	}
 
-	// A later refresh returning a non-empty list replaces the kept empty list.
 	res := h.r.RefreshModels(context.Background(), "a")
 	if len(res) != 1 || res[0].Models != 1 || res[0].Kept || res[0].Error != "" {
 		t.Fatalf("RefreshModels after empty first read = %+v, want Models=1 Kept=false", res)
@@ -482,7 +453,6 @@ func TestMergeModelLimitsAndCapabilities(t *testing.T) {
 	h.r.UseCatalog(func(_ context.Context, a Account, _ *protocol.Credential) (*protocol.ModelList, *llm.Error) {
 		switch a.ID {
 		case "codex-sub":
-			// Account list gives 272k window, silent on max_output_tokens and capabilities.
 			return &protocol.ModelList{
 				OwnedBy: "openai",
 				From:    protocol.ModelListFromAccount,
@@ -491,7 +461,6 @@ func TestMergeModelLimitsAndCapabilities(t *testing.T) {
 				},
 			}, nil
 		case "kimi-live":
-			// Account list gives model ID only (silent on limits and capabilities).
 			return &protocol.ModelList{
 				OwnedBy: "moonshot",
 				From:    protocol.ModelListFromAccount,
@@ -500,7 +469,6 @@ func TestMergeModelLimitsAndCapabilities(t *testing.T) {
 				},
 			}, nil
 		case "claude-builtin":
-			// Extension built-in list gives 200k/64k, smaller than catalogue's 1M/128k.
 			return &protocol.ModelList{
 				OwnedBy: "anthropic",
 				From:    protocol.ModelListFromExtension,
@@ -509,7 +477,6 @@ func TestMergeModelLimitsAndCapabilities(t *testing.T) {
 				},
 			}, nil
 		case "custom-ext":
-			// Extension built-in list for a model not in the catalogue.
 			return &protocol.ModelList{
 				OwnedBy: "custom",
 				From:    protocol.ModelListFromExtension,
@@ -527,8 +494,6 @@ func TestMergeModelLimitsAndCapabilities(t *testing.T) {
 		byID[m.ID] = m
 	}
 
-	// 1. Account limit 272k vs catalogue 922k -> 272k wins (from: "account"), max_output_tokens
-	// and capabilities filled from catalogue.
 	luna, ok := byID["gpt-5.6-luna"]
 	if !ok {
 		t.Fatalf("gpt-5.6-luna missing from ServedModels")
@@ -545,7 +510,6 @@ func TestMergeModelLimitsAndCapabilities(t *testing.T) {
 		t.Errorf("gpt-5.6-luna capabilities = %+v", luna.Capabilities)
 	}
 
-	// 2. Account list silent on limits and capabilities -> filled from catalogue (from: "catalogue").
 	kimi, ok := byID["kimi-k3"]
 	if !ok {
 		t.Fatalf("kimi-k3 missing from ServedModels")
@@ -560,8 +524,6 @@ func TestMergeModelLimitsAndCapabilities(t *testing.T) {
 		t.Errorf("kimi-k3 capabilities = %+v", kimi.Capabilities)
 	}
 
-	// 3. Extension built-in list has smaller positive limits (200k/64k) than catalogue (1M/128k) ->
-	// smaller limits win (from: "extension"), capabilities filled from catalogue.
 	sonnet, ok := byID["claude-sonnet-4-6"]
 	if !ok {
 		t.Fatalf("claude-sonnet-4-6 missing from ServedModels")
@@ -576,7 +538,6 @@ func TestMergeModelLimitsAndCapabilities(t *testing.T) {
 		t.Errorf("claude-sonnet-4-6 capabilities = %+v", sonnet.Capabilities)
 	}
 
-	// 4. Model only in extension's built-in list -> limits from extension (from: "extension").
 	custom, ok := byID["custom-only"]
 	if !ok {
 		t.Fatalf("custom-only missing from ServedModels")

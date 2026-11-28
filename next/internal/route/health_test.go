@@ -12,10 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// The reset rules and the account health they show, step by step on a fake clock: the scenarios
-// of the prototype that pinned the rules, each a reported case of an account blocked for days.
-
-// fakeReadings answers Reading with what read returns for the account; nil read: no reading.
 type fakeReadings struct {
 	read  func(id string) (*protocol.Quota, *llm.Error)
 	calls []string
@@ -29,31 +25,25 @@ func (f *fakeReadings) Reading(_ context.Context, a Account) (*protocol.Quota, *
 	return f.read(a.ID)
 }
 
-// quotaOut is a 429 for a used-up allowance on the whole account, naming its reset.
 func quotaOut(reset time.Duration) script {
 	return fail(llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: reset.Milliseconds()})
 }
 
 func pct(v float64) *float64 { return &v }
 
-// windows is a reading with a five-hour and a weekly window, each used to the given percent and
-// reset after the given time from now.
 func windows(now time.Time, fiveHour float64, fiveHourReset time.Duration, weekly float64, weeklyReset time.Duration) *protocol.Quota {
 	return &protocol.Quota{Limits: []protocol.QuotaLimit{
 		{ID: "five_hour", UsedPercent: pct(fiveHour), ResetsAt: now.Add(fiveHourReset).Unix(), WindowSeconds: 5 * 3600},
 		{ID: "weekly", UsedPercent: pct(weekly), ResetsAt: now.Add(weeklyReset).Unix(), WindowSeconds: 7 * 24 * 3600},
-		// A balance and a count, which are not usage windows: never what holds an account.
 		{ID: "credits", Remaining: pct(0), Unit: "credits"},
 		{ID: "extra_usage", UsedPercent: pct(100), Unit: "usd"},
 	}}
 }
 
 type healthStep struct {
-	after time.Duration
-	note  string
-	do    func(h *harness, rd *fakeReadings) // nil: time passes
-	// What the account's health is after the step: its state, the time left until its block ends
-	// and to its next check (0: none), and the block's source.
+	after  time.Duration
+	note   string
+	do     func(h *harness, rd *fakeReadings)
 	state  string
 	left   time.Duration
 	check  time.Duration
@@ -86,10 +76,8 @@ func runSteps(t *testing.T, h *harness, rd *fakeReadings, steps []healthStep) {
 	}
 }
 
-// request sends one request for model m.
 func request(h *harness, _ *fakeReadings) { h.run(h.req("m")) }
 
-// check runs the checks that are due, with the reading read gives the account.
 func check(read func(now time.Time) (*protocol.Quota, *llm.Error)) func(h *harness, rd *fakeReadings) {
 	return func(h *harness, rd *fakeReadings) {
 		rd.read = func(string) (*protocol.Quota, *llm.Error) { return read(h.now) }
@@ -97,7 +85,6 @@ func check(read func(now time.Time) (*protocol.Quota, *llm.Error)) func(h *harne
 	}
 }
 
-// checkUnread runs the checks that are due for an account that has no usage reading.
 func checkUnread(h *harness, rd *fakeReadings) {
 	rd.read = nil
 	h.r.Check(context.Background())
@@ -116,9 +103,8 @@ func TestResetRuleScenarios(t *testing.T) {
 		return nil, &llm.Error{Code: llm.CodeUpstream, Status: 502, Message: "usage endpoint down"}
 	}
 	cases := []struct {
-		name  string
-		steps []healthStep
-		// attempts are the attempts the scenario sends to the account, in all.
+		name     string
+		steps    []healthStep
 		attempts int
 	}{
 		{"1. a reset 292 years off (milliseconds read as seconds); the reading says 3h", []healthStep{
@@ -209,8 +195,6 @@ func TestResetRuleScenarios(t *testing.T) {
 	}
 }
 
-// 6. A person turns an account off while requests on it still run; their late outcomes, a
-// success and a used-up quota, leave nothing behind, so it is ok once it is turned on again.
 func TestTurnedOffAccountIgnoresLateOutcomes(t *testing.T) {
 	h := newHarness(t, Config{}, accts("a")...)
 	h.on("a", ok(), script{start(), {Type: llm.EventError, Error: &llm.Error{Code: llm.CodeQuota, Status: 429, Scope: llm.ScopeCredential, RetryAfterMS: time.Hour.Milliseconds()}}})
@@ -218,7 +202,7 @@ func TestTurnedOffAccountIgnoresLateOutcomes(t *testing.T) {
 	served.Next()
 	limited := h.r.Generate(context.Background(), h.req("m"))
 	limited.Next()
-	h.setAccounts() // turned off: routing leaves it out
+	h.setAccounts()
 	if got := h.r.state.Health(Account{ID: "a"}, h.now, Hold{Disabled: true}); got.State != HealthDisabled {
 		t.Fatalf("turned off: %+v", got)
 	}
@@ -231,7 +215,7 @@ func TestTurnedOffAccountIgnoresLateOutcomes(t *testing.T) {
 		t.Fatalf("after the late outcomes: %+v", got)
 	}
 	h.now = h.now.Add(time.Minute)
-	h.setAccounts(accts("a")...) // turned on
+	h.setAccounts(accts("a")...)
 	if got := h.healthOf("a"); got.State != HealthOK {
 		t.Fatalf("turned on again: %+v, want ok", got)
 	}
@@ -239,7 +223,6 @@ func TestTurnedOffAccountIgnoresLateOutcomes(t *testing.T) {
 	h.runOK("m")
 }
 
-// A sign-in the provider refused shows as needs_login, whatever routing holds.
 func TestHealthNeedsLogin(t *testing.T) {
 	h := newHarness(t, Config{}, accts("a")...)
 	h.on("a", quotaOut(time.Hour))
@@ -250,9 +233,6 @@ func TestHealthNeedsLogin(t *testing.T) {
 	}
 }
 
-// The provider's newest word replaces the one before it, sooner or later; a backoff core chose
-// itself only moves a block later, and the word of an attempt that started before the one that
-// set the block only moves it later too.
 func TestNewestWordReplaces(t *testing.T) {
 	st := NewState()
 	st.rand = func() float64 { return 0 }
@@ -269,25 +249,21 @@ func TestNewestWordReplaces(t *testing.T) {
 	if got := left(); got != 2*time.Minute {
 		t.Errorf("after a later word: %v, want 2m", got)
 	}
-	st.failure(a, "m", 1, limit(5_000), now, 0) // an attempt older than the block's
+	st.failure(a, "m", 1, limit(5_000), now, 0)
 	if got := left(); got != 2*time.Minute {
 		t.Errorf("after an older attempt's sooner word: %v, want 2m", got)
 	}
-	st.failure(a, "m", 5, &llm.Error{Code: llm.CodeRateLimit}, now, 0) // backoff: 1s step, 0.5s block
+	st.failure(a, "m", 5, &llm.Error{Code: llm.CodeRateLimit}, now, 0)
 	if got := left(); got != 2*time.Minute {
 		t.Errorf("after a backoff: %v, want 2m", got)
 	}
 }
 
-// A reset a provider names beyond 8 days is not believed, and does not overflow: the account is
-// held 30 minutes and checked at 15. One under a second is held a second. When the provider names
-// the usage window's length too, the rule is that window's length plus an hour: a month's reset
-// on a monthly window is believed, the same reset on a five-hour window is not.
 func TestResetBounds(t *testing.T) {
 	const day = 24 * time.Hour
 	for _, c := range []struct {
 		ms           int64
-		window       int64 // the usage window's length in minutes; 0: not known
+		window       int64
 		left, check  time.Duration
 		source, kind string
 	}{
@@ -314,13 +290,11 @@ func TestResetBounds(t *testing.T) {
 	}
 }
 
-// A check believes a reset the window its reading names allows: a monthly window's month-long
-// reset is believed, the same reset on a five-hour window is not.
 func TestCheckBelievesAResetItsWindowAllows(t *testing.T) {
 	const day = 24 * time.Hour
 	for _, c := range []struct {
 		name   string
-		window int64 // the window's length in seconds
+		window int64
 		left   time.Duration
 		source string
 	}{
@@ -332,7 +306,7 @@ func TestCheckBelievesAResetItsWindowAllows(t *testing.T) {
 			rd := &fakeReadings{}
 			h.r.UseReadings(rd)
 			h.on("a", quotaOut(5*time.Hour))
-			h.run(h.req("m")) // a refuses, held for 5 hours
+			h.run(h.req("m"))
 			h.now = h.now.Add(15 * time.Minute)
 			check(func(now time.Time) (*protocol.Quota, *llm.Error) {
 				return &protocol.Quota{Limits: []protocol.QuotaLimit{
@@ -354,8 +328,6 @@ func TestCheckBelievesAResetItsWindowAllows(t *testing.T) {
 	}
 }
 
-// A check made with a reading never lets a request through, and only one request passes at a
-// check where there is no reading.
 func TestCheckRequestIsOnlyWithoutAReading(t *testing.T) {
 	h := newHarness(t, Config{}, accts("a", "b")...)
 	rd := &fakeReadings{read: func(string) (*protocol.Quota, *llm.Error) {
@@ -363,7 +335,7 @@ func TestCheckRequestIsOnlyWithoutAReading(t *testing.T) {
 	}}
 	h.r.UseReadings(rd)
 	h.on("a", quotaOut(5*time.Hour))
-	h.runOK("m") // a refuses, b serves
+	h.runOK("m")
 	h.now = h.now.Add(15 * time.Minute)
 	h.r.Check(context.Background())
 	h.runOK("m")
@@ -372,18 +344,15 @@ func TestCheckRequestIsOnlyWithoutAReading(t *testing.T) {
 	if !slices.Equal(rd.calls, []string{"a"}) {
 		t.Errorf("readings = %v, want one of a", rd.calls)
 	}
-	// No reading: the next check lets the next request through, and only it.
 	rd.read = nil
 	h.now = h.now.Add(15 * time.Minute)
 	h.r.Check(context.Background())
 	h.on("a", quotaOut(4*time.Hour))
-	h.runOK("m") // a, refused again; b
+	h.runOK("m")
 	h.runOK("m")
 	h.wantAttempts("a", "b", "b", "b", "a", "b", "b")
 }
 
-// A block is checked only while it has more than the check interval left, and a short block is
-// never checked.
 func TestShortBlocksAreNotChecked(t *testing.T) {
 	h := newHarness(t, Config{}, accts("a")...)
 	rd := &fakeReadings{}
@@ -400,15 +369,13 @@ func TestShortBlocksAreNotChecked(t *testing.T) {
 	}
 }
 
-// Quota blocks are saved and read back at start, where each is checked at once: a restart sends
-// no request to an exhausted account, and a block that no longer holds ends at that check.
 func TestSavedBlocks(t *testing.T) {
 	h := newHarness(t, Config{}, accts("a", "b", "c")...)
 	changes := h.r.state.Changes()
 	h.on("a", quotaOut(3*time.Hour))
-	h.on("b", rateLimited(20*time.Second)) // 30 seconds or less left: not saved
+	h.on("b", rateLimited(20*time.Second))
 	h.on("c", fail(llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeModel, RetryAfterMS: (30 * 24 * time.Hour).Milliseconds()}), ok())
-	h.run(h.req("m")) // a, b and c refuse
+	h.run(h.req("m"))
 	select {
 	case <-changes:
 	default:
@@ -427,7 +394,6 @@ func TestSavedBlocks(t *testing.T) {
 		t.Fatalf("saved %s, want a's and c's quota blocks", b)
 	}
 
-	// A new core, ten minutes later, with a, c and d; a's and c's blocks hold, until checked.
 	h2 := newHarness(t, Config{}, accts("a", "c", "d")...)
 	h2.now = h.now.Add(10 * time.Minute)
 	back = append(back, SavedBlock{Account: "gone", Scope: "credential", Until: h2.now.Add(time.Hour), Source: SourceProvider})
@@ -457,32 +423,26 @@ func TestSavedBlocks(t *testing.T) {
 	if got := h2.healthOf("a"); got.State != HealthExhausted || got.Until.Sub(h2.now) != 2*time.Hour {
 		t.Errorf("a after its check: %+v, want exhausted for 2h", got)
 	}
-	h2.runOK("m") // c's model block ended: c serves
+	h2.runOK("m")
 	h2.wantAttempts("d", "d", "c")
 	if s := h2.r.state.Saved(h2.now); len(s) != 1 || s[0].Account != "a" {
 		t.Errorf("saved after the checks: %+v, want a's", s)
 	}
-	// Clearing the account (the panel's reset) removes its saved block.
 	h2.r.state.Reset(Account{ID: "a"}, h2.now)
 	if s := h2.r.state.Saved(h2.now); len(s) != 0 {
 		t.Errorf("saved after a reset: %+v", s)
 	}
 }
 
-// Rate limits and cooldowns on an account's credential or one of its models with more than 30
-// seconds left are saved with their kind and the failure that set them, and read back into their
-// kind at start, with the account's last error: a restart sends no request to an account a rate
-// limit, a refused sign-in or a missing model holds. Clearing a block is saved too, and a file an
-// older core wrote, whose blocks have no kind, reads as quota blocks.
 func TestSavedBlocksOfEveryKind(t *testing.T) {
 	h := newHarness(t, Config{}, accts("a", "b", "c", "d", "e")...)
 	changes := h.r.state.Changes()
-	long := strings.Repeat("é", 200) // 400 bytes
+	long := strings.Repeat("é", 200)
 	h.on("a", rateLimited(6831*time.Second))
 	h.on("b", fail(llm.Error{Code: llm.CodeAuth, Status: 401, Retryable: true, Scope: llm.ScopeCredential, Message: "Incorrect API key provided"}))
 	h.on("c", fail(llm.Error{Code: llm.CodeNotFound, Status: 404, Retryable: true, Scope: llm.ScopeModel, Message: long}))
 	h.on("d", rateLimited(20*time.Second))
-	h.runOK("m") // a, b, c and d refuse; e serves
+	h.runOK("m")
 	h.wantAttempts("a", "b", "c", "d", "e")
 	select {
 	case <-changes:
@@ -510,8 +470,6 @@ func TestSavedBlocksOfEveryKind(t *testing.T) {
 		t.Fatalf("saved\n%s\nwant\n%s", g, w)
 	}
 
-	// A new core, ten minutes later: the blocks hold, in their kinds, with their errors, and the
-	// rate limit is checked an interval on, not at once.
 	h2 := newHarness(t, Config{}, accts("a", "b", "c", "d", "e")...)
 	h2.now = h.now.Add(10 * time.Minute)
 	changes = h2.r.state.Changes()
@@ -559,7 +517,6 @@ func TestSavedBlocksOfEveryKind(t *testing.T) {
 	h2.runOK("m")
 	h2.wantAttempts("d", "e")
 
-	// Clearing a's cooldown is signalled, and a's block is no longer saved.
 	select {
 	case <-changes:
 	default:
@@ -574,7 +531,6 @@ func TestSavedBlocksOfEveryKind(t *testing.T) {
 		t.Errorf("saved after clearing a: %+v, want b's and c's", s)
 	}
 
-	// A file an older core wrote: a block with no kind and no error is a quota block.
 	h3 := newHarness(t, Config{}, accts("a")...)
 	var old []SavedBlock
 	if err := json.Unmarshal([]byte(`[{"account": "a", "scope": "credential", "until": "`+h3.now.Add(3*time.Hour).UTC().Format(time.RFC3339)+`", "source": "provider"}]`), &old); err != nil {
@@ -591,7 +547,6 @@ func TestSavedBlocksOfEveryKind(t *testing.T) {
 	}
 }
 
-// indented returns v as indented JSON.
 func indented(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.MarshalIndent(v, "", "  ")
@@ -601,10 +556,6 @@ func indented(t *testing.T, v any) string {
 	return string(b)
 }
 
-// A check holds a block only on a full usage window that covers it: a block on the account's
-// credential on a window of the whole account, a block on one model on that or a window that
-// names the model, and no block on a window of a feature of the plan (code review, another
-// app's allowance). Here only a window of model m1 and a feature's window are full.
 func TestCheckHoldsOnlyOnCoveringWindows(t *testing.T) {
 	const m, hr = time.Minute, time.Hour
 	reading := func(now time.Time) (*protocol.Quota, *llm.Error) {
@@ -644,9 +595,6 @@ func TestCheckHoldsOnlyOnCoveringWindows(t *testing.T) {
 	}
 }
 
-// A check that ends a block starts its backoff over, as a success does: the next refusal without
-// a reset time is held for the first step again. Here the account's state is not swept between
-// the check and that refusal: a request on the other account swept it just before the check.
 func TestCheckEndingABlockStartsTheBackoffOver(t *testing.T) {
 	h := newHarness(t, Config{}, accts("a", "b")...)
 	rd := &fakeReadings{read: func(string) (*protocol.Quota, *llm.Error) {
@@ -655,29 +603,27 @@ func TestCheckEndingABlockStartsTheBackoffOver(t *testing.T) {
 	h.r.UseReadings(rd)
 	backoff := fail(llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeCredential})
 	h.on("a", backoff)
-	h.runOK("m") // a refuses: backoff, its first step; b serves
+	h.runOK("m")
 	if got := h.healthOf("a"); got.State != HealthCooling || got.Until == nil || got.Until.Sub(h.now) != 500*time.Millisecond {
 		t.Fatalf("after the first refusal: %+v, want cooling for 500ms", got)
 	}
 	h.now = h.now.Add(time.Second)
 	h.on("a", quotaOut(5*time.Hour))
-	h.runOK("m") // a refuses until a reset in 5h; b serves
+	h.runOK("m")
 	h.now = h.now.Add(15 * time.Minute)
-	h.runOK("m") // b serves, and the state is swept
+	h.runOK("m")
 	h.r.Check(context.Background())
 	if got := h.healthOf("a"); got.State != HealthOK {
 		t.Fatalf("after the check: %+v, want ok", got)
 	}
 	h.on("a", backoff)
-	h.runOK("m") // a refuses again without a reset; b serves
+	h.runOK("m")
 	h.wantAttempts("a", "b", "a", "b", "b", "a", "b")
 	if got := h.healthOf("a"); got.State != HealthCooling || got.Until == nil || got.Until.Sub(h.now) != 500*time.Millisecond {
 		t.Errorf("after the refusal that followed the check: %+v, want cooling for 500ms, the first step", got)
 	}
 }
 
-// A model the account does not have (a 404) is kept off the account for 12 hours, but says
-// nothing about the account itself: its health stays ok, and the block shows in its cooldowns.
 func TestMissingModelLeavesHealthOK(t *testing.T) {
 	h := newHarness(t, Config{}, accts("a")...)
 	h.on("a", fail(llm.Error{Code: llm.CodeNotFound, Status: 404, Scope: llm.ScopeModel, Message: "no such model"}))
@@ -691,9 +637,6 @@ func TestMissingModelLeavesHealthOK(t *testing.T) {
 	}
 }
 
-// A saved block on an account that does not route now (turned off, or waiting for a sign-in) is
-// not checked, and its check stays due: once the account routes again, the next run of the
-// checks reads it, not one an interval later.
 func TestCheckSkipsAccountsThatDoNotRoute(t *testing.T) {
 	h := newHarness(t, Config{}, accts("a")...)
 	rd := &fakeReadings{read: func(string) (*protocol.Quota, *llm.Error) {
@@ -716,12 +659,8 @@ func TestCheckSkipsAccountsThatDoNotRoute(t *testing.T) {
 	}
 }
 
-// 6 (H2). An account_closed failure bans the account with the provider's words; a stale success
-// and a stale 429 from requests already in flight leave it banned, Reset leaves it banned, and
-// only Unban returns it to ok (ignoring outcomes of attempts started before Unban).
 func TestBannedAccountScenario6AndPersistence(t *testing.T) {
 	h := newHarness(t, Config{Strategy: StrategyFillFirst, DisableCooling: true}, accts("a", "b")...)
-	// Start three in-flight attempts on a before the ban lands.
 	h.on("a",
 		ok(),
 		script{start(), {Type: llm.EventError, Error: &llm.Error{Code: llm.CodeRateLimit, Status: 429, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: time.Hour.Milliseconds()}}},
@@ -731,14 +670,12 @@ func TestBannedAccountScenario6AndPersistence(t *testing.T) {
 	sOK := h.r.Generate(context.Background(), h.req("m"))
 	s429 := h.r.Generate(context.Background(), h.req("m"))
 	sBan := h.r.Generate(context.Background(), h.req("m"))
-	// Start sOK (seq 1) and s429 (seq 2) on a so both are in flight before sBan lands.
 	if ev := sOK.Next(); ev.Type != llm.EventResponseStart {
 		t.Fatalf("stale ok first event = %+v", ev)
 	}
 	if ev := s429.Next(); ev.Type != llm.EventResponseStart {
 		t.Fatalf("stale 429 first event = %+v", ev)
 	}
-	// sBan (seq 3) hits account_closed before ResponseStart, bans a, and rotates to b.
 	if ev := sBan.Next(); ev.Type != llm.EventResponseStart {
 		t.Fatalf("sBan should have rotated to b and started: %+v", ev)
 	}
@@ -746,13 +683,11 @@ func TestBannedAccountScenario6AndPersistence(t *testing.T) {
 	}
 	sBan.Close()
 
-	// DisableCooling did NOT stop account_closed from banning a.
 	got := h.healthOf("a")
 	if got.State != HealthBanned || got.Why != "Your account has been suspended." || got.Source != SourceProvider || got.Until != nil || got.NextCheck != nil {
 		t.Fatalf("after account_closed: %+v, want banned with provider words and source provider", got)
 	}
 
-	// Stale success arrives.
 	for ev := sOK.Next(); !ev.Terminal(); ev = sOK.Next() {
 	}
 	sOK.Close()
@@ -760,7 +695,6 @@ func TestBannedAccountScenario6AndPersistence(t *testing.T) {
 		t.Fatalf("after stale success: %+v, want still banned", got)
 	}
 
-	// Stale 429 arrives.
 	for ev := s429.Next(); !ev.Terminal(); ev = s429.Next() {
 	}
 	s429.Close()
@@ -771,19 +705,16 @@ func TestBannedAccountScenario6AndPersistence(t *testing.T) {
 		t.Fatalf("runtime after stale 429: %+v, want no cooldowns and LastError account_closed", rt)
 	}
 
-	// Reset (cooldown clear) does NOT clear a ban.
 	if cleared := h.r.state.Reset(Account{ID: "a"}, h.now); cleared != 0 {
 		t.Errorf("Reset cleared = %d, want 0", cleared)
 	}
 	if got := h.healthOf("a"); got.State != HealthBanned {
 		t.Fatalf("after Reset: %+v, want still banned", got)
 	}
-	// A banned account keeps its last error through Reset, unlike an unbanned one.
 	if rt := h.r.state.Runtime(Account{ID: "a"}, h.now); rt.LastError == nil || rt.LastError.Code != llm.CodeAccountClosed {
 		t.Fatalf("runtime after Reset: %+v, want the ban's LastError kept", rt)
 	}
 
-	// SavedBans and LoadBans preserve the ban across a restart, and skip unknown accounts.
 	bans := h.r.state.SavedBans()
 	if len(bans) != 1 || bans[0].Account != "a" || bans[0].Why != "Your account has been suspended." {
 		t.Fatalf("SavedBans = %+v", bans)
@@ -797,14 +728,11 @@ func TestBannedAccountScenario6AndPersistence(t *testing.T) {
 	if len(h2.r.state.SavedBans()) != 1 {
 		t.Fatalf("SavedBans after LoadBans = %+v, want gone skipped", h2.r.state.SavedBans())
 	}
-	// Requests after restart skip banned a completely.
 	h2.on("a", ok())
 	h2.on("b", ok())
 	h2.runOK("m")
 	h2.wantAttempts("b")
 
-	// A person turns a back on (Unban): a is ok and serves again; a late failure from an
-	// attempt started before Unban is ignored.
 	h.r.state.failure(&Account{ID: "a"}, "m", 1, &llm.Error{Code: llm.CodeQuota, Status: 429, RetryAfterMS: time.Hour.Milliseconds()}, h.now, 0)
 	if !h.r.state.Unban("a") {
 		t.Fatal("Unban returned false, want true")
@@ -815,7 +743,6 @@ func TestBannedAccountScenario6AndPersistence(t *testing.T) {
 	if got := h.healthOf("a"); got.State != HealthOK || got.Why != "" {
 		t.Fatalf("after Unban: %+v, want ok", got)
 	}
-	// Late 429 from seq 3 (reserved before Unban) cannot re-block or pollute LastError.
 	h.r.state.failure(&Account{ID: "a"}, "m", 2, &llm.Error{Code: llm.CodeAccountClosed, Message: "stale ban"}, h.now, 0)
 	if got := h.healthOf("a"); got.State != HealthOK {
 		t.Fatalf("after stale failure pre-Unban: %+v, want ok", got)
@@ -827,9 +754,6 @@ func TestBannedAccountScenario6AndPersistence(t *testing.T) {
 	}
 }
 
-// Sibling rule: account_closed always bans the account; when retryable is true it moves on to
-// sibling accounts unless scope is request (the refusal is about this request's content), in
-// which case it stops there.
 func TestAccountClosedSiblingRule(t *testing.T) {
 	t.Run("credential scope bans and moves on to sibling", func(t *testing.T) {
 		h := newHarness(t, Config{}, accts("a", "b")...)
@@ -857,9 +781,6 @@ func TestAccountClosedSiblingRule(t *testing.T) {
 	})
 }
 
-// When every account that serves a model is banned, a request answers with the ban, as the
-// request that got the account banned did: the provider's words, not a 503 that says only that
-// no account could serve the model.
 func TestEveryAccountBannedAnswersWithTheBan(t *testing.T) {
 	h := newHarness(t, Config{}, accts("a")...)
 	h.on("a", fail(llm.Error{Code: llm.CodeAccountClosed, Status: 403, Retryable: true, Scope: llm.ScopeCredential, Message: "Your account has been suspended."}))
@@ -875,12 +796,9 @@ func TestEveryAccountBannedAnswersWithTheBan(t *testing.T) {
 	if last.Error.Message != "Your account has been suspended." {
 		t.Errorf("second request's message = %q, want the provider's words", last.Error.Message)
 	}
-	h.wantAttempts("a") // a banned account is not tried again
+	h.wantAttempts("a")
 }
 
-// A ban ends only when a person enables the account, signs in again, or deletes it: leaving
-// the router (e.g. a failed refresh or an extension not running at reload) or a settings
-// change keeps the account banned when it returns.
 func TestBanSurvivesLeavingRouterSettingsChangeAndRetain(t *testing.T) {
 	h := newHarness(t, Config{}, accts("a", "b")...)
 	h.on("a", fail(llm.Error{Code: llm.CodeAccountClosed, Status: 400, Retryable: true, Scope: llm.ScopeCredential, Message: "This organization has been disabled."}))
@@ -890,7 +808,6 @@ func TestBanSurvivesLeavingRouterSettingsChangeAndRetain(t *testing.T) {
 		t.Fatalf("a health after account_closed = %+v, want banned", got)
 	}
 
-	// 1. Account leaves the router (e.g. reauth_required) and returns.
 	h.setAccounts(accts("b")...)
 	if !h.r.state.IsBanned("a") {
 		t.Errorf("after leaving router via SetAccounts: IsBanned(a) = false, want true")
@@ -900,13 +817,11 @@ func TestBanSurvivesLeavingRouterSettingsChangeAndRetain(t *testing.T) {
 		t.Errorf("after returning to router: a health = %+v, want banned", got)
 	}
 
-	// 2. Settings change in place (restart).
 	h.setAccounts(withSettings(Account{ID: "a"}, `{"base_url":"https://other.invalid"}`), Account{ID: "b"})
 	if got := h.healthOf("a"); got.State != HealthBanned {
 		t.Errorf("after settings change: a health = %+v, want banned", got)
 	}
 
-	// 3. Reload with its extension stopped (Retain drops a), then reload with it running again.
 	r2, err := New(Config{}, accts("b"), h.r.attempt, h.r.state)
 	if err != nil {
 		t.Fatal(err)
@@ -925,14 +840,12 @@ func TestBanSurvivesLeavingRouterSettingsChangeAndRetain(t *testing.T) {
 		t.Errorf("after Retain with a back: a health = %+v, want banned", got)
 	}
 
-	// Requests still skip a.
 	h.on("a", ok())
 	h.on("b", ok())
 	h.attempts = nil
 	h.runOK("m")
 	h.wantAttempts("b")
 
-	// 4. Deleting the account drops its ban (so re-adding it starts ok).
 	r3.state.RetainBans(func(id string) bool { return id != "a" })
 	if r3.state.IsBanned("a") {
 		t.Errorf("after RetainBans without a: IsBanned(a) = true, want false")

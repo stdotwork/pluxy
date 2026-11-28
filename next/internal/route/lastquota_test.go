@@ -7,9 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// The last quota reply of an account is replaced by the next, kept for a copy so a later change
-// to the reply read does not reach it, and dropped when the account is removed, not when it only
-// leaves routing.
 func TestLastQuota(t *testing.T) {
 	s := NewState()
 	if _, ok := s.LastQuota("a"); ok {

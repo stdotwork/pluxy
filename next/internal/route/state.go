@@ -11,9 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Scope kinds: what a piece of state is about. A credential scope covers one account's
-// credential across all its models; a model scope covers one model on one account; an endpoint
-// scope covers every account that names the same endpoint.
 const (
 	scopeCredential = llm.ScopeCredential
 	scopeModel      = llm.ScopeModel
@@ -22,16 +19,14 @@ const (
 
 type scopeKey struct {
 	kind  string
-	id    string // account ID, or endpoint name for endpoint scopes
-	model string // model scopes only
+	id    string
+	model string
 }
 
-// Block kinds. Each is kept separately on its scope, so a quota observation is never mistaken
-// for a short rate limit and a transient-failure backoff never erases a known quota reset.
 const (
-	blockRateLimit = "rate_limit" // the upstream refused for request rate; resets soon
-	blockQuota     = "quota"      // a usage allowance is used up
-	blockCooldown  = "cooldown"   // failures without a reset time: backoff
+	blockRateLimit = "rate_limit"
+	blockQuota     = "quota"
+	blockCooldown  = "cooldown"
 	numBlockKinds  = 3
 )
 
@@ -46,125 +41,68 @@ func kindIndex(kind string) int {
 	}
 }
 
-// block says a scope may not be used before until.
 type block struct {
-	until time.Time
-	// level is the backoff exponent for blocks without a reset time from the upstream.
-	level int
-	// mark is the sequence number of the latest-started attempt whose failure the block holds.
-	// Results count in the order their attempts started: only a success from an attempt that
-	// started after it (a higher sequence number) may clear the block, since an older success
-	// says nothing about the newer failure.
-	mark   uint64
-	reason *llm.Error
-	// told is true when until is a quota reset the upstream named, and window the length in
-	// minutes of the usage window that ran out, when it said: the evidence the usage-limit
-	// reply needs.
-	told   bool
-	window int64
-	// source says where until came from: SourceProvider, SourceBackoff or SourceUnverified.
-	source string
-	// exhausted marks a quota block that health shows as exhausted rather than cooling.
+	until     time.Time
+	level     int
+	mark      uint64
+	reason    *llm.Error
+	told      bool
+	window    int64
+	source    string
 	exhausted bool
-	// check is when the block is next checked (Router.Check); zero when it is not checked.
-	check time.Time
-	// pass lets one request through the block: its check found no usage reading to make.
-	pass bool
-	// why, when set, says why the account is held in place of the failure that set the block.
-	why string
+	check     time.Time
+	pass      bool
+	why       string
 }
 
-// live reports whether b keeps its scope from serving at now: it has not ended, and no check
-// let a request through it.
 func (b *block) live(now time.Time) bool { return b.until.After(now) && !b.pass }
 
 type scopeState struct {
 	blocks [numBlockKinds]block
-	// won is the sequence number of the latest-started attempt that succeeded on the scope,
-	// kept while an attempt that started before it is still running. That attempt's failure,
-	// when it comes, is older news than the success and records nothing: a stale failure does
-	// not block a scope that has since worked.
-	won uint64
+	won    uint64
 }
 
-// Backoff settings for failures that carry no reset time.
 var (
-	// Rate limits and quotas without a reset time: 1s doubling to 30 minutes, the ladder
-	// today's core uses.
-	limitBackoffBase = time.Second
-	limitBackoffMax  = 30 * time.Minute
-	// Transient upstream and endpoint failures: 1s doubling to 1 minute.
+	limitBackoffBase   = time.Second
+	limitBackoffMax    = 30 * time.Minute
 	failureBackoffBase = time.Second
 	failureBackoffMax  = time.Minute
-	// A refused credential is left alone for 30 minutes; a model the account does not have,
-	// for 12 hours. Both match today's core.
-	authCooldown     = 30 * time.Minute
-	notFoundCooldown = 12 * time.Hour
+	authCooldown       = 30 * time.Minute
+	notFoundCooldown   = 12 * time.Hour
 )
 
-// Bounds on state keyed by model names, which clients choose.
 var (
-	// maxModelKeys bounds the model-scoped entries kept (blocks here, rotation cursors in the
-	// picker). When it is full of live blocks, a new model-scoped block is not recorded: live
-	// cooldowns are never dropped to make room.
 	maxModelKeys = 10_000
-	// stateIdle: an entry whose blocks all ended this long ago is dropped (its backoff step
-	// with it), as is a rotation cursor unused this long.
-	stateIdle = time.Hour
-	// sweepEvery is how often idle entries are looked for.
-	sweepEvery = time.Minute
+	stateIdle    = time.Hour
+	sweepEvery   = time.Minute
 )
 
-// State is core's routing state for accounts: blocks per scope, active attempts per account,
-// session bindings and the rotation among accounts. It is shared by every request and safe for concurrent use. It is kept
-// against account IDs and endpoint names, not against one config, so it outlives a reload.
 type State struct {
-	// keyMu guards pubKey, the key public IDs are made with (SetPublicKey).
 	keyMu  sync.RWMutex
 	pubKey []byte
 
-	mu        sync.Mutex
-	seq       uint64
-	scopes    map[scopeKey]*scopeState
-	models    int // model-scoped entries in scopes
-	active    map[string]int
-	affinity  *affinity
-	rotation  *rotation
-	lastSweep time.Time
-	// gens counts the routers made over this state; each takes the next as its generation.
-	gens uint64
-	// since holds, per account ID and per endpoint name whose state Retain dropped, the
-	// generation of the router Retain carried the state to: an outcome seen by an older router
-	// is about the account as it was, so it records nothing.
-	since map[scopeKey]uint64
-	// revs holds, per account ID, how many times SetAccounts changed the account in place: its
-	// revision (see restart).
-	revs map[string]uint64
-	// last holds, per account ID, the latest failure an attempt on the account recorded a
-	// block for, until an attempt that started after it was recorded succeeds (block.mark's rule).
-	last map[string]lastFailure
-	// running holds the sequence numbers of the attempts reserved and not yet ended, and order
-	// the same numbers as a min-heap (with numbers already ended removed lazily), so the oldest
-	// running attempt is found quickly.
-	running map[uint64]struct{}
-	order   seqHeap
-	rand    func() float64
-	// checkEvery is how often a long block is checked (see Router.Check).
-	checkEvery time.Duration
-	// bans holds accounts the provider closed or suspended, until a person enables or signs in again.
-	bans map[string]banState
-	// unbannedSeq records the highest sequence number seen when each account was unbanned, so
-	// outcomes from attempts started before the unban record nothing.
+	mu          sync.Mutex
+	seq         uint64
+	scopes      map[scopeKey]*scopeState
+	models      int
+	active      map[string]int
+	affinity    *affinity
+	rotation    *rotation
+	lastSweep   time.Time
+	gens        uint64
+	since       map[scopeKey]uint64
+	revs        map[string]uint64
+	last        map[string]lastFailure
+	running     map[uint64]struct{}
+	order       seqHeap
+	rand        func() float64
+	checkEvery  time.Duration
+	bans        map[string]banState
 	unbannedSeq map[string]uint64
-	// changes is signalled when the blocks or bans Saved/SavedBans return may have changed.
-	changes chan struct{}
-	// usage holds, per account ID, its latest usage reading, which soonest-reset ranks it by;
-	// refreshed is when Router.Refresh last began reading.
-	usage     map[string]usageReading
-	refreshed time.Time
-	// quotas holds, per account ID, the last quota reply read for it, for GET /accounts (see
-	// NoteQuota). It is kept until the account is removed, not until it leaves routing.
-	quotas map[string]QuotaReading
+	changes     chan struct{}
+	usage       map[string]usageReading
+	refreshed   time.Time
+	quotas      map[string]QuotaReading
 }
 
 type banState struct {
@@ -174,7 +112,6 @@ type banState struct {
 	reason *llm.Error
 }
 
-// seqHeap is a min-heap of attempt sequence numbers.
 type seqHeap []uint64
 
 func (h seqHeap) Len() int           { return len(h) }
@@ -188,8 +125,6 @@ func (h *seqHeap) Pop() any {
 	return x
 }
 
-// oldest returns the sequence number of the oldest running attempt, or 0 when none runs.
-// Call with s.mu held.
 func (s *State) oldest() uint64 {
 	for len(s.order) > 0 {
 		if _, ok := s.running[s.order[0]]; ok {
@@ -200,9 +135,6 @@ func (s *State) oldest() uint64 {
 	return 0
 }
 
-// needed reports whether st must be kept: a block or backoff step is live within the idle
-// window, or its won mark may still turn away the failure of an older running attempt. Call
-// with s.mu held.
 func (s *State) needed(st *scopeState, cutoff time.Time) bool {
 	if st.lastEnd().After(cutoff) {
 		return true
@@ -211,14 +143,12 @@ func (s *State) needed(st *scopeState, cutoff time.Time) bool {
 	return st.won != 0 && o != 0 && o < st.won
 }
 
-// lastFailure is the latest failure recorded about an account.
 type lastFailure struct {
 	at   time.Time
-	mark uint64 // as block.mark
+	mark uint64
 	err  *llm.Error
 }
 
-// lastEnd returns when the latest block of st ends.
 func (st *scopeState) lastEnd() time.Time {
 	var t time.Time
 	for _, b := range st.blocks {
@@ -229,7 +159,6 @@ func (st *scopeState) lastEnd() time.Time {
 	return t
 }
 
-// drop removes the entry for k. Call with s.mu held.
 func (s *State) drop(k scopeKey) {
 	st, ok := s.scopes[k]
 	if !ok {
@@ -244,8 +173,6 @@ func (s *State) drop(k scopeKey) {
 	}
 }
 
-// sweep drops entries whose blocks all ended before cutoff and whose won mark no running
-// attempt is older than. Call with s.mu held.
 func (s *State) sweep(cutoff time.Time) {
 	for k, st := range s.scopes {
 		if !s.needed(st, cutoff) {
@@ -254,7 +181,6 @@ func (s *State) sweep(cutoff time.Time) {
 	}
 }
 
-// maybeSweep drops idle entries, at most once per sweepEvery. Call with s.mu held.
 func (s *State) maybeSweep(now time.Time) {
 	if now.Sub(s.lastSweep) < sweepEvery {
 		return
@@ -263,9 +189,6 @@ func (s *State) maybeSweep(now time.Time) {
 	s.sweep(now.Add(-stateIdle))
 }
 
-// reserve checks, in one step with reserving it, that account a may serve model now: no block
-// covers it and it is under its concurrency limit. Two requests that both chose a can then
-// never both run on it beyond its limit. It returns the attempt's sequence number.
 func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -286,8 +209,6 @@ func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) 
 	if a.MaxConcurrency > 0 && s.active[a.ID] >= a.MaxConcurrency {
 		return 0, false
 	}
-	// This attempt is the one request a check lets through: the next check is due an interval on,
-	// when more than an interval is left.
 	for _, k := range keys {
 		if st := s.scopes[k]; st != nil {
 			for i := range st.blocks {
@@ -304,7 +225,6 @@ func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) 
 	return s.seq, true
 }
 
-// NewState returns empty state.
 func NewState() *State {
 	return &State{scopes: map[scopeKey]*scopeState{}, active: map[string]int{}, affinity: newAffinity(), rotation: newRotation(),
 		since: map[scopeKey]uint64{}, revs: map[string]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64,
@@ -312,9 +232,6 @@ func NewState() *State {
 		quotas: map[string]QuotaReading{}, checkEvery: defaultCheckEvery, changes: make(chan struct{}, 1), pubKey: NewPublicKey()}
 }
 
-// RetainBans drops bans for accounts that known reports no longer exist (deleted accounts),
-// keeping bans for accounts that merely left routing temporarily (such as a stopped extension
-// or reauth_required).
 func (s *State) RetainBans(known func(id string) bool) {
 	if known == nil {
 		return
@@ -354,7 +271,6 @@ func (s *State) RetainBans(known func(id string) bool) {
 	s.mu.Unlock()
 }
 
-// IsBanned reports whether account id is currently banned.
 func (s *State) IsBanned(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -362,16 +278,12 @@ func (s *State) IsBanned(id string) bool {
 	return ok
 }
 
-// banReason returns the error that banned account id, as the provider gave it, or nil when the
-// account is not banned.
 func (s *State) banReason(id string) *llm.Error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.bans[id].reason
 }
 
-// Unban clears any ban on account id so it can serve again, ignoring outcomes from attempts
-// started before the unban. It reports whether the account was banned.
 func (s *State) Unban(id string) bool {
 	s.mu.Lock()
 	ban, wasBanned := s.bans[id]
@@ -400,7 +312,6 @@ func singleLine(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// nextGen returns the generation for a new router.
 func (s *State) nextGen() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -408,16 +319,6 @@ func (s *State) nextGen() uint64 {
 	return s.gens
 }
 
-// Retain carries the state from the accounts of one router (prev, the one a reload replaces)
-// to those of the next, which must not be serving yet. State stays with every account of next
-// that same reports is the same account as the one with its ID in prev. For accounts that were
-// removed or changed it is dropped: blocks on their credential and models, their session
-// bindings, and blocks on endpoints that no unchanged account names: a block is about one
-// upstream account, and a changed account may be another one. From then on, outcomes that
-// routers older than next see on what it dropped record nothing and bind no session, whenever
-// their attempts began: a request that started on an older router may still retry there.
-// Weighted rotation starts afresh when the weights change, and older routers keep their own
-// balances. Running attempts stay counted until they end.
 func (s *State) Retain(prevRouter, nextRouter *Router, same func(old, cur *Account) bool) {
 	prev, next, gen := prevRouter.Accounts(), nextRouter.Accounts(), nextRouter.gen
 	kept := map[string]bool{}
@@ -477,9 +378,6 @@ func (s *State) Retain(prevRouter, nextRouter *Router, same func(old, cur *Accou
 	}
 }
 
-// stale reports whether an outcome on key seen on copy a is about an account as it was before
-// Retain or restart dropped key's state: a is of an older revision than the account's, or its
-// router's generation is older than the drop. s.mu is held.
 func (s *State) stale(key scopeKey, a *Account) bool {
 	if a.rev < s.revs[a.ID] {
 		return true
@@ -490,19 +388,12 @@ func (s *State) stale(key scopeKey, a *Account) bool {
 	return a.gen < s.since[key]
 }
 
-// revision returns account id's revision, for a new copy of it.
 func (s *State) revision(id string) uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.revs[id]
 }
 
-// restart drops the state of the accounts Router.SetAccounts changed in place (old, their
-// copies until now, and fresh, the copies that replace them): blocks on their credentials and
-// models, their last errors, their session bindings, and blocks on their endpoints that no
-// endpoint in kept names. Each account gets a new revision, which fresh takes, so an outcome an
-// attempt on any older copy sees afterwards, from any router, records nothing and binds no
-// session. Running attempts stay counted until they end.
 func (s *State) restart(old, fresh []*Account, kept map[string]bool) {
 	if len(old) == 0 {
 		return
@@ -532,14 +423,11 @@ func (s *State) restart(old, fresh []*Account, kept map[string]bool) {
 	s.affinity.unbind(revs)
 }
 
-// end releases the reservation reserve made for the attempt with sequence number seq on
-// account a. Call it exactly once per reservation, after recording the attempt's outcome.
 func (s *State) end(a *Account, seq uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.running, seq)
 	if len(s.order) > 2*len(s.running)+64 {
-		// Numbers that ended under a long-running older attempt pile up behind it: rebuild.
 		s.order = s.order[:0]
 		for n := range s.running {
 			s.order = append(s.order, n)
@@ -553,10 +441,6 @@ func (s *State) end(a *Account, seq uint64) {
 	}
 }
 
-// forget drops the state kept on account id's credential and models, and its session bindings.
-// Endpoint state stays: other accounts may share the endpoint. The account gets a new revision,
-// so outcomes that attempts on its copies until now see afterwards record nothing and bind no
-// session: added again, it starts clean.
 func (s *State) forget(id string) {
 	s.mu.Lock()
 	for k := range s.scopes {
@@ -586,9 +470,6 @@ func keysFor(a *Account, model string) [3]scopeKey {
 	}
 }
 
-// availability reports when account a can next serve model: the zero time when it can now,
-// and the error that blocks it otherwise. busy is true when the account is at its concurrency
-// limit.
 func (s *State) availability(a *Account, model string, now time.Time) (until time.Time, reason *llm.Error, busy bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -607,12 +488,6 @@ func (s *State) availability(a *Account, model string, now time.Time) (until tim
 	return until, reason, busy
 }
 
-// failure records what the failed attempt with sequence number seq on account a for model says
-// about the account. account_closed always bans the account; other failures about the request
-// or the caller record nothing, and so does a failure on a scope where an attempt that started
-// after this one has already succeeded: the newest result wins. transient replaces the backoff
-// for a failing upstream or endpoint: above 0 it is the block's length, below 0 no block is
-// kept.
 func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now time.Time, transient time.Duration) {
 	if e == nil {
 		return
@@ -676,17 +551,14 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	}
 	st := s.scopes[key]
 	if st != nil && st.won > seq {
-		return // a newer attempt has succeeded on this scope since this one started
+		return
 	}
 	s.maybeSweep(now)
 	st = s.scopes[key]
 	if st == nil {
 		if key.kind == scopeModel && s.models >= maxModelKeys {
-			s.sweep(now) // make room from blocks that have ended
+			s.sweep(now)
 			if s.models >= maxModelKeys {
-				// shortcut: the table is full of live model blocks, so this one is not kept
-				// (the next request for the model tries the account again); raise
-				// maxModelKeys if real pools serve more models than this at once.
 				return
 			}
 		}
@@ -696,13 +568,11 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 			s.models++
 		}
 	}
-	// The block is kept, so the failure is the account's last error, unless an attempt on the
-	// account that started after this one has since succeeded.
 	saved := key.kind != scopeEndpoint
 	if cred := s.scopes[scopeKey{kind: scopeCredential, id: a.ID}]; cred == nil || cred.won <= seq {
 		if l, ok := s.last[a.ID]; !ok || l.mark <= seq {
 			s.last[a.ID] = lastFailure{at: now, mark: seq, err: e}
-			saved = true // which saved block's error is the account's last error may change
+			saved = true
 		}
 	}
 	b := &st.blocks[kindIndex(kind)]
@@ -710,8 +580,7 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	source, why, word := SourceBackoff, "", false
 	switch {
 	case e.RetryAfterMS > 0:
-		// The upstream said when: never try this scope earlier (RFC 9110 §10.2.3), within the
-		// bounds resetFor puts on what is believed, which the window's length raises.
+		// The upstream said when: never try this scope earlier (RFC 9110 §10.2.3).
 		var d time.Duration
 		d, source = s.resetFor(e.RetryAfterMS, e.QuotaWindowMinutes)
 		if source == SourceUnverified {
@@ -721,9 +590,6 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	case fixed > 0:
 		until = now.Add(fixed)
 	default:
-		// No reset time: capped exponential backoff. Failures that land while the previous
-		// block is still live share its step, so a burst of concurrent failures climbs the
-		// ladder once, not once per request.
 		step := b.level
 		if b.until.After(now) && step > 0 {
 			step--
@@ -731,18 +597,13 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 		d := base << step
 		if d <= 0 || d >= max {
 			d = max
-			b.level = step // at the cap: stop climbing
+			b.level = step
 		} else {
 			b.level = step + 1
 		}
-		// Equal jitter: between half and all of the step, so accounts that failed together
-		// do not all come back at the same instant.
 		d = d/2 + time.Duration(s.rand()*float64(d/2))
 		until = now.Add(d)
 	}
-	// The upstream's newest word replaces the block's, sooner or later. A time core chose
-	// itself, or the word of an attempt that started before the one that set the block, only
-	// moves it later.
 	if word && seq >= b.mark || until.After(b.until) {
 		s.set(b, key, kind, until, source, why, now)
 		b.window = e.QuotaWindowMinutes
@@ -755,13 +616,6 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	}
 }
 
-// quotaOut reports whether what keeps account a from serving model at now is a quota block
-// whose end the upstream named, as today's core decides it. Among a set of blocks, the one
-// that ends last decides, and a block of another kind that ends as late keeps the account out
-// of the count. The credential's own blocks are looked at first and decide alone, so a quota
-// block there wins over model and endpoint blocks; otherwise every scope's blocks count. until
-// is the quota block's end, window the length of the window that ran out (0 when not known),
-// and reason the failure that set it.
 func (s *State) quotaOut(a *Account, model string, now time.Time) (until time.Time, window int64, reason *llm.Error, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -775,10 +629,8 @@ func (s *State) quotaOut(a *Account, model string, now time.Time) (until time.Ti
 	return time.Time{}, 0, nil, false
 }
 
-// quotaLast returns the named quota block on the scopes keys that ends last, if it ends after
-// every live block of another kind on them.
 func (s *State) quotaLast(keys []scopeKey, now time.Time) (last block, ok bool) {
-	var other time.Time // the latest end of a live block that is not a named quota block
+	var other time.Time
 	for _, k := range keys {
 		st := s.scopes[k]
 		if st == nil {
@@ -799,10 +651,6 @@ func (s *State) quotaLast(keys []scopeKey, now time.Time) (last block, ok bool) 
 	return last, !last.until.IsZero() && last.until.After(other)
 }
 
-// success records that the attempt with sequence number seq on account a for model succeeded.
-// It clears blocks on the attempt's scopes that failures of attempts started before it left,
-// and, while such an attempt is still running, marks the scopes so that its failure records
-// nothing when it comes.
 func (s *State) success(a *Account, model string, seq uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -811,10 +659,10 @@ func (s *State) success(a *Account, model string, seq uint64) {
 	}
 	if l, ok := s.last[a.ID]; ok && l.mark < seq && !s.stale(scopeKey{kind: scopeCredential, id: a.ID}, a) {
 		delete(s.last, a.ID)
-		s.notify() // a saved block's error may have been the account's last error
+		s.notify()
 	}
 	o := s.oldest()
-	older := o != 0 && o < seq // an attempt that started before this one is still running
+	older := o != 0 && o < seq
 	for _, k := range keysFor(a, model) {
 		if s.stale(k, a) {
 			continue
@@ -825,9 +673,6 @@ func (s *State) success(a *Account, model string, seq uint64) {
 				continue
 			}
 			if k.kind == scopeModel && s.models >= maxModelKeys {
-				// shortcut: with the table full of live model blocks the mark is not kept, so
-				// an older attempt's failure on this model may still block it; raise
-				// maxModelKeys if real pools serve more models than this at once.
 				continue
 			}
 			st = &scopeState{}
@@ -858,15 +703,10 @@ func (s *State) success(a *Account, model string, seq uint64) {
 	}
 }
 
-// classify reads an extension's typed outcome: which kind of block it means, on which scope,
-// and for how long when the upstream gave no reset time (a fixed duration, or a backoff ladder
-// from base to max). An empty kind means the failure says nothing about the account.
 func classify(e *llm.Error) (kind, scope string, fixed, base, max time.Duration) {
 	scope = e.Scope
 	switch e.Code {
 	case llm.CodeRateLimit:
-		// Without a scope, only the model waits on the account, as today's core cools only the
-		// model that answered unless the provider says the whole credential is limited.
 		kind, base, max = blockRateLimit, limitBackoffBase, limitBackoffMax
 		if scope == "" {
 			scope = scopeModel
@@ -887,15 +727,11 @@ func classify(e *llm.Error) (kind, scope string, fixed, base, max time.Duration)
 			scope = scopeModel
 		}
 	case llm.CodeUpstream, llm.CodeUnavailable, llm.CodeExtensionTimeout:
-		// An extension that stopped answering is treated as the account's endpoint failing,
-		// so a retry-safe one moves the request to another account.
 		kind, base, max = blockCooldown, failureBackoffBase, failureBackoffMax
 		if scope == "" {
 			scope = scopeEndpoint
 		}
 	default:
-		// invalid_request, unsupported, cancelled, internal and core's other extension_* codes
-		// are about the request, the caller or the extension process, not the account.
 		return "", "", 0, 0, 0
 	}
 	if scope == llm.ScopeRequest {

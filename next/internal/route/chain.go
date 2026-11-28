@@ -9,35 +9,12 @@ import (
 	"strings"
 )
 
-// Fallback chains (routing.chains). A chain is a flat list of steps under the model name a
-// client asks for. A request for the name is served by the first step's accounts while one of
-// them can serve it now, and by the next step's only once none can: every account of the step is
-// blocked, busy or has refused the request in a way that is safe to try elsewhere. Steps are
-// tiers above priority, so moving on needs no wait, and a request that no step can serve now
-// waits, as any request does, for the first account of any step to come back. A request never
-// moves after its reply has started, nor for an error about the request itself, since the
-// router's rules for both hold across steps. A step names a model directly, never another chain,
-// so a chain cannot loop.
-//
-// With no chain, a name is served by the accounts of one provider: the provider of the
-// highest-priority account that serves it, the first in the config's order on a tie, counting
-// accounts that cannot serve now (held, banned or blocked). Two providers that serve one name do
-// not share its requests unless a chain says so.
-
-// Step is one step of a fallback chain: a model, and optionally the one provider (an
-// extension's ID, such as pluxy/claude) and the accounts (their IDs) that serve it. A step with
-// neither is served as a request for its model with no chain is: by the accounts of one
-// provider.
 type Step struct {
 	Model    string   `json:"model"`
 	Provider string   `json:"provider,omitempty"`
 	Accounts []string `json:"accounts,omitempty"`
 }
 
-// String is the step as the pluxy command writes it: model[@provider][:account,account]. With
-// no provider, a model the command would read otherwise is written with an @ after it
-// (llama3:8b@): one that holds a colon and has no accounts after it, or whose last @ is
-// followed by what reads as a provider (an extension's ID, or nothing).
 func (s Step) String() string {
 	out := s.Model
 	if s.Provider == "" && needsEscape(s) {
@@ -51,12 +28,8 @@ func (s Step) String() string {
 	return out
 }
 
-// providerID matches an extension's ID, publisher/name, as the host checks it.
 var providerID = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*/[a-z0-9][a-z0-9.-]*$`)
 
-// needsEscape reports whether s, a step with no provider, written without the @ escape, would
-// read back as another step: the command takes what follows the last @ as the provider when it
-// is an extension's ID or empty, and else what follows the last colon as the accounts.
 func needsEscape(s Step) bool {
 	text := s.Model
 	if len(s.Accounts) > 0 {
@@ -70,12 +43,8 @@ func needsEscape(s Step) bool {
 	return len(s.Accounts) == 0 && strings.Contains(s.Model, ":")
 }
 
-// MaxChainSteps is the most steps a chain has.
 const MaxChainSteps = 8
 
-// ValidateChain checks one chain, among chains (the config's, with this one in it): its name,
-// its number of steps, and that each step names a model and not another chain and does not repeat
-// an earlier step. A step may name the chain's own name: that is the model of the name.
 func ValidateChain(name string, steps []Step, chains map[string][]Step) error {
 	switch {
 	case strings.TrimSpace(name) == "" || strings.TrimSpace(name) != name:
@@ -102,12 +71,10 @@ func ValidateChain(name string, steps []Step, chains map[string][]Step) error {
 	return nil
 }
 
-// sameStep reports whether a and b name the same model, provider and accounts, in any order.
 func sameStep(a, b Step) bool {
 	return a.Model == b.Model && a.Provider == b.Provider && slices.Equal(slices.Sorted(slices.Values(a.Accounts)), slices.Sorted(slices.Values(b.Accounts)))
 }
 
-// ValidateChains checks every chain of chains, as ValidateChain does.
 func ValidateChains(chains map[string][]Step) error {
 	names := make([]string, 0, len(chains))
 	for n := range chains {
@@ -122,22 +89,18 @@ func ValidateChains(chains map[string][]Step) error {
 	return nil
 }
 
-// target is an account a request may use for one of its steps.
 type target struct {
 	a     *Account
-	model string // the account's name for the step's model
-	step  int    // the step's index; 0 for a request whose model has no chain
+	model string
+	step  int
 }
 
-// targetKey names a target in a request by its account and upstream model: two steps that come
-// to the same account and model are one target, tried once in a round.
 type targetKey struct {
 	id, model string
 }
 
 func (t target) key() targetKey { return targetKey{t.a.ID, t.model} }
 
-// stepNumber is t's step as attempts and replies count it: from 1 in a chain, 0 without one.
 func (c *call) stepNumber(t target) int {
 	if !c.chain {
 		return 0
@@ -145,7 +108,6 @@ func (c *call) stepNumber(t target) int {
 	return t.step + 1
 }
 
-// stepsFor returns the steps of a request for model: its chain's, or one step naming it.
 func (r *Router) stepsFor(model string) ([]Step, bool) {
 	if steps, ok := r.cfg.Chains[model]; ok {
 		return steps, true
@@ -153,8 +115,6 @@ func (r *Router) stepsFor(model string) ([]Step, bool) {
 	return []Step{{Model: model}}, false
 }
 
-// targets returns the accounts of accounts that serve each of steps, in step order and, within a
-// step, in the accounts' order. served is the model lists of accounts without models of their own.
 func (r *Router) targets(steps []Step, accounts []*Account, served map[string][]string) []target {
 	var out []target
 	for i, s := range steps {
@@ -163,14 +123,6 @@ func (r *Router) targets(steps []Step, accounts []*Account, served map[string][]
 	return out
 }
 
-// stepTargets returns the accounts that serve step s, the step at index i. With no provider and
-// no accounts named, they are one provider's: that of the highest-priority account that serves
-// the step's model, the first in order on a tie. Every account given counts toward that choice,
-// held, banned and blocked ones too, so an account going out of service never moves the name to
-// another provider; the caller leaves the held ones out of what it tries (split). An account that serves the model because its
-// model list is not known (it serves any model) decides only when no account lists the model:
-// otherwise one whose list could not be read would take every name from the providers that
-// list it.
 func (r *Router) stepTargets(s Step, i int, accounts []*Account, served map[string][]string) []target {
 	var out []target
 	listed := func(t target) bool { return len(t.a.Models) > 0 || served[t.a.ID] != nil }
@@ -178,7 +130,6 @@ func (r *Router) stepTargets(s Step, i int, accounts []*Account, served map[stri
 		if s.Provider != "" && a.Extension != s.Provider || len(s.Accounts) > 0 && !slices.Contains(s.Accounts, a.ID) {
 			continue
 		}
-		// Blocks on a model are kept under its upstream name, which is the account's own.
 		if up, ok := a.resolve(s.Model, r.cfg.ForceModelPrefix, served[a.ID]); ok {
 			out = append(out, target{a: a, model: up, step: i})
 		}
@@ -199,8 +150,6 @@ func (r *Router) stepTargets(s Step, i int, accounts []*Account, served map[stri
 	return out
 }
 
-// rotationKey is the strategy's memory for a request for model at step: the model's own with no
-// chain, and the chain's step's with one, so a chain's turns do not move its model's.
 func rotationKey(model string, chain bool, step int) string {
 	if !chain {
 		return model
@@ -208,11 +157,6 @@ func rotationKey(model string, chain bool, step int) string {
 	return model + "\x00" + strconv.Itoa(step)
 }
 
-// CheckSteps reports the first of steps that no account routing uses serves, or that names an
-// account the router does not know or one that does not serve the step, as a management call
-// that sets a chain refuses it. An account whose model list is not known serves any model, as
-// for a request. A step whose provider is that of held accounts alone is refused too: requests
-// could not use it. A named held account that serves the step is accepted.
 func (r *Router) CheckSteps(ctx context.Context, steps []Step) error {
 	known, creds := r.knownSnapshot()
 	accounts := r.routed(known)
