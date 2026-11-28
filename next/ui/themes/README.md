@@ -422,7 +422,6 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="method-group"` | One provider on Add an account, under its name: its ways to sign in, each a row with Start |
 | `data-part="provider-tiles"` | The row of providers to pick from on Add an account: the main kinds as tiles, then More providers opens a second, smaller set (`data-more`) |
 | `data-part="provider-tile"` | One provider to pick on Add an account: its mark, its name and what accounts it takes; `data-compact` is set on the ones under More |
-| `data-part="provider-mark"` | A provider's mark: its first letter (a key for another service with an API key) on a tile in the colour of one of the six chart series, `data-hue` 1 to 6; always beside the provider's name |
 | `data-part="more-options"` | A sign-in's optional inputs, folded under More options |
 | `data-part="login-details"` | The Details fold of a sign-in that ended with a message from pluxy, such as signing in to a different account |
 | `data-part="account-added"` | What Add an account shows once the sign-in is done: Added, the optional Name, Save name, Open account and Add another |

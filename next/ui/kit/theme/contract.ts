@@ -281,7 +281,6 @@ export const PARTS = [
   "method-group",
   "provider-tiles",
   "provider-tile",
-  "provider-mark",
   "more-options",
   "login-details",
   "account-added",
