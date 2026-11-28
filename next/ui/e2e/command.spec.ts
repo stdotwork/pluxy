@@ -284,6 +284,22 @@ test("Refresh this page shows the page again, and is offered only on a page that
   await expect(menu(page)).toContainText("Nothing matches");
 });
 
+test("Refresh this page is not offered on an account's Sign in again, where a sign-in may be under way", async ({
+  page,
+}) => {
+  await page.goto(`${core.base}/panel/#/accounts/command-mail/sign-in`);
+  await expect(pageTitle(page)).toBeVisible();
+  await open(page);
+  await page.keyboard.type("refresh");
+  await expect(menu(page)).toContainText("Nothing matches");
+  // The same account's own page shows what core holds, and offers it.
+  await page.keyboard.press("Escape");
+  await page.goto(`${core.base}/panel/#/accounts/command-mail`);
+  await open(page);
+  await page.keyboard.type("refresh");
+  await expect(rows(page)).toHaveCount(1);
+});
+
 test("names are masked in it while names are hidden, and the real name still finds the account", async ({
   page,
 }) => {

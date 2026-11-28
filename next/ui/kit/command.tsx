@@ -69,8 +69,13 @@ const REFRESHABLE = new Set([
   "tools",
 ]);
 
-/** Whether the menu offers Refresh on this page. */
-export const canRefresh = (page: string) => REFRESHABLE.has(page);
+/**
+ * Whether the menu offers Refresh on this page. An account's "Sign in again" (its address ends in
+ * /sign-in) holds a sign-in under way in the page itself, which no leave guard asks about: a
+ * refresh would drop it.
+ */
+export const canRefresh = (page: string, hash = location.hash) =>
+  REFRESHABLE.has(page) && !(page === "account" && /\/sign-in\/?(\?|$)/.test(hash));
 
 /** How long a row says "Copied" before the menu closes. */
 const NOTE_MS = 700;
