@@ -88,9 +88,9 @@ In managed mode the app runs only core versions it installed itself, each in its
 pluxy program in place.
 
 **The core's folder.** The app's own core keeps its config, credentials and packages in `core/` in
-the app's data folder. On Unix the app makes that folder 0700 whatever the umask, and tightens one of
-the user's that group or others may use, since core's first `init` refuses a config folder that is a
-link, another user's, or group- or other-writable (`core_folder` in `managed.rs`).
+the app's data folder. On Unix the app makes that folder 0700, and takes away group and other access
+from one of the user's that already exists, since core's first `init` refuses a config folder that
+is a link, another user's, or group- or other-writable (`core_folder` in `managed.rs`).
 
 **Where versions come from.** Three ways, all ending in a version folder of the store:
 
@@ -307,12 +307,13 @@ a chain longer than five, and asks a native confirmation naming the whole chain 
 the manifest fields and frames, and [Jobs](../app-packages.md#jobs) the data a tool
 produces and consumes.
 
-**The vault** keeps secrets the person types into native key entry, client keys, and tools'
-backups and journals, in a file only the user may read in the app's data folder (not the system
-keyring). The window names a secret only by its ID; a confirmation names each secret and the tool
-that gets it; a tool receives the secret on its pipe, or a reference it may pass on only in that
-call. Secret values and references are redacted from tools' logs, status, errors and outputs. A
-write a tool or the app did not finish is reconciled at its next start, never written again.
+**The vault** keeps secrets the person types into native key entry, client keys, and tools' backups
+and journals, in a `vault` folder only the user may read (not the system keyring): in the app's data
+folder, or on Windows in its local data folder, which does not roam with the profile. The window
+names a secret only by its ID; a confirmation names each secret and the tool that gets it; a tool
+receives the secret on its pipe, or a reference it may pass on only in that call. Secret values and
+references are redacted from tools' logs, status, errors and outputs. A write a tool or the app did
+not finish is reconciled at its next start, never written again.
 [Secrets, references and the vault](../app-packages.md#secrets-references-and-the-vault)
 has the details.
 
@@ -453,8 +454,7 @@ Agent (`readExtraTools` in `clientPage.tsx`) to the five tools core scans, and g
 `SETUP_CLIENT_PAGES` maps core's tool IDs to page IDs. `toolAction` picks each row's one button
 from `items` (`addonItems.ts`), and `setUpAddon` (`next/app/src/toolRows.tsx`) runs install, turn-on
 confirmation and opening the tool's page in one press. When opened from Setup, `SetupReturn` shows
-the strip back to `#/setup`. Old addresses `#/easy-mode` and `#/clients` redirect to `#/setup` and
-`#/tools` (`movedTo` in `agentPages.ts`).
+the strip back to `#/setup`.
 
 ## Updates
 

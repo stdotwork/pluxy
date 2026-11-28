@@ -20,6 +20,28 @@ export interface SetupClient {
   /** The client's settings file, from the home folder. */
   config: string;
   state: SetupClientState;
+  /** Core can write this tool's settings itself (connectClient); absent on older cores. */
+  can_connect?: boolean;
+  /** Core connected this tool and keeps its settings as they were, which disconnectClient puts back. */
+  connected_by_pluxy?: boolean;
+}
+
+/** What a connect or disconnect changed in one settings file, from the home folder. */
+export interface ClientConnectionFile {
+  path: string;
+  change: "created" | "changed" | "unchanged" | "restored" | "merged" | "removed";
+}
+
+/** The reply to connectClient and disconnectClient: the tool as core reads it now, and what changed. */
+export interface ClientConnection {
+  client: SetupClient;
+  files: ClientConnectionFile[];
+  /** The key the tool sends after a connect, masked; never its value. */
+  key?: { id: string; masked: string; label?: string };
+  key_made?: boolean;
+  key_removed?: boolean;
+  /** The model the connect wrote for the tool to start with; absent when none was written. */
+  model?: string;
 }
 
 /** A sign-in core saw on its machine. Core reads no token from it. */
@@ -151,4 +173,22 @@ export const setupApi = (host: Host) => ({
     const query = [keyId && `key_id=${one(keyId)}`, model && `model=${one(model)}`].filter(Boolean).join("&");
     return host.call<ClientPaste>("GET", `/setup/clients/${one(id)}/paste${query ? `?${query}` : ""}`);
   },
+  /**
+   * Core writes the tool's settings on its own machine, with a key made for it (named label) and
+   * model as the model the tool starts with (default: best match among served models, or none when
+   * core serves no model), and keeps the file as it was.
+   */
+  connectClient: (id: string, label?: string, model?: string) => {
+    const body: { label?: string; model?: string } = {};
+    if (label) body.label = label;
+    if (model) body.model = model;
+    return host.call<ClientConnection>(
+      "POST",
+      `/setup/clients/${one(id)}/connect`,
+      Object.keys(body).length > 0 ? body : undefined,
+    );
+  },
+  /** Core puts back what its connect changed in the tool's settings. */
+  disconnectClient: (id: string) =>
+    host.call<ClientConnection>("POST", `/setup/clients/${one(id)}/disconnect`),
 });

@@ -210,7 +210,9 @@ go run ./e2e/panelcore -demo -listen 127.0.0.1:8330
 It prints one line of JSON and runs until its stdin ends or you press Ctrl-C:
 `{"base":"http://127.0.0.1:8330","key":"…","client_key":"…","config":"…"}`. Open `<base>/panel/` and
 sign in with `key` (the management key); send requests with `client_key`. Without `-listen` the
-port is random.
+port is random. Core runs with an empty home folder of its own in panelcore's temporary folder, so
+**Connect** on the Tools page writes there, not in your own `~/.claude` or `~/.codex`, and what it
+wrote goes when panelcore stops. The coding tools on your `PATH` still show.
 
 The demo is seeded: 11 accounts of four providers, in every state an account can be in except a
 broken credential file, three client keys and a fallback (`demo-best`). When it starts, it sends

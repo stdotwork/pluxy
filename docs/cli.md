@@ -10,7 +10,7 @@ prints that command's flags and exits 0.
 - [Output](#output), [Signing in](#signing-in) and [Exit codes](#exit-codes)
 - [Running core](#running-core): `serve`, `init`, `-version`, `help`
 - [Status and control](#status-and-control): `status`, `reload`, `requests`, `request cancel`, `config show`, `settings`
-- [Setup and clients](#setup-and-clients): `setup`, `setup scan`, `setup apply`, `setup done`, `client show`, `import cpa`
+- [Setup and clients](#setup-and-clients): `setup`, `setup scan`, `setup apply`, `setup done`, `client show`, `client connect`, `client disconnect`, `import cpa`
 - [Accounts](#accounts): `account ...`
 - [Routing and models](#routing-and-models): `route`, `chain ...`, `model ...`
 - [Extensions](#extensions): `ext ...`
@@ -259,6 +259,33 @@ placeholder `<client-key>` stands for a client key of yours: pluxy never prints 
 
 ```bash
 pluxy client show codex
+```
+
+### `pluxy client connect <tool>`
+
+Points a coding tool on core's machine at core: core writes the tool's settings file with a client key
+made for it and the starting model, and keeps a copy of the file as it was ([clients.md](clients.md),
+[management-api.md](management-api.md#connect-and-disconnect-a-coding-tool)). Works for `claude-code`
+(`~/.claude/settings.json`) and `codex` (`~/.codex/config.toml`). Exit 5 for any other tool; exit 6
+when core refuses the file.
+
+| Flag | What it does |
+| --- | --- |
+| `--model <name>` | Model the tool starts with, one from `pluxy model list` (at most 240 characters, no control characters). Default: the best match among the models core serves; when core serves no chat model, no placeholder is written and any existing model setting stays as it is. |
+
+```bash
+pluxy client connect claude-code
+```
+
+### `pluxy client disconnect <tool>`
+
+Puts back a coding tool's settings as they were before `pluxy client connect` (or takes out only the
+settings connect wrote when the file changed since), removes a file or folder connect created, and
+removes the client key connect made unless another connected tool uses it or it is the last client
+key. Exit 6 when core did not connect the tool.
+
+```bash
+pluxy client disconnect claude-code
 ```
 
 ### `pluxy import cpa`

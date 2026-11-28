@@ -110,9 +110,8 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 			return management.ImportReport{}, &editError{http.StatusBadRequest, "invalid_request", "auth folder: " + err.Error()}
 		}
 		if fromConfig && p.folder != nil {
-			// The folder's accounts go into core's credential store: core keeps no folder.
 			res.Ledger.Update(legacy.ConfigItem(authDirKey(res)), func(_ *int, row *legacy.Row) {
-				row.Why = "the folder is not kept: core keeps no auth folder, so a later import needs --auth-dir again"
+				row.Why = "the folder's accounts go into pluxy's credential store; pluxy keeps no auth folder"
 			})
 		}
 	}
