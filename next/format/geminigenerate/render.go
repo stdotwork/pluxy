@@ -29,9 +29,6 @@ func writeData(w io.Writer, data []byte) error {
 	return err
 }
 
-// finishReason returns the Gemini finish reason to write: the upstream's own when it came from
-// Gemini, otherwise the Gemini value for the model's reason. A tool-call stop is STOP, as Gemini
-// ends a turn of function calls.
 func finishReason(f *llm.Finish, upFormat string) string {
 	if f == nil {
 		return "STOP"
@@ -87,9 +84,6 @@ func encodeUsage(u *llm.Usage) obj {
 	return m
 }
 
-// usageLosses lists the usage fields of a reply from another format that usageMetadata has no
-// place for, nested detail fields included. Token totals, cached input and reasoning tokens are
-// carried.
 func usageLosses(u *llm.Usage, upFormat string) []string {
 	if u == nil || upFormat == format || len(u.Raw) == 0 {
 		return nil
@@ -121,8 +115,6 @@ func usageLosses(u *llm.Usage, upFormat string) []string {
 	return out
 }
 
-// builder keeps what a GenerateContent reply needs from model events whose upstream format is
-// not Gemini, and what the reply could not carry.
 type builder struct {
 	id, model        string
 	upFormat         string
@@ -133,9 +125,6 @@ type builder struct {
 	sawNativeChoices bool
 }
 
-// lose records a loss once per path. Past llm.MaxLosses the list is closed: llm.AddLoss has written
-// its last entry, and nothing more is recorded. lossSize counts what the losses hold, which comes
-// from upstream data, so an aggregator can bound it with the reply.
 func (b *builder) lose(path, detail string) {
 	if b.lost[path] || len(b.losses) > llm.MaxLosses {
 		return
@@ -162,10 +151,6 @@ func (b *builder) start(r *llm.ResponseInfo) {
 	}
 }
 
-// upstreamData looks at the upstream data an event from another format carries for what a
-// GenerateContentResponse cannot hold: thinking signatures from a Messages upstream, and opaque
-// reasoning and annotations that are no url_citation from a Responses upstream (a url_citation
-// becomes a grounding support).
 func (b *builder) upstreamData(ev llm.Event) {
 	if len(ev.Raw) == 0 {
 		return
@@ -190,25 +175,18 @@ func (b *builder) upstreamData(ev llm.Event) {
 			switch t.Type {
 			case "", "text", "thinking", "tool_use":
 			default:
-				// redacted_thinking, server tool use and results: no place in a Gemini reply. A
-				// Python run is also shown as code parts (codeExecParts), but the blocks themselves
-				// are not carried.
 				b.lose("content."+t.Type, "a Messages content block with no place in a GenerateContentResponse")
 			}
 		}
 	}
 }
 
-// eventLosses records what an event from another format carries that the reply cannot hold.
 func (b *builder) eventLosses(ev llm.Event) {
 	switch ev.Type {
 	case llm.EventResponseStart:
 		b.start(ev.Response)
 	case llm.EventNative:
 		if b.upFormat == llm.FormatOpenAIChat {
-			// A Chat upstream's native events hold choices after the first; only report them as
-			// lost if no canonical candidate events carried them (for example from an extension
-			// below protocol minor 34).
 			b.sawNativeChoices = true
 		}
 	case llm.EventCandidate:
@@ -224,21 +202,13 @@ func (b *builder) eventLosses(ev llm.Event) {
 	b.upstreamData(ev)
 }
 
-// citedSegment pairs a message item's text and position with its canonical citations so
-// buildGroundingMetadata can emit Gemini groundingChunks and groundingSupports with UTF-8 byte
-// offsets.
 type citedSegment struct {
 	text      string
-	partIndex int // candidate content part index (non-streaming)
-	byteBase  int // byte offset into concatenated streamed text (streaming)
+	partIndex int
+	byteBase  int
 	citations []llm.Citation
 }
 
-// buildGroundingMetadata turns canonical citations and sources into Gemini's groundingMetadata
-// object, converting Unicode code point (rune) ranges to UTF-8 byte offsets. Returns nil when
-// there are no valid http/https sources or citations. Each support repeats its cited text, so one long message with many
-// citations would grow by that text each time; past maxSegmentTextBytes in all the text is left
-// out (the offsets stay) and b records the loss.
 func buildGroundingMetadata(segments []citedSegment, sources []llm.Source, b *builder, maxText int) obj {
 	textBytes := 0
 	chunkIdx := map[string]int{}
@@ -306,14 +276,8 @@ func buildGroundingMetadata(segments []citedSegment, sources []llm.Source, b *bu
 	return gm
 }
 
-// maxSegmentTextBytes bounds the cited text a reply's groundingSupports repeat, in all.
 const maxSegmentTextBytes = 1 << 20
 
-// codeExecParts turns canonical CodeExecution records into Gemini executableCode and
-// codeExecutionResult parts. Gemini's ExecutableCode.language enum has only PYTHON, so a run in
-// another language, such as a shell command, is left out and reported rather than shown as Python.
-// So is a result with no code to pair it with. Omitted files and images, and the record for runs left
-// out (past the size limit, or with no result the decoder could read), are reported as dropped.
 func (b *builder) codeExecParts(runs []llm.CodeExecution) []any {
 	if len(runs) == 0 {
 		return nil
@@ -344,8 +308,6 @@ func (b *builder) codeExecParts(runs []llm.CodeExecution) []any {
 	return out
 }
 
-// response returns one GenerateContentResponse with the given parts and, when finish is set,
-// the finish reason and usage.
 func (b *builder) response(parts []any, finish *llm.Finish, usage *llm.Usage) obj {
 	return b.candidateResponse(0, parts, finish, usage)
 }
@@ -371,8 +333,6 @@ func (b *builder) candidateResponse(index int, parts []any, finish *llm.Finish, 
 	return r
 }
 
-// toolArgs returns a tool call's arguments as the JSON object Gemini wants: {} when they are
-// empty. Arguments that are not a JSON object also become {}, and are reported.
 func (b *builder) toolArgs(args, path string) json.RawMessage {
 	var m map[string]json.RawMessage
 	if json.Unmarshal([]byte(args), &m) != nil || m == nil {
@@ -402,16 +362,12 @@ type call struct {
 	signature json.RawMessage
 }
 
-// newCall starts a tool call from its item.start event.
 func (b *builder) newCall(ev llm.Event) *call {
 	c := &call{id: ev.Item.CallID, name: ev.Item.Name}
 	b.signature(c, ev)
 	return c
 }
 
-// signature takes a call's thought signature from an event of a Chat upstream that is Gemini's
-// OpenAI-compatible API: the call's item.start or item.end raw carries it as
-// extra_content.google.thought_signature, and it goes back on the call's part.
 func (b *builder) signature(c *call, ev llm.Event) {
 	if c != nil && b.upFormat == llm.FormatOpenAIChat && len(ev.Raw) > 0 {
 		var x struct {
@@ -427,17 +383,13 @@ func (b *builder) signature(c *call, ev llm.Event) {
 	}
 }
 
-// StreamWriter writes events to a client as a GenerateContent SSE stream. When the reply came
-// from a Gemini upstream it writes the upstream's chunks as they came; otherwise it writes one
-// chunk per text or thought delta, and the function calls whole, in the order they started, in
-// the last chunk with the finish reason and usage, as Gemini sends calls whole.
 type StreamWriter struct {
 	w      io.Writer
 	b      builder
 	native bool
 
-	calls        map[int]*call // tool calls by model item index
-	order        []int         // tool call item indexes in start order
+	calls        map[int]*call
+	order        []int
 	msgText      map[int]*strings.Builder
 	msgBase      map[int]int
 	totalBytes   int
@@ -447,7 +399,6 @@ type StreamWriter struct {
 	candFinished map[int]bool
 }
 
-// NewStreamWriter returns a writer for one client stream.
 func NewStreamWriter(w io.Writer) *StreamWriter {
 	return &StreamWriter{
 		w:       w,
@@ -457,7 +408,6 @@ func NewStreamWriter(w io.Writer) *StreamWriter {
 	}
 }
 
-// Losses returns what the reply had that the client format could not carry.
 func (s *StreamWriter) Losses() []llm.Loss { return s.b.losses }
 
 func (s *StreamWriter) emit(v obj) error {
@@ -468,8 +418,6 @@ func (s *StreamWriter) emit(v obj) error {
 	return writeData(s.w, data)
 }
 
-// errorEvent writes an error after the stream has started: an SSE event named error holding the
-// Google error body, as today's core writes it. Gemini clients read the error from the data.
 func (s *StreamWriter) errorEvent(e *llm.Error) error {
 	_, body := ErrorResponse(e)
 	var buf bytes.Buffer
@@ -480,7 +428,6 @@ func (s *StreamWriter) errorEvent(e *llm.Error) error {
 	return err
 }
 
-// Write writes the stream chunks for one model event.
 func (s *StreamWriter) Write(ev llm.Event) error {
 	if ev.Type == llm.EventResponseStart {
 		s.native = ev.Response.Format == format
@@ -541,8 +488,6 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		delete(s.msgText, ev.Index)
 		delete(s.msgBase, ev.Index)
 		if o := ev.Opaque; o != nil && o.Format == llm.OpaqueDevin && o.Data != "" {
-			// A Devin reasoning signature goes in a thought part of its own, as today's core
-			// writes it.
 			return s.emit(b.response([]any{obj{"text": "", "thought": true, "thoughtSignature": o.Data}}, nil, nil))
 		}
 	case llm.EventMedia:
@@ -648,7 +593,6 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	return nil
 }
 
-// aggPart is one part a non-streamed reply collects.
 type aggPart struct {
 	kind      string
 	text      strings.Builder
@@ -663,8 +607,6 @@ type candAgg struct {
 	finish *llm.Finish
 }
 
-// Aggregator collects events into a non-streamed GenerateContentResponse. A reply from a Gemini
-// upstream is returned as the upstream sent it.
 type Aggregator struct {
 	b              builder
 	native         bool
@@ -677,20 +619,15 @@ type Aggregator struct {
 	sources        []llm.Source
 	codeExecutions []llm.CodeExecution
 	size           int
-	media          []*aggPart // the media parts the reply still holds, in the order they came
-	segText        int        // the cited text the supports will repeat, by the most they can
-	reserve        int        // what Response adds beyond what Size counts, for the loss it may report
+	media          []*aggPart
+	segText        int
+	reserve        int
 }
 
-// NewAggregator returns an empty aggregator.
 func NewAggregator() *Aggregator { return &Aggregator{parts: map[int]*aggPart{}} }
 
-// Losses returns what the reply had that the client format could not carry.
 func (a *Aggregator) Losses() []llm.Loss { return a.b.losses }
 
-// Add records one event. Once the reply passes llm.MaxNonStreamedReplyBytes it leaves out media
-// parts, last first, until it fits or none is left, so a reply whose images do not all fit keeps
-// its text and the images that do, with a loss for each kind it left out.
 func (a *Aggregator) Add(ev llm.Event) {
 	a.add(ev)
 	for a.Size()+a.reserve > llm.MaxNonStreamedReplyBytes && len(a.media) > 0 {
@@ -702,10 +639,6 @@ func (a *Aggregator) Add(ev llm.Event) {
 	}
 }
 
-// segmentText returns how many bytes more of cited text the supports of a message item of textLen
-// bytes with cits may repeat, at most, counting every cited range at its largest (four bytes a
-// code point, and no more than the text) and all of them against maxSegmentTextBytes. Response
-// writes no more than this, so the check against the reply limit sees the reply it makes.
 func (a *Aggregator) segmentText(textLen int, cits []llm.Citation) int {
 	n := 0
 	for _, c := range cits {
@@ -716,7 +649,7 @@ func (a *Aggregator) segmentText(textLen int, cits []llm.Citation) int {
 	grown := min(maxSegmentTextBytes, a.segText+n) - a.segText
 	a.segText += grown
 	if a.segText >= maxSegmentTextBytes {
-		a.reserve = 1 << 10 // the loss Response reports for text left out
+		a.reserve = 1 << 10
 	}
 	return grown
 }
@@ -836,13 +769,11 @@ func (a *Aggregator) add(ev llm.Event) {
 		}
 	case llm.EventItemEnd:
 		if o := ev.Opaque; o != nil && o.Format == llm.OpaqueDevin && o.Data != "" && !a.native {
-			// Today's core leaves a Devin reasoning signature out of an unstreamed reply.
 			a.b.lose("content.thoughtSignature", "a Devin reasoning signature, which an unstreamed GenerateContentResponse does not carry")
 		}
 		if p := a.parts[ev.Index]; p != nil {
 			if len(ev.Citations) > 0 {
 				p.citations = ev.Citations
-				// A reply of this format that is rebuilt from its chunks has them counted already.
 				if !a.native {
 					for _, c := range ev.Citations {
 						a.size += len(c.URL) + len(c.Title) + 48
@@ -851,7 +782,6 @@ func (a *Aggregator) add(ev llm.Event) {
 				}
 			}
 			if p.call != nil {
-				// A late signature replaces the call's first one.
 				a.size -= len(p.call.signature)
 				a.b.signature(p.call, ev)
 				a.size += len(p.call.signature)
@@ -859,7 +789,6 @@ func (a *Aggregator) add(ev llm.Event) {
 		}
 	case llm.EventFinish:
 		a.finish, a.usage, a.sources, a.codeExecutions = ev.Finish, ev.Usage, ev.Sources, ev.CodeExecutions
-		// A reply of this format keeps its sources and runs in the chunks it holds already.
 		if !a.native {
 			for _, s := range ev.Sources {
 				a.size += len(s.URL) + len(s.Title) + 32
@@ -877,29 +806,18 @@ func (a *Aggregator) add(ev llm.Event) {
 	}
 }
 
-// partOverhead is about the JSON a part adds around a call's ID, name and arguments or a text.
 const partOverhead = len(`{"functionCall":{"id":"","name":"","args":{}}},`)
 
-// Size is about how many bytes of content the response holds so far: its id and model, text,
-// thoughts, function calls with their thought signatures, the upstream chunks it keeps, its
-// finish reason and usage as the upstream sent them, and what it reports as lost, before JSON
-// escaping. Callers use it to bound what they collect.
 func (a *Aggregator) Size() int { return a.size + a.b.lossSize }
 
-// Response returns the response body.
 func (a *Aggregator) Response() ([]byte, error) {
 	if a.native && len(a.raws) == 1 {
 		return a.raws[0], nil
 	}
-	// shortcut: a Gemini upstream that streamed to a non-streaming client (an SSE answer to a
-	// non-streaming request) is rebuilt from the model events, losing its raw fields.
 	b := &a.b
 	runParts := b.codeExecParts(a.codeExecutions)
 	var parts []any
 	var cited []citedSegment
-	// The runs carry no position, so they go where a stream puts them: after the last text,
-	// thought or media part. A reply of this format rebuilt from its chunks keeps them first, as
-	// it always has.
 	runsAt := 0
 	for _, p := range a.order {
 		switch p.kind {
@@ -933,8 +851,6 @@ func (a *Aggregator) Response() ([]byte, error) {
 		finish = &llm.Finish{Reason: llm.FinishOther}
 	}
 	resp := b.response(parts, finish, a.usage)
-	// A reply of this format rebuilt from its chunks has the text its supports repeat in them
-	// already, which are counted, so it keeps all of it as the upstream sent it.
 	maxText := maxSegmentTextBytes
 	if a.native {
 		maxText = math.MaxInt32
@@ -979,7 +895,6 @@ func (a *Aggregator) Response() ([]byte, error) {
 	return json.Marshal(resp)
 }
 
-// googleStatusOf names the Google RPC status for an HTTP status, as Google's API errors do.
 func googleStatusOf(status int) string {
 	switch status {
 	case http.StatusBadRequest:
@@ -1011,7 +926,6 @@ func googleStatusOf(status int) string {
 	return "FAILED_PRECONDITION"
 }
 
-// status returns the HTTP status for e.
 func status(e *llm.Error) int {
 	if e.Status >= 400 && e.Status <= 599 {
 		return e.Status
@@ -1037,12 +951,6 @@ func status(e *llm.Error) int {
 	return http.StatusBadGateway
 }
 
-// ErrorResponse returns the HTTP status and Google error body for e:
-// {"error": {"code", "message", "status"}}. An upstream Google error keeps its status name and
-// its details (retry info and the like).
-//
-// The usage-limit reply has today's core's body, which is the same for every client but
-// Anthropic's.
 func ErrorResponse(e *llm.Error) (int, []byte) {
 	if u := e.UsageLimit; u != nil {
 		o := u.ErrorObject()
@@ -1076,8 +984,6 @@ func ErrorResponse(e *llm.Error) (int, []byte) {
 			if !isNull(g.Error.Details) && json.Unmarshal(g.Error.Details, &details) == nil {
 				body["details"] = g.Error.Details
 			}
-			// An overflow's provider code is not Google's: it keeps the status Google gave it, unless
-			// core changed the HTTP status, as for a 500 that is an overflow.
 			if _, ok := googleStatus[g.Error.Status]; ok && code == st && e.ProviderCode == llm.ProviderContextLengthExceeded {
 				body["status"] = g.Error.Status
 			}

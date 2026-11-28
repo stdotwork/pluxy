@@ -11,8 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// TestConformance runs the extension conformance kit against this extension, with the fake
-// OpenAI login server and Codex endpoint acting out each scenario on a ChatGPT subscription.
 func TestConformance(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	conformance.Run(t, conformance.Target{
@@ -23,8 +21,6 @@ func TestConformance(t *testing.T) {
 	})
 }
 
-// testAccount returns an account whose model requests and login go to srv. The browser login does
-// not listen for its redirect, so tests never bind its fixed port.
 func testAccount(srv *codextest.Server, cred *protocol.Credential) protocol.Account {
 	settings, _ := json.Marshal(map[string]any{"base_url": srv.URL + "/backend-api/codex", "auth_base_url": srv.URL, "callback_listen": false})
 	return protocol.Account{ID: "codex", Settings: settings, Credential: cred}
@@ -69,8 +65,6 @@ func prepareLogin(t *testing.T, s conformance.LoginScenario, method string) conf
 			srv.DenyBrowser = !approve
 			return conformance.LoginSetup{Account: testAccount(srv, nil), Act: browserUser}
 		case "api_key":
-			// The key is checked against the upstream's model list: an issued one is kept, any other
-			// is refused.
 			key := "sk-conformance-not-issued"
 			if approve {
 				key = srv.IssueToken("text")
@@ -93,8 +87,6 @@ func prepareLogin(t *testing.T, s conformance.LoginScenario, method string) conf
 	return conformance.LoginSetup{}
 }
 
-// browserUser plays the user of a browser login: it opens the sign-in URL without following the
-// redirect and pastes back the address the browser was sent to.
 func browserUser(t *testing.T, p protocol.Prompt) map[string]string {
 	t.Helper()
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

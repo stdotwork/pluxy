@@ -7,8 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A call whose chunk names no index gets call_<index> as before, and a made id never takes one
-// the stream already sent or used.
 func TestStreamDecoderFallbackCallIDs(t *testing.T) {
 	_, events := decodeAll(t,
 		chunk(`{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"f","arguments":"{}"}}]}`),
@@ -31,7 +29,6 @@ func TestStreamDecoderFallbackCallIDs(t *testing.T) {
 	}
 }
 
-// The first call of a stream that leaves its index out gets call_0, as today.
 func TestStreamDecoderFallbackCallIDWithoutIndex(t *testing.T) {
 	_, events := decodeAll(t,
 		chunk(`{"tool_calls":[{"type":"function","function":{"name":"f","arguments":"{}"}}]}`),

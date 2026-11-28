@@ -616,8 +616,6 @@ func TestNoEndpoint(t *testing.T) {
 	})
 }
 
-// A count path the vendor lacks says the account cannot count, so core can answer with its estimate;
-// a 404 that names an unknown model stays what it was.
 func TestNoCountEndpoint(t *testing.T) {
 	var e *llm.Error
 	err := noCountEndpoint(&llm.Error{Code: llm.CodeNotFound, Status: 404, Scope: llm.ScopeModel}, "token count", "/x")

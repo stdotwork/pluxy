@@ -15,17 +15,13 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A Responses client's custom, namespace and tool_search tools, sent to each format that has none
-// of them and restored on the reply.
-
 type wireCall struct{ name, args string }
 
-// wire reads what one upstream format was sent, in the same terms for each format.
 type wire struct {
 	tools   []string
 	calls   []wireCall
-	results map[string]string // by call ID
-	choice  []string          // the function names the tool choice names
+	results map[string]string
+	choice  []string
 }
 
 type target struct {
@@ -236,12 +232,10 @@ func lossAt(losses []llm.Loss, path string) *llm.Loss {
 	return nil
 }
 
-// replyEvents is an upstream's one function call, as the extension sends it: under the client's
-// name for what it was sent (names undoes the target's name repair).
 func replyEvents(tg target, req llm.Request, sentName string, fragments ...string) []llm.Event {
 	name := sentName
 	if to, ok := tg.names(req)[sentName]; ok {
-		name = to // the upstream saw this
+		name = to
 	}
 	for from, to := range tg.names(req) {
 		if to == name {
@@ -348,8 +342,6 @@ func wantFields(t *testing.T, where string, got map[string]any, want map[string]
 
 const patchTool = `{"type":"custom","name":"apply_patch","description":"Edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.","format":{"type":"grammar","syntax":"lark","definition":"start: patch"}}`
 
-// Point 1: a custom tool goes up as a function, its replayed call and output as a function call
-// and result, and the reply's call comes back as a custom_tool_call with its events.
 func TestCustomToolGoesUpAsFunction(t *testing.T) {
 	body := `{"model":"m","tools":[` + patchTool + `],"input":[
 		{"type":"message","role":"user","content":"go"},
@@ -420,7 +412,6 @@ func TestCustomToolDescriptionCarriesGrammar(t *testing.T) {
 
 func TestCustomToolCallComesBack(t *testing.T) {
 	body := `{"model":"m","stream":true,"tools":[` + patchTool + `],"input":"go"}`
-	// The fragments split an escape and a multi-byte character.
 	fragments := []string{`{"inp`, `ut": "a\`, "nb \xc3", "\xa9\\u00e9\"", ` }`}
 	for _, tg := range targets() {
 		t.Run(tg.name, func(t *testing.T) {
@@ -463,7 +454,6 @@ func TestCustomToolCallComesBack(t *testing.T) {
 	}
 }
 
-// notWhole are arguments that are not exactly one {"input":"<string>"} object.
 var notWhole = []struct{ name, args string }{
 	{"cut off in the text", `{"input":"rm -rf /home/me/project/build`},
 	{"cut off after the text", `{"input":"rm -rf build"`},
@@ -497,8 +487,6 @@ func noCustomCall(t *testing.T, got []sseEvent) {
 	}
 }
 
-// A custom call whose arguments are cut off by the token limit never reaches the client as a
-// call: Codex runs a done item whatever its status says.
 func TestCustomToolCallCutOff(t *testing.T) {
 	for _, tg := range targets() {
 		for _, reason := range []string{llm.FinishLength, llm.FinishContentFilter} {
@@ -549,8 +537,6 @@ func TestCustomToolCallCutOff(t *testing.T) {
 	}
 }
 
-// On any other finish such a call fails the reply, with an error that names the tool and does not
-// repeat the arguments.
 func TestCustomToolCallNotWholeFails(t *testing.T) {
 	for _, tg := range targets() {
 		for _, tc := range notWhole {
@@ -559,7 +545,6 @@ func TestCustomToolCallNotWholeFails(t *testing.T) {
 				tr := &llm.Translation{From: llm.FormatOpenAIResponses, To: tg.format}
 				events := replyFinishing(tg, req, tc.args, llm.FinishToolCalls)
 
-				// The extension ends the reply through the upstream error path.
 				check := openairesponses.NewCustomCallCheck(req, tr)
 				var failure error
 				for _, ev := range events {
@@ -578,7 +563,6 @@ func TestCustomToolCallNotWholeFails(t *testing.T) {
 					t.Errorf("the error repeats the arguments: %s", e.Message)
 				}
 
-				// A core whose extension has no check still never shows the call or a success.
 				got := stream(t, req, events)
 				noCustomCall(t, got)
 				if eventOf(got, "response.completed") != nil {
@@ -599,7 +583,6 @@ func TestCustomToolCallNotWholeFails(t *testing.T) {
 	}
 }
 
-// Exactly one whole object is delivered, an empty input and white space around it included.
 func TestCustomToolCallWhole(t *testing.T) {
 	for _, tc := range []struct{ args, want string }{
 		{`{"input":""}`, ""},
@@ -623,8 +606,6 @@ func TestCustomToolCallWhole(t *testing.T) {
 	}
 }
 
-// A Responses client is shown candidate 0 only, so the check reads candidate 0 only: a later
-// candidate's call that is not one whole input neither fails the reply nor reaches the client.
 func TestCustomCallCheckReadsCandidateZeroOnly(t *testing.T) {
 	for _, tg := range targets() {
 		t.Run(tg.name, func(t *testing.T) {
@@ -661,7 +642,6 @@ func TestCustomCallCheckReadsCandidateZeroOnly(t *testing.T) {
 	}
 }
 
-// A body passed through, or a request with no custom tool, needs no check.
 func TestCustomCallCheckOnlyForTranslatedCustomTools(t *testing.T) {
 	custom := parse(t, `{"model":"m","tools":[`+patchTool+`],"input":"go"}`)
 	plain := parse(t, `{"model":"m","tools":[{"type":"function","name":"read","parameters":{"type":"object"}}],"input":"go"}`)
@@ -688,8 +668,6 @@ const mcpNamespace = `{"type":"namespace","name":"mcp__linear__","description":"
 	{"type":"function","name":"create_issue","description":"Create an issue.","parameters":{"type":"object","properties":{"title":{"type":"string"}}}},
 	{"type":"custom","name":"note","description":"Write a note."}]}`
 
-// Point 2: a namespace's tools are flattened, replayed calls flatten the same way, and the reply is
-// restored to name plus namespace.
 func TestNamespaceFlattened(t *testing.T) {
 	body := `{"model":"m","tools":[` + mcpNamespace + `,{"type":"namespace","name":"crm","tools":[{"type":"function","name":"find","parameters":{"type":"object"}}]}],"input":[
 		{"type":"message","role":"user","content":"go"},
@@ -727,8 +705,6 @@ func TestNamespaceFlattened(t *testing.T) {
 	}
 }
 
-// The Codex client's default namespace, functions, is the same tool as the plain name: it adds no
-// prefix, and the call goes back in the namespace the client declared.
 func TestDefaultNamespaceAddsNoPrefix(t *testing.T) {
 	body := `{"model":"m","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","description":"d","tools":[` + patchTool + `,
 		{"type":"function","name":"shell","parameters":{"type":"object"}}]}]},
@@ -746,7 +722,6 @@ func TestDefaultNamespaceAddsNoPrefix(t *testing.T) {
 	}
 }
 
-// Point 3: an additional_tools item's tools count as the request's.
 func TestAdditionalTools(t *testing.T) {
 	body := `{"model":"m","tools":[{"type":"function","name":"read","parameters":{"type":"object"}}],"input":[
 		{"type":"additional_tools","role":"developer","tools":[` + patchTool + `,` + mcpNamespace + `]},
@@ -774,8 +749,6 @@ const deferredNamespace = `{"type":"namespace","name":"mcp__cal__","description"
 	{"type":"function","name":"create_event","defer_loading":true,"parameters":{"type":"object"}},
 	{"type":"function","name":"list_events","parameters":{"type":"object"}}]}`
 
-// Point 4: a tool_search the client runs is a function; its calls are restored, its replayed call
-// and output go up as a call and result, and the tools it loaded become callable.
 func TestClientToolSearch(t *testing.T) {
 	first := `{"model":"m","tools":[` + clientSearch + `,` + deferredNamespace + `],"input":"go"}`
 	for _, tg := range targets() {
@@ -830,8 +803,6 @@ func TestClientToolSearch(t *testing.T) {
 	}
 }
 
-// A tool_search the provider would run has no counterpart upstream: it stays a reported loss, and
-// the tools it would have loaded are declared so the model can still call them.
 func TestHostedToolSearchIsReported(t *testing.T) {
 	body := `{"model":"m","tools":[{"type":"tool_search"},` + deferredNamespace + `],"input":[
 		{"type":"message","role":"user","content":"go"},
@@ -855,8 +826,6 @@ func TestHostedToolSearchIsReported(t *testing.T) {
 	}
 }
 
-// Point 5: names that are the same once flattened are one tool, with xAI's precedence: the tools
-// list before an additional_tools item, then a top-level tool before a namespace's, then the first.
 func TestDuplicateToolNames(t *testing.T) {
 	body := `{"model":"m","tools":[
 		{"type":"namespace","name":"ns","tools":[{"type":"function","name":"dup","description":"child","parameters":{"type":"object"}}]},
@@ -885,14 +854,12 @@ func TestDuplicateToolNames(t *testing.T) {
 					t.Errorf("%s: loss = %+v, want dropped; all: %+v", p, l, losses)
 				}
 			}
-			// The winner is a plain function, so its call is not restored to the namespace.
 			item := outputItem(t, aggregate(t, req, replyEvents(tg, req, "ns__dup", `{}`)))
 			wantFields(t, "reply", item, map[string]any{"type": "function_call", "name": "ns__dup", "namespace": nil})
 		})
 	}
 }
 
-// Point 6: a tool choice or allowed list that names one of these tools names its function.
 func TestToolChoiceNamesFlattenedFunction(t *testing.T) {
 	tools := `"tools":[` + patchTool + `,` + mcpNamespace + `,{"type":"function","name":"read","parameters":{"type":"object"}}]`
 	for _, tc := range []struct {
@@ -913,7 +880,6 @@ func TestToolChoiceNamesFlattenedFunction(t *testing.T) {
 					t.Errorf("reported as lost: %+v", *l)
 				}
 				if tg.name == "messages" && len(tc.want) > 1 {
-					// Messages has no allowed list: only the allowed tools are defined.
 					if !slices.Equal(w.tools, tc.want) {
 						t.Errorf("tools = %v, want %v", w.tools, tc.want)
 					}
@@ -927,8 +893,6 @@ func TestToolChoiceNamesFlattenedFunction(t *testing.T) {
 	}
 }
 
-// A list of one namespaced function names its flattened function. The parser used to read it as
-// the bare name, which no tool has once flattened.
 func TestAllowedToolsOneNamespacedEntry(t *testing.T) {
 	const choice = `{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"search","namespace":"docs"}]}`
 	body := `{"model":"m","tools":[{"type":"namespace","name":"docs","tools":[{"type":"function","name":"search","parameters":{"type":"object"}},{"type":"function","name":"fetch","parameters":{"type":"object"}}]}],"tool_choice":` + choice + `,"input":"go"}`
@@ -949,7 +913,6 @@ func TestAllowedToolsOneNamespacedEntry(t *testing.T) {
 			}
 		})
 	}
-	// A Responses upstream gets the client's own body, with the list as it wrote it.
 	req := parse(t, body)
 	if !bytes.Contains(req.Native.Body, []byte(`"namespace":"docs"}]}`)) {
 		t.Errorf("native body changed: %s", req.Native.Body)
@@ -970,8 +933,6 @@ func TestAllowedToolsOneNamespacedEntry(t *testing.T) {
 	}
 }
 
-// A choice naming a tool the request does not declare stays a reported loss rather than naming a
-// function upstream would refuse.
 func TestToolChoiceUnknownToolStaysLost(t *testing.T) {
 	for _, tg := range targets() {
 		t.Run(tg.name, func(t *testing.T) {
@@ -987,7 +948,6 @@ func TestToolChoiceUnknownToolStaysLost(t *testing.T) {
 	}
 }
 
-// A name past a target's limit is repaired for that target, and the client still gets its own.
 func TestRestoredNameSurvivesNameRepair(t *testing.T) {
 	long := strings.Repeat("a", 150)
 	ns := "mcp__" + strings.Repeat("s", 40) + "__"
@@ -1041,8 +1001,6 @@ func TestRestoredNameSurvivesNameRepair(t *testing.T) {
 	}
 }
 
-// A reply from a Responses upstream is the upstream's own: its calls are not rewritten, whatever
-// the request declared.
 func TestResponsesUpstreamIsNotRestored(t *testing.T) {
 	req := parse(t, `{"model":"m","tools":[`+patchTool+`,`+mcpNamespace+`],"input":"go"}`)
 	got := aggregate(t, req, []llm.Event{
@@ -1055,7 +1013,6 @@ func TestResponsesUpstreamIsNotRestored(t *testing.T) {
 	wantFields(t, "item", outputItem(t, got), map[string]any{"type": "function_call", "name": "apply_patch", "arguments": `{"a":1}`})
 }
 
-// A request with only plain function tools is sent as it was.
 func TestPlainFunctionsUnchanged(t *testing.T) {
 	body := `{"model":"m","tools":[{"type":"function","name":"read","description":"Read.","parameters":{"type":"object"}}],"input":[
 		{"type":"message","role":"user","content":"go"},
@@ -1078,8 +1035,6 @@ func TestPlainFunctionsUnchanged(t *testing.T) {
 	}
 }
 
-// A tool_search call is a real call on these upstreams, and Messages refuses a repeated call ID, so
-// a WebSocket client's transcript keeps one of each, as it does for function and custom calls.
 func TestTranscriptKeepsOneToolSearchCall(t *testing.T) {
 	const call = `{"type":"tool_search_call","call_id":"s1","execution":"client","status":"completed","arguments":{"query":"x"}}`
 	const output = `{"type":"tool_search_output","call_id":"s1","execution":"client","status":"completed","tools":[]}`
@@ -1137,7 +1092,6 @@ func TestTranscriptKeepsOneToolSearchCall(t *testing.T) {
 	})
 }
 
-// A deferred tool a search has loaded is not reported as declared early.
 func TestLoadedDeferredToolIsNotALoss(t *testing.T) {
 	body := `{"model":"m","input":[{"type":"message","role":"user","content":"go"},
 		{"type":"tool_search_call","call_id":"s1","execution":"client","status":"completed","arguments":{"query":"x"}},

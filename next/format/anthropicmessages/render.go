@@ -33,7 +33,6 @@ func writeEvent(w io.Writer, typ string, data []byte) error {
 	return err
 }
 
-// rawType returns the type field of raw when raw is a JSON object that has one.
 func rawType(raw json.RawMessage) string {
 	raw = bytes.TrimLeft(raw, " \t\r\n")
 	if len(raw) == 0 || raw[0] != '{' {
@@ -51,10 +50,6 @@ func rawType(raw json.RawMessage) string {
 	return e.Type
 }
 
-// scanType is rawType for the common object, found without decoding it: one "type" member that
-// is a string, or none, and no other member whose name encoding/json could match to "type" (its
-// matching ignores case and reads escapes). It reports false for any other object, which rawType
-// decodes.
 func scanType(raw []byte) (string, bool) {
 	var space [8]jsonscan.Member
 	members, ok := jsonscan.AppendObject(space[:0], raw)
@@ -77,7 +72,6 @@ func scanType(raw []byte) (string, bool) {
 		}
 		for _, c := range m.Key {
 			if c >= 0x80 || c == '\\' {
-				// Maybe another spelling of type, which encoding/json matches.
 				return "", false
 			}
 		}
@@ -88,8 +82,6 @@ func scanType(raw []byte) (string, bool) {
 	return typ, true
 }
 
-// upstreamEvent returns the Messages event type of raw when raw is a Messages stream event: any
-// typed object other than a whole Message, so event types Anthropic adds later pass through too.
 func upstreamEvent(raw json.RawMessage) string {
 	if t := rawType(raw); t != "message" {
 		return t
@@ -97,9 +89,6 @@ func upstreamEvent(raw json.RawMessage) string {
 	return ""
 }
 
-// stopReason returns the stop reason to write: the upstream's own when it came from Messages,
-// otherwise the Messages value for the model's finish reason (a content filter stop becomes
-// refusal). hasToolCalls makes a plain stop with tool calls in the reply tool_use.
 func stopReason(f *llm.Finish, upFormat string, hasToolCalls bool) string {
 	if f == nil {
 		return "end_turn"
@@ -122,10 +111,6 @@ func stopReason(f *llm.Finish, upFormat string, hasToolCalls bool) string {
 	return "end_turn"
 }
 
-// encodeUsage writes model usage as Messages usage. Messages input_tokens leaves out tokens read
-// from or written to a cache, which are counted in their own fields. Reasoning tokens the
-// upstream reported go in output_tokens_details.thinking_tokens (at most output_tokens), a field
-// Anthropic's usage does not have, as today's core adds it so clients can see them.
 func encodeUsage(u *llm.Usage) obj {
 	v := func(p *int64) int64 {
 		if p == nil {
@@ -152,9 +137,6 @@ func encodeUsage(u *llm.Usage) obj {
 	return out
 }
 
-// usageLosses lists the usage fields of a reply from another format that Messages usage has no
-// place for, nested detail fields included. Token totals, cached input tokens and cache-write
-// input tokens are carried.
 func usageLosses(u *llm.Usage, upFormat string) []string {
 	if u == nil || upFormat == format || len(u.Raw) == 0 {
 		return nil
@@ -183,8 +165,6 @@ func usageLosses(u *llm.Usage, upFormat string) []string {
 	return out
 }
 
-// builder keeps what a Messages reply needs from model events whose upstream format is not
-// Messages, and what the reply could not carry.
 type builder struct {
 	id       string
 	model    string
@@ -193,14 +173,11 @@ type builder struct {
 	finish   *llm.Finish
 	usage    *llm.Usage
 	losses   []llm.Loss
-	carried  map[string]bool // encrypted reasoning a thinking block's signature holds
+	carried  map[string]bool
 	lost     map[string]bool
 	lossSize int
 }
 
-// lose records a loss once per path. Past llm.MaxLosses the list is closed: llm.AddLoss has written
-// its last entry, and nothing more is recorded. lossSize counts what the losses hold, which comes
-// from upstream data, so an aggregator can bound it with the reply.
 func (b *builder) lose(path, detail string) {
 	if b.lost[path] || len(b.losses) > llm.MaxLosses {
 		return
@@ -232,10 +209,6 @@ func (b *builder) start(r *llm.ResponseInfo) {
 	}
 }
 
-// upstreamData looks at the upstream data an event from another format carries for what a
-// Message cannot hold: annotations from a Responses upstream, and its opaque reasoning except
-// what a thinking block's signature holds (signature). It returns the signature for the block
-// an item.end event closes.
 func (b *builder) upstreamData(ev llm.Event) string {
 	sig := signature(ev)
 	if sig != "" {
@@ -257,11 +230,6 @@ func (b *builder) upstreamData(ev llm.Event) string {
 	return sig
 }
 
-// signature returns the signature for the thinking block an item.end event closes: a Responses
-// upstream's encrypted reasoning, a Gemini upstream's thought signature or a Devin reasoning
-// signature (the event's opaque data), which a Messages client keeps in the block's signature and replays with it, so the
-// reasoning carries over to the next turn (see openairesponses.IsEncryptedReasoning). It is "" for
-// any other event or opaque data.
 func signature(ev llm.Event) string {
 	o := ev.Opaque
 	if ev.Type != llm.EventItemEnd || o == nil {
@@ -271,11 +239,8 @@ func signature(ev llm.Event) string {
 	case o.Format == llm.FormatOpenAIResponses && openairesponses.IsEncryptedReasoning(o.Data):
 		return o.Data
 	case o.Format == llm.FormatGeminiGenerate && o.Data != "":
-		// A Gemini thought signature, which the Gemini provider puts back on its part when the
-		// client replays the block.
 		return o.Data
 	case o.Format == llm.OpaqueDevin && o.Data != "":
-		// A Devin reasoning signature, which Devin takes back from the replayed block.
 		return o.Data
 	}
 	return ""
@@ -294,9 +259,6 @@ func (b *builder) finished(ev llm.Event) {
 
 func (b *builder) stopReason() string { return stopReason(b.finish, b.upFormat, b.tools) }
 
-// toolInput returns a tool call's arguments as the JSON object Messages wants: {} when they are
-// empty. Arguments that are not a JSON object also become {}, as in today's core, and are
-// reported.
 func (b *builder) toolInput(args string, path string) json.RawMessage {
 	var m map[string]json.RawMessage
 	if json.Unmarshal([]byte(args), &m) != nil || m == nil {
@@ -328,38 +290,30 @@ func blockDelta(kind, delta string) obj {
 	return obj{"type": "input_json_delta", "partial_json": delta}
 }
 
-// streamBlock is one model item being written as a content block.
 type streamBlock struct {
 	kind, callID, name string
-	index              int      // Messages block index, set when the block starts
-	held               []string // deltas waiting while another block is open
-	signature          string   // thinking signature, written before the block's stop
+	index              int
+	held               []string
+	signature          string
 	ended              bool
 }
 
-// StreamWriter writes events to a client as a Messages stream. When the reply came from a
-// Messages upstream it writes the upstream's events as they came; otherwise it rebuilds the
-// Messages event sequence from the model events. Messages content blocks do not overlap, so
-// while one block is open, items that start later (parallel tool calls) are held and written
-// in order after it.
 type StreamWriter struct {
 	w      io.Writer
 	b      builder
 	native bool
-	ended  bool // an upstream terminal event was passed through
+	ended  bool
 
-	blocks map[int]*streamBlock // model item index -> block
-	active int                  // model item index of the open block, or -1
-	queue  []int                // model items waiting to be written, in start order
-	next   int                  // next Messages block index
+	blocks map[int]*streamBlock
+	active int
+	queue  []int
+	next   int
 }
 
-// NewStreamWriter returns a writer for one client stream.
 func NewStreamWriter(w io.Writer) *StreamWriter {
 	return &StreamWriter{w: w, blocks: map[int]*streamBlock{}, active: -1}
 }
 
-// Losses returns what the reply had that the client format could not carry.
 func (s *StreamWriter) Losses() []llm.Loss { return s.b.losses }
 
 func (s *StreamWriter) emit(typ string, fields obj) error {
@@ -371,8 +325,6 @@ func (s *StreamWriter) emit(typ string, fields obj) error {
 	return writeEvent(s.w, typ, data)
 }
 
-// open writes the start of item idx and its held deltas, and its stop when it has ended. It
-// reports whether the block is still open.
 func (s *StreamWriter) open(idx int) (bool, error) {
 	blk := s.blocks[idx]
 	blk.index = s.next
@@ -393,7 +345,6 @@ func (s *StreamWriter) open(idx int) (bool, error) {
 	return true, nil
 }
 
-// stop writes the end of a block: its signature, when it has one, then its stop.
 func (s *StreamWriter) stop(blk *streamBlock) error {
 	if blk.signature != "" && blk.kind == llm.ItemReasoning {
 		if err := s.emit("content_block_delta", obj{"index": blk.index, "delta": obj{"type": "signature_delta", "signature": blk.signature}}); err != nil {
@@ -403,7 +354,6 @@ func (s *StreamWriter) stop(blk *streamBlock) error {
 	return s.emit("content_block_stop", obj{"index": blk.index})
 }
 
-// drain writes waiting items in order until one stays open.
 func (s *StreamWriter) drain() error {
 	for len(s.queue) > 0 {
 		idx := s.queue[0]
@@ -420,7 +370,6 @@ func (s *StreamWriter) drain() error {
 	return nil
 }
 
-// Write writes the stream events for one model event.
 func (s *StreamWriter) Write(ev llm.Event) error {
 	if ev.Type == llm.EventResponseStart {
 		s.native = ev.Response.Format == format && upstreamEvent(ev.Raw) != ""
@@ -428,7 +377,6 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	if s.native {
 		raw := ev.Raw
 		if ev.Type == llm.EventError {
-			// An upstream error event travels as the error's raw.
 			raw = ev.Error.Raw
 		}
 		if typ := upstreamEvent(raw); typ != "" {
@@ -442,7 +390,6 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			s.ended = true
 			return s.emit("error", errorFields(ev.Error))
 		case ev.Type == llm.EventFinish && !s.ended:
-			// A non-streamed Message rebuilt as events ends with the whole Message.
 			s.ended = true
 			return s.emit("message_stop", obj{})
 		}
@@ -452,7 +399,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	switch ev.Type {
 	case llm.EventResponseStart:
 		b.start(ev.Response)
-		b.upstreamData(ev) // a stream that opened with its terminal event
+		b.upstreamData(ev)
 		return s.emit("message_start", obj{"message": obj{"id": b.id, "type": "message", "role": "assistant", "model": b.model,
 			"content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": obj{"input_tokens": 0, "output_tokens": 0}}})
 	case llm.EventItemStart:
@@ -472,8 +419,6 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	case llm.EventTextDelta, llm.EventReasoningDelta, llm.EventToolInputDelta:
 		blk := s.blocks[ev.Index]
 		if ev.Index != s.active {
-			// shortcut: held deltas are not bounded beyond the reply itself; bound them if
-			// upstreams interleave long parallel blocks.
 			blk.held = append(blk.held, ev.Delta)
 			return nil
 		}
@@ -528,16 +473,12 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	return nil
 }
 
-// aggBlock is one content block a non-streamed reply collects.
 type aggBlock struct {
 	kind, callID, name string
 	text               strings.Builder
 	signature          string
 }
 
-// Aggregator collects events into a non-streamed Message. A reply from a Messages upstream is
-// returned as the upstream's Message; when that upstream streamed, the Message is put together
-// from its events, as Anthropic's SDKs do.
 type Aggregator struct {
 	b      builder
 	blocks map[int]*aggBlock
@@ -547,20 +488,17 @@ type Aggregator struct {
 	size   int
 }
 
-// NewAggregator returns an empty aggregator.
 func NewAggregator() *Aggregator { return &Aggregator{blocks: map[int]*aggBlock{}} }
 
-// Losses returns what the reply had that the client format could not carry.
 func (a *Aggregator) Losses() []llm.Loss { return append(a.b.losses, a.acc.losses...) }
 
-// Add records one event.
 func (a *Aggregator) Add(ev llm.Event) {
 	b := &a.b
 	a.size += len(ev.Delta)
 	if ev.Type == llm.EventResponseStart {
 		b.start(ev.Response)
 		a.size += len(b.id) + len(b.model)
-		b.upstreamData(ev) // a stream that opened with its terminal event
+		b.upstreamData(ev)
 	}
 	if b.upFormat == format {
 		if ev.Type == llm.EventFinish && rawType(ev.Raw) == "message" {
@@ -621,18 +559,12 @@ func (a *Aggregator) Add(ev llm.Event) {
 	}
 }
 
-// blockOverhead is about the JSON a content block adds around its ID, name and content.
 const blockOverhead = len(`{"type":"tool_use","id":"","name":"","input":{}},`)
 
-// Size is about how many bytes of content the response holds so far: its id and model, text,
-// thinking, tool calls, the upstream events it puts a Message together from, the upstream's final
-// Message, its finish reason and usage as the upstream sent them, and what it reports as lost,
-// before JSON escaping. Callers use it to bound what they collect.
 func (a *Aggregator) Size() int {
 	return a.size + len(a.final) + a.b.lossSize + a.acc.lossSize
 }
 
-// Response returns the response body.
 func (a *Aggregator) Response() ([]byte, error) {
 	if len(a.final) > 0 {
 		return a.final, nil
@@ -662,8 +594,6 @@ func (a *Aggregator) Response() ([]byte, error) {
 		"stop_reason": b.stopReason(), "stop_sequence": nil, "usage": encodeUsage(b.usage)})
 }
 
-// accumulator puts a Message together from the events of a Messages stream, keeping every field
-// of the message and its blocks: signatures, citations and blocks the model has no place for.
 type accumulator struct {
 	message  map[string]json.RawMessage
 	blocks   map[int]*accBlock
@@ -675,14 +605,11 @@ type accumulator struct {
 
 type accBlock struct {
 	fields  map[string]json.RawMessage
-	texts   map[string]*strings.Builder // text and thinking, appended by deltas
-	partial strings.Builder             // tool input JSON, appended by deltas
+	texts   map[string]*strings.Builder
+	partial strings.Builder
 	inputs  bool
 }
 
-// lose records a loss once per path. Past llm.MaxLosses the list is closed: llm.AddLoss has written
-// its last entry, and nothing more is recorded. lossSize counts what the losses hold, which comes
-// from upstream data, so an aggregator can bound it with the reply.
 func (a *accumulator) lose(path, detail string) {
 	if a.lost[path] || len(a.losses) > llm.MaxLosses {
 		return
@@ -816,7 +743,6 @@ func (a *accumulator) result() ([]byte, error) {
 	return json.Marshal(a.message)
 }
 
-// anthropicStatus maps Anthropic's error types to their HTTP status.
 var anthropicStatus = map[string]int{
 	"invalid_request_error": http.StatusBadRequest,
 	"authentication_error":  http.StatusUnauthorized,
@@ -830,7 +756,6 @@ var anthropicStatus = map[string]int{
 	"overloaded_error":      529,
 }
 
-// errorType returns the Anthropic error type for an HTTP status, as today's core names them.
 func errorType(status int) string {
 	switch status {
 	case http.StatusUnauthorized:
@@ -858,8 +783,6 @@ func errorType(status int) string {
 	return "invalid_request_error"
 }
 
-// status returns the HTTP status for e. An error that has no status of its own but names an
-// Anthropic error type (an error event at the start of a stream) gets that type's status.
 func status(e *llm.Error) int {
 	if e.Status >= 400 && e.Status <= 599 {
 		return e.Status
@@ -886,10 +809,6 @@ func status(e *llm.Error) int {
 	return http.StatusBadGateway
 }
 
-// errorFields are the fields of an Anthropic error body or error event. The error keeps the
-// upstream's Anthropic error type when it had one. The usage-limit reply is a rate_limit_error
-// whose message ends with the time to the reset, and which carries the reset as Unix seconds
-// (resets_at) and retryable false, as today's core writes it.
 func errorFields(e *llm.Error) obj {
 	if u := e.UsageLimit; u != nil {
 		o := obj{"type": "rate_limit_error",
@@ -950,7 +869,6 @@ func messagesErrorFields(raw json.RawMessage) (requestID json.RawMessage, detail
 	return requestID, details
 }
 
-// ErrorResponse returns the HTTP status and Anthropic error body for e.
 func ErrorResponse(e *llm.Error) (int, []byte) {
 	body, _ := json.Marshal(errorFields(e))
 	return status(e), body

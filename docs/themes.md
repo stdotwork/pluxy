@@ -453,7 +453,7 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="usage-panel"` | The Usage tab's tiles and chart in one panel |
 | `data-part="usage-tiles"` | The Usage tab's figures as tiles; three are the chart's tabs (radio buttons), and the last, the time a request took, is only read |
 | `data-part="tool-steps"` | The numbered steps under a coding tool's row on the Tools page: make a key, put the text in the settings file, start the tool again |
-| `data-part="tool-key"` | One key on the Tools page: its name, its use this week, Rename and Delete |
+| `data-part="tool-key"` | One key on the Tools page: its name, its masked value, its use this week and its row menu |
 
 Some parts also carry the `data-slot` name that [T3 Code](https://github.com/pingdotgg/t3code)
 gives the same part, and the root's `dark` class is the one T3 Code uses. They exist so that the

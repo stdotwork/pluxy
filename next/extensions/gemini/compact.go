@@ -17,24 +17,14 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// codexSummarizationPrompt is the handoff summary instruction the Codex CLI sends when
-// compacting locally (codex-rs/prompts/templates/compact/prompt.md).
 const codexSummarizationPrompt = "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.\n\nInclude:\n- Current progress and key decisions made\n- Important context, constraints, or user preferences\n- What remains to be done (clear next steps)\n- Any critical data, examples, or references needed to continue\n\nBe concise, structured, and focused on helping the next LLM seamlessly continue the work."
 
-// codexSummaryPrefix starts the user message that holds a compaction summary in the Codex CLI's
-// conversation (codex-rs/prompts/templates/compact/summary_prefix.md).
 const codexSummaryPrefix = "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:"
 
 func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return compactTo(ctx, call, out)
 }
 
-// compactTo serves Responses compaction (POST /v1/responses/compact and
-// /backend-api/codex/responses/compact) on any Gemini account (Gemini API or Vertex AI): it
-// translates the Responses conversation to non-streamed GenerateContent with the Codex CLI's
-// compaction prompt appended as a user message, keeps tools with toolConfig NONE so the model
-// answers in text, and returns OpenAI's response.compaction JSON object with the summary as the
-// user message the Codex CLI keeps.
 func compactTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	ctx = withAccountID(ctx, call.Account.ID)
 	s, err := readSettings(call.Account.Settings)
@@ -57,7 +47,6 @@ func compactTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	}
 	send := &reporting{out: out, tr: tr}
 	if t.token != "" {
-		// As in generateTo: the fetched access token is redacted here, which core does not know.
 		send.redact = protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: t.token})
 		defer func() {
 			var e *llm.Error
@@ -99,10 +88,6 @@ func compactTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	return send.Finish(llm.Finish{Reason: llm.FinishStop}, usage)
 }
 
-// compactionRequest reads the client's Responses body as a non-streamed GenerateContent request for
-// the call's model, clears options incompatible with a prose summary (stop sequences and
-// structured output), sets toolConfig mode NONE when tools are present so Gemini answers in text
-// while keeping declarations for any tool history, and appends the Codex compaction prompt.
 func compactionRequest(call llm.Request) (llm.Request, error) {
 	req, err := openairesponses.ParseRequest(call.Native.Body)
 	if err != nil {
@@ -125,9 +110,6 @@ func compactionRequest(call llm.Request) (llm.Request, error) {
 	return req, nil
 }
 
-// compactionReply turns a non-streamed GenerateContentResponse into OpenAI's response.compaction
-// JSON object for model, created at the given Unix time, and its usage. Thought parts are excluded
-// from the summary; an incomplete or empty summary is reported as an error on this request.
 func compactionReply(raw []byte, model string, created int64) ([]byte, *llm.Usage, error) {
 	events, err := geminigenerate.DecodeResponse(raw)
 	if err != nil {

@@ -9,8 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Vertex's grounding page allows several tools in one request only when all are search tools, and
-// Gemini 2.0 refuses googleSearch with codeExecution; elsewhere the Gemini API takes the pair.
 func TestCodeExecutionBesideSearch(t *testing.T) {
 	const searchFirst = `[{"type":"web_search"},{"type":"code_interpreter","container":{"type":"auto"}}]`
 	const codeFirst = `[{"type":"code_interpreter","container":{"type":"auto"}},{"type":"web_search"}]`
@@ -20,8 +18,8 @@ func TestCodeExecutionBesideSearch(t *testing.T) {
 		set      settings
 		model    string
 		tools    string
-		wantBoth bool   // both tools are sent; otherwise search alone and the code tool is reported dropped
-		dropped  string // path of the code tool, when dropped
+		wantBoth bool
+		dropped  string
 	}{
 		{"vertex", vertex, "gemini-2.5-flash", searchFirst, false, "tools[1]"},
 		{"vertex, code tool first", vertex, "gemini-2.5-flash", codeFirst, false, "tools[0]"},
@@ -85,8 +83,6 @@ func TestCodeExecutionBesideSearch(t *testing.T) {
 	}
 }
 
-// Every translated code tool is judged, not only the last: two of them beside a search are both
-// dropped where the pair is refused, and both report their own losses where it is kept.
 func TestTwoCodeExecutionToolsBesideSearch(t *testing.T) {
 	const tools = `[{"type":"code_interpreter","container":"cntr_a"},{"type":"web_search"},{"type":"code_interpreter","container":"cntr_b"}]`
 	cases := []struct {

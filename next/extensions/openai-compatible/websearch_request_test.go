@@ -25,7 +25,6 @@ func roundTripReq(t *testing.T, req llm.Request) llm.Request {
 }
 
 func TestWebSearchOpenAICompatibleChatModels(t *testing.T) {
-	// Search model gpt-5-search-api at api.openai.com gets web_search_options.
 	req, err := anthropicmessages.ParseRequest([]byte(`{
 		"model":"gpt-5-search-api",
 		"max_tokens":1024,
@@ -49,12 +48,10 @@ func TestWebSearchOpenAICompatibleChatModels(t *testing.T) {
 	if got.WebSearchOptions == nil {
 		t.Fatalf("gpt-5-search-api: missing web_search_options in %s", body)
 	}
-	// max_uses is not supported by Chat web_search_options, so it must be reported as dropped.
 	if !tr.Dropped() {
 		t.Errorf("gpt-5-search-api: expected dropped loss for max_uses, got %+v", tr.Losses)
 	}
 
-	// Non-search Chat model (gpt-5) at api.openai.com must NOT get web_search_options.
 	reqNonSearch := req
 	reqNonSearch.Model = "gpt-5"
 	body2, tr2, err := buildBody(reqNonSearch, llm.FormatOpenAIChat, settings{BaseURL: "https://api.openai.com/v1"})
@@ -74,7 +71,6 @@ func TestWebSearchOpenAICompatibleChatModels(t *testing.T) {
 		t.Errorf("gpt-5: expected dropped loss, got %+v", tr2.Losses)
 	}
 
-	// Third-party host gets no web_search_options even on gpt-5-search-api.
 	body3, tr3, err := buildBody(req, llm.FormatOpenAIChat, settings{BaseURL: "https://proxy.example.com/v1"})
 	if err != nil {
 		t.Fatal(err)
@@ -111,8 +107,6 @@ func TestWebSearchOpenAICompatibleSameFormatByteIdentical(t *testing.T) {
 		t.Errorf("same-format body changed:\ngot:  %s\nwant: %s", body, raw)
 	}
 
-	// Verify web_search_preview -> Messages target on third-party host drops search tool,
-	// while Responses web_search -> Messages keeps the existing base mapping.
 	prevReq, err := openairesponses.ParseRequest([]byte(`{"model":"claude-sonnet-4-6","input":"hi","tools":[{"type":"web_search_preview"}]}`))
 	if err != nil {
 		t.Fatal(err)

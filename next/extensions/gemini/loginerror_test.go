@@ -13,9 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A service account's token endpoint can echo anything: the error reaches the client when the
-// account is added, before core holds a credential to redact, so its text is bounded and free of
-// token-like strings, and the OAuth error code kept.
 func TestTokenEndpointErrorTextIsBounded(t *testing.T) {
 	const jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLWJ5dGVz"
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

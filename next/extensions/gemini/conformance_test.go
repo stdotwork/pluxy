@@ -12,15 +12,12 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// The three ways an account reaches Gemini.
 const (
 	kindGemini    = "gemini-api-key"
 	kindVertexSA  = "vertex-service-account"
 	kindVertexKey = "vertex-api-key"
 )
 
-// TestConformance runs the extension conformance kit against this extension, with a fake Google
-// that acts out each scenario, for each kind of account.
 func TestConformance(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	for _, kind := range []string{kindGemini, kindVertexSA, kindVertexKey} {
@@ -35,7 +32,6 @@ func TestConformance(t *testing.T) {
 	}
 }
 
-// settingsFor returns account settings that point an account of kind at srv.
 func settingsFor(srv *geminitest.Server, kind string) json.RawMessage {
 	s := map[string]any{"base_url": srv.URL}
 	if kind != kindGemini {
@@ -45,7 +41,6 @@ func settingsFor(srv *geminitest.Server, kind string) json.RawMessage {
 	return b
 }
 
-// prepare sets up a fake Google so that a generate call from an account of kind acts out s.
 func prepare(t *testing.T, s conformance.Scenario, kind string) conformance.Setup {
 	t.Helper()
 	srv := geminitest.New(t)
@@ -71,7 +66,6 @@ func prepare(t *testing.T, s conformance.Scenario, kind string) conformance.Setu
 		case conformance.ScenarioRateLimited:
 			geminitest.RateLimited(w, 20)
 		case conformance.ScenarioAccountClosed:
-			// Built from Google's documented ErrorInfo example (google/api/error_reason.proto: CONSUMER_SUSPENDED), not a captured reply.
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			io.WriteString(w, `{"error":{"code":403,"message":"The consumer 'projects/123' is suspended.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"CONSUMER_SUSPENDED","domain":"googleapis.com","metadata":{"consumer":"projects/123","service":"generativelanguage.googleapis.com"}}]}}`)
@@ -95,8 +89,6 @@ func prepare(t *testing.T, s conformance.Scenario, kind string) conformance.Setu
 	return setup
 }
 
-// prepareLogin sets up a fake Google so that a login with method acts out s. Both methods are
-// key logins: approved with a key Google accepts, denied with one it refuses.
 func prepareLogin(t *testing.T, s conformance.LoginScenario, method string) conformance.LoginSetup {
 	t.Helper()
 	srv := geminitest.New(t)

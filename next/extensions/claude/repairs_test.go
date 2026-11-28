@@ -14,7 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// chatRequest is a translated Chat request for model made of items, with no output limit.
 func chatRequest(model string, items ...llm.Item) llm.Request {
 	return llm.Request{Model: model, Items: items, Native: &llm.Native{Format: llm.FormatOpenAIChat, Body: json.RawMessage(`{}`)}}
 }
@@ -24,8 +23,6 @@ func chatText(role, text string, turn int) llm.Item {
 		Origin: &llm.Origin{Format: llm.FormatOpenAIChat, Path: "messages[" + itoa(turn) + "]"}}
 }
 
-// A request that sets no output limit gets the model's own, from the extension's model list;
-// a model the list does not know keeps 32000, and a limit the client set is kept.
 func TestBuildBodyDefaultsMaxTokensToModel(t *testing.T) {
 	limit := 1000
 	for _, c := range []struct {
@@ -58,7 +55,6 @@ func TestBuildBodyDefaultsMaxTokensToModel(t *testing.T) {
 	}
 }
 
-// A base_url copied with the API's version path in it does not double the path.
 func TestReadSettingsTrimsVersionPath(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://claude.example/v1":          "https://claude.example",
@@ -79,7 +75,6 @@ func TestReadSettingsTrimsVersionPath(t *testing.T) {
 	}
 }
 
-// A Messages client's own body gets the same turn repairs, reported in the translation.
 func TestBuildBodyRepairsPassthroughTurns(t *testing.T) {
 	in := `{"model":"claude-opus-4-6","max_tokens":10,"messages":[{"role":"user","content":"Hi"},{"role":"assistant","content":"Sure:"}]}`
 	body, tr, err := buildBody(llm.Request{Model: "claude-opus-4-6", Native: &llm.Native{Format: llm.FormatAnthropicMessages, Body: json.RawMessage(in)}})
@@ -94,7 +89,6 @@ func TestBuildBodyRepairsPassthroughTurns(t *testing.T) {
 	}
 }
 
-// startExtension builds the extension and starts it as core does.
 func startExtension(t *testing.T) *host.Extension {
 	t.Helper()
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
@@ -106,7 +100,6 @@ func startExtension(t *testing.T) *host.Extension {
 	return ext
 }
 
-// events reads a call's events up to the terminal one.
 func events(t *testing.T, s *host.Stream) []llm.Event {
 	t.Helper()
 	var evs []llm.Event
@@ -127,10 +120,6 @@ func events(t *testing.T, s *host.Stream) []llm.Event {
 	}
 }
 
-// Through the extension as core runs it: a Chat client's request to Claude 4.6 that ends on an
-// assistant turn (a prefill, which the model refuses with a 400) reaches Anthropic ending on the
-// user's turn, the reply comes back, and the dropped turn is reported. The account's base_url ends
-// in /v1, and the request still goes to /v1/messages.
 func TestPrefillDroppedThroughExtension(t *testing.T) {
 	srv := claudetest.New(t)
 	var settings map[string]string

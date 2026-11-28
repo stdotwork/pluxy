@@ -9,7 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// responseOrder returns the call IDs of the functionResponse parts of contents[i], in order.
 func responseOrder(t *testing.T, body []byte, i int) []string {
 	t.Helper()
 	var b struct {
@@ -34,10 +33,6 @@ func responseOrder(t *testing.T, body []byte, i int) []string {
 	return ids
 }
 
-// Gemini matches function responses to the calls they answer by position (Google's function
-// calling guide: "include the responses in the same order as they were requested"), so tool
-// results the client sent in another order go out in the order of the calls, including two calls
-// to the same function.
 func TestEncodeOrdersFunctionResponsesByCall(t *testing.T) {
 	user := llm.Item{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "Weather and time?"}}}
 	for _, c := range []struct {
@@ -79,7 +74,6 @@ func TestEncodeOrdersFunctionResponsesByCall(t *testing.T) {
 	}
 }
 
-// callIDs returns the call IDs of the tool calls in events.
 func callIDs(events []llm.Event) []string {
 	var ids []string
 	for _, ev := range events {
@@ -90,9 +84,6 @@ func callIDs(events []llm.Event) []string {
 	return ids
 }
 
-// Gemini's functionCall.id is optional. The IDs made for calls that come without one are unique
-// across the replies of a conversation, not only within one reply: a client that replays the
-// history must not find two calls with one ID.
 func TestMadeCallIDsUniqueAcrossReplies(t *testing.T) {
 	reply := func(responseID string) string {
 		id := ""
@@ -120,7 +111,7 @@ func TestMadeCallIDsUniqueAcrossReplies(t *testing.T) {
 					t.Fatal(err)
 				}
 				streamed := callIDs(append(events, end...))
-				other := r // another reply, not streamed
+				other := r
 				if r != "" {
 					other = r + "-whole"
 				}
@@ -140,7 +131,6 @@ func TestMadeCallIDsUniqueAcrossReplies(t *testing.T) {
 			}
 		})
 	}
-	// A call that comes with an ID keeps it.
 	d := NewStreamDecoder()
 	events, _ := d.Decode([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"fc-1","name":"f","args":{}}}]},"finishReason":"STOP","index":0}],"responseId":"r"}`))
 	if ids := callIDs(events); len(ids) != 1 || ids[0] != "fc-1" {
@@ -148,9 +138,6 @@ func TestMadeCallIDsUniqueAcrossReplies(t *testing.T) {
 	}
 }
 
-// A reply that ends with finish reason MALFORMED_FUNCTION_CALL (the model wrote a function call
-// Gemini could not parse) is an error that names it, streamed or not, and not a plain stop: the
-// client would otherwise take an empty or cut reply as the model's answer.
 func TestMalformedFunctionCallIsAnError(t *testing.T) {
 	const reply = `{"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"MALFORMED_FUNCTION_CALL",` +
 		`"finishMessage":"Malformed function call: print(default_api.get_weather(city=))","index":0}],` +
@@ -181,8 +168,6 @@ func TestMalformedFunctionCallIsAnError(t *testing.T) {
 	check("response", err)
 }
 
-// A function call with null or missing args is still a call, with {} as its arguments, and the
-// reply finishes with tool calls: it does not come out empty.
 func TestCallWithoutArgsIsACall(t *testing.T) {
 	events, err := DecodeResponse([]byte(`{"candidates":[{"content":{"role":"model","parts":[` +
 		`{"functionCall":{"name":"list_files","args":null}},{"functionCall":{"name":"now"}}]},"finishReason":"STOP","index":0}],"responseId":"r"}`))
@@ -207,9 +192,6 @@ func TestCallWithoutArgsIsACall(t *testing.T) {
 	}
 }
 
-// A functionResponse with neither a name nor an id answers the earliest call still waiting, of
-// any name, so on an upstream that pairs results by id it reaches its call. Responses that carry
-// a name or an id pair as before.
 func TestParseNamelessResponsePairsWithEarliestCall(t *testing.T) {
 	call := func(name, id string) string {
 		idField := ""
@@ -261,7 +243,7 @@ func TestParseNamelessResponsePairsWithEarliestCall(t *testing.T) {
 				}
 			}
 			want := c.want
-			if want == nil { // ids Gemini did not send are made up: the results must match them
+			if want == nil {
 				want = calls
 			}
 			if strings.Join(results, ",") != strings.Join(want, ",") {
@@ -271,9 +253,6 @@ func TestParseNamelessResponsePairsWithEarliestCall(t *testing.T) {
 	}
 }
 
-// Two waiting calls can share an id under different names. A result with that id and no name
-// answers the one that came first, every time: the next result without an id then pairs with
-// the earliest call left.
 func TestParseNamelessResponseWithSharedIDTakesFirstCall(t *testing.T) {
 	body := `{"contents":[{"role":"user","parts":[{"text":"go"}]},` +
 		`{"role":"model","parts":[` +
@@ -283,7 +262,6 @@ func TestParseNamelessResponseWithSharedIDTakesFirstCall(t *testing.T) {
 		`{"role":"user","parts":[` +
 		`{"functionResponse":{"id":"x","response":{"result":"1"}}},` +
 		`{"functionResponse":{"response":{"result":"2"}}}]}]}`
-	// Go orders a map's keys differently each time it is walked, so parse the body many times.
 	for run := 0; run < 50; run++ {
 		req, err := ParseRequest("gemini-2.5-pro", false, []byte(body))
 		if err != nil {
@@ -295,7 +273,6 @@ func TestParseNamelessResponseWithSharedIDTakesFirstCall(t *testing.T) {
 				results = append(results, it.CallID)
 			}
 		}
-		// The first x is a's, so the second result gets c's y, not the x left under b.
 		if got := strings.Join(results, ","); got != "x,y" {
 			t.Fatalf("run %d: result call IDs %q, want x,y", run, got)
 		}

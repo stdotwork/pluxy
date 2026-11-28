@@ -21,13 +21,8 @@ import (
 // parameter is refused without it.
 const compactBeta = "compact-2026-09-04"
 
-// codexSummaryPrefix starts the user message that holds a compaction summary in the Codex CLI's
-// conversation, as the Codex CLI writes it when it compacts on its own side
-// (codex-rs/prompts/templates/compact/summary_prefix.md).
 const codexSummaryPrefix = "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:"
 
-// endpoint serves endpoint calls: Responses compaction (compact). Any other endpoint is not
-// served, so core tries another account.
 func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	format := ""
 	if call.Request.Native != nil {
@@ -40,13 +35,6 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		Message: fmt.Sprintf("the Claude extension does not serve %q", format)}
 }
 
-// compact serves Responses compaction, which the Codex CLI calls to shorten a long conversation,
-// with Anthropic's on-demand compaction: the Responses request is translated to Messages as for
-// /v1/responses, sent once, not streamed, with "compaction": {"type": "summarize"} and its beta,
-// and Claude's summary comes back as OpenAI's compaction reply, one JSON object. Its output is
-// the summary as the user message the Codex CLI keeps in place of the conversation (the shape of
-// its own compaction), since a later request may go to any account: Anthropic's signed
-// compaction block is not passed on.
 func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -96,9 +84,6 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, usage)
 }
 
-// compactionRequest reads the client's Responses body as a generation request for the call's
-// model, not streamed, without the settings Anthropic refuses on a compaction request, which
-// would do nothing there: stop sequences, structured output and a forced tool choice.
 func compactionRequest(call llm.Request) (llm.Request, error) {
 	req, err := openairesponses.ParseRequest(call.Native.Body)
 	if err != nil {
@@ -153,11 +138,6 @@ func compactionBody(body []byte) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// compactionReply turns Anthropic's reply to a compaction request into OpenAI's compaction
-// reply for model, created at the given Unix time, and its usage. An Anthropic error object
-// (type "error") is returned as an *llm.Error with the upstream's error details; a reply without
-// a summary (stop_reason other than compaction, which Anthropic sends with empty content when the
-// summarization call ended another way) is an error about this request.
 func compactionReply(raw []byte, model string, created int64) ([]byte, *llm.Usage, error) {
 	var r struct {
 		Type    string          `json:"type"`

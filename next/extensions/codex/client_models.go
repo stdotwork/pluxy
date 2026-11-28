@@ -13,9 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// clientModelsJSON is refreshed by hand as documented in docs/map.md ("Codex client catalog").
-// It belongs only to this program; ordinary model listing does not decode it or send it to core.
-//
 //go:embed client_models.json
 var clientModelsJSON []byte
 
@@ -148,7 +145,6 @@ func filterClientReasoning(m map[string]json.RawMessage, version string) {
 	m["default_reasoning_level"], _ = json.Marshal(def)
 }
 
-// Empty and unparseable versions keep modern levels, as today's core does.
 func extendedClientReasoning(version string) bool {
 	v := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(version), "v"), "V")
 	if i := strings.IndexAny(v, "-+"); i >= 0 {
@@ -181,17 +177,11 @@ func extendedClientReasoning(version string) bool {
 	return true
 }
 
-// catalogEntry is what the client catalog says a model takes: the ids of the service tiers it lists
-// and whether it takes a verbosity (support_verbosity), as the Codex CLI filters a request on the
-// same data (service_tier_for_request in codex-rs/protocol/src/openai_models.rs and
-// support_verbosity in codex-rs/core/src/client.rs). A model the catalog does not list takes
-// neither.
 type catalogEntry struct {
 	tiers     []string
 	verbosity bool
 }
 
-// catalogEntryOf returns the catalog entry of a model, and a zero entry for one not listed.
 func catalogEntryOf(model string) catalogEntry {
 	m, ok := clientTemplates()[strings.ToLower(strings.TrimSpace(model))]
 	if !ok {
@@ -210,11 +200,6 @@ func catalogEntryOf(model string) catalogEntry {
 	return e
 }
 
-// narrowToModel returns r without the service tier and verbosity its routed model does not take,
-// and the losses that are, at the client's field. A tier the model lists is kept ("fast" is
-// "priority"); auto and default ask for the standard service every Codex request gets, so they are
-// left off with no loss; any other tier is dropped and reported. A verbosity is kept only for a
-// model that takes one. The request's own copy is changed, not the caller's.
 func narrowToModel(r llm.Request) (llm.Request, []llm.Loss) {
 	e := catalogEntryOf(r.Model)
 	var losses []llm.Loss

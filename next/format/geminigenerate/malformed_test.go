@@ -8,14 +8,9 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// An error for upstream data that is not JSON keeps no start of a credential at the end of its
-// Raw where the data's read ended inside the credential: core's redaction, which runs over
-// every error an extension sends, cannot recognise a credential's start. Data short enough to
-// keep whole is kept.
 func TestMalformedKeepsNoCutCredential(t *testing.T) {
 	const secret = "sk-malformed-cut-0123456789abcdef"
 	r := protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: secret})
-	// Not JSON, longer than an error keeps, and cut 10 bytes into the secret where the read stopped.
 	long := []byte(strings.Repeat("x", 1<<20+4096) + secret[:10])
 	decoders := map[string]func([]byte) error{
 		"stream":   func(b []byte) error { _, err := NewStreamDecoder().Decode(b); return err },

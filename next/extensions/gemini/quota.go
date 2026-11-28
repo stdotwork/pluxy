@@ -26,8 +26,6 @@ const (
 
 type accountIDCtxKey struct{}
 
-// withAccountID binds an account ID onto ctx so upstream HTTP and stream handlers record
-// rate-limit details per account both under sdk.Serve and in direct unit calls.
 func withAccountID(ctx context.Context, accountID string) context.Context {
 	if accountID == "" {
 		return ctx
@@ -48,7 +46,6 @@ func accountIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// quotaViolation holds the fields parsed from one google.rpc.QuotaFailure.Violation entry.
 type quotaViolation struct {
 	Subject          string            `json:"subject,omitempty"`
 	Description      string            `json:"description,omitempty"`
@@ -60,7 +57,6 @@ type quotaViolation struct {
 	FutureQuotaValue *float64          `json:"future_quota_value,omitempty"`
 }
 
-// rateLimitObservation holds the last HTTP 429 reply seen for an account in extension memory.
 type rateLimitObservation struct {
 	ObservedAt   time.Time         `json:"observed_at"`
 	Model        string            `json:"model,omitempty"`
@@ -102,7 +98,6 @@ func (s *rateLimitStore) get(accountID string) (rateLimitObservation, bool) {
 	return obs, ok
 }
 
-// googleErrorDetail is a detail object from Google's RPC error envelope.
 type googleErrorDetail struct {
 	Type       string            `json:"@type"`
 	Reason     string            `json:"reason"`
@@ -131,7 +126,6 @@ type googleError struct {
 	} `json:"error"`
 }
 
-// parseGoogleError unmarshals either {"error": ...} or [{"error": ...}].
 func parseGoogleError(raw []byte) (googleError, bool) {
 	var single googleError
 	if json.Unmarshal(raw, &single) == nil && (single.Error.Code != 0 || single.Error.Status != "" || single.Error.Message != "" || len(single.Error.Details) > 0) {
@@ -144,7 +138,6 @@ func parseGoogleError(raw []byte) (googleError, bool) {
 	return googleError{}, false
 }
 
-// reason returns the ErrorInfo reason in the error's details, such as API_KEY_INVALID.
 func (g *googleError) reason() string {
 	for _, d := range g.Error.Details {
 		if d.Reason != "" && (d.Type == "" || d.Type == typeErrorInfo) {
@@ -154,7 +147,6 @@ func (g *googleError) reason() string {
 	return ""
 }
 
-// hasReason reports whether any entry in the error's details carries ErrorInfo reason r.
 func (g *googleError) hasReason(r string) bool {
 	for _, d := range g.Error.Details {
 		if d.Reason == r {
@@ -164,8 +156,6 @@ func (g *googleError) hasReason(r string) bool {
 	return false
 }
 
-// retryDelay returns the RetryInfo delay (or ErrorInfo metadata.quotaResetDelay fallback) in
-// milliseconds, or 0.
 func (g *googleError) retryDelay() int64 {
 	for _, d := range g.Error.Details {
 		if d.RetryDelay == "" || (d.Type != "" && d.Type != typeRetryInfo) {
@@ -214,7 +204,6 @@ func parseQuotaNumber(raw json.RawMessage) *float64 {
 	return nil
 }
 
-// observeRateLimit records an HTTP 429 (or embedded 429 error) for the account named on ctx.
 func observeRateLimit(ctx context.Context, header http.Header, raw []byte, parsed *googleError, hasParsed bool, model string, redact *protocol.Redactor, now time.Time) {
 	acctID := accountIDFromContext(ctx)
 	if acctID == "" {

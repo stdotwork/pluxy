@@ -20,12 +20,6 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// Under the reject drop policy a count refuses exactly what generating the same request would,
-// before anything is sent. A Gemini request is generated as Chat Completions, which has no place
-// for a model turn's thought, so its count is refused naming it, as generating refuses it. JSON
-// output, which Chat Completions carries but the count's Messages body does not, is no reason to
-// refuse; nor is a thought in a Chat, Responses or Messages request, whose body goes to Kimi as it
-// came. Those counts are sent (the upstream here refuses them).
 func TestCountTokensRefusesAsGenerating(t *testing.T) {
 	var sent int
 	old := client.Transport
@@ -45,7 +39,6 @@ func TestCountTokensRefusesAsGenerating(t *testing.T) {
 		req.DropPolicy = policy
 		return req
 	}
-	// as gives a request the native body of another format, keeping its items.
 	as := func(req llm.Request, format, body string) llm.Request {
 		req.Native = &llm.Native{Format: format, Body: json.RawMessage(body)}
 		return req
@@ -82,7 +75,6 @@ func TestCountTokensRefusesAsGenerating(t *testing.T) {
 			t.Errorf("%s: error %+v after %d requests, want the count sent once and the upstream's refusal", name, e, n)
 		}
 	}
-	// A missing credential is reported first, as generating reports it.
 	noKey := sdk.Call{Account: protocol.Account{ID: "a"}, Request: refused}
 	var auth *llm.Error
 	if err := countTokens(context.Background(), noKey, nil); !errors.As(err, &auth) || auth.Code != llm.CodeAuth {

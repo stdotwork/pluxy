@@ -1,11 +1,3 @@
-// Package openairesponses converts between OpenAI Responses and pluxy's internal model: core uses
-// it to read client requests and write client replies, and provider extensions use it to build
-// requests for and read replies from an upstream that speaks Responses.
-//
-// A request read here keeps its body as the native form, so an upstream that speaks Responses
-// gets it unchanged. A reply from such an upstream keeps every upstream event in its raw field,
-// so a Responses client gets the upstream's events unchanged; a reply from another format is
-// rebuilt into the Responses event sequence.
 package openairesponses
 
 import (
@@ -21,21 +13,12 @@ import (
 
 const format = llm.FormatOpenAIResponses
 
-// Headers are the client request headers that belong to a Responses body (lower-case): those the
-// Codex CLI sends to name its session, window and turn and its own version and originator, and
-// the User-Agent, which tells a Codex client from others. A Codex upstream reads them; an
-// upstream that does not ignores them.
 var Headers = []string{
 	"session-id", "thread-id", "x-codex-window-id", "x-codex-turn-metadata", "x-codex-turn-state",
 	"x-codex-beta-features", "x-client-request-id", "version", "originator", "user-agent",
 	"x-openai-internal-codex-responses-lite",
 }
 
-// LiteRequest reports whether a request comes from a Responses-lite client, as today's core reads
-// it: the X-Openai-Internal-Codex-Responses-Lite header (lower-case in headers) says true, or the
-// body's client_metadata carries the same flag, as a WebSocket client sends it
-// (ws_request_header_x_openai_internal_codex_responses_lite, true or "true"). m holds the
-// request's top-level fields.
 func LiteRequest(headers map[string]string, m map[string]json.RawMessage) bool {
 	if strings.EqualFold(strings.TrimSpace(headers["x-openai-internal-codex-responses-lite"]), "true") {
 		return true
@@ -66,14 +49,9 @@ type request struct {
 	Tools             []json.RawMessage `json:"tools"`
 }
 
-// requestFields are the top-level fields the model carries. tool_choice, text and reasoning are
-// carried only in the shapes the parser knows; anything else in them stays in Origin.Raw.
 var requestFields = []string{"model", "input", "instructions", "stream", "max_output_tokens", "temperature", "top_p",
 	"parallel_tool_calls", "tools", "tool_choice", "text", "reasoning"}
 
-// ParseRequest reads a Responses request body. The result keeps body as its Native form, and
-// every item, part and tool keeps the fields the model has no place for in its Origin. Errors
-// are *llm.Error with code invalid_request.
 func ParseRequest(body []byte) (llm.Request, error) {
 	var in request
 	if err := json.Unmarshal(body, &in); err != nil {
@@ -104,7 +82,6 @@ func ParseRequest(body []byte) (llm.Request, error) {
 	}
 	if raw, ok := top["text"]; ok {
 		m := rawjson.Object(raw)
-		// text.verbosity is carried when it is a string; any other value stays in Origin.Raw.
 		verbosity, hasVerbosity := rawjson.Text(m["verbosity"])
 		if hasVerbosity {
 			req.Options.Verbosity = verbosity
@@ -225,7 +202,6 @@ func parseTool(raw json.RawMessage, path string) llm.Tool {
 		}
 	}
 	if err != nil || t.Type != "function" || t.Name == "" {
-		// Hosted and custom tools are not function tools; they survive whole.
 		return llm.Tool{Type: llm.ToolNative, Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)}}
 	}
 	return llm.Tool{Name: t.Name, Description: t.Description, Parameters: t.Parameters, Strict: t.Strict,
@@ -262,10 +238,6 @@ func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
 	return nil
 }
 
-// responsesAllowedTool is one entry of a tool choice's allowed_tools list: a function tool, named
-// in name, as Responses writes it. Responses writes the name flat, but function.name is read too,
-// as clients that share code with Chat write it. An entry with a namespace is a tool only its
-// namespace and name identify.
 type responsesAllowedTool struct {
 	Type      string `json:"type"`
 	Name      string `json:"name"`
@@ -275,10 +247,6 @@ type responsesAllowedTool struct {
 	} `json:"function"`
 }
 
-// allowedToolChoice reads a tool choice's allowed_tools list: its mode (auto or required) and the
-// function tools it names, as the model's allowed list. One that names anything else (a custom or
-// namespaced tool among them), or no tool, is nil, so the choice stays whole in the request's
-// fields rather than losing what the model has no place for.
 func allowedToolChoice(mode string, tools []responsesAllowedTool) *llm.ToolChoice {
 	if len(tools) == 0 || (mode != llm.ToolChoiceAuto && mode != llm.ToolChoiceRequired) {
 		return nil
@@ -317,8 +285,6 @@ func parseTextFormat(raw json.RawMessage) *llm.ResponseFormat {
 	return nil
 }
 
-// itemBookkeeping are item fields that describe an item rather than say anything to the model:
-// its id (kept in Item.ID) and the status a replayed output item had.
 var itemBookkeeping = []string{"type", "id", "status"}
 
 func parseItem(raw json.RawMessage, path string) (llm.Item, error) {
@@ -392,7 +358,5 @@ func parseItem(raw json.RawMessage, path string) (llm.Item, error) {
 		return llm.Item{Type: llm.ItemTypeReasoning, ID: head.ID, Text: text.String(),
 			Origin: rawjson.Origin(format, path, m, append([]string{"summary"}, itemBookkeeping...), nil)}, nil
 	}
-	// Item types the model does not know (custom tool calls, hosted tool calls, item
-	// references, ...) survive whole.
 	return llm.Item{Type: llm.ItemTypeNative, ID: head.ID, Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)}}, nil
 }

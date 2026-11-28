@@ -8,8 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// An error core explains carries the pluxy member inside the error object, whatever the format's
-// own shape; one it did not explain has none.
 func TestErrorCarriesPluxyMember(t *testing.T) {
 	e := &llm.Error{Code: llm.CodeRateLimit, Status: 429, Message: "slow down",
 		Explain: &llm.Explain{Trace: "t-1",

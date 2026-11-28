@@ -9,10 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 )
 
-// Gemini's allowedFunctionNames is read into the model with the mode it came with: ANY as
-// required, VALIDATED, in which the model picks from the allowed functions, as auto. It reaches
-// Chat as its allowed_tools list, and written back as Gemini it names the same functions under
-// the same mode.
 func TestAllowedFunctionNamesToChat(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -71,7 +67,6 @@ func TestAllowedFunctionNamesToChat(t *testing.T) {
 				t.Errorf("Chat tool_choice = %s, want allowed_tools mode %s tools %q", body, c.wantMode, c.wantNames)
 			}
 
-			// Written back as Gemini, the choice keeps its wire form.
 			back, _, err := EncodeRequest(req)
 			if err != nil {
 				t.Fatal(err)
@@ -95,7 +90,6 @@ func TestAllowedFunctionNamesToChat(t *testing.T) {
 	}
 }
 
-// modeOf returns the functionCallingConfig mode in cfg, for a test that compares a round trip.
 func modeOf(cfg string) string {
 	var c struct {
 		Mode string `json:"mode"`
@@ -104,9 +98,6 @@ func modeOf(cfg string) string {
 	return c.Mode
 }
 
-// A Chat request whose tool_choice is an allowed_tools list reaches Gemini as its function
-// calling mode with allowedFunctionNames: required as ANY, auto as VALIDATED, the mode in which
-// the model picks from the allowed functions.
 func TestAllowedToolsFromChatToGemini(t *testing.T) {
 	for _, c := range []struct{ mode, wantMode string }{
 		{"required", "ANY"},

@@ -17,8 +17,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// embedAttempt runs one Gemini-format embedding call on a fake upstream and returns what the
-// extension sent, its error and how many calls the upstream got.
 func embedAttempt(t *testing.T, vertex bool, model, format, body string, handle func(w http.ResponseWriter, n int)) (*recorder, int, error) {
 	t.Helper()
 	var calls atomic.Int32
@@ -44,7 +42,6 @@ func embedAttempt(t *testing.T, vertex bool, model, format, body string, handle 
 	return rec, int(calls.Load()), err
 }
 
-// A 200 that is not a full answer becomes an error, and nothing of it reaches the client.
 func TestGeminiEmbedRefusesShortReplies(t *testing.T) {
 	const two = `{"requests":[{"content":{"parts":[{"text":"a"}]}},{"content":{"parts":[{"text":"b"}]}}]}`
 	const one = `{"content":{"parts":[{"text":"a"}]}}`
@@ -81,8 +78,6 @@ func TestGeminiEmbedRefusesShortReplies(t *testing.T) {
 	})
 }
 
-// A field of embedContentConfig that :predict cannot carry is refused naming the field, retryable
-// on the account so routing tries another, and is not dropped.
 func TestGeminiEmbedPredictRefusesUnknownConfig(t *testing.T) {
 	for _, tc := range []struct{ name, format, body string }{
 		{"single", llm.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"a"}]},"embedContentConfig":{"autoTruncate":false}}`},
@@ -114,8 +109,6 @@ func TestGeminiEmbedPredictRefusesUnknownConfig(t *testing.T) {
 	})
 }
 
-// A batch with an item that is not an object is refused, so a client's model name is never left
-// in a body the extension could not rewrite.
 func TestGeminiEmbedBatchWithNonObjectItem(t *testing.T) {
 	for _, body := range []string{
 		`{"requests":[{"model":"models/my-private-alias","content":{"parts":[{"text":"a"}]}},7]}`,
@@ -134,8 +127,6 @@ func TestGeminiEmbedBatchWithNonObjectItem(t *testing.T) {
 	}
 }
 
-// When one of several upstream calls reports no usage, no total is reported: a sum over only the
-// calls that reported would understate it.
 func TestGeminiEmbedUsageNeedsEveryCall(t *testing.T) {
 	two := `{"requests":[{"content":{"parts":[{"text":"a"}]}},{"content":{"parts":[{"text":"b"}]}}]}`
 	predict := func(w http.ResponseWriter, n int) {
@@ -183,8 +174,6 @@ func TestGeminiEmbedUsageNeedsEveryCall(t *testing.T) {
 	})
 }
 
-// The same holds for OpenAI's /v1/embeddings on a Gemini account, which splits 101 inputs into two
-// :batchEmbedContents calls.
 func TestGeminiOpenAIEmbeddingsUsageNeedsEveryCall(t *testing.T) {
 	inputs, _ := json.Marshal(strings.Split(strings.Repeat("x,", 100)+"x", ","))
 	body := `{"model":"gemini-embedding-001","input":` + string(inputs) + `}`
@@ -217,8 +206,6 @@ func TestGeminiOpenAIEmbeddingsUsageNeedsEveryCall(t *testing.T) {
 	}
 }
 
-// A 200 with an error object does not carry the upstream's text to the client: it can name the
-// account's project, which an ordinary error reply has masked.
 func TestGeminiEmbedErrorBodyDoesNotLeakProject(t *testing.T) {
 	const reply = `{"error":{"code":403,"message":"Permission denied on resource project projects/acme-prod-4821.","status":"PERMISSION_DENIED"}}`
 	const one = `{"content":{"parts":[{"text":"a"}]}}`

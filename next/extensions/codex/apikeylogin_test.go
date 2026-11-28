@@ -21,9 +21,6 @@ func apiKeyLoginCall(srv *codextest.Server, key string) (*protocol.Grant, error)
 	return login(context.Background(), sdk.LoginCall{Account: testAccount(srv, nil), Method: "api_key", Input: map[string]string{"api_key": key}}, nil)
 }
 
-// loginTo signs in with an API key against an upstream the account does not set: the address
-// comes from the sign-in's base_url input, as a person adding a key in the panel or the command
-// gives it.
 func loginTo(input map[string]string) (*protocol.Grant, error) {
 	return login(context.Background(), sdk.LoginCall{Account: protocol.Account{ID: "c"}, Method: "api_key", Input: input}, nil)
 }
@@ -37,7 +34,6 @@ func asLLMError(t *testing.T, err error) *llm.Error {
 	return e
 }
 
-// fakeUpstream serves GET /v1/models with handler and counts the requests it gets.
 func fakeUpstream(t *testing.T, handler http.HandlerFunc) (*httptest.Server, func() int) {
 	t.Helper()
 	var mu sync.Mutex
@@ -54,7 +50,6 @@ func fakeUpstream(t *testing.T, handler http.HandlerFunc) (*httptest.Server, fun
 
 const goodList = `{"object":"list","data":[{"id":"m","object":"model"}]}`
 
-// A key the upstream issued is checked with the model list and kept as the account's credential.
 func TestAPIKeyLoginKeepsAcceptedKey(t *testing.T) {
 	srv := codextest.New(t)
 	key := srv.IssueToken("text")
@@ -77,7 +72,6 @@ func TestAPIKeyLoginKeepsAcceptedKey(t *testing.T) {
 	}
 }
 
-// A key the provider refuses is not added, and the error does not repeat the key.
 func TestAPIKeyLoginRefusesRefusedKey(t *testing.T) {
 	srv := codextest.New(t)
 	const key = "sk-test-not-issued"
@@ -88,8 +82,6 @@ func TestAPIKeyLoginRefusesRefusedKey(t *testing.T) {
 	}
 }
 
-// A person adding a key for a compatible provider gives its base_url as an input: the check goes
-// there, and the address is returned as the account's setting. Nothing goes to OpenAI.
 func TestAPIKeyLoginChecksTheBaseURLInput(t *testing.T) {
 	ts, count := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer sk-compat" {
@@ -109,15 +101,12 @@ func TestAPIKeyLoginChecksTheBaseURLInput(t *testing.T) {
 	if count() != 1 {
 		t.Errorf("requests = %d, want 1", count())
 	}
-	// The provider's refusal names the provider, not OpenAI.
 	_, err = loginTo(map[string]string{"api_key": "sk-other", "base_url": ts.URL + "/v1"})
 	if e := asLLMError(t, err); e.Code != llm.CodeAuth || strings.Contains(e.Message, "OpenAI") || !strings.Contains(e.Message, strings.TrimPrefix(ts.URL, "http://")) {
 		t.Errorf("error = %+v, want the refusal to name the provider's host", e)
 	}
 }
 
-// A base_url that is not an HTTP or HTTPS address with a host, or carries a query, a fragment or
-// user information, is refused as bad input without any request.
 func TestAPIKeyLoginRefusesBadBaseURL(t *testing.T) {
 	ts, count := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, goodList) })
 	for _, base := range []string{"not a url", "ftp://example.test/v1", "/v1", ts.URL + "/v1?x=1", ts.URL + "/v1#frag", "http://user:pw@" + strings.TrimPrefix(ts.URL, "http://") + "/v1"} {
@@ -131,8 +120,6 @@ func TestAPIKeyLoginRefusesBadBaseURL(t *testing.T) {
 	}
 }
 
-// A key with a line break or a control character is bad input, said in its own words, and is not
-// sent.
 func TestAPIKeyLoginRefusesKeyWithControlCharacter(t *testing.T) {
 	ts, count := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, goodList) })
 	for _, key := range []string{"sk-a\nsk-b", "sk-a\tb", "sk-a\x00"} {
@@ -147,9 +134,6 @@ func TestAPIKeyLoginRefusesKeyWithControlCharacter(t *testing.T) {
 	}
 }
 
-// Only a 200 with a model list accepts a key. Any other answer that is not the provider
-// refusing it leaves the key unadded: an HTML page, a 204, a 200 error body, a redirect to a login
-// page (not followed: the login page gets no request).
 func TestAPIKeyLoginAcceptsOnlyAModelList(t *testing.T) {
 	cases := map[string]http.HandlerFunc{
 		"html": func(w http.ResponseWriter, r *http.Request) {
@@ -183,8 +167,6 @@ func TestAPIKeyLoginAcceptsOnlyAModelList(t *testing.T) {
 	}
 }
 
-// A 404 or 405 whose body says the key is bad or the account closed refuses the key, as the status
-// 401 would.
 func TestAPIKeyLoginReadsTheBodyOf404(t *testing.T) {
 	for _, body := range []string{
 		`{"error":{"message":"Incorrect API key provided: sk-ma****","type":"invalid_request_error","code":"invalid_api_key"}}`,
@@ -201,8 +183,6 @@ func TestAPIKeyLoginReadsTheBodyOf404(t *testing.T) {
 	}
 }
 
-// Another host with no model list (a 404 or 405 that does not refuse the key) cannot check a key
-// without running a model: the key is kept, and its base_url comes back as the account's setting.
 func TestAPIKeyLoginKeepsKeyWhereOtherHostHasNoModelList(t *testing.T) {
 	for _, status := range []int{http.StatusNotFound, http.StatusMethodNotAllowed} {
 		ts, _ := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) })
@@ -214,9 +194,6 @@ func TestAPIKeyLoginKeepsKeyWhereOtherHostHasNoModelList(t *testing.T) {
 	}
 }
 
-// With no base_url the check goes to OpenAI's own address, which always has a model list: a 404
-// or 405 there is an error, never a kept key. The test replaces the transport, so nothing leaves
-// the machine.
 func TestAPIKeyLoginDefaultAddressNeverKeepsKeyOn404(t *testing.T) {
 	var hosts []string
 	old := loginClient.Transport
@@ -241,8 +218,6 @@ func TestAPIKeyLoginDefaultAddressNeverKeepsKeyOn404(t *testing.T) {
 	}
 }
 
-// An upstream that cannot be reached is reported as that, not as a wrong key, naming where it
-// looked, and the account is not added.
 func TestAPIKeyLoginUnreachable(t *testing.T) {
 	srv := codextest.New(t)
 	key := srv.IssueToken("text")
@@ -257,7 +232,6 @@ func TestAPIKeyLoginUnreachable(t *testing.T) {
 	}
 }
 
-// An upstream failure is reported without the key, bounded, and is not retried.
 func TestAPIKeyLoginUpstreamFailureIsBounded(t *testing.T) {
 	const key = "sk-test-echoed-0123456789abcdef"
 	for name, body := range map[string]string{

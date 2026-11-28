@@ -46,7 +46,7 @@ func TestWebSearchToCodex(t *testing.T) {
 				}
 				return req
 			},
-			wantDropped: true, // max_uses and blocked_domains not supported by Responses
+			wantDropped: true,
 			checkTool: func(t *testing.T, tool map[string]any) {
 				if tool["type"] != "web_search" {
 					t.Errorf("type = %v, want web_search", tool["type"])
@@ -136,7 +136,6 @@ func TestWebSearchToCodex(t *testing.T) {
 				t.Errorf("official host: dropped = %v, want %v (losses: %+v)", ur.tr.Dropped(), tc.wantDropped, ur.tr.Losses)
 			}
 
-			// Third-party base_url gets no tool and a loss.
 			customUR, err := buildRequest(req, "", customSettings, officialAcc, false)
 			if err != nil {
 				t.Fatalf("custom host: %v", err)
@@ -190,8 +189,6 @@ func TestWebSearchCodexChatGPTBackendBareTool(t *testing.T) {
 	}
 	msgReq = roundTripReq(t, msgReq)
 
-	// ChatGPT backend (default OAuth host chatgpt.com/backend-api/codex) gets bare {"type":"web_search"}
-	// and reports allowed_domains and user_location as dropped.
 	chatgptSettings := settings{BaseURL: "https://chatgpt.com/backend-api/codex"}
 	ur, err := buildRequest(msgReq, "", chatgptSettings, account{}, false)
 	if err != nil {
@@ -230,7 +227,6 @@ func TestWebSearchCodexChatGPTBackendBareTool(t *testing.T) {
 		t.Errorf("chatgpt.com: dropped = %v, want tools[0].allowed_domains and tools[0].user_location", dropped)
 	}
 
-	// Chat source with search_context_size on chatgpt.com: bare tool, search_context_size dropped.
 	chatReq, err := openaichat.ParseRequest([]byte(`{
 		"model":"gpt-5.4",
 		"messages":[{"role":"user","content":"latest news"}],

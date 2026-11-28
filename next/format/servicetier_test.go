@@ -13,8 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// The client formats the service tier and verbosity tests read a request from. Each takes the
-// fields to add to a minimal request.
 var tierClients = map[string]func(t *testing.T, extra string) llm.Request{
 	"chat": func(t *testing.T, extra string) llm.Request {
 		r, err := openaichat.ParseRequest([]byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]` + extra + `}`))
@@ -46,8 +44,6 @@ var tierClients = map[string]func(t *testing.T, extra string) llm.Request{
 	},
 }
 
-// The upstream formats the tests write a request to, each for a caller that says its upstream takes
-// the service tier and the verbosity (messages-fast also takes fast mode).
 var tierTargets = map[string]func(llm.Request) ([]byte, []llm.Loss, error){
 	"chat": func(r llm.Request) ([]byte, []llm.Loss, error) {
 		return openaichat.EncodeRequestWith(r, openaichat.EncodeOptions{ServiceTier: true, Verbosity: true})
@@ -66,8 +62,6 @@ var tierTargets = map[string]func(llm.Request) ([]byte, []llm.Loss, error){
 	},
 }
 
-// tierTargetsOff are the same formats for a caller that does not say so: the encoders' plain entry
-// points.
 var tierTargetsOff = map[string]func(llm.Request) ([]byte, []llm.Loss, error){
 	"chat":      openaichat.EncodeRequest,
 	"responses": openairesponses.EncodeRequest,
@@ -77,12 +71,8 @@ var tierTargetsOff = map[string]func(llm.Request) ([]byte, []llm.Loss, error){
 	"gemini": geminigenerate.EncodeRequest,
 }
 
-// tierFields are the body fields that say a service tier in any of the formats.
 var tierFields = []string{"service_tier", "speed", "serviceTier"}
 
-// checkTier encodes req for target and checks what it says about the tier: want is "" for nothing
-// said and nothing lost, "field=value" for that top-level field and no loss, or "drop:path" for
-// no tier said and the tier reported as dropped at path.
 func checkTier(t *testing.T, req llm.Request, target, want string) {
 	t.Helper()
 	body, losses, err := tierTargets[target](req)
@@ -126,17 +116,11 @@ func checkTier(t *testing.T, req llm.Request, target, want string) {
 	}
 }
 
-// Every service tier a client can name, written to every upstream format: the tier it means there,
-// or a loss where that format has none. A paid tier is written only for the client's own priority
-// tier (fast is the same tier); auto, default and the tiers of no other format are never moved to
-// priority, fast mode or another tier.
 func TestServiceTierMatrix(t *testing.T) {
 	for _, c := range []struct {
-		name, client, extra string
-		// want, by target
+		name, client, extra                             string
 		chat, responses, messages, messagesFast, gemini string
 	}{
-		// OpenAI's own spellings go to the other OpenAI format as the client wrote them.
 		{"chat auto", "chat", `,"service_tier":"auto"`, "service_tier=auto", "service_tier=auto", "service_tier=auto", "service_tier=auto", "drop:service_tier"},
 		{"chat default", "chat", `,"service_tier":"default"`, "service_tier=default", "service_tier=default", "service_tier=standard_only", "service_tier=standard_only", "serviceTier=standard"},
 		{"chat flex", "chat", `,"service_tier":"flex"`, "service_tier=flex", "service_tier=flex", "drop:service_tier", "drop:service_tier", "serviceTier=flex"},
@@ -144,8 +128,6 @@ func TestServiceTierMatrix(t *testing.T) {
 		{"chat priority", "chat", `,"service_tier":"priority"`, "service_tier=priority", "service_tier=priority", "drop:service_tier", "speed=fast", "serviceTier=priority"},
 		{"chat fast", "chat", `,"service_tier":"fast"`, "service_tier=fast", "service_tier=fast", "drop:service_tier", "speed=fast", "serviceTier=priority"},
 		{"chat ultrafast", "chat", `,"service_tier":"ultrafast"`, "service_tier=ultrafast", "service_tier=ultrafast", "drop:service_tier", "drop:service_tier", "drop:service_tier"},
-		// A tier OpenAI's references do not list is the client's own on its own wire only: Responses
-		// lists ultrafast and Chat Completions does not.
 		{"chat unknown", "chat", `,"service_tier":"turbo"`, "service_tier=turbo", "drop:service_tier", "drop:service_tier", "drop:service_tier", "drop:service_tier"},
 		{"responses unknown", "responses", `,"service_tier":"turbo"`, "drop:service_tier", "service_tier=turbo", "drop:service_tier", "drop:service_tier", "drop:service_tier"},
 		{"responses ultrafast", "responses", `,"service_tier":"ultrafast"`, "drop:service_tier", "service_tier=ultrafast", "drop:service_tier", "drop:service_tier", "drop:service_tier"},
@@ -153,14 +135,10 @@ func TestServiceTierMatrix(t *testing.T) {
 		{"responses auto", "responses", `,"service_tier":"auto"`, "service_tier=auto", "service_tier=auto", "service_tier=auto", "service_tier=auto", "drop:service_tier"},
 		{"responses fast", "responses", `,"service_tier":"fast"`, "service_tier=fast", "service_tier=fast", "drop:service_tier", "speed=fast", "serviceTier=priority"},
 		{"responses flex", "responses", `,"service_tier":"flex"`, "service_tier=flex", "service_tier=flex", "drop:service_tier", "drop:service_tier", "serviceTier=flex"},
-		// Messages: standard_only is the default tier, fast speed the priority tier.
 		{"messages auto", "messages", `,"service_tier":"auto"`, "service_tier=auto", "service_tier=auto", "service_tier=auto", "service_tier=auto", "drop:service_tier"},
 		{"messages standard_only", "messages", `,"service_tier":"standard_only"`, "service_tier=default", "service_tier=default", "service_tier=standard_only", "service_tier=standard_only", "serviceTier=standard"},
 		{"messages speed fast", "messages", `,"speed":"fast"`, "service_tier=priority", "service_tier=priority", "speed=fast", "speed=fast", "serviceTier=priority"},
-		// Speed that is not fast says no tier: it stays a field of the client's, written back to its
-		// own format and reported where another has no place for it.
 		{"messages speed standard", "messages", `,"speed":"standard"`, "drop:speed", "drop:speed", "speed=standard", "speed=standard", "drop:speed"},
-		// Gemini: standard is the default tier; unspecified names none.
 		{"gemini standard", "gemini", `,"serviceTier":"standard"`, "service_tier=default", "service_tier=default", "service_tier=standard_only", "service_tier=standard_only", "serviceTier=standard"},
 		{"gemini flex", "gemini", `,"serviceTier":"flex"`, "service_tier=flex", "service_tier=flex", "drop:serviceTier", "drop:serviceTier", "serviceTier=flex"},
 		{"gemini priority", "gemini", `,"serviceTier":"priority"`, "service_tier=priority", "service_tier=priority", "drop:serviceTier", "speed=fast", "serviceTier=priority"},
@@ -176,8 +154,6 @@ func TestServiceTierMatrix(t *testing.T) {
 	}
 }
 
-// A field a format cannot read into the model, a value that is not a string, stays among the
-// request's kept fields: the same format writes it back, any other reports it dropped.
 func TestServiceTierUnreadableStays(t *testing.T) {
 	for _, c := range []struct {
 		client, extra, field string
@@ -219,18 +195,16 @@ func TestServiceTierUnreadableStays(t *testing.T) {
 	}
 }
 
-// Verbosity goes between Chat Completions and Responses, and is reported dropped everywhere else.
 func TestVerbosityMatrix(t *testing.T) {
 	for _, c := range []struct {
 		name, client, extra string
-		read                string // the verbosity read into the model
-		chat, responses     string // the verbosity written; "" for none (reported dropped if one was read)
-		dropped             string // the path reported dropped by Messages and Gemini (and by a wire that lists no such verbosity)
+		read                string
+		chat, responses     string
+		dropped             string
 	}{
 		{"chat", "chat", `,"verbosity":"low"`, "low", "low", "low", "verbosity"},
 		{"responses", "responses", `,"text":{"verbosity":"high"}`, "high", "high", "high", "text.verbosity"},
 		{"responses with format", "responses", `,"text":{"verbosity":"medium","format":{"type":"json_object"}}`, "medium", "medium", "medium", "text.verbosity"},
-		// A value OpenAI's references do not list is the client's own on its own wire only.
 		{"chat unknown", "chat", `,"verbosity":"loud"`, "loud", "loud", "", "verbosity"},
 		{"responses unknown", "responses", `,"text":{"verbosity":"loud"}`, "loud", "", "loud", "text.verbosity"},
 		{"none", "chat", ``, "", "", "", ""},
@@ -297,8 +271,6 @@ func TestVerbosityMatrix(t *testing.T) {
 	}
 }
 
-// A Responses request's text keeps its other fields and its format beside the verbosity, and a
-// text that is not an object keeps all of itself.
 func TestVerbosityKeepsTextFields(t *testing.T) {
 	req := tierClients["responses"](t, `,"text":{"verbosity":"low","other":1,"format":{"type":"json_schema","name":"n","schema":{"type":"object"},"extra":true}}`)
 	body, _, err := tierTargets["responses"](req)
@@ -338,9 +310,6 @@ func rawField(t *testing.T, body []byte, key string) json.RawMessage {
 	return m[key]
 }
 
-// Fast speed is the priority tier, and the service_tier beside it, which says nothing about speed
-// (standard_only keeps the request off Priority Tier capacity), stays the client's own field: a
-// Messages upstream gets both, any other format reports the field dropped.
 func TestServiceTierSpeedBesideServiceTier(t *testing.T) {
 	req := tierClients["messages"](t, `,"speed":"fast","service_tier":"standard_only"`)
 	if req.Options.ServiceTier != llm.ServiceTierPriority {
@@ -362,8 +331,6 @@ func TestServiceTierSpeedBesideServiceTier(t *testing.T) {
 	}
 }
 
-// Each format's own words for a tier are read into the model's: OpenAI's as written, Messages'
-// standard_only as default and fast speed as priority, Gemini's standard as default.
 func TestServiceTierRead(t *testing.T) {
 	for _, c := range []struct {
 		client, extra, want string
@@ -389,14 +356,11 @@ func TestServiceTierRead(t *testing.T) {
 	}
 }
 
-// Without the caller saying its upstream takes the field, a request from another format goes
-// without a service tier and without a verbosity, and each is reported as dropped at the client's
-// field. A client's own tier and verbosity are written back to its own format either way.
 func TestServiceTierUnsentWithoutOption(t *testing.T) {
 	for _, c := range []struct {
 		name, client, extra string
-		own                 string // the target that is the client's own format
-		ownSays             string // what the client's own target writes: "field=value"
+		own                 string
+		ownSays             string
 		dropped             []string
 	}{
 		{"chat", "chat", `,"service_tier":"priority","verbosity":"low"`, "chat", "service_tier=priority", []string{"service_tier", "verbosity"}},

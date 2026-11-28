@@ -9,8 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// An error core explains carries the pluxy member inside the error object, whatever the format's
-// own shape; one it did not explain has none.
 func TestErrorCarriesPluxyMember(t *testing.T) {
 	e := &llm.Error{Code: llm.CodeRateLimit, Status: 429, Message: "slow down",
 		Explain: &llm.Explain{Trace: "t-1",
@@ -37,7 +35,6 @@ func TestErrorCarriesPluxyMember(t *testing.T) {
 	if json.Unmarshal(body, &plain) != nil || plain.Error == nil || plain.Error["pluxy"] != nil {
 		t.Errorf("an error with no explanation has a pluxy member: %s", body)
 	}
-	// The usage-limit reply, which has today's core's body, carries it too.
 	e.Explain = &llm.Explain{Tried: []llm.Tried{}, LeftOut: []llm.LeftOut{}}
 	e.UsageLimit = &llm.UsageLimit{Model: "m", ResetsAt: time.Now().Add(time.Hour), At: time.Now()}
 	_, body = ErrorResponse(e)

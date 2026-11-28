@@ -14,9 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// compactBody is a Responses compaction request as the Codex CLI sends one: instructions, a
-// conversation with a tool call and its output, the tools, a reasoning effort and fields only
-// OpenAI's Responses API reads, with a forced tool choice and structured output added.
 const compactBody = `{"model":"claude-opus-4-6","instructions":"You are a coding agent.",` +
 	`"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"List the files."}]},` +
 	`{"type":"function_call","call_id":"call_1","name":"shell","arguments":"{\"command\":[\"ls\"]}"},` +
@@ -26,9 +23,6 @@ const compactBody = `{"model":"claude-opus-4-6","instructions":"You are a coding
 	`"tool_choice":"required","parallel_tool_calls":false,"reasoning":{"effort":"high"},` +
 	`"text":{"format":{"type":"json_schema","name":"out","schema":{"type":"object"}}},"store":false}`
 
-// anthropicCompaction is Anthropic's reply to an on-demand compaction request, as its docs show it:
-// one compaction block, stop_reason compaction, and the summarization call's usage in
-// iterations (the top-level counts are zero).
 const anthropicCompaction = `{"id":"msg_compact1","type":"message","role":"assistant","model":"claude-opus-4-6",` +
 	`"content":[{"type":"compaction","content":"The user asked for the files; ls showed a.txt.","signature":"EuYBCkQYexample"}],` +
 	`"stop_reason":"compaction","stop_sequence":null,` +
@@ -43,7 +37,6 @@ func compactRequest(body string) llm.Request {
 		Headers: map[string]string{"user-agent": "codex_cli_rs/0.150.0", "originator": "codex_cli_rs"}}}
 }
 
-// replyBody returns the body an endpoint call wrote, its format, and the terminal event.
 func replyBody(t *testing.T, evs []llm.Event) (body, format string, end llm.Event) {
 	t.Helper()
 	var b strings.Builder
@@ -62,13 +55,6 @@ func replyBody(t *testing.T, evs []llm.Event) (body, format string, end llm.Even
 	return b.String(), format, evs[len(evs)-1]
 }
 
-// A Responses compaction request on a Claude account becomes one on-demand compaction request
-// to the Messages API: the conversation translated as for /v1/responses (instructions as the
-// system prompt, the tool call and its output, the tools), "compaction": {"type": "summarize"},
-// not streamed, the compaction beta in anthropic-beta, and without what Anthropic refuses on a
-// compaction request (a forced tool choice and structured output). The reply is OpenAI's
-// compaction reply: one JSON object whose output holds Claude's summary as the user message the
-// Codex CLI keeps, with the summarization call's usage.
 func TestCompactThroughExtension(t *testing.T) {
 	srv := claudetest.New(t)
 	srv.Messages = func(w http.ResponseWriter, r *http.Request, req claudetest.Request) {
@@ -183,9 +169,6 @@ func TestCompactThroughExtension(t *testing.T) {
 	}
 }
 
-// When the summarization call ends without a summary (here at max_tokens, which Anthropic
-// answers with a 200 and empty content), the client gets an error naming why, not an empty
-// compaction, and the account is not blamed.
 func TestCompactWithoutSummary(t *testing.T) {
 	srv := claudetest.New(t)
 	srv.Messages = func(w http.ResponseWriter, r *http.Request, req claudetest.Request) {
@@ -204,8 +187,6 @@ func TestCompactWithoutSummary(t *testing.T) {
 	}
 }
 
-// An endpoint the extension does not serve is refused so that core tries another account, and
-// nothing goes upstream.
 func TestEndpointNotServed(t *testing.T) {
 	srv := claudetest.New(t)
 	ext := startExtension(t)
@@ -220,8 +201,6 @@ func TestEndpointNotServed(t *testing.T) {
 	}
 }
 
-// compactionBody adds the compaction parameter and its beta, takes out what Anthropic refuses
-// on a compaction request, and leaves an automatic tool choice alone.
 func TestCompactionBody(t *testing.T) {
 	in := `{"model":"m","max_tokens":10,"stream":true,"stop_sequences":["x"],"tool_choice":{"type":"any"},` +
 		`"context_management":{"edits":[]},"output_config":{"effort":"high","format":{"type":"json_schema","schema":{}}},"messages":[]}`
@@ -242,7 +221,6 @@ func TestCompactionBody(t *testing.T) {
 	}
 }
 
-// A conversation that ends on a tool's output (a user turn on Claude) goes as it is.
 func TestCompactEndingOnToolOutput(t *testing.T) {
 	srv := claudetest.New(t)
 	srv.Messages = func(w http.ResponseWriter, r *http.Request, req claudetest.Request) {
@@ -272,8 +250,6 @@ func TestCompactEndingOnToolOutput(t *testing.T) {
 	}
 }
 
-// compactionReply preserves cache-write token counts in Usage and leaves counts nil when the
-// upstream omits them or omits usage altogether.
 func TestCompactionReplyUsage(t *testing.T) {
 	base := `{"id":"msg_u","type":"message","role":"assistant","model":"claude-opus-4-6",` +
 		`"content":[{"type":"compaction","content":"Short summary."}],"stop_reason":"compaction"`
@@ -355,8 +331,6 @@ func TestCompactionReplyUsage(t *testing.T) {
 	})
 }
 
-// A 200 reply whose JSON body is Anthropic's error object is surfaced with the upstream's error
-// type, message and raw body, instead of becoming "Claude wrote no compaction summary".
 func TestCompactErrorObjectOn200(t *testing.T) {
 	t.Run("through extension", func(t *testing.T) {
 		const errBody = `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}`
@@ -405,7 +379,6 @@ func TestCompactErrorObjectOn200(t *testing.T) {
 	})
 }
 
-// An error object in a 200 is about this reply: it must not put the account's endpoint in cooldown.
 func TestCompactErrorObjectOn200IsAboutTheRequest(t *testing.T) {
 	raw := []byte(`{"type":"error","error":{"type":"invalid_request_error","message":"bad compaction request"}}`)
 	_, _, err := compactionReply(raw, "claude-sonnet-4-6", 1)

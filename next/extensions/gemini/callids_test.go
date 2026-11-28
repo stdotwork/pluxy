@@ -58,8 +58,6 @@ func TestStripCallIDsLeavesOtherBodies(t *testing.T) {
 	}
 }
 
-// A tool call and its result, sent by a client in each format to each kind of account: which IDs
-// reach Google.
 func TestCallIDsSentToGoogle(t *testing.T) {
 	items := []llm.Item{
 		{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "weather?"}}},

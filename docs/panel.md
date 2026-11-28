@@ -157,42 +157,98 @@ Settings opens on **General** and groups its topics into **This device** (**Gene
 ## An account's page
 
 - **Address:** `#/accounts/<id>` (`data-page="account"`). `#/accounts/<id>/sign-in` opens **Sign in
-  again** on the page; `#/accounts/<id>?alias=<name>` opens **Edit settings** with a new alias row
-  prefilled with `<name>`.
+  again** on the page (for sign-in accounts). `#/accounts/<id>?alias=<name>` opens **Edit settings**
+  (for readable sign-in accounts) with a new alias row prefilled with `<name>`, then removes
+  `?alias` from the address when closed. If `<id>` is not in core, the page shows **This account is
+  not in pluxy.** and **Back to accounts** (`#/accounts`).
+- **Kept current:** polls accounts, provider status, 7-day usage for this account, and its latest 6
+  requests every 10 seconds while visible. If a refresh fails over loaded data, or provider status
+  could not be read initially, a warning notice keeps the last loaded data and offers **Try again**.
 - **What it shows:**
-  - Opening header: provider and plan pill, condition and reason, last error (when failing or
-    waiting), and the one fix action (**Sign in again**, **Turn on**, **Clear cooldown**, **Open
-    Extensions**, or **Open the settings file** for config-file accounts).
-  - **Limits:** every limit reported by the provider, **Manual resets** remaining, **Subscription
-    ends** date, read timestamp, and **Refresh**.
-  - **About:** **Provider**, **Signs in with**, **Sign-in** (auto-renewal status, renewal error or
-    expiry), **Order** (links to **Order & fallback**), **Right now** (active request count),
-    **Added** date, and **Known to tools as** (public ID).
-  - **This week** and **Latest requests:** 7-day request total, success percentage, top 5 models
-    with **See its requests** (`#/activity?account=<id>`), and up to 6 expandable recent requests.
-  - **Change it:** for accounts added by sign-in, offers **Rename**, **Turn off** (when enabled and
-    not closed), **Edit settings**, and **Remove…** (unreadable accounts offer only **Remove…**).
-    For config-file accounts, links to **Open the settings file** (`#/config/source?account=<id>`).
-  - **Settings, models and a test request** (expandable): read-only **Account settings**, **Models
-    it serves** (with aliases), **Test with** model selector and **Send a test request**, and
-    **Renew sign-in now** (for refreshable sign-in accounts).
+  - Opening header: provider mark with condition dot, account name, plan pill (when the provider
+    reports a plan), condition line (**Serving** or the reason sentence, with the provider name
+    appended when the reason does not start with it), last error with timestamp (when needing
+    attention or waiting), and the one inline fix action (**Sign in again**, **Turn on**, **Clear
+    cooldown**, **Open Extensions**, or **Open the settings file** for a config-file account whose
+    key was refused; exhausted accounts show no fix button). When an account cannot be read, the
+    header explains how to replace or restore its file, offers a **Details** fold with core's error
+    when present, and shows only **Change it** below it (and **Sign in again** when opened from its
+    address).
+  - **Limits:** every limit reported by the provider, `Read at {time}` and **Refresh** once read
+    (otherwise a read is kept for 5 minutes, and read again once a reset it names has passed).
+    Windowed limits show the limit name (**5-hour limit**, **Daily limit**, **Weekly limit**,
+    **Monthly limit**, `{count}-day limit`, `{count}-hour limit` or `{count}-minute limit` for other
+    whole lengths, or the provider's label), remaining share (`{percent}% left`, **Used up**, or
+    **No limit**), a full-width meter bar, reset time (`Resets {when} · in {duration}`, or **Reset
+    available** once passed), an even-pace tick on the bar for active finite windows, and a pace
+    warning below the bar when spending runs ahead of even pace. Unwindowed USD credit balances show
+    the provider's label (or **Credit balance**) and `{amount} left` without a bar. When reported,
+    the footer shows `Manual resets: {count} left` and `Subscription ends {date}`. When no limits
+    show, states **Limits are read while the account takes requests.** (when not serving or
+    waiting), **Reading limits…**, `Not reported by {provider}` (or **No limits reported**), or
+    **Limits unavailable**.
+  - **This week** and **Latest requests:** **This week** shows
+    `{count} request · {percent}% succeeded` (plural: `{count} requests · {percent}% succeeded`),
+    horizontal bars for the top 5 models in the last 7 days, and **See its requests**
+    (`#/activity?account=<id>`, when at least 1 request ran), or **No requests in the last 7
+    days.** (**Try again** if unreadable). When the account has recent requests in the last 7 days
+    (up to 6) or reading them failed, **Latest requests** sits beside **This week** above
+    **About**; each row expands inline to show **Attempts** (when more than one ran) and facts
+    (**Account**, **Provider**, **Model used**, **Key**, **Path**, **Tokens**, and **Trace** linking
+    to `#/logs/<trace>`). With no recent requests, **Latest requests** is omitted and **This week**
+    sits beside **About**.
+  - **About:** **Provider**, **Signs in with** (`a sign-in with {provider}`, `an API key`, or core's
+    kind, adding `, set in pluxy's settings file` for config-file accounts), **Sign-in** (omitted
+    for API-key and signed-out accounts; otherwise **Stays signed in by itself**,
+    `Could not renew: {error}`, or `Ends {when}`), **Order** (`First among {provider} accounts` or
+    `Backup {count}`, linking to **Order & fallback** at `#/routing`), **Right now**
+    (`{count} request under way` or `{count} requests under way`, when active), **Added**, and
+    **Known to tools as** (`public_id`, when different from `id`).
+  - **Change it:** for accounts added by sign-in, offers **Rename**, **Turn off** (when readable,
+    enabled and not closed), **Edit settings**, and **Remove…** (unreadable accounts offer only
+    **Remove…**). For config-file accounts, shows **Set in pluxy's settings file.** with **Open the
+    settings file** (`#/config/source?account=<id>`).
+  - **Settings, models and a test request** (folded; omitted when unreadable): read-only **Account
+    settings**, **Models it serves** (non-excluded models with `→` aliases, or **It serves no
+    models. Check its settings.**), **Test with** model selector (**The first model it serves** or a
+    served model) with **Send a test request** (`Uses one request.`), and **Renew sign-in now**
+    (only for refreshable sign-in accounts).
 - **Actions:**
-  - **Rename:** dialog changing the account's display label (up to 64 characters; blank clears it).
-  - **Edit settings:** dialog editing `prefix`, `proxy_url`, `priority`, `weight`,
-    `disable_cooling`, `websockets` (Codex accounts only), `request_retry` (**Inherit** or
-    **Custom**), `max_concurrency`, `models`, `excluded_models`, `headers`, `model_alias`, and
-    extension `settings` JSON; asks before discarding unsaved edits (**Discard changes** / **Keep
-    editing**).
-  - **Send a test request:** sends one live request through this account using the chosen model (or
-    **The first model it serves**) and shows whether it succeeded, the model served, latency, error,
-    and reply preview.
-  - **Renew sign-in now:** triggers an immediate credential refresh.
-  - **Sign in again** (`#/accounts/<id>/sign-in`): replaces the credential using the provider's
-    sign-in methods; keeps non-secret settings optional and refuses a sign-in to a different
-    upstream account.
-- **Spends or deletes:** **Send a test request** spends one request against this account (marked
-  `Uses one request.`). **Remove…** asks for confirmation (**Remove**) before deleting the saved
-  sign-in and returning to **Accounts**.
+  - **Turn on**, **Turn off**, and **Clear cooldown:** run immediately without asking first.
+  - **Refresh** (in **Limits**): runs immediately, clearing the cached read and fetching fresh
+    limits from core.
+  - **Rename:** opens a dialog (`Rename {name}`) editing **Name** (up to 64 characters; blank clears
+    it), with **Save** and **Cancel**.
+  - **Edit settings:** opens a dialog (`Edit {name}`) with a field for each account setting,
+    labelled with its key (`request_retry` is **Credential request retries** and `model_alias` is
+    **Account model aliases**): `prefix`, `proxy_url`, `priority`, `weight`, `disable_cooling`,
+    `websockets` (Codex accounts only), `request_retry` (**Inherit** or **Custom**),
+    `max_concurrency`, `models`, `excluded_models`, `headers`, `model_alias` and `settings`.
+    Redacted proxy credentials, headers and settings stay unchanged unless edited. **Save** saves;
+    leaving with unsaved edits asks first (**Discard unsaved changes?**, **Discard changes** /
+    **Keep editing**).
+  - **Remove…:** asks for confirmation (`Remove {name}?`, **Remove** / **Cancel**) before deleting
+    the saved sign-in and returning to `#/accounts`.
+  - **Send a test request:** runs immediately without asking first, sending one live request through
+    this account using the chosen model (or **The first model it serves**) and showing **Succeeded**
+    (or the failure word), the served model, latency, error message, and reply preview.
+  - **Renew sign-in now:** runs immediately without asking first, triggering a credential refresh
+    and showing **Signed in again.** on success.
+  - **Sign in again** (`#/accounts/<id>/sign-in`): opens the **Sign in again** section below the
+    opening header (hidden in the header while open). Lists the provider's sign-in methods (**How to
+    sign in**) when more than one exists, or starts the sole method automatically; if none exist,
+    links to **Open Extensions** (`#/extensions`). Keeps non-secret settings already on the account
+    optional under **More options**, uses the same sign-in controls as **Add an account**
+    (**Continue**, **Cancel** / **Cancelling…**, **Open sign-in page**, **Copy link**, **Copy
+    code**, **Paste the address you land on**, **Load from file**, **Try again**), and refuses a
+    sign-in to a different upstream account (with a **Details** fold). On success, shows **Signed in
+    again.** and returns to `#/accounts/<id>`.
+- **Spends or deletes:** **Send a test request** spends one request against this account immediately
+  without asking first (marked `Uses one request.`). **Remove…** asks for confirmation (**Remove** /
+  **Cancel**) before deleting the saved sign-in from core's credential store and returning to
+  **Accounts** (`#/accounts`). **Turn on**, **Turn off**, **Clear cooldown**, and **Renew sign-in
+  now** run immediately without asking first and do not spend from the account or delete
+  credentials.
 - **Settings keys:** account fields under `extensions.<id>.accounts[]`
   ([config.md](config.md#accounts)).
 

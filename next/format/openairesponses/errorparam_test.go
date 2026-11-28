@@ -7,7 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// The error event of a failed Responses stream keeps the upstream's param, and has null without one.
 func TestErrorEventKeepsParam(t *testing.T) {
 	got := errorFields(&llm.Error{Code: llm.CodeInvalidRequest, Status: 400, Message: "m",
 		Raw: json.RawMessage(`{"error":{"message":"m","param":"input","code":"c"}}`)})

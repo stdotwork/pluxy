@@ -22,13 +22,8 @@ import (
 //     it came; a SIWC account refuses it (subscription_sharing_unsupported_capability), and every
 //     Codex upstream refuses one without its author or recipient, so those go as user messages.
 
-// interruptedOutput is the output sent for a tool call that has none, as the Claude repairs word
-// it.
 const interruptedOutput = "Tool call was interrupted before any output was recorded."
 
-// outputTypes maps each tool call type to the type of the output sent for it when the
-// conversation has none. A local shell call gets a function call output, as the Codex client
-// records it.
 var outputTypes = map[string]string{
 	"function_call":    "function_call_output",
 	"local_shell_call": "function_call_output",
@@ -36,25 +31,19 @@ var outputTypes = map[string]string{
 	"tool_search_call": "tool_search_output",
 }
 
-// altOutputTypes maps a tool call type to a second output type that also answers it. The Responses
-// API answers a local shell call with a local_shell_call_output as well, which carries the call's
-// call_id, and a client that sends one has answered the call.
 var altOutputTypes = map[string]string{
 	"local_shell_call": "local_shell_call_output",
 }
 
-// history makes the repairs described above on the request's input, which input has made a list.
-// It also records the paths of the reasoning items whose encrypted content another account may
-// have made (see dropForeignReasoning).
 func (h *shaper) history() {
 	var raws []json.RawMessage
 	if json.Unmarshal(h.m["input"], &raws) != nil {
 		return
 	}
 	objs := make([]map[string]json.RawMessage, len(raws))
-	answered := map[string]bool{} // output type + "\x00" + call ID
+	answered := map[string]bool{}
 	for i, r := range raws {
-		_ = json.Unmarshal(r, &objs[i]) // an item that is not an object stays nil
+		_ = json.Unmarshal(r, &objs[i])
 		typ, _ := str(objs[i]["type"])
 		if id, _ := str(objs[i]["call_id"]); id != "" {
 			answered[typ+"\x00"+id] = true
@@ -84,7 +73,6 @@ func (h *shaper) history() {
 		case "reasoning":
 			if enc, _ := str(o["encrypted_content"]); enc != "" {
 				if unsendableReasoning(o) {
-					// limits leaves it out.
 					h.lose(llm.LossDropped, path, "a reasoning item whose ID is over Codex's limit; its encrypted content cannot be read under another ID")
 				} else {
 					h.encryptedReasoning = append(h.encryptedReasoning, path)
@@ -107,8 +95,6 @@ func (h *shaper) lose(kind, path, detail string) {
 	h.tr.Losses = llm.AddLoss(h.tr.Losses, llm.Loss{Kind: kind, Path: path, Detail: detail})
 }
 
-// missingOutput returns the output to send after a tool call of type typ (the item o) that the
-// conversation has no output for, and marks the call answered; nil for any other item.
 func missingOutput(typ string, o map[string]json.RawMessage, answered map[string]bool) json.RawMessage {
 	outType, ok := outputTypes[typ]
 	id, _ := str(o["call_id"])
@@ -120,15 +106,11 @@ func missingOutput(typ string, o map[string]json.RawMessage, answered map[string
 	}
 	answered[outType+"\x00"+id] = true
 	if outType == "tool_search_output" {
-		// A tool search the client ran, which found no tools.
 		return raw(map[string]any{"type": outType, "call_id": id, "status": "completed", "execution": "client", "tools": []any{}})
 	}
 	return raw(map[string]any{"type": outType, "call_id": id, "output": interruptedOutput})
 }
 
-// unsendableReasoning reports whether o is a reasoning item with encrypted content whose ID is
-// over the endpoint's limit: it cannot be sent as it is, and the endpoint could not read its
-// content under another ID, so limits leaves it out.
 func unsendableReasoning(o map[string]json.RawMessage) bool {
 	typ, _ := str(o["type"])
 	id, ok := str(o["id"])
@@ -136,10 +118,6 @@ func unsendableReasoning(o map[string]json.RawMessage) bool {
 	return typ == "reasoning" && ok && enc != "" && utf8.RuneCountInString(id) > itemIDLimit
 }
 
-// agentMessage returns the item to send for the agent_message o, at path in input, and whether it
-// differs from o: o itself when the account takes it, a user message with o's readable content
-// when it does not, or nil when nothing in it can be read. Encrypted parts can be read only by the
-// upstream that made them, so they are left out.
 func (h *shaper) agentMessage(o map[string]json.RawMessage, path string) (json.RawMessage, bool) {
 	author, _ := str(o["author"])
 	recipient, _ := str(o["recipient"])
@@ -178,8 +156,6 @@ func (h *shaper) agentMessage(o map[string]json.RawMessage, path string) (json.R
 	return raw(map[string]any{"type": "message", "role": "user", "content": parts}), true
 }
 
-// foreignReasoning reports whether e is Codex refusing encrypted reasoning it cannot read: reasoning
-// another account (or another provider's Responses upstream) made, replayed by the client.
 func foreignReasoning(e *llm.Error) bool {
 	if e == nil || e.Status != 400 {
 		return false
@@ -191,9 +167,6 @@ func foreignReasoning(e *llm.Error) bool {
 	return strings.Contains(msg, "encrypted content") && (strings.Contains(msg, "could not be verified") || strings.Contains(msg, "could not be decrypted"))
 }
 
-// dropForeignReasoning returns the request's body without its reasoning items that carry encrypted
-// content, and reports each as dropped, for one more try after Codex refused that content. It
-// returns false when there is no such item to leave out.
 func (u *upstreamRequest) dropForeignReasoning() ([]byte, bool) {
 	var m map[string]json.RawMessage
 	var items []json.RawMessage

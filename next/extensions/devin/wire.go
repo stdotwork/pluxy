@@ -11,12 +11,6 @@ import (
 	"unicode/utf8"
 )
 
-// Devin's API server speaks Connect (connectrpc.com) with protobuf messages. pluxy has no
-// protobuf library (next/ uses only the standard library), and Devin publishes no schema, so this
-// file writes and reads the wire format by field number: a message is a run of fields, each a
-// tag (field number and wire type) and a value.
-
-// Protobuf wire types.
 const (
 	wireVarint  = 0
 	wireFixed64 = 1
@@ -24,7 +18,6 @@ const (
 	wireFixed32 = 5
 )
 
-// message is a protobuf message being written. Each method appends one field.
 type message []byte
 
 func (m message) tag(n, wire int) message {
@@ -46,8 +39,6 @@ func (m message) double(n int, f float64) message {
 	return binary.LittleEndian.AppendUint64(m.tag(n, wireFixed64), math.Float64bits(f))
 }
 
-// field is one field read from a message: val holds a varint or fixed value, data a
-// length-delimited one.
 type field struct {
 	num  int
 	wire int
@@ -57,7 +48,6 @@ type field struct {
 
 var errBadMessage = errors.New("malformed protobuf message")
 
-// parseFields reads a message's fields in order.
 func parseFields(b []byte) ([]field, error) {
 	var out []field
 	for len(b) > 0 {
@@ -98,25 +88,19 @@ func parseFields(b []byte) ([]field, error) {
 	return out, nil
 }
 
-// Connect streaming frames: a flags byte, the payload's length as a big-endian uint32, and the
-// payload. The last frame of a stream has the end flag and carries a JSON trailer.
 const (
 	flagCompressed = 0x01
 	flagEnd        = 0x02
-	// maxFrame and maxInflated bound one frame, as today's core bounds them (16 and 64 MiB).
-	maxFrame    = 16 << 20
-	maxInflated = 64 << 20
+	maxFrame       = 16 << 20
+	maxInflated    = 64 << 20
 )
 
-// frame wraps a message in a Connect data frame.
 func frame(msg []byte) []byte {
 	out := make([]byte, 5, 5+len(msg))
 	binary.BigEndian.PutUint32(out[1:], uint32(len(msg)))
 	return append(out, msg...)
 }
 
-// readFrame reads one frame. It returns io.EOF when the stream ends between frames, and
-// io.ErrUnexpectedEOF when it ends inside one.
 func readFrame(r io.Reader) (end bool, payload []byte, err error) {
 	var h [5]byte
 	if _, err := io.ReadFull(r, h[:]); err != nil {
@@ -152,19 +136,14 @@ func readFrame(r io.Reader) (end bool, payload []byte, err error) {
 	return flags&flagEnd != 0, payload, nil
 }
 
-// utf8Buffer holds the bytes of a character split across frames until the rest comes, so every
-// piece passed on is whole UTF-8.
 type utf8Buffer struct{ rest []byte }
 
-// feed returns b, after what was held, up to its last whole character; an incomplete character
-// at the end is held.
 func (u *utf8Buffer) feed(b []byte) string {
 	if len(b) == 0 {
 		return ""
 	}
 	all := append(u.rest, b...)
 	cut := len(all)
-	// Look back at most utf8.UTFMax-1 bytes for the start of an incomplete last character.
 	for i := len(all) - 1; i >= 0 && i >= len(all)-(utf8.UTFMax-1); i-- {
 		if utf8.RuneStart(all[i]) {
 			if !utf8.FullRune(all[i:]) {
@@ -177,7 +156,6 @@ func (u *utf8Buffer) feed(b []byte) string {
 	return string(all[:cut])
 }
 
-// flush returns what is held, at the end of the reply.
 func (u *utf8Buffer) flush() string {
 	s := string(u.rest)
 	u.rest = nil

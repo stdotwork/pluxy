@@ -6,20 +6,8 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// roleSystem is the role of a system message inside a Messages conversation.
 const roleSystem = "system"
 
-// placeSystem places the system messages EncodeRequest kept inside the conversation, the
-// consecutive ones as one, by Anthropic's rules for them
-// (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages): one
-// follows a user turn and precedes an assistant turn or ends the conversation. So on a model that
-// takes system messages there (takes), runs separated only by user turns are placed together after
-// all user turns up to the next assistant turn (or the end), merging runs that meet; on any other
-// model, each run's text goes in the user turn after it (or the one before it if none follows), in
-// place, as LiteLLM does, inside <system-reminder> tags (the form Claude Code gives such text)
-// where LiteLLM adds an operator note. Where a run follows an assistant turn with no user turn
-// after it, its text goes in a user turn of its own. A move and a change of form are each reported
-// as approximated.
 func (e *encoder) placeSystem(msgs []*outMessage, takes bool) []*outMessage {
 	out := make([]*outMessage, 0, len(msgs))
 	for i := 0; i < len(msgs); {
@@ -80,8 +68,6 @@ func (e *encoder) placeSystem(msgs []*outMessage, takes bool) []*outMessage {
 	return out
 }
 
-// reminders returns system content as user content: each text block's text inside
-// <system-reminder> tags, its other fields kept.
 func reminders(blocks []json.RawMessage) []json.RawMessage {
 	out := make([]json.RawMessage, 0, len(blocks))
 	for _, b := range blocks {

@@ -13,8 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// Each body feature that needs a beta gets it, in today's core's order; a body that needs none
-// gets none and is left as it is.
 func TestBodyBetas(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -53,8 +51,6 @@ func TestBodyBetas(t *testing.T) {
 	}
 }
 
-// A body's betas field is removed; the rest of the body keeps its values byte for byte, HTML
-// characters in strings included. A body without the field is not touched.
 func TestBodyBetasRemovesBetasField(t *testing.T) {
 	in := `{"model":"m","betas":["b1"],"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"a <b> & c","signature":"Es+ig/="}]}]}`
 	out, _ := bodyBetas([]byte(in), false)
@@ -71,9 +67,6 @@ func TestBodyBetasRemovesBetasField(t *testing.T) {
 	}
 }
 
-// The betas a body needs go after the client's own (and after the OAuth beta of a subscription),
-// without repeating one the client already sent, and the body's betas field never reaches the
-// upstream.
 func TestPostAddsBodyBetas(t *testing.T) {
 	srv := claudetest.New(t)
 	s, err := readSettings(srv.Settings(""))
@@ -116,9 +109,6 @@ func TestPostAddsBodyBetas(t *testing.T) {
 	}
 }
 
-// Claude Code's own agent, request-class and remote-session headers go upstream only with a
-// request that names itself as Claude Code (X-App cli, a claude-cli User-Agent and the
-// claude-code beta); a client's other identification headers go either way.
 func TestPostClaudeCodeHeadersOnlyFromClaudeCode(t *testing.T) {
 	srv := claudetest.New(t)
 	s, err := readSettings(srv.Settings(""))

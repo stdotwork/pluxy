@@ -5,7 +5,7 @@
 import { existsSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { goTo, openPanel, signIn, useCore } from "./support";
 
 // panelcore compiles core and the fixture extensions before announcing readiness.
@@ -24,6 +24,9 @@ test.beforeEach(async ({ page, context }) => {
 const row = (page: Page, tool: string) => page.locator('[data-part="tool-row"]').filter({ hasText: tool });
 const keys = (page: Page) => page.getByRole("region", { name: /^Keys/ });
 const keyRow = (page: Page, name: string) => page.locator('[data-part="tool-key"]').filter({ hasText: name });
+const openKeyMenu = async (item: Locator) => {
+  await item.locator('button[aria-haspopup="menu"]').click();
+};
 
 /** Keys this test made are deleted, so the next test starts with the one key core was started with. */
 async function forgetMadeKeys() {
@@ -195,12 +198,15 @@ test("Make key puts a real key in the text and names it for the tool; Close take
   await expect(page.locator('[data-part="key-value"]')).toHaveCount(0);
 });
 
-test("a key made by name can be renamed and deleted after asking; the last key cannot be deleted", async ({
+test("a key made by name can be renamed and deleted from its row menu; the last key cannot be deleted", async ({
   page,
 }) => {
   const only = keys(page).locator('[data-part="tool-key"]');
   await expect(only).toHaveCount(1);
-  await expect(only.getByRole("button", { name: "Delete", exact: true })).toBeDisabled();
+  await openKeyMenu(only);
+  await expect(only.getByRole("menuitem", { name: "Delete", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(only.getByRole("menu")).toHaveCount(0);
   await expect(only).toContainText("Add another key before deleting this one.");
   await keys(page).getByRole("button", { name: "New key", exact: true }).click();
   await keys(page).getByLabel("Name", { exact: true }).fill("Script on my laptop");
@@ -215,27 +221,29 @@ test("a key made by name can be renamed and deleted after asking; the last key c
   // New key puts nothing in any tool's text.
   await row(page, "Claude Code").getByRole("button", { name: "Set up by hand", exact: true }).click();
   await expect(row(page, "Claude Code").locator("pre")).toContainText("<client-key>");
-  // Rename.
-  await made.getByRole("button", { name: "Rename", exact: true }).click();
+  await openKeyMenu(made);
+  await made.getByRole("menuitem", { name: "Rename", exact: true }).click();
   await made.getByLabel("Name", { exact: true }).fill("Nightly job");
   await made.getByRole("button", { name: "Save", exact: true }).click();
   const renamed = keyRow(page, "Nightly job");
   await expect(renamed).toBeVisible();
   const listed = await core.mgmt<{ keys: { label?: string }[] }>("GET", "/client-keys");
   expect(listed.body.keys.map((k) => k.label)).toContain("Nightly job");
-  // Delete asks first, naming the key; Cancel leaves it.
-  await renamed.getByRole("button", { name: "Delete", exact: true }).click();
+  await openKeyMenu(renamed);
+  await renamed.getByRole("menuitem", { name: "Delete", exact: true }).click();
   await expect(renamed).toContainText("Nightly job stops working until it gets a new key.");
   await renamed.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(renamed).toBeVisible();
-  await renamed.getByRole("button", { name: "Delete", exact: true }).click();
+  await openKeyMenu(renamed);
+  await renamed.getByRole("menuitem", { name: "Delete", exact: true }).click();
   await renamed.getByRole("button", { name: "Yes, delete", exact: true }).click();
   await expect(keys(page).locator('[data-part="tool-key"]')).toHaveCount(1);
   expect(
     (await fetch(`${core.base}/v1/models`, { headers: { Authorization: `Bearer ${value}` } })).status,
   ).toBe(401);
+  await openKeyMenu(keys(page).locator('[data-part="tool-key"]'));
   await expect(
-    keys(page).locator('[data-part="tool-key"]').getByRole("button", { name: "Delete", exact: true }),
+    keys(page).locator('[data-part="tool-key"]').getByRole("menuitem", { name: "Delete", exact: true }),
   ).toBeDisabled();
 });
 
@@ -251,23 +259,133 @@ test("a refused delete of the last key shows the same line", async ({ page }) =>
     (r) => r.request().method() === "DELETE" && r.url().includes("/client-keys/"),
   );
   const last = keys(page).locator('[data-part="tool-key"]').nth(1);
-  await last.getByRole("button", { name: "Delete", exact: true }).click();
+  await openKeyMenu(last);
+  await last.getByRole("menuitem", { name: "Delete", exact: true }).click();
   await last.getByRole("button", { name: "Yes, delete", exact: true }).click();
   expect((await asked).status()).toBe(409);
   await expect(last).toContainText("Add another key before deleting this one.");
 });
 
-test("the address has a Copy button and says who can reach it", async ({ page }) => {
+test("the address uses ConnectionCard with Copy and says who can reach it", async ({ page }) => {
   const address = page.getByRole("region", { name: "Address for tools" });
-  await expect(address).toContainText(core.base);
+  await expect(address.locator('[data-part="connection-card"]')).toBeVisible();
+  await expect(address).toContainText(`${core.base}/v1`);
   await expect(address).toContainText("Only programs on this computer can reach it.");
   await address.getByRole("button", { name: "Copy", exact: true }).click();
   await expect(address.getByRole("button", { name: "Copied", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${core.base}/v1`);
+  await address.getByRole("radio", { name: "Claude" }).click();
+  await expect(address).toContainText(core.base);
+  await address.getByRole("button", { name: "Copy", exact: true }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(core.base);
-  await expect(address.getByRole("link", { name: "Addresses for other programs" })).toHaveAttribute(
-    "href",
-    "#/system",
-  );
+  const systemLink = address.getByRole("link", { name: "Addresses for other programs" });
+  await expect(systemLink).toHaveAttribute("href", "#/system");
+  expect(await systemLink.evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe("none");
+  await expect(systemLink.locator("svg")).toHaveCount(1);
+});
+
+test("opening a key menu does not cover the next key row or the last-key note", async ({ page }) => {
+  const only = keys(page).locator('[data-part="tool-key"]');
+  await expect(only).toHaveCount(1);
+  await openKeyMenu(only);
+  const onlyMenu = only.getByRole("menu");
+  const note = only.locator(".tool-key-note");
+  const del = only.getByRole("menuitem", { name: "Delete", exact: true });
+  await expect(del).toBeDisabled();
+  const noteId = await note.getAttribute("id");
+  expect(noteId).toBeTruthy();
+  await expect(del).toHaveAttribute("aria-describedby", noteId as string);
+  const onlyMenuBox = await onlyMenu.boundingBox();
+  const noteBox = await note.boundingBox();
+  expect(onlyMenuBox && noteBox).toBeTruthy();
+  expect((onlyMenuBox?.y ?? 0) + (onlyMenuBox?.height ?? 0)).toBeLessThanOrEqual((noteBox?.y ?? 0) + 1);
+  await page.keyboard.press("Escape");
+
+  await keys(page).getByRole("button", { name: "New key", exact: true }).click();
+  await keys(page).getByLabel("Name", { exact: true }).fill("Second key");
+  await keys(page).getByRole("button", { name: "Make key", exact: true }).click();
+  await expect(keys(page).locator('[data-part="tool-key"]')).toHaveCount(2);
+  const first = keys(page).locator('[data-part="tool-key"]').nth(0);
+  const second = keys(page).locator('[data-part="tool-key"]').nth(1);
+  await openKeyMenu(first);
+  const firstMenuBox = await first.getByRole("menu").boundingBox();
+  const secondBox = await second.boundingBox();
+  expect(firstMenuBox && secondBox).toBeTruthy();
+  expect((firstMenuBox?.y ?? 0) + (firstMenuBox?.height ?? 0)).toBeLessThanOrEqual((secondBox?.y ?? 0) + 1);
+});
+
+test("key row menu supports Arrow keys, closes when focus leaves, and Cancel returns focus to the menu button", async ({
+  page,
+}) => {
+  await keys(page).getByRole("button", { name: "New key", exact: true }).click();
+  await keys(page).getByLabel("Name", { exact: true }).fill("Script");
+  await keys(page).getByRole("button", { name: "Make key", exact: true }).click();
+  const row = keyRow(page, "Script");
+  await expect(row).toBeVisible();
+  const trigger = row.locator('button[aria-haspopup="menu"]');
+
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  await expect(row.getByRole("menuitem", { name: "Rename", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(row.getByRole("menuitem", { name: "Delete", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(row.getByRole("menuitem", { name: "Rename", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(row.getByRole("menu")).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+
+  await page.keyboard.press("ArrowDown");
+  await expect(row.getByRole("menuitem", { name: "Rename", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ArrowUp");
+  await expect(row.getByRole("menuitem", { name: "Delete", exact: true })).toBeFocused();
+
+  await page.keyboard.press("Tab");
+  await expect(row.getByRole("menu")).toHaveCount(0);
+
+  await trigger.focus();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(row.getByLabel("Name", { exact: true })).toBeFocused();
+  await row.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(trigger).toBeFocused();
+
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Enter");
+  await expect(row.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(trigger).toBeFocused();
+});
+
+test("Tools key-row CSS stays scoped to .tools and does not paint a .tool-key outside it", async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    const wrap = document.createElement("div");
+    wrap.className = "tool-page";
+    const span = document.createElement("span");
+    span.id = "app-tool-key-probe";
+    span.className = "tool-key";
+    span.textContent = "Created for Claude Code";
+    wrap.append(span);
+    document.querySelector("main")?.append(wrap);
+  });
+  const probe = page.locator("#app-tool-key-probe");
+  await probe.hover();
+  const styles = await probe.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return {
+      backgroundColor: cs.backgroundColor,
+      borderBottomWidth: cs.borderBottomWidth,
+      paddingLeft: cs.paddingLeft,
+    };
+  });
+  expect(styles).toEqual({
+    backgroundColor: "rgba(0, 0, 0, 0)",
+    borderBottomWidth: "0px",
+    paddingLeft: "0px",
+  });
 });
 
 test("Refresh scans again", async ({ page }) => {

@@ -1,13 +1,3 @@
-// Package codextest is a fake of OpenAI's login server and the Codex Responses endpoint, for
-// testing the Codex provider extension without reaching OpenAI. It speaks the login endpoints the
-// extension uses (the authorization code grant with PKCE, OpenAI's device-code flow and refresh),
-// answers POST /responses and /backend-api/codex/responses with scripted streams, and answers
-// GET /backend-api/wham/usage, the ChatGPT usage endpoint. It also speaks Sign in with ChatGPT
-// (SIWC): GET /api/accounts/authorize, whose result carries the client ID it issues, and
-// POST /api/accounts/oauth/token for that client.
-//
-// Tokens are unsigned JWTs. Refresh tokens rotate: each one works once, and using one again is
-// refused as refresh_token_reused, as OpenAI does.
 package codextest
 
 import (
@@ -29,11 +19,8 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// ClientID is the OAuth client the extension must identify as.
 const ClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-// SIWC: the client a SIWC sign-in asks to register, the client ID the fake issues to it, the API
-// the tokens are for, and the scope it grants.
 const (
 	SIWCClientID       = "dynamic_agent_client"
 	SIWCIssuedClientID = "siwc-client-codextest"
@@ -41,48 +28,39 @@ const (
 	SIWCScope          = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
 )
 
-// Account is the ChatGPT account every sign-in belongs to.
 const (
 	AccountID = "acct-codextest"
 	Email     = "codex@example.invalid"
 	PlanType  = "plus"
 )
 
-// Server is the fake. Set its exported fields before use.
 type Server struct {
 	*httptest.Server
 
-	// DenyBrowser makes the browser sign-in end with error=access_denied.
-	DenyBrowser bool
-	// RefreshFailure "unavailable" makes refresh answer 503.
+	DenyBrowser    bool
 	RefreshFailure string
-	// Usage, if set, is the body of the usage endpoint's reply; the default is DefaultUsage.
-	Usage string
-	// Optional quota replies; empty means the endpoint is unavailable.
-	Subscriptions string
-	ResetCredits  string
-	// AccessTTL is how long the n-th issued access token lasts (n from 1). Default: an hour.
-	AccessTTL func(n int) time.Duration
-	// SIWCGrantScope, if set, is the scope a SIWC grant names in place of SIWCScope.
+	Usage          string
+	Subscriptions  string
+	ResetCredits   string
+	AccessTTL      func(n int) time.Duration
 	SIWCGrantScope string
 
 	mu          sync.Mutex
-	codes       map[string]codeGrant // authorization code -> grant
-	devices     map[string]*device   // device_auth_id -> device
-	refresh     map[string]bool      // refresh token -> still valid
-	access      map[string]string    // access token -> behaviour
+	codes       map[string]codeGrant
+	devices     map[string]*device
+	refresh     map[string]bool
+	access      map[string]string
 	issued      int
 	refreshes   int
 	requests    []Request
 	listings    int
 	listHeaders []http.Header
-	siwc        []url.Values // SIWC authorize queries and token forms, in order
+	siwc        []url.Values
 	hangs       map[string]chan struct{}
 	block       chan struct{}
 	started     chan struct{}
 }
 
-// Request is one model request the fake received.
 type Request struct {
 	Path   string
 	Header http.Header
@@ -93,12 +71,10 @@ type codeGrant struct{ challenge, redirect string }
 
 type device struct {
 	userCode, verifier, code string
-	status                   string // pending, approved, denied
+	status                   string
 }
 
-// New starts a fake; it stops when the test ends.
 func New(t testing.TB) *Server {
-	// The extension honours the fake's address in account settings only under this variable.
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	s := &Server{
 		codes: map[string]codeGrant{}, devices: map[string]*device{}, refresh: map[string]bool{},
@@ -123,9 +99,6 @@ func New(t testing.TB) *Server {
 	return s
 }
 
-// DefaultUsage is what the usage endpoint answers by default, in the shape of ChatGPT's own: a Plus
-// plan with a 5-hour and a weekly window, code review's weekly window, one model's own limits, and
-// a credit balance.
 const DefaultUsage = `{
   "plan_type": "plus",
   "rate_limit": {
@@ -149,8 +122,6 @@ const DefaultUsage = `{
   "credits": {"has_credits": true, "unlimited": false, "balance": "12.50"}
 }`
 
-// IssueToken returns an access token whose model requests act out behaviour: "text" (the conformance
-// kit's reply, in two pieces), "rate_limited" (429 with Retry-After 20) or "auth_failed" (401).
 func (s *Server) IssueToken(behaviour string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -159,8 +130,6 @@ func (s *Server) IssueToken(behaviour string) string {
 	return tok
 }
 
-// IssueHang returns an access token whose model request starts a reply and then waits; the
-// channel closes when the request is cancelled.
 func (s *Server) IssueHang() (string, <-chan struct{}) {
 	tok := s.IssueToken("hang")
 	ch := make(chan struct{})
@@ -170,7 +139,6 @@ func (s *Server) IssueHang() (string, <-chan struct{}) {
 	return tok, ch
 }
 
-// Grant signs in directly and returns the tokens a login would have given.
 func (s *Server) Grant() (access, refresh, idToken string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -178,13 +146,11 @@ func (s *Server) Grant() (access, refresh, idToken string) {
 	return t.AccessToken, t.RefreshToken, t.IDToken
 }
 
-// IDToken returns an ID token for the fake's account.
 func IDToken() string {
 	return jwt(map[string]any{"email": Email, "https://api.openai.com/auth": map[string]any{
 		"chatgpt_account_id": AccountID, "chatgpt_plan_type": PlanType}})
 }
 
-// ApproveDevice approves the device sign-in showing userCode; DenyDevice refuses it.
 func (s *Server) ApproveDevice(userCode string) { s.setDevice(userCode, "approved") }
 func (s *Server) DenyDevice(userCode string)    { s.setDevice(userCode, "denied") }
 
@@ -198,17 +164,14 @@ func (s *Server) setDevice(userCode, status string) {
 	}
 }
 
-// RefreshCalls returns how many refresh requests arrived.
 func (s *Server) RefreshCalls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.refreshes
 }
 
-// RefreshStarted closes when the first refresh request arrives.
 func (s *Server) RefreshStarted() <-chan struct{} { return s.started }
 
-// BlockRefresh holds refresh requests until release is called.
 func (s *Server) BlockRefresh() (release func()) {
 	ch := make(chan struct{})
 	s.mu.Lock()
@@ -218,31 +181,24 @@ func (s *Server) BlockRefresh() (release func()) {
 	return func() { once.Do(func() { close(ch) }) }
 }
 
-// ModelListRequests returns how many model list requests (the call that checks an API key) the fake
-// received, and the headers of each.
 func (s *Server) ModelListRequests() (int, []http.Header) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.listings, append([]http.Header(nil), s.listHeaders...)
 }
 
-// Requests returns the model requests received so far.
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Request(nil), s.requests...)
 }
 
-// SIWCCalls returns the query of each SIWC authorize request and the form of each SIWC token
-// request, in the order they came.
 func (s *Server) SIWCCalls() []url.Values {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]url.Values(nil), s.siwc...)
 }
 
-// siwcAuthorize is the SIWC sign-in page: it checks the request as OpenAI would need it and
-// sends the browser back with a code and the client ID it issued.
 func (s *Server) siwcAuthorize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	s.mu.Lock()
@@ -274,8 +230,6 @@ func (s *Server) siwcAuthorize(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, back.String(), http.StatusFound)
 }
 
-// siwcToken is the SIWC token endpoint: the code exchange and renewal of the issued client, for
-// the API resource; refresh tokens rotate as on the Codex token endpoint.
 func (s *Server) siwcToken(w http.ResponseWriter, r *http.Request) {
 	if r.ParseForm() != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
@@ -326,12 +280,11 @@ func (s *Server) siwcToken(w http.ResponseWriter, r *http.Request) {
 		t.Scope = s.SIWCGrantScope
 	}
 	if f.Get("grant_type") == "refresh_token" {
-		t.IDToken = "" // a renewal need not send one
+		t.IDToken = ""
 	}
 	writeJSON(w, http.StatusOK, t)
 }
 
-// SIWCGrant signs in with ChatGPT directly and returns the tokens a SIWC login would have given.
 func (s *Server) SIWCGrant() (access, refresh string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -381,8 +334,6 @@ func (s *Server) userCode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"device_auth_id": id, "user_code": d.userCode, "interval": "1"})
 }
 
-// deviceToken answers a poll: 403 while the code has not been entered, the authorization code and
-// its PKCE verifier once approved, 400 when denied.
 func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		DeviceAuthID string `json:"device_auth_id"`
@@ -514,7 +465,6 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]string{"type": "rate_limit_error", "code": "rate_limit_exceeded", "message": "Rate limit reached"}})
 		return
 	case "account_closed":
-		// Built from OmniRoute's classifier tests (provider-test-account-deactivated.test.ts, codex-passive-refresh-gate.test.ts), not a captured reply.
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"type": "invalid_request_error", "code": "account_deactivated", "message": "Your account has been deactivated. Please contact support."}})
 		return
 	default:
@@ -553,9 +503,6 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 	ev("response.completed", map[string]any{"response": resp})
 }
 
-// models answers the model list as OpenAI does for a key it issued (IssueToken) and 401 for any
-// other; the request is counted by ModelListRequests and kept out of Requests, which are model requests. The list itself is one model: callers
-// of the fake use it only to check a key.
 func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	s.mu.Lock()
@@ -570,9 +517,6 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": []any{map[string]any{"id": "gpt-codextest", "object": "model", "owned_by": "codextest"}}})
 }
 
-// usage answers the usage endpoint for an access token the fake issued; like the responses endpoint
-// it acts out the token's behaviour (401 for an unknown token, 429 for "rate_limited"). The request
-// is recorded with the model requests.
 func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	s.mu.Lock()

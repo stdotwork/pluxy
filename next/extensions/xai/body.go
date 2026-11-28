@@ -9,56 +9,15 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// What xAI's Responses API needs changed in a request, as today's core makes the changes on its
-// API-key path (internal/runtime/executor/xai_executor_request.go, prepareResponsesRequestToDoc
-// and the helpers it calls). Each rule names where xAI's API differs from the body it is given:
-//
-//   - stream: the upstream stream flag follows the client's stream flag;
-//   - removed fields: stop, previous_response_id, prompt_cache_retention, safety_identifier and
-//     stream_options are taken out, as today's core takes them out;
-//   - store false unless the client set store, and reasoning.encrypted_content in include;
-//   - additional_tools: the tools of each such input item (Responses Lite) join the tools list and
-//     the item is removed, before the rules below;
-//   - tools: a function's local $ref references are inlined and its $defs and definitions removed;
-//     a function without parameters gets an empty object schema; more than 200 tools are cut to the
-//     first 200 (xaiMaxTools);
-//   - custom tools: each custom tool the client declares, Codex's apply_patch included, is sent as a
-//     function with one input argument, and xAI's call to it is turned back into a custom tool
-//     call (patch.go). Today's core does this for apply_patch only and sends another custom tool
-//     as a function without an input field; that differs on purpose;
-//   - input: a custom tool call and its output are sent as a function call and its output
-//     (normalizeXAIInputCustomToolCallsDoc); a call to a custom tool of the request carries its
-//     text in the input argument;
-//   - namespace tools: the Codex app's namespaces are sent as functions, flattened or folded, and
-//     xAI's calls to them are turned back into calls in their namespaces (namespace.go); the
-//     Codex app's automation_update tool gets parameters that accept any object.
-//
-// Not done here, and why it is left out: image references and encrypted reasoning content are not rewritten
-// (sanitizeXAIInputEncryptedContent and normalizeXAIImageRefsDoc); the reasoning effort is not
-// checked against each model's levels, which needs today's model catalog. Today's core also
-// sets instructions and a list input, and the Codex translator's tool defaults (tool_choice,
-// parallel_tool_calls, strict); those come from the Codex translator that core runs for every
-// Responses request, not from a rule about xAI, so the extension leaves them out.
-
-// maxTools is how many tools xAI takes in one request (xaiMaxTools in today's core).
 const maxTools = 200
 
-// removedFields are the fields today's core deletes from a Responses body before it sends it.
-// The reason is not written down in core. xAI's Responses API has no stop (core says so);
-// the others are left out by the core on the same path, unverified here.
 var removedFields = []string{"stop", "previous_response_id", "prompt_cache_retention", "safety_identifier", "stream_options"}
 
-// buildBody returns the request body for xAI's Responses API and how it was built.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	body, tr, _, err := buildRequest(req, false)
 	return body, tr, err
 }
 
-// buildRequest returns the body for xAI's Responses API and also what turns xAI's reply back for
-// the client:
-// calls to the custom tools of the request become custom tool calls (patch.go) and calls to the
-// functions that stand for namespace tools become calls in their namespaces (namespace.go). It is
-// nil when the request has neither.
 func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation, *replyBridge, error) {
 	tr := &llm.Translation{To: llm.FormatOpenAIResponses}
 	var body []byte
@@ -89,10 +48,6 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 	for _, k := range removedFields {
 		delete(m, k)
 	}
-	// xAI keeps each response unless told not to. With previous_response_id removed a kept
-	// response is never used again, so the conversation is not left on xAI unless the client
-	// asked for that. Without stored responses, a reasoning model's thinking reaches the next turn
-	// only as encrypted reasoning content, so that is asked for (as the Codex extension does).
 	if _, ok := m["store"]; !ok {
 		m["store"] = false
 	}
@@ -112,8 +67,6 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 			reply.patch = newPatchBridge(patch)
 			patch.rewriteChoice(m["tool_choice"])
 		}
-		// Today's core counts the x_search tool it will inject when it decides to fold. Its other
-		// condition, a forced hosted tool that is the only tool, cannot hold with a namespace there.
 		injected := 0
 		if injectXSearch && !requestHasSearch(m) {
 			injected = 1
@@ -122,7 +75,6 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 		if namespaces != nil {
 			reply.ns = newNSRestorer(namespaces.refs)
 			namespaces.rewriteChoice(m["tool_choice"])
-			// A folded namespace with a custom tool may be called for it.
 			dispatchers := map[string]bool{}
 			for ns := range patch.namespaces {
 				if ref := namespaces.refs[ns]; ref != nil && ref.dispatcher {
@@ -161,14 +113,6 @@ func buildRequest(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation
 	return out, tr, reply, nil
 }
 
-// promoteAdditionalTools moves the tools of each additional_tools input item (how a Responses Lite
-// client, the Codex app, declares tools) to the end of the tools list and removes the item, because
-// xAI does not take that item (promoteXAIAdditionalToolsDoc in today's core). It runs before the
-// rules for tools, so a promoted tool is flattened, folded, counted and cut like a top-level one.
-// A function or custom tool whose name an earlier tool has is dropped: the top-level list wins
-// over the items, and the first item over the next. Namespaces are all kept; rewriteNamespaces
-// merges those of one name and keeps the first of each child. Hosted tools have no name and all
-// stay, as in today's core.
 func promoteAdditionalTools(m map[string]any) {
 	input, ok := m["input"].([]any)
 	if !ok {
@@ -213,7 +157,6 @@ func promoteAdditionalTools(m map[string]any) {
 	}
 }
 
-// withEncryptedReasoning returns the client's include list with reasoning.encrypted_content added.
 func withEncryptedReasoning(v any) []any {
 	list, _ := v.([]any)
 	for _, x := range list {
@@ -224,10 +167,6 @@ func withEncryptedReasoning(v any) []any {
 	return append(list, "reasoning.encrypted_content")
 }
 
-// rewriteTools sends the custom tools that are left as function tools, gives each function a
-// parameters schema xAI accepts. The caller caps the list after optional search injection. The
-// custom tools of the client have been made functions with an input argument by then
-// (rewriteCustomTools); one that is left is a custom tool without a name.
 func rewriteTools(tools []any) []any {
 	for _, t := range tools {
 		tm, ok := t.(map[string]any)
@@ -235,9 +174,6 @@ func rewriteTools(tools []any) []any {
 			continue
 		}
 		if tm["type"] == "custom" {
-			// Today's core sends a custom tool as a function and keeps its other fields (normalizeXAITool).
-			// A custom tool without parameters takes the empty object schema below, like any
-			// function without one.
 			tm["type"] = "function"
 		}
 		if tm["type"] != "function" {
@@ -253,13 +189,6 @@ func rewriteTools(tools []any) []any {
 	return tools
 }
 
-// rewriteCustomToolItems turns each custom tool call into a function call and each custom tool
-// output into a function call output, the form xAI takes. An item without its call ID or name
-// is dropped, as today's core drops it. A call to apply_patch, or to a custom tool the request
-// declares (customs), carries its text in the input argument (patch.go), whatever the text looks
-// like, and must have text for its input; one in a namespace keeps its namespace when the request
-// has namespace tools (namespaceTools is true), which the rules for namespaces then write the way
-// the tools were sent. A call to any other tool keeps the rule it had.
 func rewriteCustomToolItems(input []any, namespaceTools bool, customs customTools) ([]any, error) {
 	out := make([]any, 0, len(input))
 	for _, raw := range input {
@@ -308,8 +237,6 @@ func rewriteCustomToolItems(input []any, namespaceTools bool, customs customTool
 	return out, nil
 }
 
-// customCallArguments turns a custom tool's input into the arguments of a function call. An
-// object is kept; a string that is an object is parsed; any other text is wrapped as "input".
 func customCallArguments(in any) string {
 	switch v := in.(type) {
 	case nil:
@@ -331,7 +258,6 @@ func customCallArguments(in any) string {
 	}
 }
 
-// customCallOutput returns a custom tool's output as the text a function call output carries.
 func customCallOutput(out any) string {
 	switch v := out.(type) {
 	case nil:
@@ -365,8 +291,6 @@ func normalizeSchema(holder map[string]any, key string) {
 	holder[key] = out
 }
 
-// inline replaces local $ref references in v with what they point at, up to a depth that stops
-// recursive schemas.
 func inline(v any, defs map[string]any, depth int) any {
 	switch x := v.(type) {
 	case map[string]any:

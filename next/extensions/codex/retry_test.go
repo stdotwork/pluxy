@@ -24,8 +24,6 @@ func brokenReply(w http.ResponseWriter) {
 	sdktest.HangUp(w)
 }
 
-// A login or renewal call is retryable only when the request never reached the login server, or
-// when the server rate limited it.
 func TestLoginRetryOnlyWhenNotSent(t *testing.T) {
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	for _, c := range []struct {
@@ -49,7 +47,6 @@ func TestLoginRetryOnlyWhenNotSent(t *testing.T) {
 		})
 		t.Run("device start "+c.name, func(t *testing.T) {
 			set, _ := readSettings(settings)
-			// Every case ends at the first request, before the user is prompted (the session is nil).
 			_, err := deviceLogin(context.Background(), set, nil)
 			sdktest.WantError(t, err, c.code, c.retryable)
 		})

@@ -40,7 +40,6 @@ func citationsOf(evs []llm.Event) []llm.Citation {
 	return out
 }
 
-// A part index counts within one chunk, so a later chunk's part 0 must not stand for the text.
 func TestGeminiStreamRangeAcrossChunks(t *testing.T) {
 	cits := citationsOf(geminiStream(t,
 		`{"candidates":[{"content":{"parts":[{"text":"hm","thought":true},{"text":"AAAA"}]}}]}`,
@@ -60,7 +59,6 @@ func TestGeminiStreamRepeatedMetadataCitesOnce(t *testing.T) {
 	}
 }
 
-// Metadata after the text item closed must not attach to a later text item.
 func TestGeminiLateMetadataKeepsItsSourceOnly(t *testing.T) {
 	evs := geminiStream(t,
 		`{"candidates":[{"content":{"parts":[{"text":"AAAA"},{"functionCall":{"name":"f","args":{}}}]}}]}`,
@@ -74,7 +72,6 @@ func TestGeminiLateMetadataKeepsItsSourceOnly(t *testing.T) {
 	}
 }
 
-// Upstream offsets count the leading think tag that the decoder strips from the text.
 func TestChatStreamRangeSkipsThinkTag(t *testing.T) {
 	d := openaichat.NewStreamDecoder()
 	var all []llm.Event
@@ -98,7 +95,6 @@ func TestChatStreamRangeSkipsThinkTag(t *testing.T) {
 	}
 }
 
-// OpenAI's references list start_index and end_index as required on a URL citation.
 func TestCitationWithNoRangeCoversItsItem(t *testing.T) {
 	events := []llm.Event{
 		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r", Model: "m", Format: llm.FormatGeminiGenerate}},
@@ -124,7 +120,6 @@ func TestCitationWithNoRangeCoversItsItem(t *testing.T) {
 	}
 }
 
-// A Chat upstream's reply to a Chat client keeps the upstream's message.annotations.
 func TestChatSameFormatReplyKeepsAnnotations(t *testing.T) {
 	wantAnns := `[{"type":"url_citation","url_citation":{"url":"https://a.example/","title":"A","start_index":0,"end_index":5}}]`
 	body := `{"id":"c1","object":"chat.completion","created":1,"model":"gpt-5-search-api","choices":[{"index":0,"finish_reason":"stop",` +

@@ -32,9 +32,6 @@ func captureModelLog(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
-// TestFailedModelReadIsLogged: a failed live read leaves one stderr line with its reason and
-// none of the credential; the same failure again is not logged again, a different one is, and
-// after a read that works a failure is logged again.
 func TestFailedModelReadIsLogged(t *testing.T) {
 	buf := captureModelLog(t)
 	var status atomic.Int32
@@ -87,7 +84,6 @@ func TestFailedModelReadIsLogged(t *testing.T) {
 	}
 }
 
-// TestModelReadLogRedactsCredential: a reason that holds the credential is written without it.
 func TestModelReadLogRedactsCredential(t *testing.T) {
 	buf := captureModelLog(t)
 	modelReadFailed("acct", logTestCredential(), "request failed: bad "+logTestSecret)
@@ -96,7 +92,6 @@ func TestModelReadLogRedactsCredential(t *testing.T) {
 	}
 }
 
-// TestModelReadLogCannotReachProvider: a provider that cannot be reached is logged without its URL.
 func TestModelReadLogCannotReachProvider(t *testing.T) {
 	buf := captureModelLog(t)
 	closed := httptest.NewServer(http.NotFoundHandler())
@@ -119,8 +114,6 @@ func logTestCredential() *protocol.Credential {
 	return c
 }
 
-// TestModelReadLogHoldsNoReplyText: an upstream that answers with garbage holding an email and an
-// account ID, which the HTTP client quotes in its error, reaches the log as neither.
 func TestModelReadLogHoldsNoReplyText(t *testing.T) {
 	buf := captureModelLog(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -154,8 +147,6 @@ func TestModelReadLogHoldsNoReplyText(t *testing.T) {
 	}
 }
 
-// TestModelReadCancelledIsNotLogged: a read the caller cancelled logs nothing, as nobody is served
-// the built-in list.
 func TestModelReadCancelledIsNotLogged(t *testing.T) {
 	buf := captureModelLog(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

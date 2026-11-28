@@ -64,7 +64,7 @@ func Check(name string, h map[string]string) error {
 			return fmt.Errorf("%s: the value of header %s holds a line break or another control character", name, k)
 		}
 		if strings.Contains(strings.ToUpper(v), cpaSession) {
-			return fmt.Errorf("%s: header %s: %s (today's core's own session ID) is not supported", name, k, cpaSession)
+			return fmt.Errorf("%s: header %s: %s (a CLIProxyAPI session ID, which pluxy does not have) is not supported", name, k, cpaSession)
 		}
 		if src, ok := copied(v); ok {
 			if !token(src) {
@@ -237,7 +237,7 @@ func Import(h map[string]string) (out map[string]string, left []Left, err error)
 			continue
 		}
 		if strings.Contains(strings.ToUpper(v), cpaSession) {
-			left = append(left, Left{k, "its value holds " + cpaSession + ", today's core's own session ID, which pluxy does not have"})
+			left = append(left, Left{k, "its value holds " + cpaSession + ", a CLIProxyAPI session ID that pluxy does not have"})
 			continue
 		}
 		if src, ok := copied(v); ok {

@@ -74,8 +74,6 @@ func TestInputTokensResponsesPassthrough(t *testing.T) {
 	}
 }
 
-// An account's alias names the model upstream by another name: the count goes to the upstream
-// under the model routing chose, with the rest of the body unchanged.
 func TestInputTokensNamesTheRoutedModel(t *testing.T) {
 	srv, recorded := newCompactUpstream(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
 		io.WriteString(w, `{"object":"response.input_tokens","input_tokens":3}`)

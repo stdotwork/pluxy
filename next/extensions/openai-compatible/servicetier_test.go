@@ -14,8 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// officialBase is the base URL of the vendor whose documentation names a service tier and a
-// verbosity on each wire (tierHosts); nothing is sent to it.
 var officialBase = map[string]string{
 	llm.FormatOpenAIChat:        "https://api.openai.com/v1",
 	llm.FormatOpenAIResponses:   "https://api.openai.com/v1",
@@ -28,7 +26,6 @@ var wireOf = map[string]string{
 	"messages": llm.FormatAnthropicMessages, "gemini": llm.FormatGeminiGenerate,
 }
 
-// tierClient reads a client request in a format.
 func tierClient(t *testing.T, kind, body string) llm.Request {
 	t.Helper()
 	var req llm.Request
@@ -46,7 +43,6 @@ func tierClient(t *testing.T, kind, body string) llm.Request {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// As the extension gets it: over the protocol, encoded to JSON and decoded again.
 	b, err := json.Marshal(req)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +54,6 @@ func tierClient(t *testing.T, kind, body string) llm.Request {
 	return out
 }
 
-// tierClients are requests that name a service tier or a verbosity, by the format they are in.
 var tierClients = map[string]struct{ kind, body string }{
 	"chat-priority":      {"chat", `{"model":"m","service_tier":"priority","verbosity":"low","messages":[{"role":"user","content":"Hi"}]}`},
 	"chat-fast":          {"chat", `{"model":"m","service_tier":"fast","messages":[{"role":"user","content":"Hi"}]}`},
@@ -71,9 +66,6 @@ var tierClients = map[string]struct{ kind, body string }{
 	"gemini-standard":    {"gemini", `{"serviceTier":"standard","contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`},
 }
 
-// tierWant is, per client and wire, the fields of the upstream body that say a tier or a verbosity,
-// at the vendor whose documentation names them (officialBase): "service_tier", "verbosity",
-// "text.verbosity", "speed" or "serviceTier" with the value.
 var tierWant = map[string]map[string]map[string]string{
 	"chat-priority":      {"chat": {"service_tier": "priority", "verbosity": "low"}, "responses": {"service_tier": "priority", "text.verbosity": "low"}, "messages": {}, "gemini": {"serviceTier": "priority"}},
 	"chat-fast":          {"chat": {"service_tier": "fast"}, "responses": {"service_tier": "fast"}, "messages": {}, "gemini": {"serviceTier": "priority"}},
@@ -86,7 +78,6 @@ var tierWant = map[string]map[string]map[string]string{
 	"gemini-standard":    {"chat": {"service_tier": "default"}, "responses": {"service_tier": "default"}, "messages": {"service_tier": "standard_only"}, "gemini": {"serviceTier": "standard"}},
 }
 
-// tierFieldsIn returns the fields of body that say a tier or a verbosity.
 func tierFieldsIn(t *testing.T, body []byte) map[string]string {
 	t.Helper()
 	var sent map[string]json.RawMessage
@@ -111,9 +102,6 @@ func tierFieldsIn(t *testing.T, body []byte) map[string]string {
 	return got
 }
 
-// A client's service tier and verbosity reach the vendor whose documentation names them, in the form
-// its wire has for them, and what the wire cannot say is dropped, not moved to another setting.
-// (The same requests go to a third-party host without either: see TestServiceTierThirdPartyHost.)
 func TestServiceTierToDocumentedHosts(t *testing.T) {
 	for name, c := range tierClients {
 		for wire, format := range wireOf {
@@ -131,9 +119,6 @@ func TestServiceTierToDocumentedHosts(t *testing.T) {
 	}
 }
 
-// A third-party host (or any host not listed in tierHosts) gets neither a tier nor a verbosity from
-// a request in another format, and the report says so, at the client's field. A client's own body
-// goes as it came.
 func TestServiceTierToThirdPartyHost(t *testing.T) {
 	for name, c := range tierClients {
 		for wire, format := range wireOf {
@@ -145,7 +130,6 @@ func TestServiceTierToThirdPartyHost(t *testing.T) {
 				}
 				got := tierFieldsIn(t, body)
 				if c.kind == wire {
-					// The client's own body: untouched, and nothing lost.
 					if string(body) != c.body || len(tr.Losses) != 0 {
 						t.Errorf("a %s client's body changed or lost something: %s, %+v", c.kind, body, tr.Losses)
 					}
@@ -166,8 +150,6 @@ func TestServiceTierToThirdPartyHost(t *testing.T) {
 	}
 }
 
-// The host table is by host, not by what the base URL's path or case says, and an account whose
-// base URL is not one of the vendors' gets none.
 func TestTierFieldsOf(t *testing.T) {
 	for _, c := range []struct {
 		base, format string
@@ -191,12 +173,10 @@ func TestTierFieldsOf(t *testing.T) {
 	}
 }
 
-// Under the reject drop policy a tier or verbosity the vendor's wire carries goes, and one it
-// cannot carry (or any at a third-party host) refuses the request.
 func TestServiceTierRejectPolicy(t *testing.T) {
 	for _, c := range []struct {
 		name, client, base, wire string
-		dropped                  []string // the fields the refusal names; none: the request goes
+		dropped                  []string
 	}{
 		{"chat priority to anthropic", "chat-priority", "https://api.anthropic.com/v1", "messages", []string{"service_tier", "verbosity"}},
 		{"chat flex to anthropic", "chat-flex", "https://api.anthropic.com/v1", "messages", []string{"service_tier"}},

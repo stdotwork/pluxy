@@ -13,8 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// Only Anthropic's own origin counts as its API: https, the host api.anthropic.com, port 443 or
-// none, no user info. The cases are the ones today's core's gate is tested with, and more.
 func TestIsAnthropicBase(t *testing.T) {
 	for base, want := range map[string]bool{
 		"https://api.anthropic.com":              true,
@@ -50,8 +48,6 @@ func countCall(settings []byte) sdk.Call {
 	}
 }
 
-// An account on another base URL answers that it cannot count, so that core tries another
-// account and then estimates the count itself, and sends the upstream nothing.
 func TestCountTokensOnAnotherBaseURL(t *testing.T) {
 	srv := claudetest.New(t)
 	err := countTokens(context.Background(), countCall(srv.Settings("")), nil)
@@ -64,8 +60,6 @@ func TestCountTokensOnAnotherBaseURL(t *testing.T) {
 	}
 }
 
-// On Anthropic's own origin, a count the reject drop policy refuses names what was dropped in the
-// error's Dropped, so core does not take it for an account that cannot count, and sends nothing.
 func TestCountTokensDropRefusalNamesDropped(t *testing.T) {
 	old := client.Transport
 	client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -86,8 +80,6 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// An account on Anthropic's own origin (the default base_url) counts with the upstream: the
-// request goes to its count_tokens endpoint, and the upstream's refusal is the error.
 func TestCountTokensOnAnthropicsOrigin(t *testing.T) {
 	var got []string
 	old := client.Transport

@@ -10,30 +10,6 @@ import (
 // emptyUserTurn is the turn Google needs where a request has no user turn to start or end with.
 const emptyUserTurn = `{"role":"user","parts":[{"text":""}]}`
 
-// fixTurns makes Google accept requests whose turns it would refuse, as today's core does for
-// every request it sends to the Gemini API or Vertex AI, whatever the client's format (a Gemini
-// client's own request included):
-//
-//   - a request whose first turn is the model's gets an empty user turn before it;
-//   - a request whose last turn is the model's gets an empty user turn after it, except a last
-//     turn made of function responses, which Google answers; a function response that carries an
-//     image or file is not answered, so it gets the user turn too;
-//   - function responses go in the order of the calls they answer, and one with no name takes its
-//     call's name (geminigenerate.OrderFunctionResponses): Gemini matches them by position. A
-//     translated request has this from geminigenerate.EncodeRequest; a Gemini client's own gets
-//     it here;
-//   - on Vertex AI, trailing model turns made only of thoughts (a replayed reasoning item) are
-//     dropped first, keeping at least one turn. In a request translated from another format, a
-//     replayed reasoning item reaches Google as an empty text part carrying only its thought
-//     signature (geminigenerate.EncodeRequest), which counts as a thought here.
-//
-// The leading turn is added before the thought turns are dropped, except in a stream, where it is
-// added after, as today's core orders them. That only matters for a request that is a single
-// thought turn: a stream sends it between two empty user turns, a reply that is not streamed
-// sends just one empty user turn.
-//
-// A body that is not a JSON object with a contents array is returned as it is, and so is one
-// that needs no change, byte for byte.
 func fixTurns(body []byte, vertex, stream, translated bool) []byte {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(body, &m) != nil {
@@ -43,6 +19,8 @@ func fixTurns(body []byte, vertex, stream, translated bool) []byte {
 	if json.Unmarshal(m["contents"], &contents) != nil || len(contents) == 0 {
 		return body
 	}
+	// Function responses go in the order of the calls they answer, and one with no name takes its
+	// call's name (geminigenerate.OrderFunctionResponses): Gemini matches them by position.
 	contents, changed := geminigenerate.OrderFunctionResponses(contents)
 	lead := func() {
 		if turnRole(contents[0]) == "model" {
@@ -50,6 +28,8 @@ func fixTurns(body []byte, vertex, stream, translated bool) []byte {
 			changed = true
 		}
 	}
+	// On Vertex AI, trailing model turns made only of thoughts (a replayed reasoning item) are
+	// dropped first, keeping at least one turn.
 	drop := func() {
 		if !vertex {
 			return
@@ -80,9 +60,6 @@ func fixTurns(body []byte, vertex, stream, translated bool) []byte {
 	return setContents(body, m, contents)
 }
 
-// fixLeadingTurn is fixTurns for a countTokens body, where today's core adds only the leading
-// user turn, and only to a top-level contents array (a request wrapped in generateContentRequest
-// is left as it is).
 func fixLeadingTurn(body []byte) []byte {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(body, &m) != nil {
@@ -96,7 +73,6 @@ func fixLeadingTurn(body []byte) []byte {
 	return setContents(body, m, contents)
 }
 
-// setContents returns body with its contents replaced, every other field as it came.
 func setContents(body []byte, m map[string]json.RawMessage, contents []json.RawMessage) []byte {
 	raw, err := marshalRaw(contents)
 	if err != nil {
@@ -110,7 +86,6 @@ func setContents(body []byte, m map[string]json.RawMessage, contents []json.RawM
 	return out
 }
 
-// marshalRaw encodes v without escaping <, > and &, so raw JSON text keeps its bytes.
 func marshalRaw(v any) (json.RawMessage, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -121,7 +96,6 @@ func marshalRaw(v any) (json.RawMessage, error) {
 	return bytes.TrimSpace(buf.Bytes()), nil
 }
 
-// turnRole returns a contents entry's role.
 func turnRole(raw json.RawMessage) string {
 	var t struct {
 		Role string `json:"role"`
@@ -130,8 +104,6 @@ func turnRole(raw json.RawMessage) string {
 	return t.Role
 }
 
-// turnParts returns the parts of a contents entry, each as its fields; a part that is not an
-// object has none.
 func turnParts(raw json.RawMessage) []map[string]json.RawMessage {
 	var t struct {
 		Parts []json.RawMessage `json:"parts"`
@@ -146,9 +118,6 @@ func turnParts(raw json.RawMessage) []map[string]json.RawMessage {
 
 func isModel(role string) bool { return role == "model" || role == "assistant" }
 
-// thoughtOnlyModelTurn reports whether a turn is the model's and every part of it is a thought,
-// none a function call or response. With signatureOnly, a part that is an empty text and a thought
-// signature, nothing else, is a thought too.
 func thoughtOnlyModelTurn(raw json.RawMessage, signatureOnly bool) bool {
 	if !isModel(turnRole(raw)) {
 		return false
@@ -173,9 +142,9 @@ func thoughtOnlyModelTurn(raw json.RawMessage, signatureOnly bool) bool {
 	return true
 }
 
-// endsWithUnansweredModelTurn reports whether a last turn needs a user turn after it: it is the
-// model's, and not made to be answered by the model (a function response without an image or
-// file).
+// A request whose last turn is the model's gets an empty user turn after it, except a last
+// turn made of function responses, which Google answers; a function response that carries an
+// image or file is not answered, so it gets the user turn too.
 func endsWithUnansweredModelTurn(raw json.RawMessage) bool {
 	if !isModel(turnRole(raw)) {
 		return false

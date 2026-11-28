@@ -13,16 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// An account can point at Google's own host, and Google's errors — or a connection error quoting a
-// Vertex base_url — name the Google project or account of the owner's upstream account, which a
-// client holding a pluxy key must not learn. maskGoogle wraps the handlers whose errors reach
-// clients (Generate, CountTokens and Endpoint) and masks a returned error when its raw body has
-// Google's error shape or the account's base_url host is googleapis.com or ends in .googleapis.com
-// (passing any project in that URL's /projects/<id>/ path as a known name), after the handler
-// classified it. This covers an error status, an error inside a stream, and a bodyless error such
-// as an unreachable upstream. Login, Check, Quota and Models are the owner's, who reads them to
-// find which project needs an API enabled, and are not wrapped. An error from another vendor's
-// host with a body of another shape is left byte-identical.
 func maskGoogle(h sdk.Handler) sdk.Handler {
 	return func(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		err := h(ctx, call, out)
@@ -51,9 +41,6 @@ func maskGoogle(h sdk.Handler) sdk.Handler {
 	}
 }
 
-// googleBaseURL reports whether the account's base_url host is googleapis.com or a subdomain of
-// it, and returns the project in its /projects/<id>/ path, if any, as known names to mask (both
-// the decoded and escaped forms). When base_url has no scheme, it is parsed with https://.
 func googleBaseURL(a protocol.Account) (bool, []string) {
 	if len(a.Settings) == 0 {
 		return false, nil

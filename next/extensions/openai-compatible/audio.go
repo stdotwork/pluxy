@@ -18,10 +18,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// audio serves OpenAI's speech, transcription and translation endpoints through an account.
-// Speech sends the client's JSON body unchanged. Transcriptions and translations rebuild the
-// multipart form from the JSON form core read. The upstream reply keeps its body and Content-Type;
-// a non-SSE speech reply travels as base64 pieces, as llm.FormatOpenAIAudioSpeech describes.
 func audio(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if call.Request.Native == nil {
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "the request has no endpoint body", Scope: llm.ScopeRequest}
@@ -110,8 +106,6 @@ func audio(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
 }
 
-// audioEndpointStatusError is upstreamError for an audio endpoint: a 404 that does not name a
-// missing model means the upstream has no such endpoint, not that the account lacks the model.
 func audioEndpointStatusError(resp *http.Response, model string) *llm.Error {
 	e := upstreamError(resp, model)
 	if e.Code == llm.CodeNotFound && !e.Retryable {
@@ -120,9 +114,6 @@ func audioEndpointStatusError(resp *http.Response, model string) *llm.Error {
 	return e
 }
 
-// audioMultipart rebuilds a transcription or translation's multipart body from the JSON form core
-// read. Repeated fields become repeated form fields, the file keeps its filename and media type,
-// and every other value keeps its text form.
 func audioMultipart(raw json.RawMessage) ([]byte, string, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()

@@ -21,8 +21,6 @@ func failWith(err error) sdk.Handler {
 	return func(context.Context, sdk.Call, *sdk.Stream) error { return err }
 }
 
-// An error a client-facing handler returns loses the account's own project and identity, wherever
-// it is named, and keeps its classification.
 func TestMaskedErrorsLoseTheAccountsProject(t *testing.T) {
 	sa := json.RawMessage(`{"type":"service_account","project_id":"` + maskedProject + `","client_email":"svc@` + maskedProject + `.iam.gserviceaccount.com"}`)
 	call := sdk.Call{Account: protocol.Account{
@@ -50,8 +48,6 @@ func TestMaskedErrorsLoseTheAccountsProject(t *testing.T) {
 	}
 }
 
-// An error that is not an *llm.Error becomes one only when its text names the project (a failed
-// request's URL does); otherwise it is returned as it is.
 func TestMaskedOtherErrors(t *testing.T) {
 	call := sdk.Call{Account: protocol.Account{Settings: json.RawMessage(`{"vertex":{"project":"settings-proj-9"}}`)}}
 	got := masked(failWith(errors.New(`Post "https://aiplatform.googleapis.com/v1/projects/settings-proj-9/locations/global": EOF`)))(context.Background(), call, nil)
@@ -68,8 +64,6 @@ func TestMaskedOtherErrors(t *testing.T) {
 	}
 }
 
-// An upstream that is down is "unavailable" with the request's URL in its message; the Vertex
-// project in that URL does not reach the client.
 func TestMaskedUnreachableVertexNamesNoProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	url := srv.URL
@@ -92,8 +86,6 @@ func TestMaskedUnreachableVertexNamesNoProject(t *testing.T) {
 	}
 }
 
-// The owner's own calls are not wrapped: the account check shows the project the API must be
-// enabled in.
 func TestCheckKeepsTheProject(t *testing.T) {
 	const reply = `{"error":{"code":403,"message":"Generative Language API has not been used in project 738291456021 before or it is disabled.","status":"PERMISSION_DENIED",` +
 		`"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED","metadata":{"containerInfo":"738291456021"}}]}}`
@@ -110,9 +102,6 @@ func TestCheckKeepsTheProject(t *testing.T) {
 	}
 }
 
-// Only an error is masked in what an Interactions client gets as the upstream sent it: a model's
-// text that mentions a project path stays, while a top-level object or string "error" member and
-// an event named "error" are masked.
 func TestMaskReply(t *testing.T) {
 	text := []byte(`{"event_type":"content.delta","delta":{"text":"see projects/123/locations/x"}}`)
 	if got := maskReply(text, "", nil); &got[0] != &text[0] {
@@ -131,9 +120,6 @@ func TestMaskReply(t *testing.T) {
 	}
 }
 
-// An Interactions reply or event with an "error" member one object level down (as a failed
-// interaction has) masks only that member; one with no matching error member is the same bytes,
-// whatever its text says.
 func TestMaskReplyNestedError(t *testing.T) {
 	nested := []byte(`{"event_type":"interaction.complete","interaction":{"id":"v1_x","status":"failed","error":{"code":403,"message":"The consumer 'projects/123' is suspended."}}}`)
 	got := maskReply(nested, "", nil)
@@ -151,9 +137,6 @@ func TestMaskReplyNestedError(t *testing.T) {
 	}
 }
 
-// In an Interactions reply, only the value of an "error" member (object or string) at the top
-// level or one object level down — never inside an array — is masked; model text and tool output
-// outside that value keep their exact bytes. An event named "error" is still masked whole.
 func TestMaskReplyOnlyErrors(t *testing.T) {
 	t.Run("completed reply with tool error object stays byte-identical", func(t *testing.T) {
 		in := []byte(`{"id":"v1_x","status":"completed","steps":[{"type":"text","text":"The project lives at projects/acme-prod-4821/models/x"},{"type":"function_result","result":{"error":{"code":"tool_failed","message":"projects/999"}}}]}`)

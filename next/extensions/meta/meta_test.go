@@ -18,8 +18,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk/sdktest"
 )
 
-// A renewal makes a new API key from the login's device token, keeps the device token, and keeps
-// where Meta said the key's API is.
 func TestRefreshMintsKey(t *testing.T) {
 	srv := metatest.New(t)
 	dca, key := srv.Grant()
@@ -34,7 +32,6 @@ func TestRefreshMintsKey(t *testing.T) {
 	if c.AccessToken == key || !strings.HasPrefix(c.AccessToken, "metatest-key-") || c.RefreshToken != dca || d.BaseURL != srv.URL+"/v1" {
 		t.Errorf("renewed credential %+v (data %+v); want a new key, the device token kept and Meta's base URL", c, d)
 	}
-	// Without base_url in the settings, the request goes where the key endpoint said.
 	s, _ := readSettings(set)
 	_, base, err := target(s, c)
 	if err != nil || base != srv.URL+"/v1" {
@@ -42,7 +39,6 @@ func TestRefreshMintsKey(t *testing.T) {
 	}
 }
 
-// A dca: device token is never sent to Meta's API as a key.
 func TestDeviceTokenIsNotAKey(t *testing.T) {
 	for _, c := range []*protocol.Credential{
 		{Kind: protocol.CredentialOAuth, AccessToken: "dca:abc", RefreshToken: "dca:abc"},
@@ -56,9 +52,6 @@ func TestDeviceTokenIsNotAKey(t *testing.T) {
 	}
 }
 
-// A 429 is a used-up subscription quota on the account when Meta says so, and waits until Meta's
-// reset time; any other 429 holds back only the model, as today's core cools only that model; a
-// 404 holds the account back from the model for five minutes when Meta names no reset.
 func TestUpstreamErrors(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	reset := now.Add(90 * time.Minute).Unix()
@@ -84,8 +77,6 @@ func TestUpstreamErrors(t *testing.T) {
 
 func jsonInt(n int64) string { b, _ := json.Marshal(n); return string(b) }
 
-// A request with tools carries Muse Code's tool namespace once, and web_search tools lose
-// search_content_types; a request without tools gets no namespace.
 func TestMuseTools(t *testing.T) {
 	native := func(body string) llm.Request {
 		return llm.Request{Model: "muse-spark-1.3", Native: &llm.Native{Format: llm.FormatOpenAIResponses, Body: json.RawMessage(body)}}
@@ -112,8 +103,6 @@ func TestMuseTools(t *testing.T) {
 	}
 }
 
-// An error event in the stream ends the request with the status it names classified like a reply:
-// a used-up subscription quota mid-stream is a quota error, as today's core reads it.
 func TestStreamErrorEvent(t *testing.T) {
 	body := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"output\":[]}}\n\n" +
 		"event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":429,\"message\":\"Subscription quota exhausted\"}}\n\n"
@@ -128,9 +117,6 @@ type recorder func(llm.Event)
 
 func (r recorder) Send(ev llm.Event) error { r(ev); return nil }
 
-// A failure event is classified by the status it names, whether an error event or
-// response.failed, and whether the status is a number or a string; once the reply began
-// (response.created starts it), it is not retry-safe.
 func TestStreamFailures(t *testing.T) {
 	created := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"output\":[]}}\n\n"
 	text := "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"m\",\"role\":\"assistant\",\"content\":[]}}\n\n" +
@@ -153,8 +139,6 @@ func TestStreamFailures(t *testing.T) {
 	}
 }
 
-// A login or renewal error that echoes the device token or device code does not carry it out:
-// core does not know them yet, so it cannot redact them.
 func TestLoginErrorsHideTokens(t *testing.T) {
 	srv := metatest.New(t)
 	set, _ := readSettings(srv.Settings())
@@ -194,8 +178,6 @@ type promptFunc func(protocol.Prompt)
 
 func (f promptFunc) Prompt(p protocol.Prompt) error { f(p); return nil }
 
-// A poll that gets a 5xx stops the login, whatever its body says: the poll may have run, so it is
-// not tried again.
 func TestPollStopsOnServerFailure(t *testing.T) {
 	for _, body := range []string{"upstream connect error\n", `{"error":"authorization_pending"}`} {
 		srv := metatest.New(t)
@@ -218,8 +200,6 @@ func TestPollStopsOnServerFailure(t *testing.T) {
 	}
 }
 
-// An answer with no OAuth error that is not a 5xx leaves the device code good: the poll is tried
-// again.
 func TestPollSurvivesOddAnswer(t *testing.T) {
 	srv := metatest.New(t)
 	failed := false
@@ -238,7 +218,6 @@ func TestPollSurvivesOddAnswer(t *testing.T) {
 	}
 }
 
-// A renewal keeps the API address the credential holds when Meta's key endpoint names none.
 func TestRefreshKeepsBaseURL(t *testing.T) {
 	srv := metatest.New(t)
 	dca, key := srv.Grant()
@@ -264,7 +243,6 @@ func TestRefreshKeepsBaseURL(t *testing.T) {
 	}
 }
 
-// A rate-limited renewal keeps the wait Meta names, so core does not renew again before it.
 func TestRenewalRetryAfter(t *testing.T) {
 	srv := metatest.New(t)
 	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {

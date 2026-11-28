@@ -7,8 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// An access token's lifetime from the server is bounded before it becomes an expiry time: a huge
-// one must not overflow into the past (renewal churn), a negative one must not expire the token.
 func TestTokenLifetimeIsBounded(t *testing.T) {
 	before := time.Now()
 	for _, tc := range []struct {

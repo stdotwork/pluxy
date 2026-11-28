@@ -16,7 +16,6 @@ func lastRuns(evs []llm.Event) []llm.CodeExecution {
 	return evs[len(evs)-1].CodeExecutions
 }
 
-// geminiPartKinds names the parts of a Gemini reply in order, for comparing two replies.
 func geminiPartKinds(parts []map[string]any) []string {
 	var out []string
 	for _, p := range parts {
@@ -45,8 +44,6 @@ func aggParts(m map[string]any) []map[string]any {
 	return parts
 }
 
-// The runs carry no position, so a Gemini client gets them in one place whether it streams or not:
-// after the text and before the calls that follow it.
 func TestCodeRunsArePlacedAlikeStreamedAndNot(t *testing.T) {
 	const head = `{"id":"m","type":"message","role":"assistant","model":"claude-opus-4-5","content":[
 		{"type":"text","text":"BEFORE"},
@@ -108,8 +105,6 @@ func TestCodeRunsArePlacedAlikeStreamedAndNot(t *testing.T) {
 	}
 }
 
-// A run with no usable result is not carried and is not lost silently: every decoder ends the
-// runs with the record that says runs were left out, and a client of another format hears of it.
 func TestRunsWithNoUsableResultAreReportedLost(t *testing.T) {
 	gemini := func(parts string) string {
 		return `{"responseId":"g","modelVersion":"gemini-3.8-flash","candidates":[{"index":0,"content":{"role":"model","parts":[` + parts + `,{"text":"hi"}]},"finishReason":"STOP"}]}`
@@ -212,7 +207,6 @@ func TestRunsWithNoUsableResultAreReportedLost(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			evs := tc.evs(t)
 			wantOnlyLeftOut(t, tc.name, lastRuns(evs))
-			// Chat has no place for runs in any case, so its loss shows what the decoder said.
 			_, losses := renderChatAggWithLosses(t, evs)
 			if !hasLossPrefix(losses, "code_execution.files") {
 				t.Errorf("a Chat client was not told runs were left out: %+v", losses)
@@ -226,7 +220,6 @@ func TestRunsWithNoUsableResultAreReportedLost(t *testing.T) {
 	}
 }
 
-// A run whose outputs the upstream did not give is not a run that printed nothing.
 func TestResponsesRunWithOutputsNullIsNotASuccess(t *testing.T) {
 	body := func(outputs string) string {
 		return `{"id":"r","object":"response","created_at":1,"status":"completed","model":"gpt-6.2-astra","output":[
@@ -241,7 +234,6 @@ func TestResponsesRunWithOutputsNullIsNotASuccess(t *testing.T) {
 			t.Errorf("a run with outputs null is carried as a result: %+v", r)
 		}
 	}
-	// No logs is a result: the code ran and printed nothing.
 	evs, err = openairesponses.DecodeResponse([]byte(body("[]")))
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +243,6 @@ func TestResponsesRunWithOutputsNullIsNotASuccess(t *testing.T) {
 	}
 }
 
-// Code the decoder had to cut is left out, never shown as the run's code.
 func TestResponsesStreamedCodeOverTheLimitIsLeftOut(t *testing.T) {
 	long := strings.Repeat("a", 600<<10)
 	delta := func(s string) string {
@@ -262,7 +253,6 @@ func TestResponsesStreamedCodeOverTheLimitIsLeftOut(t *testing.T) {
 	evs := decodeResponsesStream(t, []string{
 		`{"type":"response.created","sequence_number":1,"response":{"id":"r","object":"response","created_at":1,"status":"in_progress","model":"gpt-6.2-astra","output":[]}}`,
 		delta(long), delta(long),
-		// A small delta after the one that did not fit must not be kept as if it followed the first.
 		delta("tail"),
 		`{"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":` + item + `}`,
 		`{"type":"response.completed","sequence_number":4,"response":{"id":"r","object":"response","created_at":1,"status":"completed","model":"gpt-6.2-astra","output":[` + item + `]}}`,
@@ -276,8 +266,6 @@ func TestResponsesStreamedCodeOverTheLimitIsLeftOut(t *testing.T) {
 	wantOnlyLeftOut(t, "over-long streamed code", runs)
 }
 
-// A reply's code over the limit is left out the same way streamed and not, and code under it is
-// kept the same way, including code whose JSON text is longer than the code.
 func TestMessagesCodeLimitIsTheSameStreamedAndNot(t *testing.T) {
 	call := func(code string) (string, []string) {
 		in, _ := json.Marshal(map[string]string{"code": code})
@@ -330,7 +318,6 @@ func TestMessagesCodeLimitIsTheSameStreamedAndNot(t *testing.T) {
 	}
 }
 
-// A result that cannot be read takes its own code, so the next result does not pair with it.
 func TestGeminiResultPairsWithItsOwnCode(t *testing.T) {
 	body := `{"responseId":"g","modelVersion":"gemini-3.8-flash","candidates":[{"index":0,"content":{"role":"model","parts":[
 		{"executableCode":{"language":"PYTHON","code":"A()"}},
@@ -347,8 +334,6 @@ func TestGeminiResultPairsWithItsOwnCode(t *testing.T) {
 	}
 }
 
-// A result with no ID answers the one code that waits for it. A code that never got a result is
-// left out, and a result is never shown beside code it cannot be shown to answer.
 func TestGeminiResultWithNoIDDoesNotTakeAnotherCode(t *testing.T) {
 	reply := func(parts string) []llm.Event {
 		evs, err := geminigenerate.DecodeResponse([]byte(`{"responseId":"g","modelVersion":"gemini-3.8-flash","candidates":[{"index":0,"content":{"role":"model","parts":[` + parts + `]},"finishReason":"STOP"}]}`))
@@ -360,23 +345,18 @@ func TestGeminiResultWithNoIDDoesNotTakeAnotherCode(t *testing.T) {
 	code := func(c string) string { return `{"executableCode":{"language":"PYTHON","code":"` + c + `"}}` }
 	result := func(o string) string { return `{"codeExecutionResult":{"outcome":"OUTCOME_OK","output":"` + o + `"}}` }
 
-	// A has no result, B has its own: B keeps its output and A is left out.
 	runs := lastRuns(reply(code("A()") + "," + code("B()") + "," + result("from B")))
 	if len(runs) != 2 || runs[0].Code != "B()" || runs[0].Output != "from B" || runs[1] != (llm.CodeExecution{FilesOmitted: true}) {
 		t.Errorf("A without result: runs = %+v, want B with its own output, then the left-out record", runs)
 	}
-	// Two codes, then two results: which answers which cannot be told, so neither is shown.
 	runs = lastRuns(reply(code("A()") + "," + code("B()") + "," + result("from A") + "," + result("from B")))
 	wantOnlyLeftOut(t, "two codes, two results", runs)
-	// Codes that each have their result are paired as they come, also after a lost one.
 	runs = lastRuns(reply(code("A()") + "," + code("B()") + "," + result("from B") + "," + code("C()") + "," + result("from C")))
 	if len(runs) != 3 || runs[0].Code != "B()" || runs[1].Code != "C()" || runs[1].Output != "from C" || runs[2] != (llm.CodeExecution{FilesOmitted: true}) {
 		t.Errorf("a pair after a lost code: runs = %+v", runs)
 	}
 }
 
-// A Gemini upstream's SSE answer to a non-streaming request is rebuilt, and keeps its runs first
-// as it did before runs were placed for other formats.
 func TestRebuiltGeminiReplyKeepsItsRunsFirst(t *testing.T) {
 	evs := decodeGeminiStream(t, []string{
 		`{"responseId":"g","modelVersion":"gemini-3.8-flash","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"BEFORE"}]}}]}`,
@@ -390,7 +370,6 @@ func TestRebuiltGeminiReplyKeepsItsRunsFirst(t *testing.T) {
 	}
 }
 
-// An item whose ID is not a string is still a code call: it is left out with a loss, not passed over.
 func TestResponsesCallWithNumericIDIsReportedLost(t *testing.T) {
 	item := `{"id":123,"type":"code_interpreter_call","status":"completed","container_id":"c","code":"print(1)","outputs":[{"type":"logs","logs":"1\n"}]}`
 	evs, err := openairesponses.DecodeResponse([]byte(`{"id":"r","object":"response","created_at":1,"status":"completed","model":"gpt-6.2-astra","output":[` + item + `]}`))
@@ -406,7 +385,6 @@ func TestResponsesCallWithNumericIDIsReportedLost(t *testing.T) {
 	wantOnlyLeftOut(t, "streamed", lastRuns(evs))
 }
 
-// The same result block twice delivers the run once and loses nothing.
 func TestMessagesRepeatedResultLosesNothing(t *testing.T) {
 	call := `{"type":"server_tool_use","id":"srvtoolu_1","name":"bash_code_execution","input":{"command":"ls"}}`
 	res := `{"type":"bash_code_execution_tool_result","tool_use_id":"srvtoolu_1","content":{"type":"bash_code_execution_result","stdout":"a","stderr":"","return_code":0,"content":[]}}`

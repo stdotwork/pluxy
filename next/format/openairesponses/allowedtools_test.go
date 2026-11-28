@@ -9,9 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A Responses request's allowed_tools choice is read into the model as a choice, not left in the
-// request's own fields, and written back to Responses in the form the client sent. (A client also
-// gets its body back unchanged through native passthrough; this is the translated path.)
 func TestAllowedToolsParsedAndWrittenBack(t *testing.T) {
 	in := `{"model":"m","stream":true,
 	 "tools":[{"type":"function","name":"get_weather","parameters":{"type":"object"}},
@@ -49,8 +46,6 @@ func TestAllowedToolsParsedAndWrittenBack(t *testing.T) {
 	}
 }
 
-// A tool_choice allowed_tools naming a hosted tool as well as functions stays in the request's own
-// fields: the model carries function names, so the hosted entry keeps the whole choice as it was.
 func TestAllowedToolsWithHostedToolStaysNative(t *testing.T) {
 	in := `{"model":"m","stream":true,
 	 "tools":[{"type":"function","name":"get_weather","parameters":{"type":"object"}}],

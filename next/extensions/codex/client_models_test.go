@@ -45,7 +45,6 @@ func TestClientModelTemplates(t *testing.T) {
 			}
 		})
 	}
-	// A future refresh must not leak runtime-only claims even if the template gains them.
 	original := clientTemplates()["gpt-6.1-sol"]["cpa_capabilities"]
 	clientTemplates()["gpt-6.1-sol"]["cpa_capabilities"] = json.RawMessage(`{"web_search":true}`)
 	defer func() {
@@ -76,7 +75,6 @@ func TestClientModelsSharedProvider(t *testing.T) {
 			t.Errorf("shared %s = %v, want %v", k, got[k], v)
 		}
 	}
-	// A shared name must not mutate the decoded template for later pure-Codex requests.
 	pure := catalogForTest(t, "", []map[string]any{{"name": "pure", "upstream": "gpt-6.1-sol"}})[0]
 	if pure["prefer_websockets"] != true || pure["supports_search_tool"] != true {
 		t.Fatal("shared reply changed pure template")

@@ -8,8 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Chat Completions takes 1 to 64 characters from a-z, A-Z, 0-9, _ and -; other names are sent
-// under a name it takes.
 func TestToolNames(t *testing.T) {
 	long := strings.Repeat("x", 70)
 	req := llm.Request{
@@ -64,7 +62,6 @@ func TestToolNames(t *testing.T) {
 	}
 }
 
-// encodeChatDecoded decodes the body EncodeRequest built.
 func encodeChatDecoded(t *testing.T, req llm.Request) (decls []string, calls []string, choice any) {
 	t.Helper()
 	body, _, err := EncodeRequest(req)
@@ -100,7 +97,6 @@ func encodeChatDecoded(t *testing.T, req llm.Request) (decls []string, calls []s
 	return decls, calls, out.ToolChoice
 }
 
-// The declarations and the replayed calls use the same Chat name, and a tool choice names it too.
 func TestEncodeRequestUsesToolNames(t *testing.T) {
 	req := llm.Request{Model: "m",
 		Tools: []llm.Tool{{Name: "mcp:server.tool", Parameters: json.RawMessage(`{"type":"object"}`)}},
@@ -123,7 +119,6 @@ func TestEncodeRequestUsesToolNames(t *testing.T) {
 	}
 }
 
-// A request whose names are already valid is sent unchanged, and its tool choice too.
 func TestEncodeRequestKeepsValidToolNames(t *testing.T) {
 	req := llm.Request{Model: "m",
 		Tools:   []llm.Tool{{Name: "get_weather"}, {Name: "_private"}},

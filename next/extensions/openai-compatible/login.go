@@ -41,7 +41,6 @@ func login(ctx context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*proto
 			return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: name + " must be a string, not null", Scope: llm.ScopeRequest}
 		}
 	}
-	// Explicit account settings win over login inputs, just as they win over grant defaults.
 	if set.BaseURL == "" {
 		set.BaseURL = call.Input["base_url"]
 	}
@@ -86,7 +85,6 @@ func login(ctx context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*proto
 		e = redact.Event(llm.Event{Type: llm.EventError, Error: e}).Error
 		e.Message = sdk.LoginText(e.Message)
 		e.ProviderCode = sdk.LoginCode(e.ProviderCode)
-		// A login needs the refusal reason, not a raw body that may echo credentials.
 		e.Raw = nil
 		return e
 	}

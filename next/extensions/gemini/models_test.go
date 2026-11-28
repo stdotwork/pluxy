@@ -16,8 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// geminiAPIKeyModelIDs is the list today's core returns from GET /v1/models for a Gemini API-key
-// account when the account names no models (14 models).
 var geminiAPIKeyModelIDs = []string{
 	"gemini-2.5-flash",
 	"gemini-2.5-flash-lite",
@@ -35,9 +33,6 @@ var geminiAPIKeyModelIDs = []string{
 	"gemini-4-argon",
 }
 
-// vertexModelIDs is the list today's core returns for a Vertex AI account (express-mode key or
-// service account) when the account names no models: 21 models, less the 5 imagen-* models that
-// only have the predict method.
 var vertexModelIDs = []string{
 	"gemini-2.5-flash",
 	"gemini-2.5-flash-image",
@@ -121,7 +116,6 @@ func TestListModelsGeminiAPIKey(t *testing.T) {
 		!slices.Equal(m.InputModalities, []string{"text", "image", "audio", "video"}) || !slices.Equal(m.OutputModalities, []string{"text"}) {
 		t.Errorf("gemini-2.5-pro = %+v", m)
 	}
-	// A catalog entry with no generation methods lists generateContent, as today's core shows.
 	i = slices.IndexFunc(list.Models, func(m protocol.Model) bool { return m.ID == "gemini-3.8-flash" })
 	if i < 0 {
 		t.Fatal("gemini-3.8-flash is not listed")
@@ -132,7 +126,6 @@ func TestListModelsGeminiAPIKey(t *testing.T) {
 }
 
 func TestListModelsVertex(t *testing.T) {
-	// An express-mode key and a service account both have the vertex settings.
 	for _, settings := range []string{`{"vertex":{"location":"global"}}`, `{"vertex":{"project":"p","location":"us-central1"}}`} {
 		ids, list := listedIDs(t, settings)
 		if list.From != protocol.ModelListFromExtension {

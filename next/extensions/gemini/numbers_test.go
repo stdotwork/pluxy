@@ -90,8 +90,6 @@ func TestIntegralArguments(t *testing.T) {
 	}
 }
 
-// A translated reply's call arguments are rewritten; a passthrough body's are not, and the call
-// still comes back to the client under its own name.
 func TestReportingRewritesTranslatedIntegralArguments(t *testing.T) {
 	req := llm.Request{Tools: []llm.Tool{{
 		Name:       "mcp/server.tool",
@@ -114,7 +112,6 @@ func TestReportingRewritesTranslatedIntegralArguments(t *testing.T) {
 		t.Errorf("delta = %s, want the integer", got)
 	}
 
-	// A passthrough body keeps its numbers and its names.
 	pass := &reporting{out: rec, tr: &llm.Translation{To: llm.FormatGeminiGenerate, Passthrough: true}}
 	if err := pass.Send(llm.Event{Type: llm.EventItemStart, Index: 1, Item: &llm.ItemStart{
 		Kind: llm.ItemToolCall, CallID: "c2", Name: "f"}}); err != nil {

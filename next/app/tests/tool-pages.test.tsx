@@ -2,6 +2,8 @@
 // offers in each state, the one-press Connect and its key, the questions only the page asks, the
 // model lines, and the words no page may use.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { VNode } from "preact";
 import { act } from "preact/test-utils";
 import { ClaudeCodePage } from "../src/claudeCode";
@@ -1631,5 +1633,14 @@ describe("OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi", () => {
     await page.click("Uninstall plugin");
     await page.click("Yes, uninstall plugin");
     expect(op(ch, "uninstall")?.args.input).toEqual({ targets: pi("needs-update").targets, plugin: null });
+  });
+});
+
+describe("tool page stylesheet", () => {
+  test("toolPage.css sizes type from theme tokens, with no raw px font-size", () => {
+    const css = readFileSync(join(import.meta.dir, "../src/toolPage.css"), "utf8");
+    const fontSizes = [...css.matchAll(/font-size\s*:\s*([^;]+);/g)].map((m) => m[1]?.trim());
+    expect(fontSizes.length).toBeGreaterThan(0);
+    expect(fontSizes.filter((v) => !v?.includes("var(--px-font-size"))).toEqual([]);
   });
 });

@@ -15,10 +15,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Tests for how a request is shaped for the Codex endpoint: the fields it does not take, the
-// smallest output budget, the prompt cache key, the reasoning levels of a model, the image tool,
-// and the account settings that change them.
-
 func settingsFrom(t *testing.T, js string) settings {
 	t.Helper()
 	s, err := readSettings(json.RawMessage(js))
@@ -28,13 +24,10 @@ func settingsFrom(t *testing.T, js string) settings {
 	return s
 }
 
-// responsesReq is a Responses client's request for model with body.
 func responsesReq(model, body string, headers map[string]string) llm.Request {
 	return llm.Request{Model: model, Native: &llm.Native{Format: llm.FormatOpenAIResponses, Body: json.RawMessage(body), Headers: headers}}
 }
 
-// messagesReq is a Messages client's request: the IR a user turn and the output budget, and the
-// body and headers as the client sent them.
 func messagesReq(model, body string, maxTokens *int, headers map[string]string) llm.Request {
 	return llm.Request{
 		Model:   model,
@@ -75,8 +68,6 @@ func effortOf(t *testing.T, m map[string]json.RawMessage) string {
 	return r.Effort
 }
 
-// Codex's own request has no metadata field, so the field a client sets on its request is not
-// sent, whatever the client's format.
 func TestMetadataIsNotSent(t *testing.T) {
 	_, m := shapeWith(t, responsesReq("gpt-test", `{"model":"gpt-test","input":"hi","metadata":{"user_id":"u","k":"v"}}`, nil), settings{}, account{})
 	if got := field(m, "metadata"); got != "<absent>" {
@@ -88,8 +79,6 @@ func TestMetadataIsNotSent(t *testing.T) {
 	}
 }
 
-// The Codex endpoint refuses an integer output budget under 16; a smaller one is raised to 16.
-// Budgets that are missing, zero, negative or not whole numbers are left to the upstream to judge.
 func TestSmallOutputBudgetRaised(t *testing.T) {
 	for _, c := range []struct{ name, in, want string }{
 		{"1", `1`, `16`},
@@ -109,20 +98,17 @@ func TestSmallOutputBudgetRaised(t *testing.T) {
 			}
 		})
 	}
-	// The budget a Chat client names as max_completion_tokens or max_tokens is copied, then raised.
 	for _, k := range []string{"max_tokens", "max_completion_tokens"} {
 		_, m := shapeWith(t, responsesReq("gpt-test", `{"model":"gpt-test","input":"hi","`+k+`":1}`, nil), settings{}, account{})
 		if got := field(m, "max_output_tokens"); got != "16" {
 			t.Errorf("%s 1 became max_output_tokens %s, want 16", k, got)
 		}
 	}
-	// A translated request: Claude Code's model-switch probe asks for one token.
 	one := 1
 	_, m := shapeWith(t, messagesReq("gpt-test", `{"model":"gpt-test","max_tokens":1}`, &one, nil), settings{}, account{})
 	if got := field(m, "max_output_tokens"); got != "16" {
 		t.Errorf("Messages max_tokens 1 became max_output_tokens %s, want 16", got)
 	}
-	// An API key account and a SIWC account take the same minimum.
 	_, m = shapeWith(t, responsesReq("gpt-test", `{"model":"gpt-test","input":"hi","max_output_tokens":1}`, nil), settings{}, account{siwc: true})
 	if got := field(m, "max_output_tokens"); got != "16" {
 		t.Errorf("SIWC account: max_output_tokens %s, want 16", got)
@@ -155,10 +141,6 @@ func ccRequest(model, body string, headers map[string]string) llm.Request {
 	return messagesReq(model, body, &one, headers)
 }
 
-// A Claude Code request's prompt cache key follows its session: the same for every turn of the
-// session and agent whatever the first turn said, and different for another session, agent,
-// model or account. The session comes from the X-Claude-Code-Session-Id header, or else from
-// metadata.user_id in either of the forms Claude Code writes it.
 func TestPromptCacheKeyFollowsClaudeCodeSession(t *testing.T) {
 	body := func(extra string) string {
 		return `{"model":"gpt-test","max_tokens":100` + extra + `,"messages":[{"role":"user","content":"hello"}]}`
@@ -177,7 +159,6 @@ func TestPromptCacheKeyFollowsClaudeCodeSession(t *testing.T) {
 	if ur.sessionID != k1 {
 		t.Errorf("session ID %q, want the key %q (it is also the Session-Id header)", ur.sessionID, k1)
 	}
-	// Another first message, same session: same key.
 	other := strings.Replace(body(""), "hello", "something else entirely", 1)
 	if k, _ := cacheKeyOf(t, ccRequest("gpt-test", other, hdr(ccSession, "")), "a"); k != k1 {
 		t.Errorf("same session, another first message: key %q, want %q", k, k1)
@@ -202,19 +183,15 @@ func TestPromptCacheKeyFollowsClaudeCodeSession(t *testing.T) {
 			t.Errorf("%s: key %q, first key %q; want equal %v", c.name, k, k1, c.equal)
 		}
 	}
-	// A client's own prompt_cache_key wins over the session.
 	req := responsesReq("gpt-test", `{"model":"gpt-test","input":"hi","prompt_cache_key":"mine"}`, hdr(ccSession, ""))
 	if k, _ := cacheKeyOf(t, req, "a"); k != "mine" {
 		t.Errorf("client key: got %q, want mine", k)
 	}
-	// With no session the key still comes from the conversation's start (unchanged).
 	if k, _ := cacheKeyOf(t, ccRequest("gpt-test", body(""), nil), "a"); k == "" || k == k1 {
 		t.Errorf("no session: key %q, want one derived from the conversation (not %q)", k, k1)
 	}
 }
 
-// When a Claude Code request also carries the client's own Session-Id header, promptCacheKey
-// defers to it instead of deriving a conflicting prompt_cache_key from the Claude session.
 func TestPromptCacheKeyDefersToSessionIDHeader(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -248,7 +225,6 @@ func TestPromptCacheKeyDefersToSessionIDHeader(t *testing.T) {
 	}
 }
 
-// catalogLevels returns a catalog model's reasoning levels, in the catalog's order.
 func catalogLevels(t *testing.T, slug string) []string {
 	t.Helper()
 	var levels []struct {
@@ -264,7 +240,6 @@ func catalogLevels(t *testing.T, slug string) []string {
 	return out
 }
 
-// modelWithout returns a catalog model that does not take level.
 func modelWithout(t *testing.T, level string) string {
 	t.Helper()
 	for slug := range clientTemplates() {
@@ -276,9 +251,6 @@ func modelWithout(t *testing.T, level string) string {
 	return ""
 }
 
-// A reasoning effort the model does not take is clamped to a level it does, and the change is
-// reported as a loss. An effort the model takes, a model the catalog does not list and an effort
-// the extension does not know are left as they are.
 func TestEffortClampedToModelLevels(t *testing.T) {
 	noUltra := modelWithout(t, "ultra")
 	body := func(model, effort string) string {
@@ -314,7 +286,6 @@ func TestEffortClampedToModelLevels(t *testing.T) {
 			t.Errorf("loss %+v: want kind approximated naming %s and %s", *found, c.in, c.want)
 		}
 	}
-	// A thinking suffix's effort and a Messages client's output_config effort are clamped too.
 	req := responsesReq(noUltra, body(noUltra, "low"), nil)
 	req.Options.ThinkingSuffix = "ultra"
 	if _, m := shapeWith(t, req, settings{}, account{}); effortOf(t, m) != "max" {
@@ -326,8 +297,6 @@ func TestEffortClampedToModelLevels(t *testing.T) {
 	}
 }
 
-// image_generation is offered to every model unless the account lists the model (an exact name or
-// a pattern with * and ?) in image_generation_off_models.
 func TestImageToolOffPerModel(t *testing.T) {
 	has := func(m map[string]json.RawMessage) bool { return slices.Contains(toolTypes(t, m), "image_generation") }
 	body := func(model string) string { return `{"model":"` + model + `","input":"hi"}` }
@@ -341,7 +310,6 @@ func TestImageToolOffPerModel(t *testing.T) {
 	if _, m := shapeWith(t, responsesReq("gpt-6-luna", body("gpt-6-luna"), nil), settings{}, account{}); !has(m) {
 		t.Error("no setting: image_generation not offered")
 	}
-	// The client's own image_generation tool stays.
 	own := `{"model":"gpt-6-luna","input":"hi","tools":[{"type":"image_generation","output_format":"webp"}]}`
 	if _, m := shapeWith(t, responsesReq("gpt-6-luna", own, nil), s, account{}); !strings.Contains(string(m["tools"]), "webp") {
 		t.Errorf("the client's own image tool was removed: %s", m["tools"])
@@ -351,8 +319,6 @@ func TestImageToolOffPerModel(t *testing.T) {
 	}
 }
 
-// codex_client_version sets the version in the User-Agent the extension sends in place of the
-// client's; unset, the default stays.
 func TestCodexClientVersionSetting(t *testing.T) {
 	ua := func(s settings) string {
 		h := http.Header{}
@@ -373,8 +339,6 @@ func TestCodexClientVersionSetting(t *testing.T) {
 	}
 }
 
-// prompt_cache_retention is removed from the request unless the account's
-// prompt_cache_retention_passthrough is on; a SIWC account never sends it.
 func TestPromptCacheRetentionSetting(t *testing.T) {
 	body := `{"model":"gpt-test","input":"hi","prompt_cache_retention":"24h"}`
 	_, m := shapeWith(t, responsesReq("gpt-test", body, nil), settings{}, account{})
@@ -392,10 +356,6 @@ func TestPromptCacheRetentionSetting(t *testing.T) {
 	}
 }
 
-// Requests go through the real extension program to a fake Codex endpoint. A Claude Code
-// Messages request with a one-token budget arrives with 16, and a prompt cache key that follows its
-// session; a Responses client's metadata is gone; and the configured client version is in the
-// User-Agent.
 func TestShapingThroughTheExtension(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	srv := codextest.New(t)
@@ -410,7 +370,6 @@ func TestShapingThroughTheExtension(t *testing.T) {
 	}
 	t.Cleanup(ext.Stop)
 
-	// send makes one call and returns the request the upstream received.
 	send := func(req llm.Request) codextest.Request {
 		t.Helper()
 		before := len(srv.Requests())

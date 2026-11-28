@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// TestRememberSearchResults checks which web search results a reply's event records for its
-// account: the entries of a web_search_tool_result block, and nothing from another event.
 func TestRememberSearchResults(t *testing.T) {
 	searchOwners = searchOwnersCache{}
 	block := json.RawMessage(`{"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result",` +

@@ -19,14 +19,11 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// The assistant turn the fake Kimi answers the first request of a conversation with: signed
-// thinking, then a tool call.
 const (
 	keptThinking = `{"type":"thinking","thinking":"The user wants Oslo's weather.","signature":"sig-oslo"}`
 	keptToolUse  = `{"type":"tool_use","id":"toolu_oslo","name":"get_weather","input":{"city":"Oslo"}}`
 )
 
-// toolTurnSSE is that turn as Kimi's Messages API streams it.
 var toolTurnSSE = []string{
 	`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"k3","usage":{"input_tokens":10,"output_tokens":1}}}`,
 	`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`,
@@ -42,14 +39,11 @@ var toolTurnSSE = []string{
 	`{"type":"message_stop"}`,
 }
 
-// replayKimi is a fake Kimi whose Messages API answers each conversation's first request with
-// the tool turn (streamed or not, as asked) and every later one with text, or with status when
-// set.
 type replayKimi struct {
 	*kimitest.Server
 	mu          sync.Mutex
 	status      int
-	streamError bool // a later request is answered with a stream that ends in an error event
+	streamError bool
 }
 
 func newReplayKimi(t *testing.T) *replayKimi {
@@ -96,8 +90,6 @@ func (k *replayKimi) refuse(status int) {
 	k.mu.Unlock()
 }
 
-// lastAssistant returns the content of the last assistant message of the last request the fake
-// got.
 func (k *replayKimi) lastAssistant(t *testing.T) string {
 	t.Helper()
 	reqs := k.Requests()
@@ -124,7 +116,6 @@ type turnCall struct {
 	stream                         bool
 }
 
-// messages sends a Messages request with the given messages and reads the reply to its end.
 func messages(t *testing.T, ext *host.Extension, k *replayKimi, c turnCall, msgs string) llm.Event {
 	t.Helper()
 	if c.model == "" {
@@ -154,8 +145,6 @@ func messages(t *testing.T, ext *host.Extension, k *replayKimi, c turnCall, msgs
 
 const firstTurn = `[{"role":"user","content":"Weather in Oslo?"}]`
 
-// secondTurn resends the tool turn with assistant content (its thinking left out, or not) and
-// the tool's result.
 func secondTurn(assistant string) string {
 	return `[{"role":"user","content":"Weather in Oslo?"},{"role":"assistant","content":[` + assistant + `]},` +
 		`{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_oslo","content":"4°C"}]}]`
@@ -169,9 +158,6 @@ func sameContent(t *testing.T, got, want string) {
 	}
 }
 
-// A Messages client that resends an assistant tool turn without its signed thinking gets the
-// thinking back, when the request comes from the same caller, in the same conversation and model
-// family, and the rest of the turn is as Kimi sent it; any other request goes as it was written.
 func TestThinkingReplay(t *testing.T) {
 	ext, err := host.Start(conformance.BuildExtension(t, "pluxy-extension.json", "."), host.Options{Log: io.Discard})
 	if err != nil {
@@ -185,8 +171,8 @@ func TestThinkingReplay(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		first, again turnCall
-		resend       string // the second request's messages; default stripped
-		want         string // the assistant content Kimi must get
+		resend       string
+		want         string
 	}{
 		{name: "streamed reply", first: turnCall{caller: "c1", session: "s-stream", stream: true}, again: turnCall{caller: "c1", session: "s-stream"}, want: full},
 		{name: "whole reply", first: turnCall{caller: "c1", session: "s-whole"}, again: turnCall{caller: "c1", session: "s-whole", stream: true}, want: full},
@@ -219,8 +205,6 @@ func TestThinkingReplay(t *testing.T) {
 		})
 	}
 
-	// Kimi refusing a request whose thinking was put back drops what was kept: the next request
-	// goes as written.
 	t.Run("refused", func(t *testing.T) {
 		k := newReplayKimi(t)
 		c := turnCall{caller: "c1", session: "s-refused", stream: true}
@@ -253,8 +237,6 @@ func TestThinkingReplay(t *testing.T) {
 	})
 }
 
-// Kept turns expire an hour after their last use, and the cache drops the least recently used
-// turns beyond its entry and size bounds.
 func TestReplayCacheBounds(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	c := newReplayCache()
@@ -264,7 +246,7 @@ func TestReplayCacheBounds(t *testing.T) {
 	if _, ok := c.get("a"); !ok {
 		t.Fatal("a turn was gone after 59 minutes")
 	}
-	now = now.Add(59 * time.Minute) // 118 minutes after it was kept, 59 after its last use
+	now = now.Add(59 * time.Minute)
 	if _, ok := c.get("a"); !ok {
 		t.Fatal("a turn used 59 minutes ago was gone")
 	}
@@ -276,13 +258,13 @@ func TestReplayCacheBounds(t *testing.T) {
 	c.maxEntries, c.maxBytes = 2, 10
 	c.put("1", []byte("1111"))
 	c.put("2", []byte("2222"))
-	c.get("1") // 2 is now the least recently used
+	c.get("1")
 	c.put("3", []byte("33"))
 	if _, ok := c.get("2"); ok {
 		t.Error("the least recently used turn stayed past the entry bound")
 	}
 	c.maxEntries = 3
-	c.put("4", []byte("444444")) // 12 bytes with 1 and 3
+	c.put("4", []byte("444444"))
 	if _, ok := c.get("1"); ok {
 		t.Error("the least recently used turn stayed past the size bound")
 	}
@@ -293,8 +275,6 @@ func TestReplayCacheBounds(t *testing.T) {
 		t.Error("a turn over the entry size bound was kept")
 	}
 
-	// Keys count toward the size bound: a client chooses its session ID, so turns with long keys
-	// and little content cannot grow the cache past it.
 	c = newReplayCache()
 	c.now = func() time.Time { return now }
 	c.maxEntries, c.maxBytes = 100, 64
@@ -309,10 +289,6 @@ func TestReplayCacheBounds(t *testing.T) {
 	}
 }
 
-// A stream the capture cannot rebuild exactly is not kept: an unknown delta, an error event, or
-// one that never completes.
-// A streamed turn is kept before its finish leaves the decoder, so a client that sends its next
-// turn the moment it has the reply finds it.
 func TestStreamedTurnKeptBeforeFinish(t *testing.T) {
 	cache := newReplayCache()
 	d := replayDecoder{decoders[llm.FormatAnthropicMessages].stream(), newReplayCapture(), &replayTurn{cache: cache, scope: "c\x00kimi\x00s"}}

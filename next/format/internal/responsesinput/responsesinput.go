@@ -1,6 +1,3 @@
-// Package responsesinput reads the content of Responses input items: a message's parts and a tool
-// output's. It is shared by the Responses parser and by the code that sends a Responses client's
-// custom tool outputs to other formats (format/internal/clienttools).
 package responsesinput
 
 import (
@@ -16,9 +13,6 @@ import (
 
 const format = llm.FormatOpenAIResponses
 
-// ToolOutput reads a tool output item's output field into it: a string, or a list of parts whose
-// text is joined in Output and which are kept in Content when they hold more than text. It reports
-// whether it could read the field.
 func ToolOutput(it *llm.Item, raw json.RawMessage, path string) bool {
 	if json.Unmarshal(raw, &it.Output) == nil {
 		return true
@@ -27,8 +21,6 @@ func ToolOutput(it *llm.Item, raw json.RawMessage, path string) bool {
 	if !ok {
 		return false
 	}
-	// A list of text parts with nothing else in them is the result's text; any other list is
-	// carried as parts too.
 	it.Output = text
 	if !PlainTexts(parts) {
 		it.Content = parts
@@ -36,7 +28,6 @@ func ToolOutput(it *llm.Item, raw json.RawMessage, path string) bool {
 	return true
 }
 
-// OutputParts reads a function_call_output's list of parts, with its text parts joined.
 func OutputParts(raw json.RawMessage, path string) ([]llm.Part, string, bool) {
 	if len(bytes.TrimSpace(raw)) == 0 || bytes.TrimSpace(raw)[0] != '[' {
 		return nil, "", false
@@ -54,7 +45,6 @@ func OutputParts(raw json.RawMessage, path string) ([]llm.Part, string, bool) {
 	return parts, text.String(), true
 }
 
-// PlainTexts reports whether every part is text with no fields of its own beyond its text.
 func PlainTexts(parts []llm.Part) bool {
 	for _, p := range parts {
 		if p.Type != llm.PartText || (p.Origin != nil && len(p.Origin.Raw) > 0) {
@@ -64,7 +54,6 @@ func PlainTexts(parts []llm.Part) bool {
 	return true
 }
 
-// Content reads message content: a string (textContent true) or a list of parts.
 func Content(raw json.RawMessage, path string) (parts []llm.Part, textContent bool, err error) {
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return nil, false, nil
@@ -89,10 +78,9 @@ func Content(raw json.RawMessage, path string) (parts []llm.Part, textContent bo
 			FileData string `json:"file_data"`
 			FileURL  string `json:"file_url"`
 			Filename string `json:"filename"`
-			// input_audio: the flat spelling, or data and format inside input_audio.
-			Data   string `json:"data"`
-			Format string `json:"format"`
-			Audio  *struct {
+			Data     string `json:"data"`
+			Format   string `json:"format"`
+			Audio    *struct {
 				Data   string `json:"data"`
 				Format string `json:"format"`
 			} `json:"input_audio"`
@@ -103,7 +91,6 @@ func Content(raw json.RawMessage, path string) (parts []llm.Part, textContent bo
 		switch p.Type {
 		case "input_text", "output_text":
 			modelled := []string{"type", "text"}
-			// Empty annotations and logprobs on a replayed output say nothing.
 			for _, k := range []string{"annotations", "logprobs"} {
 				if v, ok := m[k]; ok && (bytes.Equal(v, []byte("[]")) || bytes.Equal(v, []byte("null"))) {
 					modelled = append(modelled, k)
@@ -127,14 +114,10 @@ func Content(raw json.RawMessage, path string) (parts []llm.Part, textContent bo
 				}
 			}
 			if data == "" {
-				// No bytes to carry; kept whole so a Responses target sends it as it came.
 				parts = append(parts, llm.Part{Type: llm.PartNative, Format: format, Data: append(json.RawMessage(nil), rp...),
 					Origin: &llm.Origin{Format: format, Path: pp}})
 				break
 			}
-			// OpenAI's InputAudio nests data and format inside input_audio, which is how the
-			// encoder writes it; the flat spelling today's clients also send is read too. The
-			// part's other fields are not kept.
 			parts = append(parts, llm.Part{Type: llm.PartFile, FileData: audioinput.DataURL(audioinput.MIME(audioFormat), data),
 				Origin: rawjson.Origin(format, pp, m, []string{"type", "data", "format", "input_audio"}, nil)})
 		default:

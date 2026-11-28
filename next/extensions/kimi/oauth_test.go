@@ -29,8 +29,6 @@ func settingsOf(t *testing.T, raw json.RawMessage) settings {
 	return s
 }
 
-// Login stops when the device code expires, even when slow_down has pushed the next poll past
-// the code's end.
 func TestDeviceCodeExpiryStopsPolling(t *testing.T) {
 	srv := kimitest.New(t)
 	srv.CodeLifetime, srv.SlowDown = 3, true
@@ -45,8 +43,6 @@ func TestDeviceCodeExpiryStopsPolling(t *testing.T) {
 	}
 }
 
-// A login host that stops answering fails a renewal instead of holding it. The request was
-// sent, so the failure is not retryable.
 func TestRenewalTimesOut(t *testing.T) {
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	hung := make(chan struct{})
@@ -79,8 +75,6 @@ func TestRenewalTimesOut(t *testing.T) {
 	}
 }
 
-// A renewal that fails for now keeps the login host's Retry-After, in seconds or as a date. A 429
-// is retryable; a 503 is not, because the request reached the login host and may have run.
 func TestRenewalRetryAfter(t *testing.T) {
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	for _, c := range []struct {
@@ -107,8 +101,6 @@ func TestRenewalRetryAfter(t *testing.T) {
 	}
 }
 
-// A token reply with no access token (a 200 with an empty object) fails a login or a renewal;
-// it is never kept as a credential.
 func TestTokenReplyWithoutAccessTokenFails(t *testing.T) {
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

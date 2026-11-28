@@ -18,7 +18,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// Capture the real generation request for both credentials without spending upstream tokens.
 func TestXSearchRequests(t *testing.T) {
 	for _, kind := range []string{protocol.CredentialAPIKey, protocol.CredentialOAuth} {
 		t.Run(kind, func(t *testing.T) {
@@ -112,7 +111,6 @@ func TestXSearchAllowedTools(t *testing.T) {
 	}
 }
 
-// Preserve client tools that reuse search names, citations, usage and opaque hosted items.
 func TestXSearchJSONReply(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	ext, err := host.Start(manifest, host.Options{Log: io.Discard})

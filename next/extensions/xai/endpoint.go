@@ -13,7 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// The CLI chat proxy has no compaction endpoint, even for a Grok login.
 func compactBaseURL(base string) string {
 	if strings.TrimRight(base, "/") == cliChatBaseURL {
 		return defaultBaseURL
@@ -44,7 +43,6 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	// Apply the usual xAI shaping, then the compact-specific removals.
 	native := *req.Native
 	native.Format = llm.FormatOpenAIResponses
 	req.Native = &native
@@ -65,7 +63,6 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		Include  json.RawMessage `json:"include"`
 	}
 	_ = json.Unmarshal(native.Body, &original)
-	// Compaction does not opt into storage or encrypted reasoning by default.
 	if len(original.Store) == 0 {
 		delete(m, "store")
 	}
@@ -114,7 +111,6 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		e := upstreamError(resp, req.Model)
-		// An absent endpoint says nothing about generation on this account or model.
 		if e.Code == llm.CodeNotFound && !e.Retryable {
 			e.Scope = llm.ScopeRequest
 		}

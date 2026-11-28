@@ -25,7 +25,6 @@ func llmError(t *testing.T, err error) *llm.Error {
 	return e
 }
 
-// A good API key is checked with the model list and the result names how many models it lists.
 func TestCheckAPIKeyListsModels(t *testing.T) {
 	srv := claudetest.New(t)
 	res, err := runCheck(srv, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: srv.IssueKey()})
@@ -43,7 +42,6 @@ func TestCheckAPIKeyListsModels(t *testing.T) {
 	}
 }
 
-// A refused key is an auth error that does not repeat the key.
 func TestCheckRefusedKey(t *testing.T) {
 	srv := claudetest.New(t)
 	const key = "sk-ant-api-test-not-issued"
@@ -53,7 +51,6 @@ func TestCheckRefusedKey(t *testing.T) {
 	}
 }
 
-// A subscription login is answered unsupported without any request to the upstream.
 func TestCheckLoginIsUnsupportedWithoutRequest(t *testing.T) {
 	srv := claudetest.New(t)
 	access, refresh := srv.Grant()
@@ -66,7 +63,6 @@ func TestCheckLoginIsUnsupportedWithoutRequest(t *testing.T) {
 	}
 }
 
-// An upstream that cannot be reached is unavailable on the endpoint.
 func TestCheckUnreachable(t *testing.T) {
 	srv := claudetest.New(t)
 	key := srv.IssueKey()

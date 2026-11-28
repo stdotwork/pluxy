@@ -45,7 +45,6 @@ func compactCall(settings json.RawMessage, cred *protocol.Credential, model, bod
 	}
 }
 
-// compactReplyBody gathers the response format and body sent to out during compactTo.
 func compactReplyBody(t *testing.T, rec *recorder) (format, body string, finish llm.Event) {
 	t.Helper()
 	var b strings.Builder

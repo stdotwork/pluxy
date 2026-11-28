@@ -109,7 +109,6 @@ func TestAPIKeyLoginLimits(t *testing.T) {
 	}
 }
 
-// All four wire APIs use the same API path convention and their own authentication headers.
 func TestAPIKeyLoginWireAPI(t *testing.T) {
 	for _, wire := range []string{"chat", "responses", "messages", "gemini"} {
 		t.Run(wire, func(t *testing.T) {

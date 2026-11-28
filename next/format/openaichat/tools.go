@@ -10,13 +10,8 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Tool names. Chat Completions takes a function name of 1 to 64 characters from a-z, A-Z, 0-9,
-// underscores and dashes (https://platform.openai.com/docs/api-reference/chat/create). A client
-// in another format may use other characters (MCP tools often have dots or colons), so such a
-// name is sent under a Chat name and the reply's calls go back to the client under its own.
 const maxToolName = 64
 
-// validToolName reports whether Chat Completions takes name as it is.
 func validToolName(name string) bool {
 	if name == "" || len(name) > maxToolName {
 		return false
@@ -30,8 +25,6 @@ func validToolName(name string) bool {
 	return true
 }
 
-// sanitizeToolName replaces each character Chat Completions does not take with an underscore and
-// cuts the name to 64 bytes.
 func sanitizeToolName(name string) string {
 	b := []byte(name)
 	for i, c := range b {
@@ -45,15 +38,8 @@ func sanitizeToolName(name string) string {
 	return string(b)
 }
 
-// ToolNames returns the Chat name of each function name in req that Chat Completions does not
-// take as it is, keyed by the client's name: the tools' names first, then the names of the tool
-// calls replayed in its items. Every name sent is distinct. A name is kept when it is valid and
-// not taken, otherwise sanitized (each other character an underscore, at most 64 bytes); when two
-// sanitized names would be the same, or one is already taken, each gets a hash of the client's
-// name after the first 53 bytes. The result depends only on req, so the request and its reply
-// agree.
 func ToolNames(req llm.Request) map[string]string {
-	req, _ = clienttools.Lower(req) // the names the encoder sends
+	req, _ = clienttools.Lower(req)
 	n := toolNames{to: map[string]string{}, taken: map[string]bool{}}
 	var declared, called []string
 	for _, t := range req.Tools {
@@ -133,7 +119,6 @@ func (n *toolNames) allocate(names []string) {
 	}
 }
 
-// ToolName returns the Chat name for a client's function name.
 func ToolName(names map[string]string, name string) string {
 	if to, ok := names[name]; ok {
 		return to

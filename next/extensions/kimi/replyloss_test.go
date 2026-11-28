@@ -34,8 +34,6 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// A non-streamed Chat reply with a nameless tool call drops it and logs the reply loss, matching
-// the streamed path; a normal named tool call logs no reply loss.
 func TestNonStreamNamelessToolCallLogged(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 
@@ -105,8 +103,6 @@ func TestNonStreamNamelessToolCallLogged(t *testing.T) {
 	})
 }
 
-// A non-streamed Responses reply with a dropped output item logs the reply loss, matching the
-// streamed path and the Chat path; a normal Responses reply logs no reply loss.
 func TestNonStreamResponsesReplyLossLogged(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 

@@ -1,8 +1,5 @@
 package main
 
-// This file holds applyReasoning as it was before it read the body's effort with a scan, and
-// compares the two over the bodies the tests in this package build and a generated set.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -14,8 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// applyReasoningRef is applyReasoning as it was: it decoded every body into a map to read the
-// effort and report a clamped one as a loss.
 func applyReasoningRef(body []byte, req llm.Request, target string, levels []string) ([]byte, []llm.Loss, error) {
 	suffix := req.Options.ThinkingSuffix
 	switch target {
@@ -36,7 +31,6 @@ func applyReasoningRef(body []byte, req llm.Request, target string, levels []str
 	if err := json.Unmarshal(body, &m); err != nil || m == nil {
 		return body, nil, nil
 	}
-	// Where the effort lives: reasoning_effort for Chat, reasoning.effort for Responses.
 	path := "reasoning.effort"
 	if target == llm.FormatOpenAIChat {
 		path = "reasoning_effort"
@@ -85,8 +79,6 @@ func applyReasoningRef(body []byte, req llm.Request, target string, levels []str
 	return out, losses, err
 }
 
-// TestApplyReasoningMatchesReference compares applyReasoning with the reference copy over every
-// body, target, suffix and level set it is given, byte for byte.
 func TestApplyReasoningMatchesReference(t *testing.T) {
 	targets := []string{llm.FormatOpenAIChat, llm.FormatOpenAIResponses, llm.FormatAnthropicMessages, llm.FormatGeminiGenerate}
 	suffixes := []string{"", "none", "auto", "minimal", "low", "medium", "high", "xhigh", "max", "turbo",
@@ -121,7 +113,6 @@ func TestApplyReasoningMatchesReference(t *testing.T) {
 	t.Logf("%d bodies, %d cases compared with the reference", len(bodies), n)
 }
 
-// outcome is what applyReasoning did, including any unexpected panic.
 type outcome struct {
 	body  []byte
 	err   error
@@ -134,12 +125,9 @@ func applyOutcome(f func() ([]byte, error)) (o outcome) {
 	return o
 }
 
-// reasoningBodies returns the bodies the bodies in this package's tests hold and the edges a
-// reading of the effort has to get right.
 func reasoningBodies(t *testing.T) map[string]string {
 	t.Helper()
 	bodies := map[string]string{
-		// The bodies reasoning_test.go and the extension's own tests build.
 		"chat-effort":         `{"model":"m","reasoning_effort":"high"}`,
 		"chat-no-effort":      `{"model":"m"}`,
 		"chat-clamp":          `{"model":"m","reasoning_effort":"xhigh"}`,
@@ -152,23 +140,21 @@ func reasoningBodies(t *testing.T) map[string]string {
 			`{"role":"tool","content":"4C rain","tool_call_id":"call_1"}],` +
 			`"stream":true,"max_tokens":50,"temperature":0.5,"stop":["END"],` +
 			`"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object"}}}]}`,
-		// The effort where it lives, and nothing else.
-		"chat-effort-empty":    `{"reasoning_effort":""}`,
-		"chat-effort-null":     `{"reasoning_effort":null}`,
-		"chat-effort-number":   `{"reasoning_effort":5}`,
-		"chat-effort-true":     `{"reasoning_effort":true}`,
-		"chat-effort-object":   `{"reasoning_effort":{"effort":"high"}}`,
-		"chat-effort-array":    `{"reasoning_effort":["high"]}`,
-		"chat-effort-escaped":  `{"reasoning_effor\u0074":"low"}`,
-		"chat-effort-case":     `{"Reasoning_Effort":"low"}`,
-		"chat-effort-twice":    `{"reasoning_effort":"xhigh","reasoning_effort":null}`,
-		"chat-effort-twice-2":  `{"reasoning_effort":"high","reasoning_effort":"max"}`,
-		"chat-effort-invalid":  `{"reasoning_effort":"\ud800"}`,
-		"chat-effort-bad-byte": "{\"reasoning_effort\":\"a\xffb\"}",
-		"chat-key-bad-byte":    "{\"reasoning_effort\xff\":\"low\"}",
-		"chat-key-escaped-sum": `{"\u0072easoning_effort":"medium"}`,
-		"chat-other-keys":      `{"model":"m","reasoning_effort":"low","x":1,"y":[1,2,{"z":null}]}`,
-		// The Responses shape, at every depth.
+		"chat-effort-empty":       `{"reasoning_effort":""}`,
+		"chat-effort-null":        `{"reasoning_effort":null}`,
+		"chat-effort-number":      `{"reasoning_effort":5}`,
+		"chat-effort-true":        `{"reasoning_effort":true}`,
+		"chat-effort-object":      `{"reasoning_effort":{"effort":"high"}}`,
+		"chat-effort-array":       `{"reasoning_effort":["high"]}`,
+		"chat-effort-escaped":     `{"reasoning_effor\u0074":"low"}`,
+		"chat-effort-case":        `{"Reasoning_Effort":"low"}`,
+		"chat-effort-twice":       `{"reasoning_effort":"xhigh","reasoning_effort":null}`,
+		"chat-effort-twice-2":     `{"reasoning_effort":"high","reasoning_effort":"max"}`,
+		"chat-effort-invalid":     `{"reasoning_effort":"\ud800"}`,
+		"chat-effort-bad-byte":    "{\"reasoning_effort\":\"a\xffb\"}",
+		"chat-key-bad-byte":       "{\"reasoning_effort\xff\":\"low\"}",
+		"chat-key-escaped-sum":    `{"\u0072easoning_effort":"medium"}`,
+		"chat-other-keys":         `{"model":"m","reasoning_effort":"low","x":1,"y":[1,2,{"z":null}]}`,
 		"responses-effort":        `{"model":"m","reasoning":{"effort":"high"}}`,
 		"responses-effort-null":   `{"model":"m","reasoning":{"effort":null}}`,
 		"responses-effort-case":   `{"model":"m","reasoning":{"EFFORT":"low"}}`,
@@ -184,23 +170,20 @@ func reasoningBodies(t *testing.T) map[string]string {
 		"responses-array":         `{"model":"m","reasoning":["high"]}`,
 		"responses-twice":         `{"model":"m","reasoning":{"effort":"low"},"reasoning":{"effort":"max"}}`,
 		"responses-summary":       `{"model":"m","reasoning":{"effort":"high","summary":"auto"}}`,
-		// What is not one JSON object, or not JSON.
-		"empty-object": `{}`,
-		"null":         `null`,
-		"array":        `[]`,
-		"string":       `"str"`,
-		"number":       `5`,
-		"true":         `true`,
-		"invalid":      `{"model":`,
-		"trailing":     `{"model":"m"} x`,
-		"two-values":   `{"model":"m"}{"model":"n"}`,
-		"empty":        ``,
-		"deep":         strings.Repeat(`{"a":`, 60) + `1` + strings.Repeat(`}`, 60),
-		// Whitespace and a body near the size an upstream sees.
-		"spaced": "{ \"model\" : \"m\" ,\n  \"reasoning\" : { \"effort\" : \"high\" } }",
-		"big":    `{"model":"m","messages":[{"role":"user","content":"` + strings.Repeat("lorem ipsum ", 8000) + `"}],"reasoning":{"effort":"high"}}`,
+		"empty-object":            `{}`,
+		"null":                    `null`,
+		"array":                   `[]`,
+		"string":                  `"str"`,
+		"number":                  `5`,
+		"true":                    `true`,
+		"invalid":                 `{"model":`,
+		"trailing":                `{"model":"m"} x`,
+		"two-values":              `{"model":"m"}{"model":"n"}`,
+		"empty":                   ``,
+		"deep":                    strings.Repeat(`{"a":`, 60) + `1` + strings.Repeat(`}`, 60),
+		"spaced":                  "{ \"model\" : \"m\" ,\n  \"reasoning\" : { \"effort\" : \"high\" } }",
+		"big":                     `{"model":"m","messages":[{"role":"user","content":"` + strings.Repeat("lorem ipsum ", 8000) + `"}],"reasoning":{"effort":"high"}}`,
 	}
-	// A body whose effort only appears where the decoder must not look for it.
 	for _, b := range []string{
 		`{"model":"m","messages":[{"reasoning_effort":"low"}]}`,
 		`{"reasoning":{"effort":"low"},"model":"m"}`,

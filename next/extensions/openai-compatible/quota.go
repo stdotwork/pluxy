@@ -18,7 +18,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// Quota vendor settings.
 const (
 	quotaOpenRouter = "openrouter"
 	quotaDeepSeek   = "deepseek"
@@ -27,9 +26,6 @@ const (
 	maxQuotaBody = 1 << 20
 )
 
-// quotaVendor returns the quota reading to use for s: the account's explicit quota setting when
-// set, otherwise a preset from base_url's host (openrouter.ai -> openrouter,
-// api.deepseek.com -> deepseek, anything else -> none).
 func quotaVendor(s settings) (string, error) {
 	switch q := strings.TrimSpace(s.Quota); q {
 	case quotaOpenRouter, quotaDeepSeek, quotaNone:
@@ -56,7 +52,6 @@ func quotaVendor(s settings) (string, error) {
 	}
 }
 
-// quotaURL returns the upstream URL for vendor's quota endpoint under baseURL.
 func quotaURL(baseURL, vendor string) string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	switch vendor {
@@ -81,9 +76,6 @@ func quotaURL(baseURL, vendor string) string {
 	}
 }
 
-// quota reads the account's quota from its vendor's normal-key endpoint: OpenRouter's
-// GET /api/v1/key or DeepSeek's GET /user/balance. An account whose vendor offers no reading
-// answers with code unsupported and scope credential.
 func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	s, _, key, err := account(sdk.Call{ID: call.ID, Account: call.Account})
 	if err != nil {
@@ -139,7 +131,6 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	}
 }
 
-// quotaNum is a JSON number or a string holding a finite number.
 type quotaNum struct {
 	v  float64
 	ok bool
@@ -192,7 +183,6 @@ func parseUnixTime(s string) int64 {
 	return 0
 }
 
-// parseOpenRouterQuota parses OpenRouter's GET /api/v1/key response.
 func parseOpenRouterQuota(body []byte) (*protocol.Quota, error) {
 	body = bytes.TrimSpace(body)
 	var outer struct {
@@ -393,7 +383,6 @@ func parseOpenRouterQuota(body []byte) (*protocol.Quota, error) {
 	return q, nil
 }
 
-// parseDeepSeekQuota parses DeepSeek's GET /user/balance response.
 func parseDeepSeekQuota(body []byte) (*protocol.Quota, error) {
 	body = bytes.TrimSpace(body)
 	var r struct {

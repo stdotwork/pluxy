@@ -10,28 +10,14 @@ import (
 	"strings"
 )
 
-// Tool parameter schema cleaner for Gemini API and Vertex AI function declarations
-// (parametersJsonSchema / parameters_json_schema / parameters, including inside a countTokens
-// generateContentRequest wrapper). Keeps wire field names and the case of the types a client
-// wrote (such as uppercase OpenAPI ones); the types it adds or replaces itself ("object",
-// "array", "string", "integer", "number", "null") are lowercase.
-
 const (
-	// maxRefDepth bounds a chain of $refs, so a schema that refers to itself ends.
-	maxRefDepth = 16
-	// maxRefCost bounds what $ref expansion produces for one request, all its tools together, in
-	// the units of refCost. Depth alone does not bound the tree: a def with four refs to the next
-	// def multiplies the output by four at every level. Counting values alone does not bound the
-	// bytes: a def with a long description and many refs to it copies the description each time.
-	maxRefCost = 4 << 20
-	// refValueCost is what any JSON value costs, before the length of its text.
-	refValueCost = 64
-	// maxKeptTypeLen and maxKeptTypes bound the type a refused ref keeps from its target.
+	maxRefDepth    = 16
+	maxRefCost     = 4 << 20
+	refValueCost   = 64
 	maxKeptTypeLen = 16
 	maxKeptTypes   = 8
 )
 
-// refBudget is what is left of a request's maxRefCost.
 type refBudget struct{ left int }
 
 func newRefBudget() *refBudget { return &refBudget{left: maxRefCost} }
@@ -117,9 +103,6 @@ func cleanRequestToolsField(body []byte) []byte {
 	return body
 }
 
-// cleanToolSchema cleans one tool parameter schema; openAPI selects OpenAPI Schema mode
-// (parameters) vs JSON Schema mode (parametersJsonSchema / parameters_json_schema). budget is the
-// request's allowance for $ref expansion, shared by all its tools.
 func cleanToolSchema(raw json.RawMessage, openAPI bool, budget *refBudget) (json.RawMessage, bool) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return raw, false
@@ -269,16 +252,13 @@ func repairPropertyMap(m map[string]any) (map[string]any, []string) {
 	return props, req
 }
 
-// refExpansion is the state of expanding the $refs of one schema.
 type refExpansion struct {
 	root   any
-	active map[string]bool // the refs being expanded, so a cycle ends
+	active map[string]bool
 	budget *refBudget
-	sizes  map[string]int // each ref's target cost, counted once (up to maxRefCost+1)
+	sizes  map[string]int
 }
 
-// charge takes the cost of ref's target from the budget and says whether it fit. A ref that does
-// not fit costs nothing, so later, cheaper refs can still fit.
 func (x *refExpansion) charge(ref string, target any) bool {
 	cost, ok := x.sizes[ref]
 	if !ok {
@@ -294,9 +274,6 @@ func (x *refExpansion) charge(ref string, target any) bool {
 	return true
 }
 
-// subtractRefCost subtracts the cost of v from *left, and stops walking once it is used up. A
-// value costs refValueCost, plus the length of a string's or number's text, plus the length of
-// each of an object's keys.
 func subtractRefCost(v any, left *int) {
 	if *left <= 0 {
 		return
@@ -319,8 +296,6 @@ func subtractRefCost(v any, left *int) {
 	}
 }
 
-// refusedTargetFields returns the fields a refused ref keeps from its target, each only while the
-// budget can still pay for it: a short type, a boolean nullable and a description.
 func (x *refExpansion) refusedTargetFields(tm map[string]any) map[string]any {
 	out := map[string]any{}
 	if t, ok := tm["type"]; ok && shortType(t) && x.pay(t) {
@@ -335,8 +310,6 @@ func (x *refExpansion) refusedTargetFields(tm map[string]any) map[string]any {
 	return out
 }
 
-// pay takes the cost of v from the budget and says whether it fit. A value that would use the
-// budget up exactly does not fit, because subtractRefCost stops walking at zero.
 func (x *refExpansion) pay(v any) bool {
 	left := x.budget.left
 	subtractRefCost(v, &left)
@@ -347,8 +320,6 @@ func (x *refExpansion) pay(v any) bool {
 	return true
 }
 
-// shortType says whether t is a string of at most maxKeptTypeLen bytes or a list of at most
-// maxKeptTypes such strings.
 func shortType(t any) bool {
 	switch x := t.(type) {
 	case string:
@@ -380,7 +351,6 @@ func resolveRefs(x *refExpansion, v any, depth int) any {
 			return resolveRefNode(x, n, ref, depth)
 		}
 		out := make(map[string]any, len(n))
-		// In key order, so that which refs the budget pays for does not depend on map order.
 		for _, k := range slices.Sorted(maps.Keys(n)) {
 			val := n[k]
 			switch {
@@ -412,9 +382,6 @@ func resolveRefNode(x *refExpansion, node map[string]any, ref string, depth int)
 	var ok bool
 	if strings.HasPrefix(ref, "#/") {
 		target, ok = resolveJSONPointer(x.root, ref)
-		// Expand only when not cyclic, within maxRefDepth, and within the request's ref budget.
-		// Otherwise the fallback below keeps what refusedTargetFields allows of the target's type,
-		// nullable and description.
 		if ok && (x.active[ref] || depth >= maxRefDepth || !x.charge(ref, target)) {
 			ok = false
 		}
@@ -754,11 +721,6 @@ func cleanUnions(m map[string]any, isToolRoot, openAPI bool) {
 	}
 }
 
-// mergeBranchSchemas merges the schemas one property has in the branches of a root union, given in
-// branch order. Identical schemas keep one. Schemas that differ only in enum and description, all
-// with an enum, become one schema whose enum holds every branch's values (first-seen order, no
-// duplicates) and whose description is the first non-empty one. Anything else becomes an anyOf of
-// the distinct schemas, which loses nothing, cleaned as a union is (a null branch is nullability).
 func mergeBranchSchemas(schemas []any, openAPI bool) any {
 	var distinct []any
 	for _, s := range schemas {
@@ -772,8 +734,6 @@ func mergeBranchSchemas(schemas []any, openAPI bool) any {
 	if merged, ok := mergeEnumSchemas(distinct); ok {
 		return merged
 	}
-	// Cleaned like any other union, so that a null branch becomes nullability and a second
-	// cleaning changes nothing.
 	return cleanSchemaNode(map[string]any{"anyOf": distinct}, false, openAPI)
 }
 
@@ -951,8 +911,6 @@ func cleanEnum(m map[string]any, openAPI bool) {
 	}
 }
 
-// isStringType reports whether t is "string" (case-insensitively) or a type list whose only
-// non-null member is "string".
 func isStringType(t any) bool {
 	switch x := t.(type) {
 	case string:
@@ -977,9 +935,6 @@ func isStringType(t any) bool {
 	return false
 }
 
-// numericEnumType says whether a JSON Schema mode enum keeps its numbers, and the type it keeps
-// them under: every value is a JSON number and the declared type is integer or number (alone or in
-// a list with null), or absent, in which case it is integer unless a value has a ".", "e" or "E".
 func numericEnumType(declared any, values []any) (any, bool) {
 	whole := true
 	for _, v := range values {

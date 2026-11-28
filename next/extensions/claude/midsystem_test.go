@@ -11,9 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// System messages in the conversation move into the top-level system prompt, after it, as text
-// blocks: a string becomes a block, a text block keeps its cache marker, blank text and other
-// blocks are left out. Without a system message that holds text the body is not touched.
 func TestMoveSystemMessages(t *testing.T) {
 	for _, c := range []struct{ name, in, want string }{
 		{"moved",
@@ -50,11 +47,6 @@ func TestMoveSystemMessages(t *testing.T) {
 	}
 }
 
-// With rebuild_mid_system_message enabled, system messages in a Messages passthrough conversation
-// are moved into the top-level system prompt before RepairTurns runs. Otherwise RepairTurns sees a
-// system message between an assistant tool_use and its user tool_result, fabricates an interrupted
-// tool_result, and demotes the real tool_result to text; or misses a trailing assistant prefill
-// followed by a system message.
 func TestRebuildMidSystemBeforeRepairTurns(t *testing.T) {
 	srv := claudetest.New(t)
 	var cfg map[string]any

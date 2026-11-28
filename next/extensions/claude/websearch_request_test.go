@@ -129,7 +129,6 @@ func TestWebSearchToClaude(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := roundTripRequest(t, tc.parse(t))
-			// Official Anthropic host gets the translated tool.
 			body, tr, err := buildBodyWith(req, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, req, defaultBaseURL))
 			if err != nil {
 				t.Fatalf("official host: %v", err)
@@ -148,8 +147,6 @@ func TestWebSearchToClaude(t *testing.T) {
 				t.Errorf("official host: unexpected dropped losses: %+v", tr.Losses)
 			}
 
-			// Third-party base_url: Responses web_search keeps existing mapping; other formats
-			// and web_search_preview get no tool and a loss.
 			customBody, customTr, err := buildBodyWith(req, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, req, "https://proxy.example.com"))
 			if err != nil {
 				t.Fatalf("custom host: %v", err)
@@ -209,7 +206,6 @@ func TestWebSearchResponsesCustomBaseURL(t *testing.T) {
 	}
 	req = roundTripRequest(t, req)
 
-	// ToolWebSearch path on custom base_url: still mapped by webSearchTool.
 	body, tr, err := buildBodyWith(req, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, req, "https://proxy.example.com"))
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +223,6 @@ func TestWebSearchResponsesCustomBaseURL(t *testing.T) {
 		t.Errorf("ToolWebSearch custom host: unexpected dropped losses: %+v", tr.Losses)
 	}
 
-	// ToolNative path (as from an older core) on custom base_url: still mapped by webSearchTool.
 	nativeReq := req
 	nativeReq.Tools = []llm.Tool{{Type: llm.ToolNative, Origin: req.Tools[0].Origin}}
 	bodyN, trN, err := buildBodyWith(nativeReq, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, nativeReq, "https://proxy.example.com"))
@@ -247,7 +242,6 @@ func TestWebSearchResponsesCustomBaseURL(t *testing.T) {
 		t.Errorf("ToolNative custom host: unexpected dropped losses: %+v", trN.Losses)
 	}
 
-	// web_search_preview was NOT mapped at base: gated by opts.WebSearch (dropped on custom base_url).
 	prevReq, err := openairesponses.ParseRequest([]byte(`{
 		"model":"claude-sonnet-4-6",
 		"input":"latest news",
@@ -353,8 +347,6 @@ func TestWebSearchResponsesToClaudeRejectPolicyAllowsExtraFields(t *testing.T) {
 	req = roundTripRequest(t, req)
 	req.DropPolicy = llm.DropReject
 
-	// Existing Responses web_search -> Claude must still succeed under drop_policy: reject,
-	// logging uncarried fields as approximated rather than dropped.
 	body, tr, err := buildBodyWith(req, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, req, "https://proxy.example.com"))
 	if err != nil {
 		t.Fatalf("reject policy refused existing Responses->Claude web_search: %v", err)
@@ -379,7 +371,6 @@ func TestWebSearchResponsesToClaudeRejectPolicyAllowsExtraFields(t *testing.T) {
 		t.Errorf("approximated paths = %v, want [tools[0].return_token_budget tools[0].search_context_size] (losses: %+v)", approx, tr.Losses)
 	}
 
-	// Newly translated Chat tool with search_context_size is still refused under reject.
 	chatReq, err := openaichat.ParseRequest([]byte(`{
 		"model":"claude-sonnet-4-6",
 		"messages":[{"role":"user","content":"hi"}],

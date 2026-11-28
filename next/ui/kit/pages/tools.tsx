@@ -1,14 +1,5 @@
-// Tools: the coding tools pluxy found and whether each is connected, three steps to set one up with
-// a key made for it already in the text, the address for any other program, and the keys tools
-// send, named, made and deleted here. The panel and the desktop app show this page; the app adds
-// to it through ToolsOptions (a button for a row, rows pluxy does not scan, the names it keeps
-// for keys). ToolList is the coding tools alone, for the guided setup.
-//
-// A key's value is held in this page's memory only: never in prefs, storage or the address. It
-// goes when the person closes its notice, deletes the key or leaves the page.
-
 import type { ComponentChildren } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import {
   type Account,
   type ClientConnection,
@@ -18,13 +9,25 @@ import {
   type SetupClient,
 } from "../api";
 import { Icon } from "../icons";
-import { Phases, refreshWord, StaleNotice, StatePane, ToolRow, tryAgainWord } from "../parts";
+import {
+  ConnectionCard,
+  Phases,
+  ProviderMark,
+  refreshWord,
+  StaleNotice,
+  StatePane,
+  toolState,
+  tryAgainWord,
+  useShownAfter,
+} from "../parts";
 import { usePrivacy } from "../privacy";
+import { shownPath } from "../save";
 import type { PageDef } from "../shell";
+import { stateText, stateTone } from "../states";
 import { rich, strings } from "../strings";
 import {
+  BUSY_SHOWS_AFTER_MS,
   Button,
-  ConfirmButton,
   type Loaded,
   Notice,
   PageHead,
@@ -45,6 +48,7 @@ import {
   requestsByKey,
   type ToolGroups,
   toolKeyName,
+  toolMarkKind,
   toolName,
   toolsAddress,
   withKey,
@@ -84,6 +88,7 @@ const t = strings("tools", {
   disconnectFailed: "Could not disconnect {tool}. {reason}",
   fromApp: "Set up from the desktop app",
   needsAddOn: "Needs its add-on",
+  unchecked: "pluxy cannot see how {tool} is set up.",
 
   stepsLoading: "Loading the steps…",
   stepsLabel: "Steps to set up {tool}",
@@ -108,6 +113,10 @@ const t = strings("tools", {
   copyFailed: "Could not copy. Select the text and copy it yourself.",
 
   address: "Address for tools",
+  connectTitle: "Point a tool at pluxy",
+  noAddress: "pluxy's address is not known yet.",
+  key: "Key",
+  keyFor: "Key · {name}",
   thisComputer: "Only programs on this computer can reach it.",
   network: "Other computers on your network can reach it too.",
   otherPrograms: "Another program can use pluxy too: System lists the exact address each kind needs.",
@@ -128,9 +137,11 @@ const t = strings("tools", {
   noKeys: "No keys. Until there is one, any program that reaches pluxy can use it.",
   requests: { one: "{count} request this week", other: "{count} requests this week" },
   unused: "Not used this week",
+  keyActions: "Actions for {name}",
   rename: "Rename",
   save: "Save",
   delete: "Delete",
+  confirmDelete: "Yes, delete",
   askNamed: "{name} stops working until it gets a new key.",
   askUnnamed: "Any tool using this key stops working.",
   lastKey: "Add another key before deleting this one.",
@@ -163,6 +174,74 @@ export interface ToolsOptions {
 
 /** What a host says around the list of tools: above it, and under it. */
 export type ToolNotes = (clients: SetupClient[]) => { above?: ComponentChildren; below?: ComponentChildren };
+
+export function ToolMark(props: { id: string; name?: string; size?: "medium" | "large" }) {
+  const mark = toolMarkKind(props.id, props.name);
+  const size = props.size ?? "medium";
+  if (mark.kind === "provider") {
+    return (
+      <span class="tool-mark-tile" data-tool-mark={props.id} data-size={size} aria-hidden="true">
+        <ProviderMark extension={mark.extension} size="medium" />
+      </span>
+    );
+  }
+  if (mark.kind === "opencode") {
+    return (
+      <span class="tool-mark-tile" data-tool-mark="opencode" data-size={size} aria-hidden="true">
+        <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+          <rect
+            x="5"
+            y="4"
+            width="14"
+            height="16"
+            rx="2.5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="3"
+          />
+          <rect x="9.5" y="9" width="5" height="6" rx="0.75" fill="currentColor" opacity="0.28" />
+        </svg>
+      </span>
+    );
+  }
+  if (mark.kind === "pi") {
+    return (
+      <span class="tool-mark-tile" data-tool-mark={props.id} data-size={size} aria-hidden="true">
+        <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+          <path
+            d="M5 7h14M9.5 7v10.5M14.5 7v8.5c0 1.2.8 2 2 2"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.4"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </span>
+    );
+  }
+  return (
+    <span
+      class="tool-mark-tile tool-mark-initial"
+      data-tool-mark={props.id}
+      data-size={size}
+      data-series={mark.series}
+      aria-hidden="true"
+    >
+      {mark.letter}
+    </span>
+  );
+}
+
+function EllipsisIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width={15} height={15} fill="currentColor" aria-hidden="true" focusable="false">
+      <circle cx="3.25" cy="8" r="1.25" />
+      <circle cx="8" cy="8" r="1.25" />
+      <circle cx="12.75" cy="8" r="1.25" />
+    </svg>
+  );
+}
 
 // ---- keys made on this page -------------------------------------------------------------------
 
@@ -311,6 +390,25 @@ function CopyButton(props: { value: string }) {
   );
 }
 
+function ToolsSkeleton() {
+  const shown = useShownAfter(BUSY_SHOWS_AFTER_MS);
+  if (!shown) return null;
+  return (
+    <div class="tools-skeleton" aria-hidden="true">
+      {[0, 1, 2, 3].map((i) => (
+        <div key={i} class="tools-skeleton-row">
+          <i class="tools-skeleton-mark" />
+          <div class="tools-skeleton-lines">
+            <i class="tools-skeleton-title" />
+            <i class="tools-skeleton-sub" />
+          </div>
+          <i class="tools-skeleton-btn" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** The steps to set one tool up, with the text for its settings file. */
 function Steps(props: {
   client: SetupClient;
@@ -372,80 +470,139 @@ function Steps(props: {
   return (
     <ol class="tool-steps" data-part="tool-steps" aria-label={t("stepsLabel", { tool })}>
       <li>
-        {key ? (
-          <p ref={done} tabIndex={-1}>
-            {t("step1Done")}
-          </p>
-        ) : (
-          <>
-            <p>{t("step1", { tool })}</p>
-            {earlier > 0 && <p class="muted">{t("step1Again", { name: tool })}</p>}
-            {error && <Notice tone="danger">{error}</Notice>}
-            <div class="actions">
-              <Button onClick={make}>{earlier > 0 ? t("makeAnother") : t("makeKey")}</Button>
-            </div>
-          </>
-        )}
-      </li>
-      <li>
-        {(data.models?.length ?? 0) > 0 ? (
-          <label class="field" data-part="field">
-            <span class="label">{t("modelLabel", { tool })}</span>
-            <select
-              data-slot="select-trigger"
-              value={data.model ?? ""}
-              onChange={(e) => props.onModel(e.currentTarget.value)}
-            >
-              {data.model && !data.models?.includes(data.model) && (
-                <option value={data.model}>{data.model}</option>
-              )}
-              {data.models?.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-            <span class="muted">{t("modelWhy", { tool })}</span>
-          </label>
-        ) : (
-          // A pluxy that does not send the list (older) is not one that serves nothing.
-          data.models && (
-            <p class="muted">
-              {rich(t("noModels"), { placeholder: <span class="mono">{MODEL_PLACEHOLDER}</span> })}
+        <span class="tool-step-num" aria-hidden="true">
+          1
+        </span>
+        <div class="tool-step-body">
+          {key ? (
+            <p ref={done} tabIndex={-1} class="tool-step-done">
+              <Icon name="check" size={14} />
+              <span>{t("step1Done")}</span>
             </p>
-          )
-        )}
-        {data.files.map((file) => {
-          const text = withKey(file.content, data.key, key?.value);
-          return (
-            <div key={file.path} class="tool-file">
-              <div class="tool-file-head">
-                <span>{rich(t("step2"), { path: <span class="mono">{file.path}</span> })}</span>
-                <CopyButton value={text} />
+          ) : (
+            <>
+              <p>{t("step1", { tool })}</p>
+              {earlier > 0 && <p class="muted">{t("step1Again", { name: tool })}</p>}
+              {error && <Notice tone="danger">{error}</Notice>}
+              <div class="actions">
+                <Button onClick={make}>{earlier > 0 ? t("makeAnother") : t("makeKey")}</Button>
               </div>
-              {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a long line scrolls sideways, and keys must reach it */}
-              <pre class="tool-text" tabIndex={0}>
-                {text}
-              </pre>
-            </div>
-          );
-        })}
-        <p class="muted">{t("keepFile")}</p>
-        {!key && <p class="muted">{rich(t("makeFirst"), { placeholder })}</p>}
-        {data.files.some((file) => file.content.includes(MODEL_PLACEHOLDER)) && (
-          <p class="muted">
-            {rich(t("model"), {
-              placeholder: <span class="mono">{MODEL_PLACEHOLDER}</span>,
-            })}{" "}
-            <a href="#/system">{t("models")}</a>
-          </p>
-        )}
-        {data.note && <p class="muted">{p.text(data.note)}</p>}
+            </>
+          )}
+        </div>
       </li>
       <li>
-        <p>{t("step3", { tool })}</p>
+        <span class="tool-step-num" aria-hidden="true">
+          2
+        </span>
+        <div class="tool-step-body">
+          {(data.models?.length ?? 0) > 0 ? (
+            <label class="field" data-part="field">
+              <span class="label">{t("modelLabel", { tool })}</span>
+              <select
+                data-slot="select-trigger"
+                value={data.model ?? ""}
+                onChange={(e) => props.onModel(e.currentTarget.value)}
+              >
+                {data.model && !data.models?.includes(data.model) && (
+                  <option value={data.model}>{data.model}</option>
+                )}
+                {data.models?.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+              <span class="muted">{t("modelWhy", { tool })}</span>
+            </label>
+          ) : (
+            data.models && (
+              <p class="muted">
+                {rich(t("noModels"), { placeholder: <span class="mono">{MODEL_PLACEHOLDER}</span> })}
+              </p>
+            )
+          )}
+          {data.files.map((file) => {
+            const text = withKey(file.content, data.key, key?.value);
+            return (
+              <div key={file.path} class="tool-file">
+                <div class="tool-file-head">
+                  <span>{rich(t("step2"), { path: <span class="mono">{file.path}</span> })}</span>
+                  <CopyButton value={text} />
+                </div>
+                {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a long line scrolls sideways, and keys must reach it */}
+                <pre class="tool-text" tabIndex={0}>
+                  {text}
+                </pre>
+              </div>
+            );
+          })}
+          <p class="muted">{t("keepFile")}</p>
+          {!key && <p class="muted">{rich(t("makeFirst"), { placeholder })}</p>}
+          {data.files.some((file) => file.content.includes(MODEL_PLACEHOLDER)) && (
+            <p class="muted">
+              {rich(t("model"), {
+                placeholder: <span class="mono">{MODEL_PLACEHOLDER}</span>,
+              })}{" "}
+              <a href="#/system">{t("models")}</a>
+            </p>
+          )}
+          {data.note && <p class="muted">{p.text(data.note)}</p>}
+        </div>
+      </li>
+      <li>
+        <span class="tool-step-num" aria-hidden="true">
+          3
+        </span>
+        <div class="tool-step-body">
+          <p>{t("step3", { tool })}</p>
+        </div>
       </li>
     </ol>
+  );
+}
+
+function ToolRowItem(props: {
+  client: SetupClient;
+  unchecked?: boolean;
+  action?: ComponentChildren;
+  children?: ComponentChildren;
+}) {
+  const p = usePrivacy();
+  const c = props.client;
+  const state = toolState(c, props.unchecked);
+  const title = state === "unchecked" ? t("unchecked", { tool: c.name }) : undefined;
+  const path = c.config && shownPath(c.config, p.on);
+  return (
+    <div class="tool-row" data-part="tool-row" data-state={state} data-open={props.children ? "" : undefined}>
+      <div class="tools-row-line">
+        <ToolMark id={c.id} name={c.name} />
+        <div class="tools-row-main">
+          <div class="tools-row-top">
+            <span class="tool-name">{c.name}</span>
+            {c.version && <span class="tool-version">{c.version}</span>}
+          </div>
+          <div class="tools-row-sub">
+            <span
+              class="badge"
+              data-part="badge"
+              data-tone={stateTone(state, "tool")}
+              data-state={state}
+              title={title}
+            >
+              {stateText(state, "tool")}
+            </span>
+            {path && (
+              <span class="tools-row-path mono" title={path}>
+                {path}
+              </span>
+            )}
+          </div>
+        </div>
+        <span class="tool-action">{props.action}</span>
+      </div>
+      {props.children && <div class="tool-more">{props.children}</div>}
+    </div>
   );
 }
 
@@ -477,6 +634,7 @@ function disconnectedText(reply: ClientConnection): string {
 function ConnectButtons(props: {
   client: SetupClient;
   model?: string;
+  primary?: boolean;
   onDone: (note: RowNote) => void;
   onChanged: () => void;
 }) {
@@ -525,7 +683,11 @@ function ConnectButtons(props: {
   return (
     <>
       {(!byPluxy || props.client.state !== "configured") && (
-        <Button busy={busy("connect")} onClick={() => run("connect")}>
+        <Button
+          variant={props.primary ? "primary" : undefined}
+          busy={busy("connect")}
+          onClick={() => run("connect")}
+        >
           {byPluxy ? t("connectAgain") : t("connect")}
         </Button>
       )}
@@ -571,6 +733,7 @@ export function ToolListView(
     onKeysChanged?: () => void;
     /** Show Refresh with the summary: for a list without a page header of its own. */
     refresh?: () => unknown;
+    highlightUpdate?: boolean;
   },
 ) {
   const { host } = useKit();
@@ -600,6 +763,7 @@ export function ToolListView(
     made: props.made,
     onKeysChanged: props.onKeysChanged,
     refresh: props.refresh,
+    highlightUpdate: props.highlightUpdate,
   };
   const noAccount = state.accounts.phase === "ready" && state.accounts.data?.accounts.length === 0;
   const account = (
@@ -613,54 +777,85 @@ export function ToolListView(
     </Notice>
   );
   const seen = useSeenAt(setup.data);
+  const data = setup.data;
+  const stale = Boolean(data?.scanned_at) && (setup.phase === "failed" || Boolean(state.scanError));
+  const groups = data?.scanned_at ? groupTools(data.found.clients, props.extraTools) : undefined;
+  const shown = groups ? [...groups.connected, ...groups.installed] : undefined;
+  const summary =
+    groups && shown ? (
+      <p class="tools-summary">
+        <span>
+          {data?.scanned_at
+            ? rich(t("summary", { installed: shown.length, connected: groups.connected.length }), {
+                when: <Time value={data.scanned_at} />,
+              })
+            : t("summaryUnread", { installed: shown.length, connected: groups.connected.length })}
+          {remote && <> {t("elsewhere")}</>}
+        </span>
+        {props.refresh && <Button onClick={props.refresh}>{refreshWord()}</Button>}
+      </p>
+    ) : null;
+
   const body = () => {
-    const data = setup.data;
     // No list and no way to get one: an older pluxy, or a scan that failed before it gave one.
     if ((setup.phase === "failed" && !data) || (data && !data.scanned_at && state.scanError)) {
       return (
-        <>
+        <div class="tools-card-body">
           <Notice tone="muted">{t("older")}</Notice>
           {!state.older && (
             <div class="actions">
               <Button onClick={data ? state.scan : setup.reload}>{tryAgainWord()}</Button>
             </div>
           )}
-          {props.extraTools && (
-            <ToolRows {...rows} groups={groupTools([], props.extraTools)} summary={false} />
-          )}
-        </>
+          {props.extraTools && <ToolRows {...rows} groups={groupTools([], props.extraTools)} />}
+        </div>
       );
     }
     // Nothing is known until the first scan ends: loading, then a scan about to start or running.
-    if (!data?.scanned_at) return <StatePane kind="loading" title={t("looking")} />;
-    const groups = groupTools(data.found.clients, props.extraTools);
+    if (!data?.scanned_at || !groups) {
+      return (
+        <div class="tools-card-body">
+          <StatePane kind="loading" title={t("looking")} rows={0} />
+          <ToolsSkeleton />
+        </div>
+      );
+    }
     return (
       <>
-        {setup.phase === "failed" && <StaleNotice at={seen} error={setup.error} onRetry={setup.reload} />}
-        {state.scanError && (
-          <StaleNotice at={Date.parse(data.scanned_at)} error={state.scanError} onRetry={state.scan} />
+        {setup.phase === "failed" && (
+          <div class="tools-stale-wrap">
+            <StaleNotice at={seen} error={setup.error} onRetry={setup.reload} />
+          </div>
         )}
-        <ToolRows
-          {...rows}
-          groups={groups}
-          scannedAt={data.scanned_at}
-          appTools={!props.extraTools && !listsAppTools(groups)}
-        />
+        {state.scanError && (
+          <div class="tools-stale-wrap">
+            <StaleNotice at={Date.parse(data.scanned_at)} error={state.scanError} onRetry={state.scan} />
+          </div>
+        )}
+        <div class="tools-fade" data-stale={stale ? "" : undefined}>
+          <ToolRows {...rows} groups={groups} appTools={!props.extraTools && !listsAppTools(groups)} />
+        </div>
       </>
     );
   };
   return (
-    <section class="tools-list" aria-labelledby="tools-coding">
+    <div class="tools-list-wrap">
       {noAccount && account}
-      <h2 id="tools-coding" class="tools-heading">
-        {t("codingTools")}
-      </h2>
-      {body()}
-    </section>
+      <section class="tools-list" aria-labelledby="tools-coding">
+        <header class="tools-card-head">
+          <div class="tools-card-title">
+            <h2 id="tools-coding" class="tools-heading">
+              {t("codingTools")}
+            </h2>
+            {summary}
+          </div>
+        </header>
+        {body()}
+      </section>
+    </div>
   );
 }
 
-/** The summary line, the rows and the lines under them. */
 function ToolRows(props: {
   groups: ToolGroups;
   toolAction?: ToolsOptions["toolAction"];
@@ -677,22 +872,18 @@ function ToolRows(props: {
   rowNotes: Record<string, RowNote | undefined>;
   setRowNote: (id: string, note?: RowNote) => void;
   onConnected: () => void;
-  /** When pluxy last scanned; without it the summary has no time. */
-  scannedAt?: string;
-  /** Show the summary line (the rows may come with no scan to count). */
-  summary?: boolean;
   /** Say the three tools only the app sets up are set up from the app. */
   appTools?: boolean;
   made: MadeKeys;
   onKeysChanged?: () => void;
-  refresh?: () => unknown;
+  highlightUpdate?: boolean;
 }) {
   const { groups } = props;
   const shown = [...groups.connected, ...groups.installed];
-  const connected = groups.connected.length;
-  const installed = shown.length;
-  const remote = props.remote;
   const notes = props.notes?.([...shown, ...groups.other]);
+  const firstUpdateId = props.highlightUpdate
+    ? shown.find((c) => c.state === "needs-update" && hasPasteText(c) && !props.toolAction?.(c))?.id
+    : undefined;
   const row = (client: SetupClient) => {
     const custom = props.toolAction?.(client);
     const hasCustom = custom !== undefined && custom !== null && custom !== false && custom !== "";
@@ -705,10 +896,10 @@ function ToolRows(props: {
       !hasCustom &&
       (byPluxy || (client.can_connect === true && client.installed && client.state !== "configured"));
     const note = props.rowNotes[client.id];
-    // Next to Connect, the steps by hand are the lesser way: a ghost button.
+    const highlight = !opened && client.id === firstUpdateId;
     const toggle = (
       <Button
-        variant={connect ? "ghost" : undefined}
+        variant={connect ? "ghost" : highlight ? "primary" : "quiet"}
         onClick={() => props.setOpen(opened ? undefined : client.id)}
       >
         {opened ? t("hide") : connect ? t("byHand") : t("setUp")}
@@ -723,6 +914,7 @@ function ToolRows(props: {
         <ConnectButtons
           client={client}
           model={props.pickedModels[client.id]}
+          primary={client.id === firstUpdateId}
           onDone={(n) => {
             props.setRowNote(client.id, n);
             if (n.tone === "ok") props.setOpen(undefined);
@@ -732,7 +924,7 @@ function ToolRows(props: {
         {!byPluxy && hasPasteText(client) && toggle}
       </>
     ) : !hasPasteText(client) ? (
-      <span class="muted">{props.extraTools ? t("needsAddOn") : t("fromApp")}</span>
+      <span class="muted tools-action-note">{props.extraTools ? t("needsAddOn") : t("fromApp")}</span>
     ) : (
       toggle
     );
@@ -740,13 +932,16 @@ function ToolRows(props: {
     const hint = connect && !byPluxy && !note && !steps;
     const path = <span class="mono">{client.config}</span>;
     return (
-      <ToolRow key={client.id} client={named(client)} unchecked={isUnchecked(client)} action={action}>
+      <ToolRowItem key={client.id} client={named(client)} unchecked={isUnchecked(client)} action={action}>
         {(note || hint || steps) && (
           <>
             {note && <NoteLine note={note} />}
             {hint && (
               <p class="muted tool-hint">
-                {rich(remote ? t("connectHintThere") : t("connectHint"), { tool: toolName(client), path })}
+                {rich(props.remote ? t("connectHintThere") : t("connectHint"), {
+                  tool: toolName(client),
+                  path,
+                })}
               </p>
             )}
             {steps && (
@@ -760,50 +955,45 @@ function ToolRows(props: {
             )}
           </>
         )}
-      </ToolRow>
+      </ToolRowItem>
     );
   };
+  const foot =
+    (props.localPages && props.localPages.length > 0) || props.appTools || notes?.below ? (
+      <div class="tools-card-foot">
+        {props.localPages && props.localPages.length > 0 ? (
+          <p class="muted tools-more">
+            {t("localPages")}{" "}
+            {props.localPages.map((page, i) => (
+              <span key={page.page}>
+                {i > 0 && ", "}
+                <a href={`#/${page.page}`}>{page.name}</a>
+              </span>
+            ))}
+          </p>
+        ) : (
+          props.appTools && <p class="muted tools-more">{t("appTools")}</p>
+        )}
+        {notes?.below}
+      </div>
+    ) : null;
   return (
     <>
-      {notes?.above}
-      {props.summary !== false && (
-        <p class="tools-summary">
-          <span>
-            {props.scannedAt
-              ? rich(t("summary", { installed, connected }), { when: <Time value={props.scannedAt} /> })
-              : t("summaryUnread", { installed, connected })}
-            {remote && <> {t("elsewhere")}</>}
-          </span>
-          {props.refresh && <Button onClick={props.refresh}>{refreshWord()}</Button>}
-        </p>
-      )}
+      {notes?.above && <div class="tools-card-note">{notes.above}</div>}
       {shown.length === 0 && <p class="tools-none">{t("none")}</p>}
       {shown.length > 0 && <div class="tool-rows">{shown.map(row)}</div>}
       {groups.other.length > 0 && (
         <details class="tools-other" open={shown.length === 0}>
           <summary>
             <span class="tools-other-mark">
-              <Icon name="chevron" />
+              <Icon name="chevron" size={14} />
             </span>
             {t("otherTools", { count: groups.other.length })}
           </summary>
           <div class="tool-rows">{groups.other.map(row)}</div>
         </details>
       )}
-      {props.localPages && props.localPages.length > 0 ? (
-        <p class="muted tools-more">
-          {t("localPages")}{" "}
-          {props.localPages.map((page, i) => (
-            <span key={page.page}>
-              {i > 0 && ", "}
-              <a href={`#/${page.page}`}>{page.name}</a>
-            </span>
-          ))}
-        </p>
-      ) : (
-        props.appTools && <p class="muted tools-more">{t("appTools")}</p>
-      )}
-      {notes?.below}
+      {foot}
     </>
   );
 }
@@ -819,32 +1009,50 @@ export function ToolList(props: ToolListProps) {
   return <ToolListView {...props} state={state} made={made} refresh={refresh} />;
 }
 
-// ---- address ------------------------------------------------------------------------------------
-
-function AddressSection(props: { state: ToolsState; remote: boolean }) {
+function ConnectionSection(props: { state: ToolsState; keys?: ClientKey[]; remote: boolean }) {
   const { host } = useKit();
+  const p = usePrivacy();
+  const titleId = useId();
   const found = props.state.setup.data;
   const address = toolsAddress(host.address, found);
-  const { state, copy } = useCopy(address ?? "");
   const network = found?.found.core.reachable_from_network;
+  const firstKey = props.keys?.[0];
   return (
-    <section class="tools-section" aria-labelledby="tools-address">
-      <h2 id="tools-address" class="tools-heading">
-        {t("address")}
-      </h2>
-      {address && (
-        <div class="tools-address">
-          <code class="mono">{address}</code>
-          <Button onClick={copy}>{state === "copied" ? t("copied") : t("copy")}</Button>
-        </div>
+    <section class="tools-connection" aria-label={t("address")}>
+      {address ? (
+        <ConnectionCard address={address} keys={props.keys} />
+      ) : (
+        <section class="connection-card card" data-part="connection-card" aria-labelledby={titleId}>
+          <header class="side-card-head">
+            <h2 id={titleId}>{t("connectTitle")}</h2>
+          </header>
+          <p class="connection-note">{t("noAddress")}</p>
+          {firstKey && (
+            <div class="connection-field">
+              <div class="connection-label">
+                <span>{firstKey.label ? t("keyFor", { name: p.id(firstKey.label) }) : t("key")}</span>
+              </div>
+              <div class="connection-value">
+                <Icon name="key" size={14} />
+                <code class="mono">{firstKey.masked}</code>
+              </div>
+            </div>
+          )}
+        </section>
       )}
-      {state === "failed" && <Notice tone="danger">{t("copyFailed")}</Notice>}
-      {!props.remote && network !== undefined && (
-        <p class="muted">{network ? t("network") : t("thisComputer")}</p>
-      )}
-      <p class="muted">
-        {t("otherPrograms")} <a href="#/system">{t("otherProgramsLink")}</a>
-      </p>
+      <div class="tools-connection-foot">
+        {!props.remote && network !== undefined && (
+          <p class="tools-reach">
+            <span class="tools-reach-dot" data-network={network ? "yes" : "no"} aria-hidden="true" />
+            <span>{network ? t("network") : t("thisComputer")}</span>
+          </p>
+        )}
+        <p class="muted">{t("otherPrograms")}</p>
+        <a class="tools-foot-link" href="#/system">
+          {t("otherProgramsLink")}
+          <Icon name="chevron" size={12} />
+        </a>
+      </div>
     </section>
   );
 }
@@ -898,7 +1106,7 @@ function NewKeyForm(props: { onMade: (key: MadeKey) => void; onCancel: () => voi
   return (
     <form class="tools-new" onSubmit={submit}>
       <label class="tools-new-name">
-        <span>{t("name")}</span>
+        <span class="label">{t("name")}</span>
         <input
           ref={input}
           type="text"
@@ -919,7 +1127,6 @@ function NewKeyForm(props: { onMade: (key: MadeKey) => void; onCancel: () => voi
   );
 }
 
-/** One key: its name, its use this week, Rename and Delete. */
 function KeyRow(props: {
   item: ClientKey;
   owners?: ReadonlyMap<string, string>;
@@ -935,29 +1142,113 @@ function KeyRow(props: {
   const p = usePrivacy();
   const key = props.item;
   const name = toolKeyName(key, props.owners, p.id);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [draft, setDraft] = useState("");
   const [renameError, setRenameError] = useState<string>();
   const [deleteError, setDeleteError] = useState<string>();
   const [lastKey, setLastKey] = useState(false);
+  const menuList = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const renameItemRef = useRef<HTMLButtonElement>(null);
+  const deleteItemRef = useRef<HTMLButtonElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const cancelDeleteRef = useRef<HTMLButtonElement>(null);
+  const menuTarget = useRef<"first" | "last">("first");
+  const returnFocus = useRef(false);
+  const questionId = useId();
+  const menuId = useId();
+  const lastKeyId = useId();
+
+  const insideMenu = (target: Node | null) =>
+    Boolean(triggerRef.current?.contains(target) || menuList.current?.contains(target));
+
+  const enabledMenuItems = (): HTMLButtonElement[] =>
+    [renameItemRef.current, deleteItemRef.current].filter((el): el is HTMLButtonElement =>
+      Boolean(el && !el.disabled),
+    );
+
+  const focusMenuItem = (which: "first" | "last") => {
+    const items = enabledMenuItems();
+    if (items.length === 0) {
+      menuList.current?.focus();
+      return;
+    }
+    (which === "last" ? items[items.length - 1] : items[0])?.focus();
+  };
+
+  useLayoutEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (e: Event) => {
+      if (!insideMenu(e.target as Node | null)) setMenuOpen(false);
+    };
+    const onFocusIn = (e: Event) => {
+      if (!insideMenu(e.target as Node | null)) setMenuOpen(false);
+    };
+    const onKeyDown = (e: Event) => {
+      if ((e as KeyboardEvent).key === "Escape") {
+        setMenuOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("focusin", onFocusIn);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
+
+  useLayoutEffect(() => {
+    if (!menuOpen) return;
+    focusMenuItem(menuTarget.current);
+  }, [menuOpen]);
+
+  useLayoutEffect(() => {
+    if (confirming) cancelDeleteRef.current?.focus();
+  }, [confirming]);
+
+  useLayoutEffect(() => {
+    if (renaming) renameInputRef.current?.focus();
+  }, [renaming]);
+
+  useLayoutEffect(() => {
+    if (!renaming && !confirming && returnFocus.current) {
+      returnFocus.current = false;
+      triggerRef.current?.focus();
+    }
+  }, [renaming, confirming]);
+
   const rename = async (e: Event) => {
     e.preventDefault();
     setRenameError(undefined);
     const reply = await api.renameClientKey(key.id, draft);
     if (reply.status === 401) return unauthorized();
     if (reply.status === 405) {
+      returnFocus.current = true;
       setRenaming(false);
       return props.onNoRename();
     }
     const why = problem(reply);
     if (why) return setRenameError(t("renameFailed", { reason: why }));
+    returnFocus.current = true;
     setRenaming(false);
     props.onRenamed();
   };
+
   const remove = async () => {
+    if (deleting) return;
     setDeleteError(undefined);
     setLastKey(false);
+    setDeleting(true);
     const reply = await api.deleteClientKey(key.id);
+    setDeleting(false);
+    returnFocus.current = true;
+    setConfirming(false);
     if (reply.status === 401) return unauthorized();
     if (reply.status === 409) return setLastKey(true);
     if (reply.status === 404) return props.onStale();
@@ -965,59 +1256,182 @@ function KeyRow(props: {
     if (why) return setDeleteError(t("deleteFailed", { reason: why }));
     props.onDeleted(key.id);
   };
+
+  const onMenuKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setMenuOpen(false);
+      triggerRef.current?.focus();
+      return;
+    }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
+    const items = enabledMenuItems();
+    if (items.length === 0) return;
+    e.preventDefault();
+    if (e.key === "Home") {
+      items[0]?.focus();
+      return;
+    }
+    if (e.key === "End") {
+      items[items.length - 1]?.focus();
+      return;
+    }
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = e.key === "ArrowDown" ? (at + 1) % items.length : (at <= 0 ? items.length : at) - 1;
+    items[next]?.focus();
+  };
+
   const week =
     props.used === undefined
       ? undefined
       : props.used > 0
         ? t("requests", { count: props.used })
         : t("unused");
+  const question = name.named ? t("askNamed", { name: name.text }) : t("askUnnamed");
+
   return (
-    <li class="tool-key" data-part="tool-key">
+    <li class="tool-key" data-part="tool-key" data-menu-open={menuOpen ? "" : undefined}>
+      <span class="tool-key-icon" aria-hidden="true">
+        <Icon name="key" size={14} />
+      </span>
       <span class="tool-key-name">
         <span class="tool-key-label">{name.text}</span>
-        {name.named && <span class="mono muted">{key.masked}</span>}
+        {name.named && <span class="mono muted tool-key-masked">{key.masked}</span>}
       </span>
-      <span class="tool-key-used muted">{week}</span>
-      <span class="tool-key-actions">
-        {props.canRename && !renaming && (
-          <Button
+      <span class="tool-key-used muted num">{week}</span>
+      <div class="tool-key-actions">
+        {!renaming && !confirming && (
+          <button
+            ref={triggerRef}
+            type="button"
+            class="btn tool-key-menu-btn"
+            data-part="button"
+            data-slot="button"
+            data-variant="ghost"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen ? "true" : "false"}
+            aria-controls={menuOpen ? menuId : undefined}
+            aria-label={t("keyActions", { name: name.text })}
             onClick={() => {
-              setDraft(key.label ?? "");
-              setRenaming(true);
+              menuTarget.current = "first";
+              setMenuOpen((o) => !o);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                const target = e.key === "ArrowUp" ? "last" : "first";
+                menuTarget.current = target;
+                if (menuOpen) focusMenuItem(target);
+                else setMenuOpen(true);
+                return;
+              }
+              if (menuOpen && e.key === "Escape") {
+                e.preventDefault();
+                setMenuOpen(false);
+              }
             }}
           >
-            {t("rename")}
-          </Button>
+            <EllipsisIcon />
+          </button>
         )}
-        <ConfirmButton
-          disabled={props.only}
-          question={name.named ? t("askNamed", { name: name.text }) : t("askUnnamed")}
-          onConfirm={remove}
-        >
-          {t("delete")}
-        </ConfirmButton>
-      </span>
+      </div>
+      {menuOpen && (
+        <div class="tool-key-menu-wrap">
+          <div
+            ref={menuList}
+            id={menuId}
+            class="tool-key-menu"
+            role="menu"
+            tabIndex={-1}
+            aria-label={t("keyActions", { name: name.text })}
+            onKeyDown={onMenuKeyDown}
+          >
+            {props.canRename && (
+              <button
+                ref={renameItemRef}
+                type="button"
+                role="menuitem"
+                class="tool-key-menu-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setConfirming(false);
+                  setDraft(key.label ?? "");
+                  setRenaming(true);
+                }}
+              >
+                {t("rename")}
+              </button>
+            )}
+            <button
+              ref={deleteItemRef}
+              type="button"
+              role="menuitem"
+              class="tool-key-menu-item"
+              data-tone="danger"
+              disabled={props.only}
+              aria-describedby={props.only || lastKey ? lastKeyId : undefined}
+              onClick={() => {
+                setMenuOpen(false);
+                setRenaming(false);
+                setConfirming(true);
+              }}
+            >
+              {t("delete")}
+            </button>
+          </div>
+        </div>
+      )}
+      {confirming && (
+        <div class="tool-key-confirm confirm">
+          <span class="confirm-question" id={questionId}>
+            {question}
+          </span>
+          <Button variant="danger" busy={deleting} describedBy={questionId} onClick={remove}>
+            {t("confirmDelete")}
+          </Button>
+          <Button
+            buttonRef={cancelDeleteRef}
+            describedBy={questionId}
+            onClick={() => {
+              returnFocus.current = true;
+              setConfirming(false);
+            }}
+          >
+            {t("cancel")}
+          </Button>
+        </div>
+      )}
       {renaming && (
         <form class="tool-key-rename" onSubmit={rename}>
           <label>
             <span class="sr-only">{t("name")}</span>
             <input
+              ref={renameInputRef}
               type="text"
               value={draft}
               maxLength={64}
               placeholder={t("namePlaceholder")}
               onInput={(e) => setDraft(e.currentTarget.value)}
-              // biome-ignore lint/a11y/noAutofocus: the field opens because the person pressed Rename
-              autoFocus
             />
           </label>
           <Button variant="primary" type="submit">
             {t("save")}
           </Button>
-          <Button onClick={() => setRenaming(false)}>{t("cancel")}</Button>
+          <Button
+            onClick={() => {
+              returnFocus.current = true;
+              setRenaming(false);
+            }}
+          >
+            {t("cancel")}
+          </Button>
         </form>
       )}
-      {(props.only || lastKey) && <p class="tool-key-note muted">{t("lastKey")}</p>}
+      {(props.only || lastKey) && (
+        <p id={lastKeyId} class="tool-key-note muted">
+          {t("lastKey")}
+        </p>
+      )}
       {renameError && <Notice tone="danger">{renameError}</Notice>}
       {deleteError && <Notice tone="danger">{deleteError}</Notice>}
     </li>
@@ -1029,49 +1443,65 @@ function KeysSection(props: {
   week?: Map<string, number>;
   made: MadeKeys;
   owners?: ReadonlyMap<string, string>;
+  adding: boolean;
+  setAdding: (v: boolean) => void;
+  primaryAction: boolean;
   /** Called when a key was made, renamed or deleted: the list and the names are read again. */
   onChanged: () => void;
 }) {
-  const [adding, setAdding] = useState(false);
   const [noRename, setNoRename] = useState(false);
   const p = usePrivacy();
   const list = props.keys.data?.keys;
   const newKey = (
-    <Button onClick={() => setAdding(true)} disabled={adding}>
+    <Button
+      variant={props.primaryAction && !props.adding ? "primary" : "quiet"}
+      onClick={() => props.setAdding(true)}
+      disabled={props.adding}
+    >
+      <Icon name="plus" size={14} />
       {t("newKey")}
     </Button>
   );
   return (
-    <section class="tools-section" aria-labelledby="tools-keys">
-      <div class="tools-section-head">
-        <h2 id="tools-keys" class="tools-heading">
-          {list ? t("keysCount", { count: list.length }) : t("keys")}
-        </h2>
+    <section class="tools-section card" aria-labelledby="tools-keys">
+      <header class="tools-card-head">
+        <div class="tools-card-title">
+          <h2 id="tools-keys" class="tools-heading">
+            {list ? t("keysCount", { count: list.length }) : t("keys")}
+          </h2>
+          <p class="tools-subtitle muted">{t("keysHint")}</p>
+        </div>
         {list && list.length > 0 && newKey}
-      </div>
-      <p class="muted">{t("keysHint")}</p>
-      {noRename && <Notice tone="muted">{t("noRename")}</Notice>}
+      </header>
+      {noRename && (
+        <div class="tools-keys-banner">
+          <Notice tone="muted">{t("noRename")}</Notice>
+        </div>
+      )}
       {props.made.list.map((made) => {
         const item = list?.find((k) => k.id === made.id);
         const label = item?.label ?? made.label;
         return (
-          <FreshKey
-            key={made.id}
-            value={made.value}
-            name={label ? p.id(label) : undefined}
-            onClose={() => props.made.close(made.id)}
-          />
+          <div key={made.id} class="tools-keys-banner">
+            <FreshKey
+              value={made.value}
+              name={label ? p.id(label) : undefined}
+              onClose={() => props.made.close(made.id)}
+            />
+          </div>
         );
       })}
-      {adding && (
-        <NewKeyForm
-          onCancel={() => setAdding(false)}
-          onMade={(key) => {
-            props.made.add(key);
-            setAdding(false);
-            props.onChanged();
-          }}
-        />
+      {props.adding && (
+        <div class="tools-keys-banner">
+          <NewKeyForm
+            onCancel={() => props.setAdding(false)}
+            onMade={(key) => {
+              props.made.add(key);
+              props.setAdding(false);
+              props.onChanged();
+            }}
+          />
+        </div>
       )}
       <Phases
         load={props.keys}
@@ -1079,11 +1509,13 @@ function KeysSection(props: {
         failed={{ title: t("keysFailed") }}
         isEmpty={(data) => data.keys.length === 0}
         empty={
-          <StatePane
-            kind="empty"
-            title={t("noKeys")}
-            primary={{ label: t("newKey"), onClick: () => setAdding(true) }}
-          />
+          <div class="tools-card-body">
+            <StatePane
+              kind="empty"
+              title={t("noKeys")}
+              primary={{ label: t("newKey"), onClick: () => props.setAdding(true) }}
+            />
+          </div>
         }
       >
         {(data) => (
@@ -1144,6 +1576,7 @@ export function ToolsPage(props: { options?: ToolsOptions }) {
   const usage = useLoad(() => api.usage("since=7d"));
   const made = useMadeKeys();
   const owners = useOwners(options?.keyOwners, keys.data);
+  const [addingKey, setAddingKey] = useState(false);
   const remote = options?.isRemote === true || !onThisMachine(host.address);
   const refresh = async () => {
     keys.reload();
@@ -1155,29 +1588,54 @@ export function ToolsPage(props: { options?: ToolsOptions }) {
     keys.reload();
     usage.reload();
   };
+  const clients = state.setup.data?.scanned_at
+    ? groupTools(state.setup.data.found.clients, options?.extraTools)
+    : undefined;
+  const hasPanelUpdate = Boolean(
+    clients &&
+      [...clients.connected, ...clients.installed].some(
+        (c) => c.state === "needs-update" && hasPasteText(c) && !options?.toolAction?.(c),
+      ),
+  );
   return (
     <>
-      <PageHead title={t("title")} actions={<Button onClick={refresh}>{refreshWord()}</Button>} />
-      <div class="tools stack">
-        <ToolListView
-          toolAction={options?.toolAction}
-          extraTools={options?.extraTools}
-          localPages={options?.localPages}
-          notes={options?.notes}
-          remote={remote}
-          state={state}
-          made={made}
-          onKeysChanged={changed}
-        />
-        <div class="tools-secondary">
-          <AddressSection state={state} remote={remote} />
-          <KeysSection
-            keys={keys}
-            week={usage.data ? requestsByKey(usage.data.keys) : undefined}
-            made={made}
-            owners={owners}
-            onChanged={changed}
-          />
+      <PageHead
+        title={t("title")}
+        actions={
+          <Button onClick={refresh}>
+            <Icon name="refresh" size={14} />
+            {refreshWord()}
+          </Button>
+        }
+      />
+      <div class="tools">
+        <div class="tools-cols">
+          <div class="tools-main">
+            <ToolListView
+              toolAction={options?.toolAction}
+              extraTools={options?.extraTools}
+              localPages={options?.localPages}
+              notes={options?.notes}
+              remote={remote}
+              state={state}
+              made={made}
+              onKeysChanged={changed}
+              highlightUpdate={!addingKey}
+            />
+            <KeysSection
+              keys={keys}
+              week={usage.data ? requestsByKey(usage.data.keys) : undefined}
+              made={made}
+              owners={owners}
+              adding={addingKey}
+              setAdding={setAddingKey}
+              primaryAction={!hasPanelUpdate}
+              onChanged={changed}
+            />
+          </div>
+          <aside class="tools-side">
+            <ConnectionSection state={state} keys={keys.data?.keys} remote={remote} />
+          </aside>
         </div>
       </div>
     </>

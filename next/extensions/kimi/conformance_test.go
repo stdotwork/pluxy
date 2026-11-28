@@ -11,9 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// TestConformance runs the extension conformance kit against this extension, with a fake Kimi
-// that acts out each scenario,
-// for each kind of account: a device-code login and a Kimi Code API key.
 func TestConformance(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	for _, apiKey := range []bool{false, true} {
@@ -66,7 +63,6 @@ func prepare(t *testing.T, s conformance.Scenario, apiKey bool) conformance.Setu
 	}
 	cred := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: access, RefreshToken: refresh, Data: []byte(`{"device_id":"conformance-device"}`)}
 	if apiKey {
-		// The fake accepts any token it issued, so an access token stands in for a key.
 		cred = &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: access}
 	}
 	setup := conformance.Setup{Account: protocol.Account{ID: "conformance", Settings: srv.Settings(), Credential: cred}}

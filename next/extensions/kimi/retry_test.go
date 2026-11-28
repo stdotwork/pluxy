@@ -14,13 +14,11 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk/sdktest"
 )
 
-// settingsFor returns the account settings that send login calls to base.
 func settingsFor(base string) json.RawMessage {
 	b, _ := json.Marshal(map[string]string{"auth_base_url": base})
 	return b
 }
 
-// A login or renewal call is retryable only when the request never reached Kimi.
 func TestLoginRetryOnlyWhenNotSent(t *testing.T) {
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	ctx := context.Background()

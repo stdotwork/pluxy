@@ -16,14 +16,11 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// The numbers a login server sends (interval, expires_in) are bounded before they become
-// durations: a huge one must not overflow, a negative one must not make a tight polling loop or
-// end the login at once.
 func TestDeviceCodeNumbersAreBounded(t *testing.T) {
 	const (
 		maxInt64 = "9223372036854775807"
-		wraps    = "9300000000" // seconds; times time.Second this wraps int64
-		longLife = "9000000000" // 285 years: positive as a duration, but absurd
+		wraps    = "9300000000"
+		longLife = "9000000000"
 	)
 	for _, tc := range []struct {
 		name, interval, expiresIn string
@@ -85,7 +82,6 @@ type promptFunc func(protocol.Prompt)
 
 func (f promptFunc) Prompt(p protocol.Prompt) error { f(p); return nil }
 
-// An access token's lifetime from the server is bounded before it becomes an expiry time.
 func TestTokenLifetimeIsBounded(t *testing.T) {
 	before := time.Now()
 	for _, tc := range []struct {

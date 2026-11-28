@@ -11,7 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// contentsOf returns the parts GenerateContent parts of a body, one entry per content.
 func contentsOf(t *testing.T, body []byte) []struct {
 	Role  string            `json:"role"`
 	Parts []json.RawMessage `json:"parts"`
@@ -29,8 +28,6 @@ func contentsOf(t *testing.T, body []byte) []struct {
 	return got.Contents
 }
 
-// A URL in a request from another format reaches Gemini as fileData only when it is a file URI
-// Gemini documents: a Files API URI or a Cloud Storage URI.
 func TestEncodeMediaURL(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -61,7 +58,6 @@ func TestEncodeMediaURL(t *testing.T) {
 		}
 	}
 
-	// A Responses file URL, and a Messages document URL, map the same way.
 	resp, err := openairesponses.ParseRequest([]byte(`{"model":"gemini-x","input":[{"type":"message","role":"user","content":[
 		{"type":"input_text","text":"look"},{"type":"input_file","file_url":"https://generativelanguage.googleapis.com/v1beta/files/doc-1"}]}]}`))
 	if err != nil {
@@ -88,8 +84,6 @@ func TestEncodeMediaURL(t *testing.T) {
 	}
 }
 
-// A Cloud Storage URI from a translated request is dropped with a loss: Vertex would read the
-// object with the account's own permissions, which a client key must not reach through pluxy.
 func TestEncodeCloudStorageURIDropped(t *testing.T) {
 	chat, err := openaichat.ParseRequest([]byte(`{"model":"gemini-x","messages":[{"role":"user","content":[
 		{"type":"text","text":"look"},{"type":"image_url","image_url":{"url":"gs://bucket/cat.png"}}]}]}`))
@@ -118,8 +112,6 @@ func TestEncodeCloudStorageURIDropped(t *testing.T) {
 	}
 }
 
-// A URL Gemini does not document is dropped with a loss, never fetched: pluxy does not follow a
-// client's URL.
 func TestEncodeUnsupportedMediaURLDropped(t *testing.T) {
 	req, err := openaichat.ParseRequest([]byte(`{"model":"gemini-x","messages":[{"role":"user","content":[
 		{"type":"text","text":"look"},
@@ -155,8 +147,6 @@ func TestEncodeUnsupportedMediaURLDropped(t *testing.T) {
 	}
 }
 
-// A GenerateContent request is passed through unchanged elsewhere, but when its own parts are
-// rebuilt the request's file URI is written back as the client sent it.
 func TestEncodeGeminiFileURLKept(t *testing.T) {
 	req, err := ParseRequest("gemini-x", false, []byte(`{"contents":[{"role":"user","parts":[
 		{"fileData":{"fileUri":"https://example.com/cat.png","mimeType":"image/png"}}]}]}`))
@@ -175,13 +165,11 @@ func TestEncodeGeminiFileURLKept(t *testing.T) {
 	}
 }
 
-// An inline image is sent only when its data is base64 and its media type is one Gemini
-// documents for images.
 func TestEncodeInlineImageValidation(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		url  string
-		want string // the inlineData media type sent, or "" when it is dropped
+		want string
 	}{
 		{"png", "data:image/png;base64,aGVsbG8=", "image/png"},
 		{"jpeg", "data:image/jpeg;base64,aGVsbG8=", "image/jpeg"},
@@ -222,8 +210,6 @@ func TestEncodeInlineImageValidation(t *testing.T) {
 	}
 }
 
-// A Messages plain-text document has no GenerateContent form: its text is carried in a text
-// part, delimited and named after the document, and reported as an approximated loss.
 func TestEncodeTextDocument(t *testing.T) {
 	req, err := anthropicmessages.ParseRequest([]byte(`{"model":"gemini-x","max_tokens":9,"messages":[{"role":"user","content":[
 		{"type":"text","text":"summarize"},
@@ -244,8 +230,6 @@ func TestEncodeTextDocument(t *testing.T) {
 	}
 }
 
-// transImageRequest is a user turn with text and one image translated from another format (no
-// origin, so not the target's own).
 func transImageRequest(url string) llm.Request {
 	return llm.Request{Model: "m", Items: []llm.Item{{
 		Type:    llm.ItemTypeMessage,
@@ -254,8 +238,6 @@ func transImageRequest(url string) llm.Request {
 	}}}
 }
 
-// A part the client sent to GenerateContent itself is what Gemini accepts: the encoder does not
-// apply the image list or the base64 check to it, only to parts translated from another format.
 func TestEncodeSameFormatImageNotValidated(t *testing.T) {
 	same := transImageRequest("data:image/tiff;base64,aGVsbG8=")
 	same.Items[0].Content[1].Origin = &llm.Origin{Format: llm.FormatGeminiGenerate, Path: "messages[0].content[1]"}
@@ -280,8 +262,6 @@ func TestEncodeSameFormatImageNotValidated(t *testing.T) {
 	}
 }
 
-// Only a Messages document block is a Messages text document: a native part of another format
-// that happens to hold the same JSON is not carried as its text.
 func TestEncodeForeignNativeTextDocumentDropped(t *testing.T) {
 	doc := []byte(`{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Line one\nLine two"},"title":"notes.txt"}`)
 	req := llm.Request{Model: "m", Items: []llm.Item{{
@@ -301,9 +281,6 @@ func TestEncodeForeignNativeTextDocumentDropped(t *testing.T) {
 	}
 }
 
-// geminiFileURI accepts exactly the Files API file URI forms and nothing that only looks like
-// one: traversal, escapes, credentials, ports, queries, fragments, other versions and other hosts
-// are refused.
 func TestGeminiFileURI(t *testing.T) {
 	for _, c := range []struct {
 		url  string

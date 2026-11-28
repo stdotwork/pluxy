@@ -12,8 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// maxErrorRaw limits the upstream bytes an error keeps for diagnostics. Longer data is not kept:
-// a cut of it could fall inside a credential, whose start core's redaction cannot recognise.
 const maxErrorRaw = 1 << 20
 
 func malformed(msg string, data []byte) *llm.Error {
@@ -55,7 +53,6 @@ func decodeUsage(raw json.RawMessage) *llm.Usage {
 	return out
 }
 
-// response is the part of a Response object the decoder reads.
 type response struct {
 	ID                string            `json:"id"`
 	Model             string            `json:"model"`
@@ -92,9 +89,6 @@ type outputItem struct {
 	EncryptedContent string `json:"encrypted_content"`
 }
 
-// extractURLCitation reads one Responses url_citation annotation. If start_index/end_index are
-// valid within [0, maxRunes], they are shifted by runeOffset; otherwise the citation is kept
-// without a range so a bad offset never produces a wrong range.
 func extractURLCitation(raw json.RawMessage, runeOffset, maxRunes int) (llm.Citation, bool) {
 	if len(raw) == 0 || raw[0] != '{' {
 		return llm.Citation{}, false
@@ -117,8 +111,6 @@ func extractURLCitation(raw json.RawMessage, runeOffset, maxRunes int) (llm.Cita
 	return c, true
 }
 
-// extractContentCitations reads url_citation annotations across all output_text parts of a
-// Responses message item, shifting each part's rune offsets into the concatenated message text.
 func extractContentCitations(content []outputContent, budget *llm.CiteBudget) []llm.Citation {
 	var out []llm.Citation
 	runeOffset := 0
@@ -145,8 +137,6 @@ func extractContentCitations(content []outputContent, budget *llm.CiteBudget) []
 	return out
 }
 
-// extractWebSearchCallSources reads URL sources from a Responses web_search_call item's
-// action.sources and results arrays, deduplicated in first-seen order.
 func extractWebSearchCallSources(raw json.RawMessage, seen map[string]bool, out []llm.Source, budget *llm.CiteBudget) []llm.Source {
 	var ws struct {
 		Type   string `json:"type"`
@@ -195,13 +185,8 @@ func extractWebSearchCallSources(raw json.RawMessage, seen map[string]bool, out 
 	return out
 }
 
-// maxCodeExecInput bounds the streamed code delta buffered for a single code_interpreter_call.
 const maxCodeExecInput = 1 << 20
 
-// extractCodeInterpreterCall reads a terminal code_interpreter_call output item into a canonical
-// CodeExecution. Partial items (in_progress, interpreting) and malformed items return ok=false, and
-// so does a completed item whose outputs the upstream did not give (null or missing): its logs are
-// unknown, so it must not read as a run that printed nothing.
 func extractCodeInterpreterCall(raw json.RawMessage, fallbackCode string) (id string, ce llm.CodeExecution, ok bool) {
 	if len(raw) == 0 || raw[0] != '{' {
 		return "", llm.CodeExecution{}, false
@@ -274,9 +259,6 @@ func extractCodeInterpreterCall(raw json.RawMessage, fallbackCode string) (id st
 	}, true
 }
 
-// codeInterpreterCallID reports whether raw is a code_interpreter_call output item, and its ID. An
-// item whose ID is not a string is still a call, with no ID, so it is counted as a call left out
-// rather than passed over.
 func codeInterpreterCallID(raw json.RawMessage) (id string, ok bool) {
 	var item struct {
 		ID   string `json:"id"`
@@ -292,10 +274,6 @@ func codeInterpreterCallID(raw json.RawMessage) (id string, ok bool) {
 	return item.ID, item.Type == "code_interpreter_call"
 }
 
-// noteCodeCall adds the run a code_interpreter_call item holds, or remembers that the item gave
-// none yet. index is its output index, which names an item with no ID. fallback is the code the
-// stream's deltas gave; over says those deltas passed the limit, so the code is left out unless the
-// item itself holds it.
 func (d *StreamDecoder) noteCodeCall(raw json.RawMessage, index int, fallback string, over bool) {
 	id, isCall := codeInterpreterCallID(raw)
 	if !isCall {
@@ -325,13 +303,6 @@ func (d *StreamDecoder) noteCodeCall(raw json.RawMessage, index int, fallback st
 	d.codeExecs.Append(ce)
 }
 
-// extractImageGenerationCall reads a final Responses image_generation_call output item into a
-// canonical OutputMedia. Callers pass only items that arrived whole (an output_item.done event,
-// a terminal event's output, a non-streamed Response), never a partial image. Such an item with
-// image data is carried whatever its status says: "generating" and a missing status happen on a
-// finished image (a Codex route is reported to end on "generating"). Non-image items return
-// isImg=false. A failed item, an item with no data, and an invalid or unsafe (SVG) one return
-// isImg=true with a non-empty problem.
 func extractImageGenerationCall(raw json.RawMessage) (id string, media *llm.OutputMedia, problem string, isImg bool) {
 	if len(raw) == 0 || raw[0] != '{' {
 		return "", nil, "", false
@@ -380,8 +351,6 @@ func extractImageGenerationCall(raw json.RawMessage) (id string, media *llm.Outp
 	return item.ID, &llm.OutputMedia{Kind: kind, MediaType: mt, Data: data}, "", true
 }
 
-// opaque returns a reasoning item's encrypted content as the opaque data its item.end carries, or
-// nil when it has none.
 func opaque(it outputItem) *llm.Opaque {
 	if it.Type != "reasoning" || it.EncryptedContent == "" {
 		return nil
@@ -389,8 +358,6 @@ func opaque(it outputItem) *llm.Opaque {
 	return &llm.Opaque{Format: format, Data: it.EncryptedContent}
 }
 
-// kindOf returns the model's item kind for a Responses output item, or "" when the model has no
-// such item.
 func kindOf(it outputItem) string {
 	switch it.Type {
 	case "message":
@@ -403,7 +370,6 @@ func kindOf(it outputItem) string {
 	return ""
 }
 
-// finishOf says why a terminal Response ended.
 func finishOf(r response) llm.Finish {
 	switch r.Status {
 	case "incomplete":
@@ -453,36 +419,29 @@ type streamEvent struct {
 	Message      string          `json:"message"`
 }
 
-// StreamDecoder turns the events of an upstream Responses stream into model events. Every model
-// event carries the upstream event it came from in Raw; upstream events the model has no place
-// for (response.in_progress, content parts, done events, hosted tool items) become native
-// events. Use one decoder per stream.
 type StreamDecoder struct {
-	started    bool
-	done       bool
-	next       int
-	items      map[int]int              // upstream output_index -> open model item index
-	textParts  map[int][]int            // model item index -> rune count of the text deltas seen, by content part
-	annRaws    map[int][]partAnnotation // model item index -> annotations from annotation.added
-	sources    []llm.Source
-	seenSrc    map[string]bool
-	cites      llm.CiteBudget
-	annRawSize int // bytes of annRaws
-	finishCut  []llm.Loss
-	codeBuf    map[int]*strings.Builder // upstream output_index -> streamed code_interpreter_call code
-	codeOver   map[int]bool             // upstream output_index -> its streamed code passed maxCodeExecInput
-	codeExecs  llm.CodeRuns
-	seenCode   map[string]bool
-	codeUnread map[string]bool // code_interpreter_call items that gave no run, by ID or output index
-	// codeOverKeys are the items whose streamed code passed the limit: only the item's own code
-	// can stand for it, since what was kept is part of the code.
+	started      bool
+	done         bool
+	next         int
+	items        map[int]int
+	textParts    map[int][]int
+	annRaws      map[int][]partAnnotation
+	sources      []llm.Source
+	seenSrc      map[string]bool
+	cites        llm.CiteBudget
+	annRawSize   int
+	finishCut    []llm.Loss
+	codeBuf      map[int]*strings.Builder
+	codeOver     map[int]bool
+	codeExecs    llm.CodeRuns
+	seenCode     map[string]bool
+	codeUnread   map[string]bool
 	codeOverKeys map[string]bool
 	mediaBytes   int
 	seenMedia    map[string]bool
 	losses       []llm.Loss
 }
 
-// NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
 	return &StreamDecoder{
 		items:        map[int]int{},
@@ -498,8 +457,6 @@ func NewStreamDecoder() *StreamDecoder {
 	}
 }
 
-// Losses returns what the reply had that the model could not carry, such as unsafe, malformed,
-// or oversized output media parts.
 func (d *StreamDecoder) Losses() []llm.Loss {
 	return d.cites.WithLoss(append(slices.Clip(d.losses), d.finishCut...))
 }
@@ -510,20 +467,13 @@ func (d *StreamDecoder) start(out []llm.Event, info llm.ResponseInfo, raw json.R
 	return append(out, llm.Event{Type: llm.EventResponseStart, Response: &info, Raw: raw})
 }
 
-// maxContentParts bounds the content parts of one message item whose text the decoder counts. A
-// part past it has no text counted, so an annotation on it carries no range.
 const maxContentParts = 1024
 
-// partAnnotation is an annotation.added event's annotation and the content part it is on.
 type partAnnotation struct {
 	raw  json.RawMessage
 	part int
 }
 
-// messageCitations returns the citations of the message item idx, as its done item (it, when the
-// upstream sent one) holds them, or else as its annotation events gave them, and lets go of what
-// it kept for the item. An annotation's offsets count within its content part, so they are
-// shifted by the text of the parts before it.
 func (d *StreamDecoder) messageCitations(idx int, it *outputItem) []llm.Citation {
 	var cits []llm.Citation
 	if it != nil {
@@ -532,7 +482,6 @@ func (d *StreamDecoder) messageCitations(idx int, it *outputItem) []llm.Citation
 	if len(cits) == 0 && len(d.annRaws[idx]) > 0 {
 		parts := d.textParts[idx]
 		for _, ar := range d.annRaws[idx] {
-			// A part with no text seen has no range to check, so its citation has none.
 			offset, runes := 0, -1
 			for i, n := range parts {
 				if i < ar.part {
@@ -551,7 +500,6 @@ func (d *StreamDecoder) messageCitations(idx int, it *outputItem) []llm.Citation
 	return cits
 }
 
-// releaseItem lets go of what the decoder kept for the item idx.
 func (d *StreamDecoder) releaseItem(idx int) {
 	for _, ar := range d.annRaws[idx] {
 		d.annRawSize -= len(ar.raw)
@@ -560,9 +508,6 @@ func (d *StreamDecoder) releaseItem(idx int) {
 	delete(d.textParts, idx)
 }
 
-// closeAll closes items the upstream left open; the events it adds carry no Raw. final is the
-// output of the terminal event: an item that never had its done event gets its citations from
-// there, or else from its annotation events.
 func (d *StreamDecoder) closeAll(out []llm.Event, final []json.RawMessage) []llm.Event {
 	type openItem struct{ output, idx int }
 	open := make([]openItem, 0, len(d.items))
@@ -589,15 +534,11 @@ func (d *StreamDecoder) closeAll(out []llm.Event, final []json.RawMessage) []llm
 	return out
 }
 
-// Decode takes the data of one SSE event and returns the events it produces. A terminal
-// upstream event (response.completed, response.incomplete, response.failed or error) ends the
-// stream; response.failed and error become an *llm.Error.
 func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	if d.done {
 		return nil, fmt.Errorf("openairesponses: data after the end of the stream")
 	}
 	if string(data) == "[DONE]" {
-		// Not part of Responses; some compatible servers send it after the terminal event.
 		return nil, nil
 	}
 	var ev streamEvent
@@ -626,13 +567,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		if ev.Type == "response.created" {
 			return d.start(out, info, raw), nil
 		}
-		// The stream did not open with response.created. The first event's raw goes on
-		// response.start, so a Responses client still gets every upstream event once.
 		out = d.start(out, info, raw)
 		raw = nil
 	}
-	// native passes on an upstream event the model has no place for, unless its raw already went
-	// on response.start.
 	native := func() []llm.Event {
 		if raw == nil {
 			return out
@@ -680,8 +617,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		return append(out, llm.Event{Type: t, Index: idx, Delta: ev.Delta, Raw: raw}), nil
 	case "response.output_text.annotation.added":
 		if idx, open := d.items[ev.OutputIndex]; open && len(ev.Annotation) > 0 {
-			// The raw entries take about what the citations made of them will, so the citation
-			// limit bounds them while they wait for their item to end.
 			if d.annRawSize+len(ev.Annotation) > llm.MaxCitationBytes {
 				d.cites.LeftOut()
 			} else {
@@ -698,7 +633,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 				d.codeBuf[ev.OutputIndex] = buf
 			}
 			if buf.Len()+len(ev.Delta) > maxCodeExecInput {
-				// The code is too long to keep: drop what came, never keep a part as the run's code.
 				d.codeOver[ev.OutputIndex] = true
 				delete(d.codeBuf, ev.OutputIndex)
 			} else {
@@ -747,8 +681,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 					case d.mediaBytes+len(media.Data) > llm.MaxOutputMediaReplyBytes:
 						d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media exceeds per-reply size limit"})
 					case len(media.Data)+len(raw) > protocol.MaxFrame-protocol.FrameHeadroom:
-						// The event holds the image twice, as media and in Raw. A native event keeps
-						// the upstream item for a client of this format.
 						d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media with its upstream event would not fit one protocol frame"})
 					default:
 						d.mediaBytes += len(media.Data)
@@ -798,7 +730,6 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		}
 		f := finishOf(r)
 		if len(d.codeUnread) > 0 {
-			// A call with no result the decoder could read is a run left out.
 			d.codeExecs.LeaveOut()
 		}
 		fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: d.sources, CodeExecutions: d.codeExecs.List(), Raw: raw}
@@ -810,20 +741,15 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		d.done = true
 		e := failure(r, data)
 		if raw == nil {
-			e.Raw = nil // already on response.start
+			e.Raw = nil
 		}
 		return out, e
 	}
 	return native(), nil
 }
 
-// Usage returns the usage the upstream reported before the stream failed. A Responses stream
-// reports usage only in its terminal event, which ends the stream, so there is none to return;
-// a response.failed event's usage is on its error.
 func (d *StreamDecoder) Usage() *llm.Usage { return nil }
 
-// Close is called when the upstream stream ends. A stream that ends before its terminal event
-// is an error: the reply may have been cut short.
 func (d *StreamDecoder) Close() ([]llm.Event, error) {
 	if d.done {
 		return nil, nil
@@ -832,17 +758,11 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 	return nil, &llm.Error{Code: llm.CodeUpstream, Message: "upstream stream ended before the reply finished"}
 }
 
-// DecodeResponse turns an upstream non-streamed Response object into the events a stream of it
-// would have produced. The finish event carries the whole body in Raw, so a Responses client
-// gets it unchanged.
 func DecodeResponse(body []byte) ([]llm.Event, error) {
 	events, _, err := DecodeResponseLosses(body)
 	return events, err
 }
 
-// DecodeResponseLosses turns an upstream non-streamed Response object into events and returns
-// what the reply had that the model could not carry. It is the non-streamed counterpart of
-// StreamDecoder.Losses.
 func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	var r response
 	if err := json.Unmarshal(body, &r); err != nil {
@@ -928,15 +848,8 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	return append(out, fin), cites.WithLoss(losses), nil
 }
 
-// OpaqueOutput lists, by path in the Response, the output data a client in another format has no
-// place for: a reasoning item's encrypted content, an assistant message's phase (commentary or
-// final_answer, which Codex asks clients to send back) and the annotations on output text. raw is
-// an output_item.done event, a terminal event or a Response object.
 func OpaqueOutput(raw json.RawMessage) []string { return opaqueOutput(raw, false) }
 
-// OpaqueOutputExceptCitations is OpaqueOutput for a client that is given a url_citation
-// annotation as a citation: a content part's annotations are listed only when one of them is
-// something else, or a url_citation the model leaves out (see llm.ValidCitationURL).
 func OpaqueOutputExceptCitations(raw json.RawMessage) []string { return opaqueOutput(raw, true) }
 
 func opaqueOutput(raw json.RawMessage, citationsCarried bool) []string {
@@ -967,7 +880,6 @@ func opaqueOutput(raw json.RawMessage, citationsCarried bool) []string {
 	return out
 }
 
-// allCitations reports whether every annotation is a url_citation the model carries as a citation.
 func allCitations(anns []json.RawMessage) bool {
 	for _, raw := range anns {
 		if _, ok := extractURLCitation(raw, 0, 0); !ok {
@@ -977,9 +889,6 @@ func allCitations(anns []json.RawMessage) bool {
 	return true
 }
 
-// outputItems calls fn with each output item in raw, by its index in the Response: the item of a
-// response.output_item.done event, or every item of a Response object or of an event that holds
-// one.
 func outputItems(raw json.RawMessage, fn func(i int, item json.RawMessage)) {
 	var ev struct {
 		Type        string            `json:"type"`

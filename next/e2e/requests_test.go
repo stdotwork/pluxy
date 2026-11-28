@@ -30,16 +30,21 @@ type runningRequest struct {
 	Attempts      int       `json:"attempts"`
 }
 
-// watchedGate is a gate that also counts the "gated" calls that left it before it opened: an
-// extension whose call was cancelled gives up its request to the gate.
 type watchedGate struct {
 	*gate
+	arrived   atomic.Int64
 	abandoned atomic.Int64
+	notify    chan struct{}
 }
 
 func newWatchedGate(t *testing.T) *watchedGate {
-	w := &watchedGate{gate: &gate{release: make(chan struct{})}}
+	w := &watchedGate{gate: &gate{release: make(chan struct{})}, notify: make(chan struct{}, 1)}
 	w.Server = httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		w.arrived.Add(1)
+		select {
+		case w.notify <- struct{}{}:
+		default:
+		}
 		select {
 		case <-w.release:
 		case <-r.Context().Done():
@@ -48,6 +53,19 @@ func newWatchedGate(t *testing.T) *watchedGate {
 	}))
 	t.Cleanup(func() { w.open(); w.Close() })
 	return w
+}
+
+func (w *watchedGate) waitArrived(t *testing.T, n int64) {
+	t.Helper()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	for w.arrived.Load() < n {
+		select {
+		case <-w.notify:
+		case <-timer.C:
+			t.Fatalf("the gate saw %d calls, want %d", w.arrived.Load(), n)
+		}
+	}
 }
 
 // requestsCore is a core with testext, whose "gated" model holds a stream open.
@@ -101,6 +119,7 @@ type heldStream struct {
 
 func (c *requestsCore) hold(t *testing.T) heldStream {
 	t.Helper()
+	before := c.gate.arrived.Load()
 	resp := post(t, context.Background(), c.base, clientKey, `{"model":"gated","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 	t.Cleanup(func() { resp.Body.Close() })
 	if resp.StatusCode != http.StatusOK {
@@ -111,6 +130,7 @@ func (c *requestsCore) hold(t *testing.T) heldStream {
 	for {
 		var ch chunk
 		if json.Unmarshal([]byte(readData(t, s.body)), &ch) == nil && len(ch.Choices) > 0 && ch.Choices[0].Delta.Content != "" {
+			c.gate.waitArrived(t, before+1)
 			return s
 		}
 	}

@@ -130,7 +130,6 @@ func TestQuotaErrors(t *testing.T) {
 	})
 }
 
-// The plan is optional: a profile that fails or names no user leaves the limits and no plan.
 func TestQuotaWithoutPlan(t *testing.T) {
 	for name, set := range map[string]func(*kimitest.Server){
 		"profile fails":    func(s *kimitest.Server) { s.MeStatus = 500 },
@@ -220,7 +219,6 @@ func TestWindowLabel(t *testing.T) {
 			t.Errorf("windowLabel(%d) = %q, want %q", secs, got, want)
 		}
 	}
-	// A missing or unknown unit counts as minutes.
 	if got := windowSeconds(flexNum{300, true}, ""); got != 18000 {
 		t.Errorf("300 with no unit = %d seconds, want 18000", got)
 	}

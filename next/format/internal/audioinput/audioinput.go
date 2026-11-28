@@ -1,5 +1,3 @@
-// Package audioinput reads and writes the audio a Chat Completions or Responses request carries
-// inline, as the canonical file part whose data URL holds it.
 package audioinput
 
 import (
@@ -9,9 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// MIME returns the media type of an audio format token, the way today's core mapped it for
-// Gemini: Chat and Responses name a wav or mp3 blob, or one of the live API's formats, with a bare
-// token. An empty token is a wav blob.
 func MIME(format string) string {
 	switch format {
 	case "", "wav":
@@ -34,8 +29,6 @@ func MIME(format string) string {
 	return "audio/" + format
 }
 
-// Format returns the token for an audio media type: the reverse of MIME, for a media type MIME
-// did not produce.
 func Format(mediaType string) string {
 	mediaType = media.Type(mediaType)
 	switch mediaType {
@@ -46,19 +39,15 @@ func Format(mediaType string) string {
 	case "audio/pcm":
 		return "pcm16"
 	case "audio/basic":
-		// Both live API spellings map to this media type; ulaw is the one to name back.
 		return "g711_ulaw"
 	}
 	return strings.TrimPrefix(mediaType, "audio/")
 }
 
-// DataURL returns the inline form of audio bytes: a base64 data URL.
 func DataURL(mediaType, data string) string {
 	return "data:" + mediaType + ";base64," + data
 }
 
-// Inline returns the media type and the base64 bytes of p when p is a file part holding inline
-// audio.
 func Inline(p llm.Part) (mediaType, data string, ok bool) {
 	if p.Type != llm.PartFile {
 		return "", "", false

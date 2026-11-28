@@ -104,7 +104,6 @@ func TestGeminiEmbeddingsOpenAIWire(t *testing.T) {
 			callCount++
 			w.Header().Set("Content-Type", "application/json")
 			if callCount == 1 {
-				// Return data out of order to verify index reordering.
 				io.WriteString(w, `{"object":"list","data":[{"object":"embedding","index":1,"embedding":[3.0,4.0]},{"object":"embedding","index":0,"embedding":[1.0,2.0]}],"usage":{"prompt_tokens":5}}`)
 			} else {
 				io.WriteString(w, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[5.0,6.0,7.0]}],"usage":{"prompt_tokens":2}}`)
@@ -205,7 +204,6 @@ func TestGeminiEmbeddingsOpenAIWire(t *testing.T) {
 			Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "goog-key"},
 		}
 
-		// Single request with aliased model.
 		singleCall := sdk.Call{
 			Account: acct,
 			Request: llm.Request{
@@ -220,7 +218,6 @@ func TestGeminiEmbeddingsOpenAIWire(t *testing.T) {
 			t.Fatalf("single: %v", err)
 		}
 
-		// Batch request with aliased inner models.
 		batchCall := sdk.Call{
 			Account: acct,
 			Request: llm.Request{
@@ -235,7 +232,6 @@ func TestGeminiEmbeddingsOpenAIWire(t *testing.T) {
 			t.Fatalf("batch: %v", err)
 		}
 
-		// Batch request whose models already match stays byte-identical.
 		const unchangedBatch = `{"requests": [{"model": "models/gemini-embedding-001", "content": {"parts": [{"text": "a"}]}}, {"model": "models/gemini-embedding-001", "content": {"parts": [{"text": "b"}]}}]}`
 		sameCall := sdk.Call{
 			Account: acct,

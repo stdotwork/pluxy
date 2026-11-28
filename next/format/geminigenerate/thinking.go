@@ -12,17 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Gemini takes thinking in two forms (Google's thinking guide). Gemini 3 and later take a level:
-// generationConfig.thinkingConfig.thinkingLevel, from the levels the model has. Gemini 2.5 takes a
-// token budget: thinkingConfig.thinkingBudget, within the model's range, -1 for dynamic, 0 to turn
-// thinking off where the model allows it. Clients in other formats name an effort (OpenAI's
-// reasoning_effort, from none to xhigh), which ApplyEffort turns into whichever form the model
-// takes, with includeThoughts so the thought summaries come back as reasoning. ApplySummary
-// overrides includeThoughts from a Messages client's thinking.display or a Responses client's
-// reasoning.summary.
-
-// budgets are the thinking budgets for each effort on models that take a budget, as today's core
-// maps them; each is then kept within the model's range.
 var budgets = map[string]int{
 	"minimal": 512,
 	"low":     1024,
@@ -31,10 +20,8 @@ var budgets = map[string]int{
 	"xhigh":   32768,
 }
 
-// levelOrder orders Gemini's thinking levels.
 var levelOrder = []string{"minimal", "low", "medium", "high", "xhigh"}
 
-// effortLevels maps each effort to the thinking level it asks for.
 var effortLevels = map[string]string{
 	"none":    "minimal",
 	"minimal": "minimal",
@@ -50,14 +37,6 @@ var (
 	roboticsModel = regexp.MustCompile(`^gemini-robotics-er-(\d+)(?:\.(\d+))?`)
 )
 
-// ThinkingOf returns how a model takes thinking: its levels (Gemini 3 and later), or its budget
-// range and whether 0 turns thinking off (Gemini 2.5, Robotics 1.6, and the -latest names). ok is
-// false for a model name the extension does not know as a thinking Gemini model, which gets no
-// thinking settings.
-//
-// shortcut: decided from the model name with Google's thinking guide as the reference, since
-// protocol v0 has no model capabilities. Move this to per-model capabilities when describe
-// carries them.
 func ThinkingOf(model string) (levels []string, minBudget, maxBudget int, zero, ok bool) {
 	model = strings.ToLower(strings.TrimPrefix(model, "models/"))
 	switch model {
@@ -119,8 +98,6 @@ func ThinkingOf(model string) (levels []string, minBudget, maxBudget int, zero, 
 	return levels, 0, 0, false, true
 }
 
-// nearestLevel returns want when the model has it, otherwise the next level up it has, otherwise
-// its highest.
 func nearestLevel(want string, levels []string) string {
 	i := slices.Index(levelOrder, want)
 	for _, l := range levelOrder[max(i, 0):] {
@@ -131,19 +108,11 @@ func nearestLevel(want string, levels []string) string {
 	return levels[len(levels)-1]
 }
 
-// ApplyEffort sets the thinking settings for effort on a GenerateContent body built for model.
-// effort may also be a token budget, as a model name's thinking suffix gives it
-// (llm.ThinkingBudget): a model that takes a budget gets that budget within its range, a model
-// with levels the level the budget falls in (llm.ThinkingEffort). It reports false, leaving the
-// body as it was, for an effort it does not know or a model that is not a thinking Gemini model;
-// the effort then stays reported as dropped.
 func ApplyEffort(body []byte, model, effort string) ([]byte, bool, error) {
 	out, _, applied, err := ApplyEffortReport(body, model, effort)
 	return out, applied, err
 }
 
-// ApplyEffortReport is ApplyEffort, and also reports each place the settings sent differ from what
-// was asked for, with its path in the body.
 func ApplyEffortReport(body []byte, model, effort string) ([]byte, []llm.Loss, bool, error) {
 	levels, minB, maxB, zero, ok := ThinkingOf(model)
 	if !ok {
@@ -198,7 +167,6 @@ func ApplyEffortReport(body []byte, model, effort string) ([]byte, []llm.Loss, b
 			include = true
 		}
 	case effort == "none":
-		// A model that cannot turn thinking off thinks as little as it can.
 		if zero {
 			cfg["thinkingBudget"] = 0
 		} else {
@@ -255,9 +223,6 @@ func ApplyEffortReport(body []byte, model, effort string) ([]byte, []llm.Loss, b
 	return out, losses, err == nil, err
 }
 
-// fieldForWrite picks which spelling of a ProtoJSON field to update in m: camelCase unless only
-// snake_case is present (or camelCase is null and snake_case is set). Any alternate spelling is
-// removed so the edited object never carries both spellings of one field.
 func fieldForWrite(m map[string]json.RawMessage, camelName, snakeName string) (string, json.RawMessage) {
 	if raw, ok := m[camelName]; ok && !isNull(raw) {
 		delete(m, snakeName)
@@ -286,14 +251,6 @@ func existingIncludeThoughts(gen map[string]json.RawMessage) (bool, bool) {
 	return v, true
 }
 
-// ApplySummary sets generationConfig.thinkingConfig.includeThoughts on a GenerateContent body built
-// for model from a Messages client's thinking.display (summarized -> true, omitted -> false) or a
-// Responses client's reasoning.summary / reasoning.generate_summary (auto -> true; concise and
-// detailed -> true with LossApproximated; none or null -> false). When thinking was turned off with
-// budget 0, a request to summarize is left unapplied so includeThoughts is not sent without
-// thinking, while an explicit false is still enforced. carried reports that the source's thinking
-// or reasoning object held only display or summary keys and is now carried, so the caller stops
-// reporting it as dropped.
 func ApplySummary(body []byte, model string, req llm.Request) ([]byte, []llm.Loss, bool, error) {
 	o := req.Origin
 	if o == nil {

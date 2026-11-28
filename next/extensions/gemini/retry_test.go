@@ -19,8 +19,6 @@ func status(code int, body string) func(w http.ResponseWriter) {
 	}
 }
 
-// An API key login is checked by one request. It is retryable only when the request never reached
-// Google, or when Google rate limited it.
 func TestAPIKeyLoginRetryOnlyWhenNotSent(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -42,8 +40,6 @@ func TestAPIKeyLoginRetryOnlyWhenNotSent(t *testing.T) {
 	}
 }
 
-// A service account login fetches an access token. The fetch is shared with model requests, whose
-// errors are retryable because the model request did not run; the login follows its own rule.
 func TestServiceAccountLoginRetryOnlyWhenNotSent(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -70,8 +66,6 @@ func TestServiceAccountLoginRetryOnlyWhenNotSent(t *testing.T) {
 	}
 }
 
-// The token fetch for a model request is unchanged: it did not reach the model, so a failure to
-// fetch the token is retryable on another account whether or not the token request was sent.
 func TestModelRequestTokenFetchStaysRetryable(t *testing.T) {
 	for name, url := range map[string]string{
 		"hung up": sdktest.LoginServer(t, sdktest.HangUp),

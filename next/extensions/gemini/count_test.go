@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// A rebuilt request is counted whole: under generateContentRequest for the Gemini API, as its
-// contents, system instruction and tools for Vertex AI.
 func TestCountBody(t *testing.T) {
 	body := []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"systemInstruction":{"parts":[{"text":"s"}]},"tools":[],"generationConfig":{"temperature":1}}`)
 	for _, c := range []struct {
@@ -30,8 +28,6 @@ func TestCountBody(t *testing.T) {
 	}
 }
 
-// Vertex AI gets a wrapped countTokens body's contents, system instruction and tools; a body of
-// contents alone goes as it came.
 func TestUnwrapCount(t *testing.T) {
 	out, err := unwrapCount([]byte(`{"generateContentRequest":{"model":"models/gemini-x","contents":[{"role":"user","parts":[{"text":"hi"}]}],"systemInstruction":{"parts":[{"text":"s"}]},"generationConfig":{"temperature":1}}}`))
 	if err != nil {

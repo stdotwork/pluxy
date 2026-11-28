@@ -9,24 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// What Kimi needs changed in a request, as today's core sends it (each rule names where Kimi's
-// API differs from the format it copies):
-//
-//   - model names: Kimi Code serves its K2.7 and K2.8 coding models as kimi-for-coding and
-//     kimi-for-coding-highspeed, and others without the kimi- prefix (kimi-k3 is k3);
-//   - temperature: only 1.0 with thinking on and 0.6 with it off; any other value is removed;
-//   - tool schemas: local $ref references are inlined and $defs removed, and a schema without a
-//     type gets type object;
-//   - Chat Completions: usage is asked for on a stream; an assistant tool call carries
-//     reasoning_content (the latest reasoning, else its own text); empty assistant messages are
-//     dropped; the reasoning effort becomes thinking {type, effort};
-//   - Responses: a batch of function call outputs must follow its calls with nothing between,
-//     so items between them move after the outputs;
-//   - Messages: Claude Code's billing block is removed from the system prompt, since Kimi reads
-//     it as prompt text; an assistant tool-use turn resent without its signed thinking gets it
-//     back when the extension kept it (replay.go).
-
-// codingModels are Kimi Code's model aliases.
 var codingModels = map[string]string{
 	"kimi-k2.8": "kimi-for-coding", "k2.8": "kimi-for-coding",
 	"kimi-k2.8-code": "kimi-for-coding", "k2.8-code": "kimi-for-coding",
@@ -37,7 +19,6 @@ var codingModels = map[string]string{
 	"kimi-for-coding-highspeed": "kimi-for-coding-highspeed", "for-coding-highspeed": "kimi-for-coding-highspeed",
 }
 
-// upstreamModel returns the name Kimi serves a model under.
 func upstreamModel(model string) string {
 	m := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(model), "[1m]"))
 	if alias, ok := codingModels[strings.ToLower(m)]; ok {
@@ -46,12 +27,8 @@ func upstreamModel(model string) string {
 	return strings.TrimPrefix(m, "kimi-")
 }
 
-// thinks reports whether a Kimi model takes thinking settings. kimi-k2 is the one that does not.
-//
-// shortcut: decided from the model name, since protocol v0 has no model capabilities.
 func thinks(model string) bool { return upstreamModel(model) != "k2" }
 
-// effortOf maps a reasoning effort to Kimi's thinking effort (low, high or max).
 func effortOf(effort string) string {
 	switch effort {
 	case "minimal", "low":
@@ -62,18 +39,11 @@ func effortOf(effort string) string {
 	return "high"
 }
 
-// passesThrough reports whether a request to up goes as the client sent it: its native body is in
-// up's format. Any other is rebuilt as Chat Completions (encodeChat). Generating and counting
-// decide it here, so a count refuses what generating refuses.
 func passesThrough(req llm.Request, up upstream) bool {
 	n := req.Native
 	return n != nil && n.Format == up.format && n.Body != nil
 }
 
-// encodeChat rebuilds req as Chat Completions, as generating does for a client whose format Kimi
-// has no API for (only Chat Completions is rebuilt: Responses and Messages clients get their own
-// API), and returns what that drops. Under the reject drop policy it refuses a request it would
-// drop part of.
 func encodeChat(req llm.Request) ([]byte, []llm.Loss, error) {
 	b, losses, err := openaichat.EncodeRequest(req)
 	if err != nil {
@@ -87,8 +57,6 @@ func encodeChat(req llm.Request) ([]byte, []llm.Loss, error) {
 	return b, losses, nil
 }
 
-// buildBody returns the request body for up and how it was built. turn, when not nil, puts kept
-// thinking back into a Messages body (replay.go).
 func buildBody(req llm.Request, up upstream, turn *replayTurn) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: up.format}
 	if n := req.Native; n != nil {
@@ -222,7 +190,6 @@ func fixToolTurns(msgs []any) []any {
 	return out
 }
 
-// contentText returns a Chat message's text content.
 func contentText(c any) string {
 	switch v := c.(type) {
 	case string:
@@ -240,9 +207,6 @@ func contentText(c any) string {
 	return ""
 }
 
-// contiguousOutputs moves items that sit between a batch of function calls' outputs to after the
-// last of them, so the outputs follow their calls with nothing between. A batch whose outputs are
-// not all there is left as it is.
 func contiguousOutputs(input []any) []any {
 	typeOf := func(it any) string {
 		m, _ := it.(map[string]any)
@@ -267,7 +231,6 @@ func contiguousOutputs(input []any) []any {
 			out = append(out, input[j])
 			pending[callID(input[j])] = true
 		}
-		// Collect the outputs of this batch until all have been seen.
 		var outputs, between []any
 		k := j
 		for ; k < len(input) && len(pending) > 0; k++ {
@@ -282,7 +245,6 @@ func contiguousOutputs(input []any) []any {
 			between = append(between, input[k])
 		}
 		if len(pending) > 0 {
-			// Not every output is there: keep the order the client gave.
 			out = append(out, input[j:k]...)
 		} else {
 			out = append(out, outputs...)
@@ -293,8 +255,6 @@ func contiguousOutputs(input []any) []any {
 	return out
 }
 
-// stripBillingBlock removes Claude Code's billing block (a system text block starting with
-// x-anthropic-billing-header:) from a Messages body.
 func stripBillingBlock(m map[string]any) {
 	sys, ok := m["system"].([]any)
 	if !ok {
@@ -315,7 +275,6 @@ func stripBillingBlock(m map[string]any) {
 	m["system"] = kept
 }
 
-// normalizeSchemaField makes the JSON schema at holder[key] one Kimi takes.
 func normalizeSchemaField(holder map[string]any, key string) {
 	s, ok := holder[key].(map[string]any)
 	if !ok {
@@ -338,8 +297,6 @@ func normalizeSchemaField(holder map[string]any, key string) {
 	holder[key] = out
 }
 
-// inline replaces local $ref references in v with what they point at, up to a depth that stops
-// recursive schemas.
 func inline(v any, defs map[string]any, depth int) any {
 	switch x := v.(type) {
 	case map[string]any:

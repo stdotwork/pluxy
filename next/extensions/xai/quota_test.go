@@ -33,10 +33,6 @@ func f(v float64) *float64 { return &v }
 
 func same(a, b *float64) bool { return a != nil && b != nil && *a == *b }
 
-// A Grok login's quota is read with two billing GETs and two profile GETs on the CLI endpoint, each
-// with the login's token and the Grok CLI's identity, and nothing else (no generation); the limits
-// carry the weekly window, the monthly credits (used clamped to the allowance, the rest counted as
-// pay as you go), the pay-as-you-go cap and the prepaid balance.
 func TestQuota(t *testing.T) {
 	srv := xaitest.New(t)
 	access, _ := srv.Grant()
@@ -90,7 +86,6 @@ func TestQuota(t *testing.T) {
 	}
 }
 
-// An API key has no plan to report.
 func TestQuotaAPIKeyUnsupported(t *testing.T) {
 	srv := xaitest.New(t)
 	_, err := quotaOf(t, srv, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: srv.Key()})
@@ -109,8 +104,6 @@ func asLLM(err error, e **llm.Error) bool {
 	return ok
 }
 
-// A refused token is an auth error with scope credential; a rate limit and an outage keep their
-// codes; a reply with no usage in it is unsupported, not an error.
 func TestQuotaErrors(t *testing.T) {
 	cred := func(srv *xaitest.Server) *protocol.Credential {
 		a, _ := srv.Grant()
@@ -170,8 +163,6 @@ func TestQuotaErrors(t *testing.T) {
 	})
 }
 
-// A failed profile read leaves the plan unnamed or named by the allowance, and the limits stay;
-// one billing read failing leaves the other's limits.
 func TestQuotaPartial(t *testing.T) {
 	srv := xaitest.New(t)
 	srv.Billing = func(w http.ResponseWriter, r *http.Request) {
@@ -198,7 +189,6 @@ func TestQuotaPartial(t *testing.T) {
 	}
 }
 
-// A login's grant names who signed in by the ID token's subject and e-mail address.
 func TestLoginIdentity(t *testing.T) {
 	srv := xaitest.New(t)
 	set, _ := readSettings(srv.Settings())

@@ -8,8 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// callsByCandidate returns each candidate's tool call name and arguments from a recorded reply:
-// candidate 0 from its item events, a later one from its candidate events.
 func callsByCandidate(t *testing.T, events []llm.Event) map[int][2]string {
 	t.Helper()
 	got := map[int][2]string{}
@@ -36,8 +34,6 @@ func callsByCandidate(t *testing.T, events []llm.Event) map[int][2]string {
 	return got
 }
 
-// Every candidate's tool call, not only the first, comes back under the client's tool name with
-// an integer argument written as an integer, whether the reply streamed or not.
 func TestReportingRepairsEveryCandidatesCall(t *testing.T) {
 	req := llm.Request{Tools: []llm.Tool{{
 		Name:       "lookup/item",

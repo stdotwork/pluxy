@@ -9,7 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// imageItem returns an image_generation_call item. status "-" leaves the field out.
 func imageItem(status, result string) string {
 	st := ""
 	if status != "-" {
@@ -22,9 +21,6 @@ func imageItem(status, result string) string {
 	return fmt.Sprintf(`{"id":"ig_1","type":"image_generation_call",%s"output_format":"png","result":%s}`, st, res)
 }
 
-// decodeImageReply decodes a reply holding one image item through the real Responses decoder:
-// nonstream is one Response body; done is a stream whose output_item.done carries the item and
-// whose terminal event repeats it; terminalOnly is a stream where only the terminal event does.
 func decodeImageReply(t *testing.T, mode, item string) ([]llm.Event, []llm.Loss) {
 	t.Helper()
 	resp := fmt.Sprintf(`{"id":"r","object":"response","status":"completed","model":"m","output":[%s]}`, item)
@@ -68,7 +64,6 @@ func mediaEvents(evs []llm.Event) []*llm.OutputMedia {
 
 var imageModes = []string{"nonstream", "done", "terminalOnly"}
 
-// A finished image is carried whatever its status says, so a Gemini client receives it.
 func TestResponsesFinishedImageCarriedWhateverItsStatus(t *testing.T) {
 	for _, mode := range imageModes {
 		for _, status := range []string{"completed", "generating", "in_progress", "-"} {
@@ -94,7 +89,6 @@ func TestResponsesFinishedImageCarriedWhateverItsStatus(t *testing.T) {
 	}
 }
 
-// An image that cannot be carried is reported, whatever its status says.
 func TestResponsesImageNotCarriedIsReported(t *testing.T) {
 	for _, mode := range imageModes {
 		for _, c := range []struct{ name, item string }{
@@ -118,7 +112,6 @@ func TestResponsesImageNotCarriedIsReported(t *testing.T) {
 	}
 }
 
-// A partial image arrives on its own event, not in a final item, and stays out.
 func TestResponsesPartialImageStaysOut(t *testing.T) {
 	d := openairesponses.NewStreamDecoder()
 	var evs []llm.Event

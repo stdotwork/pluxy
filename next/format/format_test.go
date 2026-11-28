@@ -23,24 +23,10 @@ import (
 )
 
 const (
-	// goldenFile records, per request, what the parsers made of it when format.ParserVersion was
-	// last right: a hash of the request's route and body, and a hash of the extension's request.
-	goldenFile = "testdata/parser_golden.txt"
-	// goldenUpdateVar, set to 1, makes TestParserVersion rewrite goldenFile instead of comparing
-	// with it. It is how a change to a parser or to the recorded requests is recorded, as
-	// PLUXY_CORPUS_DUMP_NEW records the corpus's replies.
+	goldenFile      = "testdata/parser_golden.txt"
 	goldenUpdateVar = "PLUXY_FORMAT_GOLDEN_UPDATE"
 )
 
-// TestParserVersion keeps format.ParserVersion honest: it parses every corpus and format-test
-// request as core reads it and then as an extension restores a native-only call from it
-// (nativeonly.Parse), and compares what that makes of each request (the items, tools and origin,
-// or that the parser refused it) with what goldenFile recorded for it.
-//
-// A request the file does not hold is not checked: adding or editing a corpus case or a format
-// test never fails the test, and its lane need not regenerate the file. Only a recorded request
-// that now parses differently fails it, since that is a parser change every extension must match
-// (format.ParserVersion).
 func TestParserVersion(t *testing.T) {
 	corpus, err := formattest.CorpusRequests("..")
 	if err != nil {
@@ -50,15 +36,13 @@ func TestParserVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]string{} // the request's hash: what the extension gets from it, hashed
+	got := map[string]string{}
 	names := map[string]string{}
 	for _, r := range append(corpus, literals...) {
 		out, ok := parseAsExtension(r.Path, r.Body)
 		if !ok {
 			continue
 		}
-		// The same request may be in several places (a corpus case and a format test); where it
-		// is does not change what it parses to, so one entry stands for all of them.
 		key := shortHash([]byte(r.Path + "\n" + string(r.Body)))
 		got[key] = shortHash([]byte(out))
 		names[key] = r.Source + ": " + r.Name
@@ -100,15 +84,11 @@ func TestParserVersion(t *testing.T) {
 	}
 }
 
-// shortHash is the hex of the first 8 bytes of b's SHA-256: enough to notice a request or a
-// parse result changing, and short enough to keep goldenFile readable.
 func shortHash(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:8])
 }
 
-// readGolden reads goldenFile into the hash of each recorded request's route and body, mapped to
-// the hash of what it parsed to. Its lines start with #, and its format is goldenFile's header.
 func readGolden(t *testing.T) map[string]string {
 	t.Helper()
 	b, err := os.ReadFile(goldenFile)
@@ -132,7 +112,6 @@ func readGolden(t *testing.T) map[string]string {
 	return out
 }
 
-// writeGolden records got in goldenFile, in the format readGolden reads.
 func writeGolden(t *testing.T, got map[string]string) {
 	t.Helper()
 	var b strings.Builder
@@ -158,9 +137,6 @@ func writeGolden(t *testing.T, got map[string]string) {
 	t.Logf("recorded %d requests in %s", len(got), goldenFile)
 }
 
-// parseAsExtension reads body as core does for a generate request to path and, when core takes
-// it, restores it as an extension does from a native-only call. It returns what the extension
-// gets, encoded, and false for a path that is not a generate route.
 func parseAsExtension(path string, body []byte) (string, bool) {
 	path, _, _ = strings.Cut(path, "?")
 	var req llm.Request
