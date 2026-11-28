@@ -1,8 +1,3 @@
-// Account order: for each provider with two or more accounts, its accounts in groups from First
-// through Backup {n}, shown as a stack of the shared AccountRow with live state and limits. An
-// arrow moves an account one group, a drag onto a group joins it, and under "Split by weight" a
-// button sets how many shares of its group's requests an account takes.
-
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Account } from "../api";
 import { Icon } from "../icons";
@@ -89,13 +84,10 @@ export interface OrderProps {
   weighted: boolean;
   /** A move or a weight is being saved. */
   busy: boolean;
-  /** Keep every row fix outlined because another primary button (such as the fallback editor) is open. */
   quietAllFixes?: boolean;
   /** Saves an account's priority or weight. */
   change: (id: string, change: { priority?: number; weight?: number | null }) => Promise<unknown>;
-  /** Turns an account on in place (shared AccountRow fix). */
   onTurnOn: (id: string) => Promise<Outcome> | Outcome;
-  /** Clears an account's cooldown in place (shared AccountRow fix). */
   onClearCooldown: (id: string) => Promise<Outcome> | Outcome;
 }
 
@@ -265,7 +257,6 @@ export function AccountOrder(props: OrderProps) {
     setWeightState(next);
   };
   const [dragging, setDraggingState] = useState<Account>();
-  // Readable at once during dragover/drop before a state update flushes.
   const draggingRef = useRef<Account | undefined>(undefined);
   const setDragging = (next?: Account) => {
     draggingRef.current = next;
@@ -285,7 +276,6 @@ export function AccountOrder(props: OrderProps) {
   const { sections, single } = orderOf(props.accounts);
   const running = props.running;
 
-  // At most one filled (primary) repair button across the order stack.
   const firstRepairId = props.quietAllFixes
     ? undefined
     : sections

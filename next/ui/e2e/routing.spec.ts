@@ -250,7 +250,6 @@ test("a fallback is made with its own model first, steps reordered, saved, read 
   await page.reload();
   await expect(page.locator('[data-part="fallback"]')).toContainText("server-error (Alpha) → fake-model");
   await expect(page.locator('[data-part="fallback"] .fallback-chip')).toHaveCount(2);
-  // Edit opens inline inside the fallback row and saves changes back.
   await page.getByRole("button", { name: "Edit the fallback for fake-model", exact: true }).click();
   await expect(page.locator('[data-part="fallback"][data-open] [data-part="fallback-editor"]')).toBeVisible();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -406,7 +405,6 @@ for (const appearance of ["light", "dark"] as const) {
     const reset = Math.floor(Date.now() / 1000) + 7200;
     const quota = {
       plan: "Test plan",
-      // 50% left (amber under both 60/20 and 70/30) and 10% left (red under both).
       limits: [
         { id: "5h", window_seconds: 5 * 3600, used_percent: 50, resets_at: reset },
         { id: "wk", window_seconds: 7 * 86400, used_percent: 90, resets_at: reset + 86400 },

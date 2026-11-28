@@ -1,6 +1,3 @@
-/* Order & fallback (routing.tsx): per-provider account order cards using the shared AccountRow,
-   fallbacks as chains of chips with an inline editor, and rules as a grouped setting card.
-   Reads only --px-* theme tokens. */
 @layer kit {
   html[data-page="routing"] .content {
     padding-block: calc(var(--s) * 5) calc(var(--s) * 6);
@@ -12,7 +9,6 @@
     white-space: nowrap;
   }
 
-  /* In narrow windows keep the header strip single-row by leaving out the freshness label. */
   @media (max-width: 56rem) {
     .routing-fresh {
       display: none;
@@ -26,8 +22,6 @@
     gap: calc(var(--s) * 4);
   }
 
-  /* Over data from an earlier read, when a refresh failed: words keep their normal colours so
-     muted, amber and red text never drop under 4.5:1; only bars and marks fade. */
   .routing-page
     .stale-notice
     + *
@@ -78,8 +72,6 @@
     color: var(--px-color-text-muted);
     font-size: var(--px-font-size-small);
   }
-
-  /* ---- Skeleton ----------------------------------------------------------------------------- */
 
   .routing-skeleton {
     display: grid;
@@ -241,7 +233,6 @@
     background: color-mix(in srgb, var(--px-color-surface-raised) 70%, transparent);
   }
 
-  /* Brief highlight when a person moves an account into a new group; 0 under reduced motion. */
   @keyframes order-settled {
     from {
       background: var(--px-color-selected);
@@ -294,9 +285,6 @@
     cursor: default;
   }
 
-  /* The shared AccountRow fits inside the order row without its own divider or double hover, and
-     keeps its two-line height down to narrower widths by sizing its plan and limits to their content
-     instead of Home's wide fixed columns. */
   .order-account {
     min-width: 0;
   }
@@ -345,7 +333,6 @@
     width: calc(var(--s) * 9);
   }
 
-  /* Clear cooldown shares the same quiet outlined button style as Turn on and non-primary fixes. */
   .order-account .fix .btn[data-variant="ghost"] {
     border-color: var(--px-color-input-border);
   }
@@ -355,13 +342,11 @@
   }
 
   @container (max-width: 52em) {
-    /* When AccountRow wraps its reason under the condition word, omit the trailing separator dot. */
     .order-account .account-word:not(:last-child)::after {
       content: none;
     }
   }
 
-  /* When the account row has a fix alongside its limits, give the limits their own line earlier. */
   @container (max-width: 44em) {
     .order-account .account-row:has(.account-fix > .fix) .account-grid {
       grid-template-columns: auto minmax(0, 1fr) auto auto;
@@ -440,8 +425,6 @@
     font-size: var(--px-font-size-small);
   }
 
-  /* Where a dragged account is dropped to start a new first or last group: there only during a drag.
-     The first-edge zone sits over the provider header so starting a drag never shifts the rows below. */
   .order-edge {
     display: none;
     margin: calc(var(--s) * 2) calc(var(--s) * 3);
@@ -535,7 +518,6 @@
     gap: calc(var(--s) * 1.5);
   }
 
-  /* The chain of chips: each step sits in its own pill-like chip with arrows between. */
   .fallback-line {
     display: flex;
     flex-wrap: wrap;
@@ -698,8 +680,6 @@
     margin: 0;
   }
 
-  /* ---- Rules (T3-style grouped card) -------------------------------------------------------- */
-
   .routing-rules.card {
     gap: 0;
     padding: 0;
@@ -723,7 +703,6 @@
     font-size: var(--px-font-size-small);
   }
 
-  /* Switches sit cleanly at the right beside their label, even in the narrow Rules column. */
   .routing-rule-item[data-kind="switch"] .setting-grid {
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
@@ -810,8 +789,6 @@
   .routing-more-list .routing-rule-item:last-child .setting-row {
     border-bottom: 0;
   }
-
-  /* ---- Responsive container breakpoints ----------------------------------------------------- */
 
   @container (max-width: 60em) {
     .routing-layout,

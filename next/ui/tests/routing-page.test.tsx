@@ -389,10 +389,8 @@ test("account rows use the shared AccountRow with live limits, plan pill and at 
   expect(rows).toHaveLength(4);
   expect(page.text()).toContain("Max 20x");
   expect(page.text()).toContain("58% left");
-  // Only the first repair button is filled (primary); the second is outlined (quiet).
   const fixes = all(page.root, "a").filter((n) => n.textContent === "Sign in again");
   expect(fixes.map((n) => attr(n, "data-variant"))).toEqual(["primary", "quiet"]);
-  // Opening the fallback editor steps back every row fix so Save is the view's one filled button.
   await act(async () => {
     button(page.root, "+ Add a fallback").dispatchEvent(new Event("click"));
   });
@@ -401,7 +399,6 @@ test("account rows use the shared AccountRow with live limits, plan pill and at 
   await act(async () => {
     button(page.root, "Cancel").dispatchEvent(new Event("click"));
   });
-  // Turning on a disabled account sends the PATCH in place.
   await act(async () => {
     button(page.root, "Turn on").dispatchEvent(new Event("click"));
   });
@@ -444,9 +441,7 @@ test("a failed refresh over loaded data keeps the page under the stale notice", 
   let failAccounts = false;
   const page = await mount();
   expect(page.text()).toContain("Claude");
-  // Simulate a subsequent reload failing by clicking Refresh when GET /accounts starts failing.
   const callsBefore = page.calls.length;
-  // Mount with a stateful host to test stale reload directly.
   restoreDom();
   forgetWindows();
   const base: Record<string, Answer> = {
@@ -532,7 +527,6 @@ test("a failed refresh keeps the previous freshness stamp instead of saying Upda
     expect(fresh()?.textContent).toBe("Updated just now");
     const initialTitle = fresh() ? attr(fresh() as FakeNode, "title") : undefined;
 
-    // 5 minutes later, GET /accounts fails while settings and chains succeed.
     clock += 5 * 60_000;
     failAccounts = true;
     await act(async () => {
@@ -543,7 +537,6 @@ test("a failed refresh keeps the previous freshness stamp instead of saying Upda
     expect(fresh()?.textContent).toBe("Updated 5m ago");
     expect(fresh() && attr(fresh() as FakeNode, "title")).toBe(initialTitle);
 
-    // Another 2 minutes later, every read fails: the stamp still stays at the initial read.
     clock += 2 * 60_000;
     failAll = true;
     await act(async () => {
@@ -553,7 +546,6 @@ test("a failed refresh keeps the previous freshness stamp instead of saying Upda
     expect(fresh()?.textContent).toBe("Updated 7m ago");
     expect(fresh() && attr(fresh() as FakeNode, "title")).toBe(initialTitle);
 
-    // When a refresh succeeds for every read, the stamp moves forward.
     failAccounts = false;
     failAll = false;
     await act(async () => {
@@ -628,7 +620,6 @@ test("one failed refresh across every read shows one stale notice, keeps an empt
   expect(live.text()).toContain("claude-opus-4-7");
   expect(live.text()).toContain("How a group shares requests");
 
-  // Clicking Try again reloads every read and expires cached limits.
   failRefresh = false;
   calls.length = 0;
   await act(async () => {
@@ -648,8 +639,6 @@ test("one failed refresh across every read shows one stale notice, keeps an empt
   }
   expect(live.text()).not.toContain("Could not refresh.");
 
-  // An empty fallback list also stays visible under the single stale notice instead of being
-  // replaced by "Could not read the fallbacks.".
   base["GET /chains"] = ok({ chains: [] });
   await act(async () => {
     button(live.root, "Refresh").dispatchEvent(new Event("click"));
@@ -680,10 +669,8 @@ test("settings-file note collapses to one header link when every account in a pr
   const page = await mount({
     "GET /accounts": ok({
       accounts: [
-        // All-config provider: Claude
         account("c1", { extension: "pluxy/claude", source: "config", priority: 10 }),
         account("c2", { extension: "pluxy/claude", source: "config", priority: 0 }),
-        // Mixed provider: Gemini
         account("g1", { extension: "pluxy/gemini", source: "config", priority: 10 }),
         account("g2", { extension: "pluxy/gemini", source: "login", priority: 0 }),
       ],

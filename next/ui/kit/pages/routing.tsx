@@ -46,7 +46,6 @@ const place = (a: Account, to: { priority?: number; weight?: number | null }): A
   ...(to.weight !== undefined ? { weight: to.weight ?? undefined } : {}),
 });
 
-/** A clock that moves every interval, for "Updated 2m ago". */
 function useNow(every = 15_000) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -56,7 +55,6 @@ function useNow(every = 15_000) {
   return now;
 }
 
-/** When the page last read pluxy, as the location bar says it. */
 function Freshness(props: { at?: number }) {
   const now = useNow();
   if (props.at === undefined) return null;
@@ -68,7 +66,6 @@ function Freshness(props: { at?: number }) {
   );
 }
 
-/** The page in its final two-column shape while the first load runs. */
 function RoutingSkeleton() {
   const shown = useShownAfter(BUSY_SHOWS_AFTER_MS);
   if (!shown) return null;
@@ -93,7 +90,6 @@ type TimedState<T> = { loading: boolean; at?: number } & (
 
 type TimedLoad<T> = Loaded<T> & { at?: number };
 
-/** Loads one management API reply, keeping its last good data and when that reply arrived. */
 function useTimedLoad<T>(load: () => Promise<Reply<T>>): TimedLoad<T> {
   const { unauthorized } = useKit();
   const [state, setState] = useState<TimedState<T>>({ phase: "loading", loading: true });
@@ -158,8 +154,6 @@ export function RoutingPage() {
     .map((l) => l.at)
     .filter((at): at is number => at !== undefined);
   const allTimes = allLoads.map((l) => l.at).filter((at): at is number => at !== undefined);
-  // The oldest read currently shown: a failed refresh leaves that read's time behind so the
-  // header never claims "Updated just now" over stale data.
   const lastAt = primaryTimes.length > 0 ? Math.min(...allTimes) : undefined;
 
   const list = useMemo(

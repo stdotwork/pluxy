@@ -1,7 +1,3 @@
-// The Rules column of Order & fallback: how a group shares requests and whether a conversation stays
-// on one account, and under More rules the rest, framed as grouped setting cards. A switch or a
-// choice saves at once; a number or a duration saves on Enter or on leaving the field.
-
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { CoreSettings } from "../api/settings";
 import { Icon } from "../icons";
@@ -27,10 +23,8 @@ const t = strings("routing.rulesPane", {
   saved: "Saved",
 });
 
-/** How long the "Saved" tick stays beside a rule after core accepts a change. */
 const SAVED_MS = 1500;
 
-/** Saves one setting, shows a brief Saved tick, and reads the settings again. */
 function useSave(reload: () => void) {
   const { api } = useKit();
   const [saved, setSaved] = useState(false);

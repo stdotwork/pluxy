@@ -1,7 +1,3 @@
-// Fallbacks: what pluxy tries for a model when no account can serve it. Each fallback is a row
-// with its steps as a chain of chips; editing one opens the editor inline under its row, and
-// adding a new one opens it below the list.
-
 import { Fragment } from "preact";
 import { useId, useState } from "preact/hooks";
 import { type Account, type Chain, problem, type ServedModel } from "../api";
@@ -247,9 +243,7 @@ export function Fallbacks(props: {
   yaml: boolean;
   /** Core refused a fallback because of it. */
   onYaml: () => void;
-  /** Notifies the page when the fallback editor opens or closes. */
   onOpenChange?: (open: boolean) => void;
-  /** Retries a failed first load of the page. */
   onRetry?: () => void;
 }) {
   const { api, unauthorized } = useKit();

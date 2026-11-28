@@ -262,10 +262,6 @@ export function draftProblem(d: FallbackDraft, names: readonly string[]): string
 export const skipsItself = (d: FallbackDraft) =>
   d.name.trim() !== "" && !d.steps.some((s) => s.model.trim() === d.name.trim());
 
-/**
- * A step split into its model name and its optional provider/account qualifier, so the model can
- * stand in monospace while the qualifier sits beside it in regular text.
- */
 export function stepParts(
   step: ChainStep,
   accountNames: (id: string) => string,
