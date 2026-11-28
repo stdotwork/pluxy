@@ -30,22 +30,38 @@ The connection is one of three modes, kept in `connection.json` in the app's con
 | Mode | Core | Address rule |
 | --- | --- | --- |
 | `managed` | The app's own core, from its store (below) | A loopback address the app picks once (`pluxy init -port 0`) |
-| `local` | A core someone else runs on this computer | A loopback origin (`127.0.0.0/8`, `::1`, `localhost`), `http://` or `https://` |
-| `remote` | A core on another computer | `https://` only, with an optional PEM file of certificate authorities to trust |
+| `local` | A core someone else runs on this computer | A loopback origin (`127.0.0.0/8`, `::1`, `localhost` or `localhost.`), `http://` or `https://` |
+| `remote` | A core on another computer | `https://` (with an optional PEM certificate authority file), plain `http://` carried by Tailscale, or plain `http://` on a network the person trusted in the key window (`trust_network` in `connection.json`, kept for that address only; the window cannot set it) |
 
-Addresses are origins only (scheme, host and port). The native side holds the management key.
-Key entry is a native dialog (GTK on Linux, Win32 on Windows, an AppKit sheet on macOS) with a
-hidden field and "Keep the key on this device"; the key goes from that dialog to the native
-connection state and no webview receives it. Before the dialog opens, native code checks the
-mode, the origin and the certificate authority file. A key is checked against core
-(`GET /v0/management/status`) before the app switches to it, and refused if the connection changed
-during the check. A kept key is stored in `connection.json`, not in the system keyring; an
-unkept one lasts until the app quits.
+Addresses are origins only (scheme, host and port). For plain `http://` to another computer,
+`tailnet.rs` counts the connection as over Tailscale only when this computer has an up interface in
+`100.64.0.0/10` or `fd7a:115c:a1e0::/48` and the resolved address is in those ranges and is not one
+of this computer's own addresses (`100.64.0.0/10` is also ISP shared address space, so the address
+shape alone is not enough); that check runs again before each new connection and sends nothing if it
+stops holding. Plain `http://` never goes through a proxy from the environment (`proxied` in
+`client.rs`).
+
+The native side holds the management key. Key entry is a native dialog (GTK on Linux, Win32 on
+Windows, an AppKit sheet on macOS) with a hidden field and "Keep the key on this device"; where it
+asks about trusting a plain-HTTP network, OK reads **Trust this network and connect** and is not the
+default button (`key_entry.rs`). The key goes from that dialog to the native connection state and no
+webview receives it. Before the dialog opens, native code checks the mode, the origin and the
+certificate authority file, resolves the address once (`KeyTarget::route` in `conn.rs`; through an
+environment proxy on `https://`, the proxy's address is resolved instead), and sends both an
+unauthenticated pre-check (`GET /v0/management/status` with no key, so a wrong address, bad
+certificate or `remote_disabled` is reported before a key is typed) and the key check to that
+resolved address. A key is checked against core before the app switches to it, and refused if the
+connection changed during the check. If the key check fails for a reason other than a refused key,
+the app holds the typed key in memory (zeroized on drop) for 10 minutes (`HOLD_FOR` in `conn.rs`)
+and reuses it on the next try at the same address and certificate authority file; a refused key is
+not held, and changing address or certificate authority, signing out, or closing to the tray drops
+it. A kept key is stored in `connection.json`, not in the system keyring; an unkept one lasts until
+the app quits.
 
 The window calls core with one command, `core_call`. The native side adds the key, sends the call
 to `<core>/v0/management/...` only, follows no redirects, uses no proxy from the environment for a
-core on this computer, refuses path segments that are or decode to `.` or `..`, and refuses every
-path under `/management-key`, however it is spelled.
+core on this computer or over plain `http://`, refuses path segments that are or decode to `.` or
+`..`, and refuses every path under `/management-key`, however it is spelled.
 
 Replacing the key (**Replace key** in the Keys section of the Config page) is a command of its own,
 `management_key_rotate`. The page asks nothing itself: the app's host tells the kit it confirms
@@ -174,7 +190,7 @@ release feed, granting a file) opens a native confirmation and applies nothing i
 
 | Group | Commands |
 | --- | --- |
-| Connection | `connection_get` (without the key), `connection_set` (no key), `key_entry` (native entry; returns `signed_in`, `wrong_key`, `cancelled` or `error`), `sign_out`, `management_key_rotate` |
+| Connection | `connection_get` (without the key), `connection_set` (no key), `key_entry` (native entry; returns `signed_in`, `wrong_key`, `cancelled` or `error`), `certificate_choose` (native file chooser on Linux for a remote core's CA file; read only on connect), `sign_out`, `management_key_rotate` |
 | The app's own core | `core_start`, `core_stop`, `core_restart` (managed mode only), `core_versions`, `core_install`, `core_rollback`, `core_adopt` |
 | Core's API | `core_call` |
 | Startup, window, privacy | `startup_get`, `startup_set`, `window_get`, `window_set`, `window_close`, `privacy_get`, `privacy_set` |
@@ -342,16 +358,30 @@ Native code prepares each action as an immutable record: its requester chain, th
 with its full source, digest, signer, contract and generation, the files it names (chosen and
 resolved), and, for a launch, the executable, argv, folder and environment
 (`next/app/src-tauri/src/confirmation.rs`). The window may only ask to review a preparation by its
-opaque ID. The dialog is GTK on Linux, Win32 on Windows and AppKit on macOS, and only its native
-response handler issues an approval: a one-use token that expires after 60 seconds and fails on a
-changed file identity or executable metadata. Page webviews have no confirmation capability.
+opaque ID. The dialog (GTK on Linux, Win32 on Windows, AppKit on macOS), titled "pluxy needs your
+OK", says first in plain words what will happen, written by native code from verified records (the
+add-on's manifest title, what the operation's effect does such as "will make changes on this
+computer", the launch program, secret vault labels, who asked when it was not the window, and for a
+native tool that it runs as you with full access to your user account). Manifest text (the add-on's
+summary, and an operation's description quoted as "The add-on says: …") comes last, after all of
+the app's own words, so a long one can only push its own end out of view. The exact action sits
+below under **Details**; the plain words bind nothing — what is confirmed and remembered is the
+exact action. Only the dialog's native response handler issues an approval: a one-use token that
+expires 60 seconds after confirmation (native code spends it at once) and fails on a changed file
+identity or executable metadata. A pending review lapses if its dialog has not shown within 60
+seconds; once shown, it stays open for 10 minutes (`SHOWN_LIFETIME`) and then closes as cancelled
+(answering checks the files and program again; quitting or closing the window withdraws it). Page
+webviews have no confirmation capability.
 
 Each preparation records its entry point: Main, Tray, NativeUi, Page or Import. Only the window's
 own direct call, started by a native gesture (which expires after five seconds), may use a
 remembered approval, and only those dialogs offer **Remember this exact executable, argv and cwd**.
 A page's start always opens a fresh dialog, with one pending confirmation per package, one attempt
-per second, Cancel focused and Confirm disabled for one second. Pending page and import entries are
-limited to 16; trusted requests to 64.
+per second, Cancel focused and Confirm disabled for one second, and shows a native notice ("pluxy
+notice"; Close button on Linux, close box on Windows and macOS) with requester, plain words, exact
+action under "Details", and outcome including refusals. Every answer to a page's or tool's request
+gets that notice; window, tray and native-UI requests do not (they show their own outcome), unless
+remembering failed. Pending page and import entries are limited to 16; trusted requests to 64.
 
 An executable is opened before its canonical path, device and inode, size, modification and change
 times and mode are checked; its SHA-256 is computed once for that metadata and cached. A changed
@@ -402,18 +432,29 @@ The frame's contract:
 - Each write's `program_call` carries a ticket; leaving the page withdraws a confirmation still open
   (`program_cancel`).
 - Connect uses the vault's key bound to this add-on and to the connected core, or makes one with
-  `client_key_capture` (named for the tool, in the vault and in core), each in its own native
-  confirmation.
-- Every native reply goes through `nativeReply` (`next/app/src/toolWords.ts`), which turns the
-  native side's words into the page's. In privacy mode `useShown` in the same file masks what the
-  page shows: paths (the home folder's user name, and all but the last two parts), IDs such as a WSL
-  user or an account ID, and e-mail addresses, URL credentials and paths in free text.
+  `client_key_capture` (named for the tool, in the vault and in core). `client_key_capture` asks no
+  native confirmation of its own: the key leaves the vault only in the tool's write confirmation,
+  which names it.
+- For Claude Code (`~/.claude`) and Pi (`~/.pi/agent`), when the default folder does not exist yet,
+  `preview` returns `create_folder` with null identities instead of refusing, and `apply` creates
+  the folder in the same confirmed write (Pi refuses if `~/.pi` is a link or not a folder).
+- `CallError::user_message` (`next/app/src-tauri/src/program.rs`) strips protocol error codes before
+  add-on errors reach people, and every native reply goes through `nativeReply`
+  (`next/app/src/toolWords.ts`), which turns the native side's words into the page's. In privacy
+  mode `useShown` in the same file masks what the page shows: paths (the home folder's user name,
+  and all but the last two parts), IDs such as a WSL user or an account ID, and e-mail addresses,
+  URL credentials and paths in free text.
 
-A tool joins the list Beginner Mode and the Tools topics draw from by being an agent page: a window
-page that names the package it drives (`AgentPage` in `next/app/src/easyMode.tsx`), listed in
-`agentPages` in `next/app/src/agentPages.ts`. `SETUP_CLIENT_PAGES` in the same file maps core's ID
-for each tool to its page, for the **Set up** link the app adds to Setup's step 2 (through
-`SetupOptions.toolAction`).
+The Tools page (`#/tools`) and Setup's step 2 receive the same tool rows, buttons, notes and refresh
+through `toolHooks` (`next/app/src/toolHooks.ts`): it adds Claude Desktop, Grok Build and Hermes
+Agent (`readExtraTools` in `clientPage.tsx`) to the five tools core scans, and gives Tools
+`keyOwners` (`next/app/src/keyOwners.ts`). Each tool page names the add-on it drives (`AgentPage` in
+`next/app/src/addonItems.ts`), listed in `agentPages` in `next/app/src/agentPages.ts`;
+`SETUP_CLIENT_PAGES` maps core's tool IDs to page IDs. `toolAction` picks each row's one button
+from `items` (`addonItems.ts`), and `setUpAddon` (`next/app/src/toolRows.tsx`) runs install, turn-on
+confirmation and opening the tool's page in one press. When opened from Setup, `SetupReturn` shows
+the strip back to `#/setup`. Old addresses `#/easy-mode` and `#/clients` redirect to `#/setup` and
+`#/tools` (`movedTo` in `agentPages.ts`).
 
 ## Updates
 

@@ -73,7 +73,25 @@ What Connect wrote into your tools' settings stays meanwhile.
 
 ## First launch
 
-See [setup.md](setup.md).
+When you open the app for the first time, it asks **Where should pluxy run?** with two choices:
+
+- **On this computer:** starts the app's own pluxy here while the app is open, with nothing to type.
+- **Connect to a pluxy that is already running:** asks for that pluxy's address and management key
+  ([Where pluxy runs](#where-pluxy-runs)).
+
+Once connected and signed in to a new pluxy with no installed providers and no accounts, the window
+opens **Set up pluxy** in three steps:
+
+1. Add your AI providers and accounts. Providers whose coding tool is installed or signed in on this
+   computer are ticked for you (for example Claude when Claude Code is installed, and Codex when
+   Codex is installed).
+2. Set up your coding tools, using the same rows as [Tools](#the-coding-tool-pages). Opening a tool
+   page from here shows a strip at the top with **Back to setup**.
+3. Send a test request.
+
+After you finish setup or press **Leave setup for now**, the app opens on Home, and **Setup** stays
+under Settings (in the **pluxy** group) with every step folded. To build or run pluxy without the
+app, see [setup.md](setup.md).
 
 ## Where pluxy runs
 
@@ -83,14 +101,27 @@ runs** (Settings, in the **This device** group).
 | Choice | What the app does | When the app quits |
 | --- | --- | --- |
 | **On this computer** | Runs its own pluxy, with a config of its own on a free port of this computer. Nothing to type | Stops that pluxy |
-| **Connect to a pluxy that is already running**, at a local address (`127.0.0.1`, `::1`, `localhost`) | Connects to a pluxy someone else runs on this computer, such as a service. `http://` is allowed | Leaves it running |
-| **Connect to a pluxy that is already running**, anywhere else | Connects over `https://` only. For a certificate you made yourself, open **It uses a certificate I made myself** and choose its **Certificate file** | Leaves it running |
+| **Connect to a pluxy that is already running**, at a local address (`127.0.0.0/8`, `::1`, `localhost` or `localhost.`) | Connects to a pluxy someone else runs on this computer, such as a service. `http://` or `https://` is allowed | Leaves it running |
+| **Connect to a pluxy that is already running**, anywhere else | Connects over `https://`, over plain `http://` carried by Tailscale (encrypted by Tailscale; the app checks that this computer has a Tailscale interface and that the resolved address is in Tailscale's ranges and not this computer's own, and sends nothing if Tailscale stops carrying it), or over plain `http://` on a network you say you trust in the key window (**Trust this network and connect**). For a certificate you made yourself over `https://`, open **It uses a certificate I made myself** and give its **Certificate authority file** (press **Choose…** on Linux) | Leaves it running |
 
-To connect, type the **Address** (scheme, host and port only), then **Continue** (or **Connect**). A
-small window, **pluxy management key**, asks for the key. On the computer pluxy runs on,
-`pluxy key management --show-key` prints it. Tick **Keep the key on this device** to have the app
-sign in by itself next time; otherwise it forgets the key when it quits. The key is checked before
-the app switches, and a wrong key or **Cancel** keeps the connection you had.
+To connect, type the **Address** (scheme, host and port only), then **Continue** (or **Connect**).
+Before opening the key window, the app checks the address with no key so a wrong address, an
+untrusted certificate, or remote management being off is reported before you type anything. A small
+window, **pluxy management key**, then asks for the key. On the computer pluxy runs on,
+`pluxy key management --show-key` prints it. For plain `http://` that Tailscale does not carry, the
+key window warns that anyone on the network can read the key and what the app sends, and its confirm
+button reads **Trust this network and connect**; that trust is saved for that address only. Tick
+**Keep the key on this device** to have the app sign in by itself next time; otherwise it forgets
+the key when it quits. The key is checked before the app switches, and a wrong key or **Cancel**
+keeps the connection you had. If the check fails for a reason other than a wrong key, the app holds
+the key you typed in memory for 10 minutes for your next try at the same address and certificate
+authority file (closing the window to the tray or changing the address drops it).
+
+On **Where pluxy runs**, the status line under the address says how a remote connection travels:
+**Only over Tailscale, which encrypts the connection.** while Tailscale carries the last
+connection; **Only over Tailscale: nothing is sent unless Tailscale is on and reaches it.** before a
+connection or when Tailscale is off; or **Over plain http, on a network you said you trust.** for a
+trusted plain-HTTP network.
 
 The key never reaches the app's web pages: you type it into that window, and the app adds it to each
 call. To change the key, press **Replace key** in the **Keys** section of **Config** (Settings tab):
@@ -186,13 +217,13 @@ is never overwritten: the new one gets ` (1)`, ` (2)` and so on.
 | **Updates** | Settings, This device | The app's and pluxy's versions, release notes, the update source |
 | **Add-ons** | Settings, This device | Add-ons installed on this computer |
 | **Launcher** | Settings, This device | Starting coding tools in one click |
-| **Beginner Mode** | Tools | Sign in, then set up a coding tool, in two steps |
-| **Manage Clients** | Tools | Which coding-tool pages Tools lists |
-| Claude Code, Codex, Claude Desktop, OpenCode, Oh My Pi, Grok Build, Hermes Agent, Pi | Tools | Set up and start each coding tool |
+| Claude Code, Codex, Claude Desktop, OpenCode, Oh My Pi, Grok Build, Hermes Agent, Pi | Opened from rows on Tools and Setup | Set up and start each coding tool (each opens as `Tools / {Tool}`) |
 | **Agent usage**, **Codex sessions** | Settings, From extensions | Pages of add-ons, when installed and on |
 
-Setup (Settings, in the **pluxy** group) is the panel's, with one addition: in step 2, a coding tool
-the app has a page for gets a **Set up** link to that page, when pluxy runs on this computer.
+Tools and Setup's step 2 show the same eight coding-tool rows: the five tools pluxy scans, plus
+Claude Desktop, Grok Build and Hermes Agent, which the app reads itself. When connected to a pluxy
+on another computer, Tools and Setup show that computer's tools with manual paste steps and list
+links to this computer's eight tool pages underneath.
 
 ### Add-ons
 
@@ -209,10 +240,13 @@ Add-ons come from **Available to install** (the sources listed in `device-regist
 app's config folder, which the local build sets up) or from **Install from file…**. Anything else is
 **Unverified**; an entry the app would refuse is marked **Blocked** with the reason.
 
-A coding-tool add-on installs turned off. **Turn on** opens a confirmation window that says it gets
-full access to your user account and shows who published it; only Confirm there turns it on.
-Updating, going back to an earlier version or turning it off ends that consent, so the next version
-asks again. A coding-tool add-on runs only while something uses it and stops 30 seconds after.
+A coding-tool add-on installs turned off. **Turn on** opens a confirmation window (**pluxy needs
+your OK**) that says first in plain words what the add-on does and that it runs as you with full
+access to your user account, puts any text from the add-on's manifest last, and keeps the exact
+action under **Details**. Only Confirm there turns it on; once shown, a confirmation window stays
+open for 10 minutes before closing as cancelled. Updating, going back to an earlier version or
+turning it off ends that consent, so the next version asks again. A coding-tool add-on runs only
+while something uses it and stops 30 seconds after.
 
 For a page add-on, **Allow tool access…** lets a Verified one use coding-tool add-ons, and **Approve
 publisher…** then **Choose a file…** (or **Choose a folder…**) lets it read a file or folder you pick
@@ -224,16 +258,24 @@ and anything you allowed it.
 
 ### The coding-tool pages
 
-Each coding tool has a page under Tools, which needs that tool's add-on. Tools lists a tool's page
-once its add-on is installed; **Manage Clients** lets you list any of them, or fewer.
+All eight coding tools appear as rows on **Tools** (and in step 2 of **Setup**). Each tool's page
+opens from its row as `Tools / {Tool}` and needs that tool's add-on. On a pluxy running on this
+computer, each row offers one button that moves the tool forward in one press:
 
-A page shows how the tool stands (`Connected`, `Installed · not connected`, `Settings need update`,
+| Add-on state | Row button |
+| --- | --- |
+| On | **Open** when the tool is Connected, else **Set up**; both open the tool's page |
+| Installed, off | **Turn on add-on**: opens the add-on's confirmation window, then opens the tool's page |
+| Offered by a registry | **Install add-on** (shows **Installing…**), then opens the turn-on confirmation window and the tool's page |
+| None available | No app button; the row keeps the panel's own paste steps |
+
+A tool page shows how the tool stands (`Connected`, `Installed · not connected`, `Settings need update`,
 `Cannot change settings`, `Not installed`, `Not checked`) and the one thing to press next:
 
 | Button | What it does |
 | --- | --- |
 | **Turn on add-on** | Turns the tool's add-on on, in its confirmation window |
-| **Connect {tool}** | Makes a key for the tool in pluxy (named after the tool, so Activity shows which tool sent each request) and writes pluxy's address, the key and the models into the tool's settings, after a confirmation window naming the files |
+| **Connect {tool}** | Makes a key for the tool in pluxy (named after the tool, so Activity and Tools show which tool uses it), then writes pluxy's address, the key and the models into the tool's settings in one confirmation window naming both the files and the key |
 | **Update {tool}** | The same, for settings that point elsewhere or miss part of what pluxy needs |
 | **Disconnect** | Takes pluxy's values out of the tool's settings; your own edits stay |
 | **Restore backup** | Puts the settings back as they were before pluxy first changed them |
@@ -248,30 +290,20 @@ asks you to read it again.
 
 | Tool | Add-on | Files (usual place) | Start | Notes |
 | --- | --- | --- | --- | --- |
-| Claude Code | `pluxy/claude-code` | `~/.claude/settings.json` | `claude` in a terminal | Models for Opus, Sonnet, Haiku and Fable, subagents, auto-compaction |
+| Claude Code | `pluxy/claude-code` | `~/.claude/settings.json` | `claude` in a terminal | Models for Opus, Sonnet, Haiku and Fable, subagents, auto-compaction. If Claude Code has not run yet (`~/.claude` does not exist), Connect creates `~/.claude` in the same write (named in the confirmation) so its first start uses pluxy without asking to sign in |
 | Codex | `pluxy/codex-setup` | `~/.codex/config.toml` and Codex's model list beside it | `codex` in a terminal; **Restart Codex service**; **Start Codex App** (a program you name) | **Import models from pluxy** fills the model list. Codex hides conversations of another provider from resume |
 | Claude Desktop | `pluxy/claude-desktop` | Three files in `~/.config/Claude-3p` | `claude-desktop`, directly | Its third-party gateway (Linux beta). Takes only Claude model names: **Create alias in pluxy** adds an alias for another model. Quit and reopen it after a change |
 | OpenCode | `pluxy/opencode` | `~/.config/opencode/opencode.jsonc` (or `opencode.json`) | `opencode` in a terminal; **Start OpenCode Desktop** | **Import models from pluxy** fills the model list |
 | Oh My Pi | `pluxy/omp-setup` | `~/.omp/agent/models.yml` and `config.yml` | `omp` in a terminal | Sets the default model; Oh My Pi lists pluxy's other models itself |
 | Grok Build | `pluxy/grok-setup` | `~/.grok/config.toml` | `grok` in a terminal | **Import models from pluxy** fills the model list |
 | Hermes Agent | `pluxy/hermes-setup` | `~/.hermes/config.yaml` (or the active profile's) | `hermes` in a terminal | Sets the default model |
-| Pi | `pluxy/pi-setup` | In `~/.pi/agent`: `cliproxyapi.json`, `settings.json` and the provider plugin's folder `pluxy-cliproxyapi-provider/`; it removes the plugin's model cache `cliproxyapi-models.json` | `pi` in a terminal | Connect is **Install plugin** until the plugin is in place; **Update plugin**, **Uninstall plugin** |
+| Pi | `pluxy/pi-setup` | In `~/.pi/agent`: `cliproxyapi.json`, `settings.json` and the provider plugin's folder `pluxy-cliproxyapi-provider/`; it removes the plugin's model cache `cliproxyapi-models.json` | `pi` in a terminal | Connect is **Install plugin** until the plugin is in place; **Update plugin**, **Uninstall plugin**. If Pi has not run yet (`~/.pi/agent` does not exist), Install plugin creates `~/.pi/agent` in the same write (named in the confirmation; refused if `~/.pi` is a link or not a folder) |
 
 A tool started from another program keeps its old settings until you start it again: the app never
 stops a program it did not start.
 
 These eight are the coding tools the app sets up. For any other tool, point it at pluxy by hand
 ([clients.md](clients.md)).
-
-### Beginner Mode
-
-Beginner Mode (Tools) walks through two steps. **Connect a model** signs in to an AI account or adds
-an API key, as Add an account does; **Next: connect an agent** turns on once pluxy has an account.
-**Connect an agent** lists the coding tools this app can set up whose add-on is installed or offered,
-with **Install**, **Enable** and **Set up** for each: Install installs the add-on (turned off),
-Enable asks in its confirmation window, and Set up shows the tool's page below, where Connect writes
-the tool's settings. Beginner Mode writes no tool's settings itself, and leaving it or cancelling a
-confirmation changes nothing.
 
 ### Launcher
 
@@ -352,10 +384,10 @@ A settings file the app cannot read is moved aside (such as `startup.damaged-<ra
 | **pluxy kept stopping, so the app stopped restarting it** | Read why on the pane and in pluxy's log (Settings, Logs, or the files in `core/` in the app's data folder), fix the config, then press **Start pluxy** |
 | **Not signed in to pluxy on this computer** (or **at <host>**) | Press **Enter management key**. Print the key with `pluxy key management --show-key` on the computer pluxy runs on |
 | "That pluxy refused the key. Check it and try again." | The key is wrong for that pluxy. Print it again with `pluxy key management --show-key` there and enter it again |
-| "This pluxy answers only the computer it runs on." | That pluxy's remote management is off. On its computer, set `"management_allow_remote": true` in its `config.json` (`pluxy help` there says where the file is) and save; pluxy picks it up without a restart, so then sign in again |
-| **Cannot connect to pluxy at <host>** (or **on this computer**) | Check pluxy runs there, the address and port, and for `https://` the certificate (add its **Certificate file** if you made it yourself) |
+| "This pluxy answers only the computer it runs on." | That pluxy's remote management is off. On its computer, turn on **Let other computers manage pluxy** in Config (Settings tab, Other computers), or set `"management_allow_remote": true` in its `config.json` (`pluxy help` there says where the file is) and save; pluxy picks it up without a restart, so then sign in again |
+| **Cannot connect to pluxy at <host>** (or **on this computer**) | Check pluxy runs there, the address and port, and for `https://` the certificate (give the **Certificate authority file** that signed it; if a self-signed certificate cannot be checked, use its Tailscale address or plain `http://` on a network you trust) |
 | **pluxy at <host> is not answering** (or **on this computer**) | Nothing answered as pluxy at that address while the app checked its key; the line under the heading says why (no answer in time, a name not found, a certificate that could not be checked). Fix that, then press **Enter management key** |
-| A tool page says its add-on is missing or off | Install it on Add-ons (in the local build it is under **Available to install**), then **Turn on add-on** |
+| A tool page says its add-on is missing or off | Press **Install add-on** or **Turn on add-on** on the tool's row on Tools (or install it under **Available to install** on Add-ons), then confirm turning it on |
 | Add-ons show **Unverified** after `make app-local` | Expected after a rebuild: **Remove** each, **Install** it again and turn it on |
 | A tool page refuses to write: the file changed | The tool or you edited it since the page read it. Press **Read this file** (or **Try again**) and write again |
 | `Cannot change settings` on a tool page | The file is one the tool itself would not read (for example not strict JSON for Claude Code). Fix it by hand, or **Restore backup** |
