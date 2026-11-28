@@ -44,7 +44,7 @@
   /* Over data from an earlier read, when a refresh failed: fade the marks, meters and bars under
      the notice, leaving every word at its normal colour so secondary text stays at 4.5:1. */
   .home-body[data-stale] .home-fade :is(.provider-mark, .meter, .pool-bar, .days-bars) {
-    opacity: 0.55;
+    opacity: 0.6;
   }
 
   /* ---- the verdict -------------------------------------------------------------------------- */
