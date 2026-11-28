@@ -265,6 +265,7 @@ export function Frame(props: {
           type="button"
           class="nav-search"
           data-part="search"
+          aria-label={t("search")}
           aria-keyshortcuts={props.search.shortcut}
           title={icons ? t("search") : undefined}
           onClick={(e) => props.search?.open(e.detail === 0 ? "keyboard" : "pointer")}

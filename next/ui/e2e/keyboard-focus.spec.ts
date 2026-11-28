@@ -93,6 +93,7 @@ test("Tab goes through the frame in reading order: the navigation, the status bl
   expect(stops).toEqual([
     "Skip to main content",
     "pluxy",
+    "Search",
     "Home",
     "Accounts",
     "Activity",
