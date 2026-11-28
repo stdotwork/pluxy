@@ -95,7 +95,7 @@ Four things to know about the result:
 - **A core that runs on a `config.yaml` takes dry runs only.** The real import writes pluxy's JSON
   config, and a core started with `-config <file>.yaml` reads a CPA-style file itself
   ([config.yaml keys](config-yaml.md)), so it answers
-  `core runs on a config.yaml, which it reads with today's core's names already; an import writes core's JSON config (pluxy init writes one)`.
+  `pluxy runs on a config.yaml, which it already reads with CLIProxyAPI's key names; an import writes pluxy's JSON config (pluxy init writes one)`.
   Run the import on a core that uses a `config.json`.
 
 ### 4. Install the providers

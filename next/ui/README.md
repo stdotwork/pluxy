@@ -143,6 +143,9 @@ English text. Only English ships.
 A page lives in `kit/pages/<page>.tsx` and owns everything about itself, so pages added side by
 side touch shared files only to list themselves:
 
+- **Scope:** pages in `corePages()` show only what core runs. A setting gets a field only once core
+  runs it; the rest of the config file stays editable as text in Config's **Settings file** tab.
+  Richer views and tools that act on the local machine belong to the desktop app.
 - **The page and its strings:** `kit/pages/<page>.tsx` declares its texts with
   `strings("<page>", {...})` and exports its `PageDef` as a function, such as
   `export const routingPage = (): PageDef => ({ id: "routing", dest: "accounts", kind: "tab", label: t("tab"), title: t("title"), tip: t("tip"), render: () => <RoutingPage /> })`.

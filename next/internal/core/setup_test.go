@@ -354,6 +354,11 @@ func TestSuggestClientModel(t *testing.T) {
 		{"Claude Code with only Sonnet and Haiku", "claude-code", []string{"claude-haiku-5-5", "gpt-6.1-sol", "claude-sonnet-5-5"}, "claude-sonnet-5-5"},
 		{"Codex takes a Codex model", "codex", []string{"claude-opus-5-5", "gpt-6.1-sol", "gpt-6.1-codex"}, "gpt-6.1-codex"},
 		{"Codex takes a GPT model", "codex", []string{"claude-opus-5-5", "gpt-6.1-sol"}, "gpt-6.1-sol"},
+		{"claude alias takes a Claude model", "claude", []string{"alpha-chat", "claude-sonnet-5-5", "gpt-6.1-codex"}, "claude-sonnet-5-5"},
+		{"Claude-Code mixed case takes a Claude model", "Claude-Code", []string{"alpha-chat", "claude-sonnet-5-5", "gpt-6.1-codex"}, "claude-sonnet-5-5"},
+		{"pluxy/claude-code package ID takes a Claude model", "pluxy/claude-code", []string{"alpha-chat", "claude-sonnet-5-5", "gpt-6.1-codex"}, "claude-sonnet-5-5"},
+		{"codex-cli alias takes a Codex model", "codex-cli", []string{"alpha-chat", "claude-sonnet-5-5", "gpt-6.1-codex"}, "gpt-6.1-codex"},
+		{"pluxy/codex-setup package ID takes a Codex model", "pluxy/codex-setup", []string{"alpha-chat", "claude-sonnet-5-5", "gpt-6.1-codex"}, "gpt-6.1-codex"},
 		{"models that are no chat model are passed over", "opencode", []string{"text-embedding-3", "gpt-image-2", "fake-gpt-1"}, "fake-gpt-1"},
 		{"only models that are no chat model", "codex", []string{"text-embedding-3"}, ""},
 	} {
@@ -362,6 +367,51 @@ func TestSuggestClientModel(t *testing.T) {
 				t.Errorf("SuggestClientModel(%q, %q) = %q, want %q", c.tool, c.names, got, c.want)
 			}
 		})
+	}
+}
+
+func TestClientPasteAliasesPickToolModel(t *testing.T) {
+	setTestHome(t)
+	h, _ := startManagementCore(t, `{"listen":"127.0.0.1:8317","client_keys":["fake-client-key-1"],"management_key":"mgmt-key","extensions":{"pluxy/fake":{"accounts":[{"id":"acc-1","models":["alpha-chat","claude-sonnet-5-5","gpt-6.1-codex"],"credential":{"kind":"api_key","api_key":"fake-0"}}]}}}`)
+	for _, tc := range []struct {
+		segment   string
+		wantTool  string
+		wantModel string
+	}{
+		{"claude-code", "claude-code", "claude-sonnet-5-5"},
+		{"claude", "claude-code", "claude-sonnet-5-5"},
+		{"Claude-Code", "claude-code", "claude-sonnet-5-5"},
+		{"CLAUDE", "claude-code", "claude-sonnet-5-5"},
+		{"pluxy%2Fclaude-code", "claude-code", "claude-sonnet-5-5"},
+		{"%20claude%20", "claude-code", "claude-sonnet-5-5"},
+		{"%20pluxy%2Fclaude-code%20", "claude-code", "claude-sonnet-5-5"},
+		{"codex", "codex", "gpt-6.1-codex"},
+		{"codex-cli", "codex", "gpt-6.1-codex"},
+		{"Codex-CLI", "codex", "gpt-6.1-codex"},
+		{"pluxy%2Fcodex-setup", "codex", "gpt-6.1-codex"},
+		{"%20codex-cli%20", "codex", "gpt-6.1-codex"},
+		{"opencode", "opencode", "alpha-chat"},
+		{"pluxy%2Fopencode", "opencode", "alpha-chat"},
+	} {
+		t.Run(tc.segment, func(t *testing.T) {
+			rec := manageCall(t, h, http.MethodGet, "/setup/clients/"+tc.segment+"/paste", "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d %s", tc.segment, rec.Code, rec.Body)
+			}
+			var p management.ClientPaste
+			if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+				t.Fatal(err)
+			}
+			if p.Tool != tc.wantTool || p.Model != tc.wantModel {
+				t.Errorf("paste %s: tool=%q model=%q, want tool=%q model=%q", tc.segment, p.Tool, p.Model, tc.wantTool, tc.wantModel)
+			}
+			if len(p.Files) == 0 || !strings.Contains(p.Files[0].Content, tc.wantModel) {
+				t.Errorf("paste %s: file lacks %q:\n%+v", tc.segment, tc.wantModel, p.Files)
+			}
+		})
+	}
+	if rec := manageCall(t, h, http.MethodGet, "/setup/clients/pluxy/claude-code/paste", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("unescaped slash status = %d, want 404", rec.Code)
 	}
 }
 

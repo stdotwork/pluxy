@@ -947,11 +947,13 @@ func ClientSnippetFor(tool, baseURL, key, model string) (ClientSnippet, bool) {
 	return clientSnippet(tool, baseURL, key, model)
 }
 
-// clientSnippet builds the setup files for tool. Unlike ClientSnippetFor, an empty model leaves
-// the tool's model settings out (for Connect, which must never write ModelPlaceholder into a real
-// settings file when pluxy serves no model yet).
-func clientSnippet(tool, baseURL, key, model string) (ClientSnippet, bool) {
+func clientSnippetID(tool string) (string, bool) {
 	id, ok := clientSnippetNames[strings.ToLower(strings.TrimSpace(tool))]
+	return id, ok
+}
+
+func clientSnippet(tool, baseURL, key, model string) (ClientSnippet, bool) {
+	id, ok := clientSnippetID(tool)
 	if !ok {
 		return ClientSnippet{}, false
 	}

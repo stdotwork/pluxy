@@ -12,7 +12,6 @@ import (
 	"testing"
 )
 
-// A getter returns what the reply holds: the call fills the value before the getter reads it.
 func TestGettersReturnTheDecodedReply(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -44,7 +43,6 @@ func TestGettersReturnTheDecodedReply(t *testing.T) {
 	}
 }
 
-// repeatReader is n bytes of b, read without holding them.
 type repeatReader struct {
 	n int64
 	b byte
@@ -65,7 +63,6 @@ func (r *repeatReader) Read(p []byte) (int, error) {
 	return int(n), nil
 }
 
-// Stream writes a reply larger than Call's limit whole.
 func TestStreamCopiesAReplyAboveTheCallLimit(t *testing.T) {
 	const size = maxReply + 5<<20
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +85,6 @@ type countWriter struct{ n int64 }
 
 func (w *countWriter) Write(p []byte) (int, error) { w.n += int64(len(p)); return len(p), nil }
 
-// A non-2xx reply is the error Call gives, and nothing is written.
 func TestStreamErrorsAreCallErrors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == Prefix+"/plain" {
@@ -115,8 +111,6 @@ func TestStreamErrorsAreCallErrors(t *testing.T) {
 	}
 }
 
-// A stream that ends before its declared length is an error, not a short success; the bytes
-// before the break are written.
 func TestStreamBrokenMidway(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "100")
@@ -132,7 +126,6 @@ func TestStreamBrokenMidway(t *testing.T) {
 	}
 }
 
-// A failing writer stops the stream with its own error, which is not "no core answered".
 func TestStreamWriterError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("x")) }))
 	defer srv.Close()

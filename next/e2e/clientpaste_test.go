@@ -189,3 +189,86 @@ func TestClientPasteNamesAServedModel(t *testing.T) {
 		t.Errorf("pluxy client show codex names the best match: %s", r)
 	}
 }
+
+func TestClientPasteAliasesPickToolModel(t *testing.T) {
+	t.Parallel()
+	srv := oauthtest.New(t)
+	base := runCore(t, map[string]any{
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "oauth", "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id": "walk", "models": []string{"alpha-chat", "claude-sonnet-5-5", "gpt-6.1-codex"},
+				"settings":   map[string]string{"base_url": srv.URL},
+				"credential": map[string]any{"kind": "oauth", "access_token": srv.IssueToken("text")},
+			}},
+		},
+	})
+	client := &mgmt.Client{URL: base, Key: managementKey}
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name      string
+		wantTool  string
+		wantModel string
+	}{
+		{"claude-code", "claude-code", "claude-sonnet-5-5"},
+		{"claude", "claude-code", "claude-sonnet-5-5"},
+		{"Claude-Code", "claude-code", "claude-sonnet-5-5"},
+		{"pluxy/claude-code", "claude-code", "claude-sonnet-5-5"},
+		{" claude ", "claude-code", "claude-sonnet-5-5"},
+		{"codex", "codex", "gpt-6.1-codex"},
+		{"codex-cli", "codex", "gpt-6.1-codex"},
+		{"Codex-CLI", "codex", "gpt-6.1-codex"},
+		{"pluxy/codex-setup", "codex", "gpt-6.1-codex"},
+		{" codex-cli ", "codex", "gpt-6.1-codex"},
+	} {
+		p, err := client.ClientPaste(ctx, tc.name, "", "")
+		if err != nil {
+			t.Fatalf("ClientPaste(%q): %v", tc.name, err)
+		}
+		if p.Tool != tc.wantTool || p.Model != tc.wantModel {
+			t.Errorf("ClientPaste(%q): tool=%q model=%q, want tool=%q model=%q", tc.name, p.Tool, p.Model, tc.wantTool, tc.wantModel)
+		}
+		if len(p.Files) == 0 || !strings.Contains(p.Files[0].Content, tc.wantModel) {
+			t.Errorf("ClientPaste(%q): file does not name %q:\n%+v", tc.name, tc.wantModel, p.Files)
+		}
+	}
+
+	for _, tc := range []struct {
+		rawPath   string
+		wantTool  string
+		wantModel string
+	}{
+		{"/setup/clients/pluxy%2Fclaude-code/paste", "claude-code", "claude-sonnet-5-5"},
+		{"/setup/clients/%20Claude-Code%20/paste", "claude-code", "claude-sonnet-5-5"},
+		{"/setup/clients/pluxy%2Fcodex-setup/paste", "codex", "gpt-6.1-codex"},
+	} {
+		status, body := managedJSON(t, base, managementKey, http.MethodGet, tc.rawPath, nil)
+		var p mgmt.ClientPaste
+		if status != http.StatusOK || json.Unmarshal(body, &p) != nil || p.Tool != tc.wantTool || p.Model != tc.wantModel {
+			t.Errorf("GET %s: status=%d tool=%q model=%q body=%s, want 200 tool=%q model=%q", tc.rawPath, status, p.Tool, p.Model, body, tc.wantTool, tc.wantModel)
+		}
+	}
+
+	env := []string{"PLUXY_URL=" + base, "PLUXY_MANAGEMENT_KEY=" + managementKey}
+	for _, tc := range []struct {
+		arg  string
+		want string
+	}{
+		{"claude", `"model": "claude-sonnet-5-5"`},
+		{"Claude-Code", `"model": "claude-sonnet-5-5"`},
+		{"pluxy/claude-code", `"model": "claude-sonnet-5-5"`},
+		{" claude ", `"model": "claude-sonnet-5-5"`},
+		{"codex-cli", `model = "gpt-6.1-codex"`},
+		{"pluxy/codex-setup", `model = "gpt-6.1-codex"`},
+	} {
+		r := runCLI(t, env, "client", "show", tc.arg)
+		if r.code != 0 || !strings.Contains(r.stdout, tc.want) {
+			t.Errorf("pluxy client show %q: want %s in stdout, got %s", tc.arg, tc.want, r)
+		}
+	}
+}

@@ -1,181 +1,640 @@
-# The panel
+# The web panel
 
-The new core in `next/` serves a web panel at `/panel/` while its management API is on. The panel
-is the browser build of the UI kit in `next/ui`; the desktop app in `next/app` is its second
-build. This page records the decisions behind the panel's pages and why they were made. How to
-build the panel, add a page and use the kit is in [`next/ui/README.md`](../next/ui/README.md).
+Core serves the web panel at `/panel/` while the management API is on. Sign in with pluxy's
+**Management key**: `pluxy key management --show-key`, run on the computer pluxy runs on, prints it.
+With **Remember on this device** ticked, the browser keeps the key after it restarts; without it,
+the key is gone when the tab closes.
 
-## What parity with the old panel means
+To open the panel from another computer, set `listen` to an address that computer can reach and
+`management_allow_remote` to `true` ([config.md](config.md#top-level)), then restart pluxy. Over
+plain HTTP the management key crosses the network unencrypted: turn on [`tls`](config.md#tls) or put
+HTTPS in front of pluxy.
 
-The new panel replaced the old one (the React/Vite panel formerly in `extensions/panel`, now
-removed). Parity meant that it looked and felt like
-the old panel: where a feature was kept, it kept the old page, section, setting and button names,
-in a similar place, so someone who knew the old panel found each thing where they expected it. A
-label changed only where it named something this core does differently, such as a file, a relay
-or a mislabelled setting, or where [docs/terms.md](terms.md), the repo's list of words for the UI,
-gives another word: an account's "Renewal time" reads "Subscription ends".
+The desktop app shows the same pages, and adds its own ([app.md](app.md)).
 
-Parity did not mean the same logic. The new core does things its own way, and the panel shows
-what it does. Old features were carried over only where they were worth keeping. Each one left out
-has a reason.
+Nothing in the panel spends from an account behind a click except **Send a test request** on an
+account's page and in Setup's third step; both state that the test uses the account before you press
+them.
 
-## A minimal panel
+## Navigation
 
-The panel shows what core itself does, in compact pages, and nothing core cannot do. A setting
-gets a field only when core runs it; the rest of the config file stays editable as text in
-Config's Settings file tab, and a setting gets its field when core starts running it.
+The frame has five destinations in its navigation (**Home**, **Accounts**, **Activity**, **Tools**,
+and **Settings** at the foot), a header strip for the page title, destination tabs and main actions,
+and a status block at the foot of the navigation.
 
-Richer views and tools the panel does not have, such as the local usage of coding agents and the
-tools that set those agents up, belong to the desktop app. The app shows the same core pages in
-the same places, and adds its own pages after them. Both show the pages of the extensions that
-run.
+- **Status block:** shows whether pluxy answers (**Checking**, **Running**, or **Not answering**)
+  and its host. While the tab is visible and signed in, it checks pluxy every 15 seconds. Selecting
+  it opens a menu with pluxy's full address and **Copy**.
+- **Names hidden:** appears at the end of the header strip whenever **Hide names** is turned on in
+  **General**; pressing it turns hiding off.
+- **Safe address:** adding `?safe` to the panel URL (for example,
+  `http://127.0.0.1:8317/panel/?safe`) turns off custom CSS and keeps it off until you re-enable
+  **Custom CSS** on **Themes**.
 
-Nothing in the panel spends from an account behind a click, except "Send a test request" on an
-account's page and in Setup's last step, which each say beside the button that the test uses that
-account.
+| Destination | Page, tab or topic | Address | `data-page` | What it holds |
+| --- | --- | --- | --- | --- |
+| **Home** | **Home** | `#/status` | `status` | Service verdict, accounts needing attention, provider pools, connection details, 7-day summary and latest requests |
+| **Accounts** | **All accounts** (tab) | `#/accounts` | `accounts` | Every account grouped by condition, provider filter, list or card view, search and batch actions |
+| **Accounts** | An account's page (under **All accounts**) | `#/accounts/<id>` | `account` | One account's limits, facts, weekly usage, settings, models and test request |
+| **Accounts** | **Add an account** (under **All accounts**) | `#/add-account` | `add-account` | Provider picker, sign-in and API-key flows, and CLIProxyAPI auth-file import |
+| **Accounts** | **Order & fallback** (tab) | `#/routing` | `routing` | Per-provider account priority and weight, model fallback chains and routing rules |
+| **Activity** | **Requests** (tab) | `#/activity`, `#/usage` | `usage` | Recent requests kept in memory, filters, routing explanation and CSV export |
+| **Activity** | **Usage** (tab) | `#/activity/usage` | `activity/usage` | Request, success-rate, token and latency totals, chart and breakdowns over 24 hours, 7 days or 30 days |
+| **Tools** | **Tools** | `#/tools` | `tools` | Detected coding tools, connect and disconnect, setup snippets, address for tools and client keys |
+| **Settings** | **General** (topic, **This device**) | `#/settings` | `settings` | Appearance, **Hide names** and **Sign out** |
+| **Settings** | **Themes** (topic, **This device**) | `#/themes` | `themes` | Active theme, layout overrides, adding themes and custom CSS |
+| **Settings** | **Config** (topic, **pluxy**) | `#/config`, `#/config/source` | `config` | Live network, remote-access, logging and management-key settings, plus the raw settings file editor |
+| **Settings** | **Extensions** (topic, **pluxy**) | `#/extensions` | `extensions` | Installed provider extensions, extension settings forms and available packages |
+| **Settings** | **Logs** (topic, **pluxy**) | `#/logs`, `#/logs/<trace ID>` | `logs` | Core's log file and full logs of failed requests |
+| **Settings** | **System** (topic, **pluxy**) | `#/system` | `system` | Version, build info, served models and base URLs by API format |
+| **Settings** | **Setup** (topic, **pluxy**) | `#/setup` | `setup` | Three-step guided setup and CLIProxyAPI setup import |
+| **Settings** | Extension pages (topics, **From extensions**) | `#/ext/<publisher>/<name>/<page>` | `ext/<publisher>/<name>/<page>` | Sandboxed pages provided by running extensions |
 
-## Page names
+Settings opens on **General** and groups its topics into **This device** (**General**, **Themes**),
+**pluxy** (**Config**, **Extensions**, **Logs**, **System**, **Setup**) and **From extensions**.
 
-| Page | Why this name |
-| --- | --- |
-| Home | The landing page, in place of the old panel's Dashboard: it answers whether the person's coding tools can be served, so it is named for where a person starts, not for a dashboard of figures. Its ID stays `status`, from the earlier Status page, so the address `#/status` and theme rules for `data-page="status"` keep working. |
-| Accounts | The old Auth Files and AI Providers pages in one, as the tab "All accounts". This core has one kind of account, whether it comes from the config or from a sign-in, so the list groups accounts by what they need from the person (Needs you, Waiting, Serving, Turned off), not by where they come from. |
-| An account's page | Replaced the old Auth Files page's details. `#/accounts/<id>` opens it, under All accounts, with the account's name in the header strip; it shows the account's limits, what it did this week and the ways to change it. |
-| Add an account | Replaced OAuth Login. It adds API keys as well as sign-ins, from the login methods each running extension offers under the provider's name, so "OAuth" no longer describes it. A person never types an account ID: core makes it, and the account is named after the sign-in. The importer for CLIProxyAPI auth files is at the end of it. |
-| System | Replaced Management Center Info. "Management Center" was the upstream panel's product name. |
-| Order & fallback | Replaced Routing, whose tiers, "Failover" and "Gateway policy" a person had to know the product to read. It is the second tab of Accounts. It shows, for each provider with two or more accounts, which goes first (`First`, `Backup 1`…): pluxy only ever picks among one provider's accounts, so a mixed list would have made another provider's account look like a backup. Under it are the fallbacks (what pluxy tries when no account can serve a model, such as ChatGPT when Claude runs out) and the rules by which accounts share requests, two shown and eight under "More rules". |
-| Config | Replaced the old panel's Config Panel. It has two tabs: Settings, whose network, other-computers (remote management and the address pluxy listens on), logging and key settings each save the moment they change, and Settings file, the file itself, saved after a review of the changes. The routing settings are on Order & fallback and the client keys on Tools, each linked from Settings, so no setting is on two pages. |
-| Logs | Replaced the old panel's Logs Viewer. It holds two things, pluxy's own log and the full logs of failed requests, and "viewer" named neither. |
-| (Quota Management) | Gone: every account's row on All accounts shows its two shortest limits, and its page shows every limit. The old address `#/quota` opens All accounts. |
-| Requests, Usage | The two tabs of Activity; see [The Activity page](#the-activity-page). Requests keeps the ID `usage` of the page it replaced, so `#/usage` and `data-page="usage"` still work; Usage is `activity/usage`. |
-| Tools | A new page, named for what a person does there: connect a coding tool, copy the address for any other program, and make, name and delete the keys tools send. It sits under the Tools destination; in the desktop app its topics sit beside it. |
-| Set up pluxy, Setup | A new page, named for what a person does there: three steps, the person's AI accounts, their coding tool and one test request. The panel opens it by itself on a first start, titled "Set up pluxy"; afterwards it stays among the Settings topics as "Setup", every step folded. |
+## Home
 
-The navigation has five destinations: Home, Accounts (All accounts, with the tab
-"Order & fallback", and each account's own page under All accounts), Activity (Requests and Usage), Tools (the Tools
-page, and in the desktop app its client pages as topics) and Settings, which lists every other page as a topic,
-the extensions' pages last. The old panel's groups (Operate, Gateway, Observe, Control) are gone.
-Since every text goes through the string layer, renaming a page later is a
-change of text; the page ID stays, because it is the page's address and theme hook.
+- **Address:** `#/status` (`data-page="status"`).
+- **Refresh:** reads accounts, status, 7-day usage and the latest 10 requests every 60 seconds while
+  the tab is visible. The header shows `Updated {when}` and **Refresh** (which also forces fresh
+  quota reads for shown accounts). If a refresh fails over existing data, a warning notice names
+  when the shown data was read and offers **Try again**.
+- **Empty state (no accounts):** shows **pluxy has no accounts yet.** with **Add an account**
+  (`#/add-account`), **Guided setup** (`#/setup`), provider quick links (**Claude**, **ChatGPT
+  (Codex)**, **Gemini**, **Another service with an API key**, and **More**), a line listing detected
+  coding tools (or `Next: connect a coding tool.`), and the **Point a tool at pluxy** card.
+- **Verdict strip and notices:** shows the current verdict headline and note — in priority order:
+  safe mode, accounts needing you, provider status unread, nothing serving (with when the first
+  waiting account returns), most 7-day requests failed, accounts waiting, or everything serving —
+  plus a counts line (waiting, serving, not checked, turned off, and 7-day request total and success
+  rate) and a proportional state bar. When core refused the latest settings-file reload, a warning
+  notice gives the error and links to **Open Config** (`#/config`).
+- **Needs you band:** lists every account requiring action (**Needs sign-in**, **Closed by
+  provider**, **Cannot be read**, **Provider stopped**) with its inline fix (**Sign in again**,
+  **See what to do**, **Open Extensions**, or **Turn on**).
+- **Pools:** one card per provider that has accounts. Each card shows the provider mark and name,
+  the shortest shared request window (**5-hour**, **Daily**, **Weekly**, **Monthly**, or window
+  label), the average remaining percentage across serving accounts (or summed USD **Balance** when
+  no window is reported, or `Not reported by {provider}` / `Nothing is serving`), a segmented bar
+  with one segment per account, `{serving} of {total} serving`, and the soonest reset gain
+  (`+{gain}% back in {duration}`) or return time.
+- **Accounts:** lists the remaining accounts grouped by provider (ordered waiting soonest-back
+  first, then serving least-left first, then unchecked, then turned off), with a link to **All
+  accounts** (`#/accounts`). Each row shows the account's condition, plan pill, two shortest request
+  limits (read for up to 24 accounts per view), and inline fix (**Turn on** or **Clear cooldown**).
+- **Point a tool at pluxy:** links to **Tools** (`#/tools`), switches between **OpenAI** (`/v1`),
+  **Claude** (origin) and **Gemini** (origin) to display the matching **Base URL** with **Copy**,
+  shows the first client key's name and masked value with a **Keys** link to **Tools**, and lists
+  detected coding tools as chips linking to **Tools**.
+- **Last 7 days:** links to **Usage** (`#/activity/usage`). Displays request count, **went through**
+  percentage, **tokens** (when reported), and a 7 local-day stacked bar chart (succeeded and failed,
+  with hover/focus readout). When at least 3 requests failed and more than half asked for one model,
+  a line names that model with a **See them** link to filtered **Requests**. If `usage.enabled` is
+  off, shows a note with **Turn it on in Config** (`#/config/logging`); if 0 requests ran in 7 days,
+  shows whether detected coding tools are connected, with a **Connect it** / **Connect a tool** link
+  to **Tools**.
+- **Latest requests:** links to **All requests** (`#/activity`) and lists up to 10 compact request
+  rows showing time, provider mark, model, account, and result (check mark, failure chip, or backup
+  try chip such as **2nd**). Selecting any row opens that request on **Requests**
+  (`#/activity?trace=<id>`).
+- **Spends or deletes:** nothing.
+- **Settings read:** `usage.enabled` ([config.md](config.md#usage)).
+
+## Accounts
+
+- **Address:** `#/accounts` (`data-page="accounts"`), tab **All accounts**.
+- **Empty state:** when core has no accounts, shows **No accounts yet.** and **Add an account**
+  (`#/add-account`).
+- **Summary and provider filter:** above the list, a counts line (total accounts and provider count,
+  or one provider's account count when filtered, plus non-zero counts for accounts needing you,
+  serving, waiting, not checked, and turned off) sits over a proportional state bar. When accounts
+  span 2 or more providers, **Filter by provider** chips (**All** and one chip per provider with its
+  count) filter the summary, state bar, and groups to one provider and show that provider's pool
+  card above the groups (when provider status is checked).
+- **Listing, grouping and sorting:** groups matching accounts by condition in order: **Needs you**,
+  **Waiting**, **Serving**, and **Turned off**, each heading showing its count. When core's provider
+  status could not be read on initial load, accounts whose condition depends on whether their
+  provider runs appear under **Not checked** (sorted by name, then ID) in place of **Waiting** and
+  **Serving**. **Needs you** and **Waiting** sort by soonest return time (accounts without a return
+  time last), then name, then ID; **Serving** and **Turned off** sort by name, then ID.
+  - Each row (or card) shows the provider mark with condition dot, account name (linking to
+    `#/accounts/<id>`), condition word and reason (or provider name and `base_url` host when simply
+    serving; provider name is omitted when filtered to one provider), plan pill, two shortest
+    request limits (read for up to 24 serving or waiting accounts per view, cached 5 minutes), 7-day
+    request count (`{count} this week`, omitted if usage could not be read), and inline fix.
+  - At most one filled primary button appears on the page: the first repair action in **Needs you**,
+    or **Add an account** when no repair is needed.
+- **Kept current:** polls accounts, provider status, and 7-day usage every 10 seconds while visible
+  (paused while **Select** is active or a batch action runs). If a refresh fails over existing data,
+  or provider status or 7-day usage could not be read, a warning notice keeps the last loaded rows
+  and offers **Try again**.
+- **Actions:**
+  - **Add an account:** opens `#/add-account`.
+  - **Filter by provider** (when 2 or more providers have accounts): **All** or one provider chip.
+  - **Find an account** (shown when more than 6 accounts exist, or while a search is entered):
+    filters by account label, ID, public ID, provider name, extension ID, condition word, or last
+    error (case-insensitive). Offers **Clear search** when nothing matches.
+  - **Account view** (**List** / **Cards**): switches this page between rows and cards. Starts from
+    the active theme's **Lists** layout and remembers a page-only choice in browser storage
+    (`pluxy.accounts.view`) without changing **Themes**.
+  - Inline row fixes: **Sign in again** (`#/accounts/<id>/sign-in`), **See what to do**
+    (`#/accounts/<id>`), **Open Extensions** (`#/extensions`), **Turn on**, **Clear cooldown**.
+  - **Select** (shown when 2 or more accounts exist): adds per-row checkboxes and a bottom batch bar
+    (**Actions for the selected accounts**) showing `{count} selected` (or
+    `{count} selected, {hidden} hidden` when search or the provider filter hides selected accounts),
+    **Select all** / **Clear** (for visible accounts), **Turn on**, **Turn off**, **Clear
+    cooldown**, **Remove…**, and **Done**.
+- **Spends or deletes:** **Remove…** opens a confirmation dialog (**Remove** / **Cancel**), noting
+  if search or the provider filter hides selected accounts, before deleting saved sign-ins from
+  core's credential store. Accounts defined in the settings file are skipped by batch **Turn off**
+  and **Remove…** (reported in a notice); batch **Turn on** and **Clear cooldown** still run on
+  them. Nothing spends from an account.
+- **Settings read:** none directly. The 7-day counts come from core's usage record, which core keeps
+  while `usage.enabled` is on ([config.md](config.md#usage)). The view starts from the active
+  theme's **Lists** layout (default view before `pluxy.accounts.view` is set in browser storage).
+
+## An account's page
+
+- **Address:** `#/accounts/<id>` (`data-page="account"`). `#/accounts/<id>/sign-in` opens **Sign in
+  again** on the page; `#/accounts/<id>?alias=<name>` opens **Edit settings** with a new alias row
+  prefilled with `<name>`.
+- **What it shows:**
+  - Opening header: provider and plan pill, condition and reason, last error (when failing or
+    waiting), and the one fix action (**Sign in again**, **Turn on**, **Clear cooldown**, **Open
+    Extensions**, or **Open the settings file** for config-file accounts).
+  - **Limits:** every limit reported by the provider, **Manual resets** remaining, **Subscription
+    ends** date, read timestamp, and **Refresh**.
+  - **About:** **Provider**, **Signs in with**, **Sign-in** (auto-renewal status, renewal error or
+    expiry), **Order** (links to **Order & fallback**), **Right now** (active request count),
+    **Added** date, and **Known to tools as** (public ID).
+  - **This week** and **Latest requests:** 7-day request total, success percentage, top 5 models
+    with **See its requests** (`#/activity?account=<id>`), and up to 6 expandable recent requests.
+  - **Change it:** for accounts added by sign-in, offers **Rename**, **Turn off** (when enabled and
+    not closed), **Edit settings**, and **Remove…** (unreadable accounts offer only **Remove…**).
+    For config-file accounts, links to **Open the settings file** (`#/config/source?account=<id>`).
+  - **Settings, models and a test request** (expandable): read-only **Account settings**, **Models
+    it serves** (with aliases), **Test with** model selector and **Send a test request**, and
+    **Renew sign-in now** (for refreshable sign-in accounts).
+- **Actions:**
+  - **Rename:** dialog changing the account's display label (up to 64 characters; blank clears it).
+  - **Edit settings:** dialog editing `prefix`, `proxy_url`, `priority`, `weight`,
+    `disable_cooling`, `websockets` (Codex accounts only), `request_retry` (**Inherit** or
+    **Custom**), `max_concurrency`, `models`, `excluded_models`, `headers`, `model_alias`, and
+    extension `settings` JSON; asks before discarding unsaved edits (**Discard changes** / **Keep
+    editing**).
+  - **Send a test request:** sends one live request through this account using the chosen model (or
+    **The first model it serves**) and shows whether it succeeded, the model served, latency, error,
+    and reply preview.
+  - **Renew sign-in now:** triggers an immediate credential refresh.
+  - **Sign in again** (`#/accounts/<id>/sign-in`): replaces the credential using the provider's
+    sign-in methods; keeps non-secret settings optional and refuses a sign-in to a different
+    upstream account.
+- **Spends or deletes:** **Send a test request** spends one request against this account (marked
+  `Uses one request.`). **Remove…** asks for confirmation (**Remove**) before deleting the saved
+  sign-in and returning to **Accounts**.
+- **Settings keys:** account fields under `extensions.<id>.accounts[]`
+  ([config.md](config.md#accounts)).
+
+## Add an account
+
+- **Address:** `#/add-account` (`data-page="add-account"`).
+- **Empty state:** when no installed provider offers sign-in methods, shows a notice and **Open
+  Extensions** (`#/extensions`).
+- **Pick a provider** (skipped when only one provider runs): the page asks **Which account do
+  you want to add?** with up to 4 main tiles (**Claude**, **ChatGPT (Codex)**, **Gemini**, **Another
+  service with an API key**, filled from other running providers up to 4). Any remaining running
+  providers appear under **More providers** (`{count} more`).
+- **Pick a way to add it:** the page says **Choose how to add it.** and shows **All providers** to
+  go back, the provider heading, and each login method the extension offers (browser sign-in, device
+  code, or API key). When a provider offers two or more methods, the first browser sign-in is marked
+  **Recommended**. Press **Start** on a method.
+- **Sign-in flow:**
+  - Methods requiring upfront inputs show required fields first and optional fields under **More
+    options**. Every secret field provides **Load from file** (reads UTF-8 text up to 1 MiB). Press
+    **Continue** to begin, or **Cancel** to go back.
+  - While waiting: shows provider instructions, **Open sign-in page** and **Copy link** (browser
+    sign-in), the device code and **Copy code** (device flow), a countdown timer when `expires_in`
+    is set, and any follow-up input (such as **Paste the address you land on**) with **Continue**.
+  - **Cancel** cancels the in-flight sign-in (**Cancelling…** while waiting for core) and checks
+    whether the sign-in finished before returning to the method list; leaving or closing the page
+    also cancels a pending sign-in. On failure, shows the reason and **Try again**.
+- **After adding:** shows the added account name (and plan pill if known), polls core's automatic
+  provider check every second (up to 10 times) until it reports success or failure, and offers:
+  - **Name** and **Save name:** optional display label (up to 64 characters). Prefills the
+    provider-supplied label or the host from `base_url`; when **Hide names** is on, starts empty
+    with the masked name as placeholder.
+  - **Open account** (`#/accounts/<id>`) and **Add another**.
+- **Or bring them from CLIProxyAPI:** **Import files…** picks one or more `.json` auth files (up to
+  1 MiB each), imports each one, and lists added accounts, ignored unsupported settings, or skip
+  reasons until you leave the page.
+- **Spends or deletes:** nothing.
+
+## Order & fallback
+
+- **Address:** `#/routing` (`data-page="routing"`), tab **Order & fallback**.
+- **Header action:** **Refresh** reloads accounts, routing rules, fallback chains, served models,
+  config format and status.
+- **Account order:** shows one section per provider that has two or more accounts, grouped by
+  priority (**First**, **Backup 1**, **Backup 2**, …; providers with one account appear in a summary
+  line below).
+  - Move sign-in accounts up or down a group with **↑** / **↓**, or drag a row onto a group or the
+    top/bottom drop edges; each move saves immediately.
+  - Config-file accounts cannot be moved here and link to **In the settings file**
+    (`#/config/source?account=<id>`).
+  - When **How a group shares requests** is set to **Split by weight**, each sign-in account shows
+    **Weight {n}**; pressing it opens an inline integer weight input (`0` excludes it, empty resets
+    to `1`, saves on Enter or blur).
+- **Fallbacks:** lists model fallback chains (`routing.chains`). Unavailable when core runs on
+  `config.yaml` (displays a notice pointing to `pluxy import cpa`).
+  - **+ Add a fallback** and **Edit** open the fallback editor: **When a tool asks for** (read-only
+    when editing), up to 8 ordered steps with **Model**, **Provider** (**Any provider** or a running
+    provider), **Only some accounts** checkboxes, **↑** / **↓**, **Remove step**, **+ Add a step**,
+    **Save**, and **Cancel**. Warns if no step names the requested model itself.
+  - **Remove…** asks for confirmation (**Remove**) before deleting the fallback chain.
+- **Rules:** each switch or select saves immediately; number and text fields save on Enter or blur.
+
+| Rule label | Where shown | Config key ([config.md](config.md#routing)) |
+| --- | --- | --- |
+| **How a group shares requests** (**Take turns**, **Split by weight**, **Fill one first**, **Least busy first**, **Soonest reset first**) | Always | `routing.strategy` |
+| **Keep a conversation on one account** | Always | `routing.session_affinity.enabled` |
+| **Release a quiet conversation after** | **More rules** | `routing.session_affinity.ttl_ms` |
+| **Extra rounds when every account fails** | **More rules** | `routing.request_retry` |
+| **Accounts to try per round** | **More rules** | `routing.max_accounts` |
+| **Longest wait for a free account (seconds)** | **More rules** | `routing.max_wait_ms` |
+| **Rest an account after it fails** | **More rules** | `routing.disable_cooling` (inverted) |
+| **Rest after a provider error (seconds)** | **More rules** | `routing.transient_error_cooldown_ms` |
+| **Show tools when a limit resets** | **More rules** | `routing.quota_response_mode` (`usage-limit` / `retryable`) |
+| **Prefixed accounts answer only prefixed names** | **More rules** | `routing.force_model_prefix` |
+
+- **Spends or deletes:** **Remove…** deletes the chosen fallback chain after confirmation; nothing
+  spends from an account.
+
+## Activity
+
+Activity has two tabs: **Requests** and **Usage**. When `usage.enabled` is off, both tabs show a
+single notice linking to **Turn it on in Config** (`#/config/logging`).
+
+### Requests
+
+- **Address:** `#/activity` or `#/usage` (`data-page="usage"`). Supports query parameters
+  `failed=1`, `provider`, `account` (ID or public ID), `model`, `key`, and `trace=<id>` (reads down
+  up to 10,000 events to locate and open that request).
+- **Header actions:**
+  - **Refresh:** reloads requests, accounts, keys, logging settings and summary. Requests do not
+    auto-refresh on a timer, so rows do not shift while you inspect them.
+  - **Save as spreadsheet:** exports up to 10,000 newest matching requests to
+    `pluxy-requests-YYYY-MM-DD.csv` with columns
+    `Time, Model, Provider, Account, Client key, Failed, Status, Latency, Tokens, Trace ID`. Notes
+    if the export hit the 10,000-row cap, and warns when **Hide names** is on that the downloaded
+    CSV contains real names.
+- **Filters:** **All** / **Failed** switch, **Filter** button opening dropdowns for **Provider**,
+  **Account**, **Model** and **Key** (each appears when at least 2 options exist or the filter is
+  active), removable filter chips, and **Clear filters**.
+- **Table:** groups requests under local day headings (**Today**, **Yesterday**, or full date),
+  loading 50 rows at a time with **Show older**. Columns: **Time**, **Model**, **Account** (with
+  detour chips such as **2nd**, **3rd**, **4th**, **5th or later**, **fallback {step}**, or **via
+  backup**), **Key**, **Tokens**, **Time taken**, and **Result** (check mark or failure word chip);
+  narrower list panes hide **Key**, **Tokens**, and then **Time taken** (and wide screens hide all
+  three while the side detail pane is open), though every field stays in the detail pane. At the end
+  of an unfiltered list, states how far back core's memory keeps requests and links to **Usage**
+  when older day files exist. If core dropped or failed to write usage records to disk since
+  starting, a warning banner states the count and links to **Logs**.
+- **Request detail pane:** opens when you select a row. Shows:
+  - Provider, account, outcome chip, and three tiles: **Time taken**,
+    **Tokens** (`{input} → {output}`), and **Tries** (or **Fallback step**).
+  - Why it went where it did: a decision sentence (for example,
+    `Tried <account>: rate limited. Then <account> answered in 2.4 s.`), fallback note, accounts
+    left out and why, and why the answering account was chosen (linking to **Order & fallback** when
+    driven by account order). When no account serves the requested model, lists served models per
+    account with **Add an alias** / **Add an alias on {account}** links (opening
+    `#/accounts/<id>?alias=<model>`) or **Open {account}** for config-file accounts, plus a link to
+    **Tools**.
+  - **Attempts** list when more than one attempt ran.
+  - The request's facts: **Time**, **Account**, **Provider**, **Model used** (when different from
+    requested), **Key**, **Path**, **Tokens** (`in`, `out`, `cached`), and **Trace** (links to
+    `#/logs/<trace>` for failed requests or when `logs.request_log` is on; otherwise copyable text).
+  - Next-step button: **Open {account}** or **Open its log**.
+- **Spends or deletes:** nothing.
+- **Settings read:** `usage.enabled`, `usage.max_events`, `usage.max_age_ms`
+  ([config.md](config.md#usage)); `logs.request_log` ([config.md](config.md#logs)).
+
+### Usage
+
+- **Address:** `#/activity/usage` (`data-page="activity/usage"`). Supports a single filter in the
+  query (`provider`, `account`, `model`, or `key`).
+- **Refresh:** auto-refreshes every 60 seconds while visible; **Refresh** in the header reloads
+  immediately.
+- **Range selector:** **24 hours** (1 hour per bar), **7 days** (default, 1 local day per bar), or
+  **30 days** (1 local day per bar). Aggregates closed day files from disk (`usage.keep_days`,
+  default 90 days) with today's events from memory; notes when pluxy's record starts after the
+  beginning of the selected range.
+- **Summary tiles and chart:** four tiles — **Requests** (with failed count), **Went through**
+  (percentage and ratio), **Tokens** (with cached count), and **Avg time** (per request). Selecting
+  **Requests**, **Went through**, or **Tokens** switches the bar chart below; **Avg time** is
+  read-only. Chart bars support mouse hover and keyboard navigation (`ArrowLeft`, `ArrowRight`,
+  `Home`, `End`) to read individual bar figures. **Show the numbers** / **Hide the numbers** toggles
+  the tabular data behind the chart.
+- **Failure hotspot:** when at least 3 requests failed in the range and one model accounts for half
+  or more, shows a line naming that model with **See them** linking to filtered **Requests**.
+- **Breakdown table:** switch between **Provider**, **Model**, **Account**, and **Key**. Columns
+  show name, **Requests**, **Share** (stacked bar and percentage), **Failed**, **Tokens**, and **Avg
+  time**. Displays the top 10 rows with **Show all {count}** / **Show the top 10**. Selecting any
+  row filters **Usage** to that item, displaying a removable filter chip and a **See these
+  requests** link to **Requests**.
+- **Spends or deletes:** nothing.
+- **Settings read:** `usage.enabled`, `usage.keep_days` ([config.md](config.md#usage)).
+
+## Tools
+
+- **Address:** `#/tools` (`data-page="tools"`).
+- **Header action:** **Refresh** runs a fresh tool scan and reloads keys and 7-day key usage. If
+  core has never scanned, opening the page starts one scan and polls every second while it runs.
+- **Coding tools:** lists coding tools detected on the computer core runs on, with a summary line
+  (`{installed} installed · {connected} connected · checked {when}`, plus **Detected on the
+  computer pluxy runs on.** when viewed from another computer). Connected tools appear first, then
+  other installed tools; uninstalled or unchecked tools sit under **Other tools ({count})** (open
+  automatically alongside **No coding tools found.** when no tool is installed).
+  - Each row shows the tool name (**Codex** for `codex`), version (when found), state badge
+    (**Connected**, **Installed · not connected**, **Settings need update**, **Cannot change
+    settings**, **Not installed**, or **Not checked**), settings file path, and action.
+  - Tools without paste snippets (**Claude Desktop**, **Grok Build**, **Hermes Agent**) read **Set
+    up from the desktop app** (and a note below the list says the same unless all three appear as
+    rows).
+  - Warns with an **Add an account** link (`#/add-account`) when pluxy has no accounts. On cores
+    without `GET /setup`, displays a note to use **Address for tools** and **Keys** below.
+- **Connecting and disconnecting a tool from the panel:**
+  - **Which tools:** **Claude Code** (`~/.claude/settings.json`) and **Codex**
+    (`~/.codex/config.toml`), when installed on core's computer and their settings file is neither
+    refused nor already connected by hand.
+  - **Buttons and hint:** an unconnected eligible row shows **Connect** and **Set up by hand**,
+    with a line naming the file and noting that **Connect** makes a key, writes it into that file
+    on core's computer, keeps a copy of the file as it was, and **Disconnect** puts it back. Once
+    connected by pluxy, the row shows **Disconnect** (and **Connect again** if the file later stops
+    pointing at pluxy). A tool connected by hand keeps **Set up** alone.
+  - **What Connect writes and where:** runs immediately without asking first. Core makes a client
+    key named after the tool (reusing an existing core key if the file already holds one), uses the
+    model picked in **Set up by hand** if any (otherwise the best-matching served chat model, or
+    leaves model settings alone when core serves no chat model yet), and merges pluxy's settings
+    into the tool's file in the home folder of the user core runs as. Other settings stay, except
+    that for Claude Code it removes `env.ANTHROPIC_API_KEY`, which **Disconnect** puts back. It
+    tightens the file to owner-only: `0600` for a new file, or group and other access removed from
+    an existing one:
+    - What each tool's file gets is in [clients.md](clients.md#what-each-tool-gets).
+    - Core refuses symlinks, non-regular files, files larger than 2 MiB, files or folders owned by
+      another user, unexpected formats, or a file modified while being updated.
+    - Before writing, core saves a private backup record (original file contents, permissions,
+      whether the file or folder was created, applied bytes, and created key ID) in
+      `state/tools/<tool>.json` beside core's config. A note under the row prompts you to restart
+      the tool after connecting.
+  - **What Disconnect puts back:** runs immediately without asking first (available only for tools
+    pluxy connected). If the file still matches what **Connect** wrote, restores the original file
+    bytes and permissions (or deletes the file — and its folder if empty — when **Connect** created
+    them). If the file changed since, keeps those later changes and reverts or removes only the
+    settings **Connect** changed that still hold **Connect**'s values (and removes an empty
+    `[model_providers.pluxy]` table that **Connect** added). Deletes the backup record and removes
+    the client key **Connect** created unless another connected tool's record uses it or it is the
+    last client key. A note under the row reports whether the file was restored, merged, or
+    removed.
+- **Set up by hand** / **Set up** (**Claude Code**, **Codex**, **OpenCode**, **Pi**, **Oh My Pi**;
+  toggled with **Hide**, one row open at a time): opens three inline steps:
+  1. **Make key** (or **Make another key** if a key with that tool's name already exists): creates
+     a client key named after the tool and substitutes it directly into step 2's snippet in page
+     memory only (closing its one-time notice in **Keys**, deleting the key, or leaving the page
+     clears it from the snippet).
+  2. **Model {tool} starts with** selector (when pluxy serves models; picking a model here also
+     sets the model **Connect** writes for that tool; when none are served, keeps `<model-id>` and
+     links to **Models your tools can ask for** on **System**) and config file snippet(s) with
+     **Copy**.
+  3. Restart the tool to load the new settings.
+- **Address for tools:** displays pluxy's base address with **Copy**, notes whether other computers
+  on your network can reach it (when viewing a local core), and links to **Addresses for other
+  programs** on **System** (`#/system`).
+- **Keys:** titled **Keys ({count})** once loaded, lists every client key with its name (and masked
+  value, or masked key if unnamed) and 7-day request count (`{count} request this week`,
+  `{count} requests this week`, or `Not used this week`). When no keys exist, shows **No keys.
+  Until there is one, any program that reaches pluxy can use it.** and **New key**.
+  - **New key:** opens a form with an optional **Name** (up to 64 characters), **Make key**, and
+    **Cancel**. Creating a key displays its full value once with **Copy** and **Close** (held only
+    in page memory until closed, deleted, or you leave the page).
+  - **Rename:** edits the key's label (`client_key_labels`, up to 64 characters; saves with
+    **Save**, cancels with **Cancel**).
+  - **Delete:** asks for confirmation (**Yes, delete** / **Cancel**) before deleting the key;
+    disabled when only one key remains.
+- **Spends or deletes:** nothing spends from an account. **Connect** and **Disconnect** write or
+  revert the tool's settings file on core's computer immediately without asking first (**Connect**
+  creates a client key and backs up the original file; **Disconnect** restores, merges, or removes
+  the file and deletes the created key if unused and not the last key). **Delete** in **Keys**
+  permanently removes a client key after confirmation (tools using it stop working).
+- **Settings keys:** `client_keys`, `client_key_labels` ([config.md](config.md#top-level)); backup
+  records in `state/tools/<tool>.json`.
 
 ## Settings
 
-Settings lists its pages as topics beside the page, in three groups: This device (General, Themes and,
-in the desktop app, its own pages), pluxy (Config, Extensions, Logs, System, Setup) and From
-extensions. It opens on General, the topic a person changes most. Every topic has a tip that says
-what it holds.
+Settings lists its pages as topics in three groups: **This device** (**General**, **Themes**),
+**pluxy** (**Config**, **Extensions**, **Logs**, **System**, **Setup**), and **From extensions**
+(pages added by running extensions).
 
-- **General** holds what is set for one window or browser: Appearance, Hide names and, in the panel,
-  Sign out. Each applies and saves at once; there is no Save button. Appearance is only here, so a
-  setting is not on two pages; when the theme that is on has one appearance, the row says so and
-  links to Themes. Hide names is the wording for hiding names while sharing a screen; while it is
-  on, the header strip shows a Names hidden button that turns it off. Sign out asks once, because
-  without the management key a person cannot sign back in. The desktop app leaves Sign out off
-  General, since it is on Where pluxy runs, beside the connection it ends.
-- **Themes** says which things pluxy keeps (the theme that is on, shared by every window) and which
-  stay on the device (layout, density, custom CSS). Its custom CSS switch is not called safe mode,
-  because safe mode is pluxy running with no extensions, shown on System. A notice about the page
-  shows one at a time, newest first. A theme file is checked for size before it is read.
-- **Logs** has two tabs. **pluxy's log** follows the log as pluxy writes it: every 2 seconds while the
-  page is visible and Follow new lines is on, which it is by default, as is Wrap lines. Find and Show
-  (All lines, Warnings, Errors) filter the lines already loaded, and Download saves the lines shown, as
-  pluxy wrote them: hiding names masks the screen only. The page keeps the latest 10,000 lines, so
-  a very large log does not freeze the window, and says so. Clear log asks first and deletes the log
-  file; failed requests stay. When pluxy writes no log file, the tab says so and one press on Turn
-  on file logging turns the setting on. **Failed requests** lists the full logs pluxy keeps of its
-  latest failed requests, and opens one beside the list. `#/logs/<trace ID>` opens that tab on the
-  request with that trace ID, which is how Activity and a tool's error lead here; the Trace ID field
-  does the same for an ID copied from a tool, after checking its shape. A request that succeeded has a
-  log only while `observability.logs.request-log` is on, and one over 2 MiB can be neither shown
-  nor downloaded here.
-- **System** says which pluxy this is (its version, commit, build time, address, and whether the
-  newest settings file is in use), lists the models its tools can ask for by provider with a Copy for
-  each name, and gives the base URL each kind of program takes (the OpenAI, Anthropic and Gemini
-  APIs, and Codex with an API key or signed in with ChatGPT). A pluxy started in safe mode says so at
-  the top.
+### General
 
-## Extensions
+- **Address:** `#/settings` (`data-page="settings"`), group **This device**.
+- What it sets (kept in this browser, each saved at once):
+  - **Appearance:** **Light**, **Dark**, or **Follow the system**. When the active theme supports
+    only one appearance, displays a notice linking to **Themes**.
+  - **Hide names:** masks account e-mail addresses, names, IDs and key labels on screen across every
+    page (does not mask copied text or downloaded files) and adds the **Names hidden** button to the
+    header strip.
+  - **Sign out:** asks for confirmation, then removes the management key from browser storage and
+    returns to the sign-in screen.
+- **Spends or deletes:** **Sign out** clears the stored management key from this browser after
+  confirmation.
 
-Extensions (Settings, pluxy) lists the programs that connect pluxy to each provider, as rows with the
-provider's name, the package ID, the version and the state, and the extensions on offer to install
-under them. A row opens its facts (where it was installed from, when, a checksum, and for each
-running copy its process ID, the requests it is serving now and its restarts), the settings form its
-schema draws, and two buttons. Turn off stops the program and its accounts stop taking requests until
-Turn on; Remove deletes the program but keeps its accounts, which work again when it is installed
-again, and it asks first. A pluxy started in safe mode says so at the top, because no extension runs
-in it. The list on offer comes from the lists core's config names (`packages.registries`); a pluxy
-with none says so and links to the settings file. A list that cannot be read is named in a notice
-and does not stop the others. An extension that is still starting is read again until it runs.
+### Themes
 
-## Where an API key added in the panel lives
+- **Address:** `#/themes` (`data-page="themes"`), group **This device**. See [themes.md](themes.md)
+  for the theme file format, tokens, hooks and T3 Code compatibility.
+- **Theme** (stored in core, shared across all windows): lists the built-in themes (**Default**,
+  **Terminal**, **Paper**) and any added themes. Selecting a theme applies and saves it immediately.
+  - **Save theme file:** downloads the active theme's JSON file.
+  - **Remove:** shown for user-added themes (and unusable stored themes); asks for confirmation
+    (**Yes, remove {name}**) before deleting the theme from core and reverting to Default.
+- **Layout** (device-local; overrides the active theme until you press **Reset layout**):
+  - **Frame:** **Inset**, **Flat**
+  - **Navigation:** **Sidebar**, **Rail**, **Top**
+  - **Width:** **Wide**, **Full**, **Narrow**
+  - **Density:** **Compact**, **Normal**, **Roomy**
+  - **Tabs:** **Top**, **Side**
+  - **Details:** **Beside**, **Below**
+  - **Lists:** **Table**, **Cards**
+- **Add a theme:** upload a `.json` file (**Theme file**, checked against the 256 KiB limit before
+  reading) or paste JSON into **Or paste a theme file** and press **Add**. Valid themes are stored
+  in core and turned on immediately.
+- **Custom CSS** (device-local):
+  - **Custom CSS** switch: turns both the theme's CSS and your own CSS on or off (if custom CSS
+    hides this switch, reload with `?safe`).
+  - **Your CSS:** applies as you type on top of every theme.
+- **Spends or deletes:** **Remove** deletes a stored theme from core after confirmation.
 
-An API key added on the Add an account page becomes an account in core's credential store: a folder
-with one file per account, readable only by core's user and, on Windows, SYSTEM (`credentials_dir`, by default
-`credentials` beside the config file). It is never written to `config.yaml`, and no management
-reply shows it again.
+### Config
 
-Accounts set in the config are listed in the panel but changed only in the config. Keys already in
-`config.yaml` keep working, and are edited in Config's Settings file tab. Keeping panel-added
-keys out of the config file means core needs no structured write of config accounts for both
-config layouts it reads, and a key is never shown after it is added.
+- **Address:** `#/config` (**Settings** tab) and `#/config/source` (**Settings file** tab;
+  `?account=<id>` highlights that account in the editor), `data-page="config"`, group **pluxy**.
+- **Top notices:** warns if the settings file on disk does not parse (disabling Settings controls
+  with **Try again**) or if core rejected the latest reload and is running the previous version.
+- **Settings tab** (switches save immediately; text and number fields save on Enter or blur):
 
-## The Activity page
+| Section | Label | Config key ([config.md](config.md)) | Notes |
+| --- | --- | --- | --- |
+| **Network** | **Outbound proxy** | `proxy_url` | Shows saved proxy without password; changing the address requires re-entering credentials if a password was saved |
+| **Network** | **Account order, retries and cooldowns** | — | **Open Order & fallback** links to `#/routing` |
+| **Other computers** | **Let other computers manage pluxy** | `management_allow_remote` | Takes effect at once; asks (**Turn off** / **Keep it on**) before disabling when accessed remotely |
+| **Other computers** | **Address pluxy listens on** | `listen` | Takes effect on next start; asks (**Save the address** / **Do not change it**) if the new host or port could lock out the current session |
+| **Logging** | **Write pluxy's log to a file** | `logs.to_file` | Required to view **pluxy's log** on **Logs** |
+| **Logging** | **Largest log size (MB)** | `logs.max_total_size_mb` | `0` means no limit |
+| **Logging** | **Failed requests to keep** | `logs.error_logs_max_files` | `0` keeps all |
+| **Logging** | **Keep a record of requests** | `usage.enabled` | Controls recording for **Home** and **Activity** |
+| **Logging** | **Log every request** | `logs.request_log` | While on, the **Failed requests** tab on **Logs** lists none; open logs by trace ID |
+| **Keys** | **Keys for coding tools** | — | **Open Tools** links to `#/tools` |
+| **Keys** | **Management key** (**Replace key**) | `management_key` | Asks (**Yes, replace key**), generates a new random key, signs this browser in with it, and shows it once with **Copy** and **Close** (other windows and commands must sign in again) |
 
-Activity has two tabs. Both read what core records, and both say so when core is told not to keep
-a record (`observability.usage.usage-statistics-enabled` is off): they show one pane that links
-to the setting.
+- **Settings file tab:** edits the raw `config.json` (or `config.yaml`) with secrets shown as
+  placeholders (leaving a placeholder unchanged preserves the secret).
+  - **Find in file** with **Previous** and **Next**.
+  - **Check for mistakes:** validates the draft with core without saving.
+  - **Review and save:** opens a line diff (masking any newly typed secrets) before **Save**.
+  - **Refresh:** reloads from disk (asks before discarding unsaved edits).
+  - **Discard edits:** reverts the editor to the last loaded file.
+  - Leaving the tab or page with unsaved edits asks (**Leave** / **Stay**).
+- **Spends or deletes:** **Replace key** invalidates the previous management key after confirmation;
+  **Save** overwrites the config file after diff review.
 
-**Requests** (`#/activity`, or `#/usage`) lists what core still keeps in memory, newest first, as a
-table (column heads stay in view) under the day each request came on, 50 at a time. A request
-that failed has a bar at its start and its failure as a word ("Rate limited", not the status);
-one that a second or later account, a backup or a fallback model answered says so in two words
-("2nd", "via backup") beside its account. That is a day by default and at most 10,000
-requests (`usage.max_age_ms` and `usage.max_events`), so the list has no time range; its end says
-how far back it goes. It is read when the page opens, on Refresh and when a filter changes, not on
-a timer. A row opens a pane beside the list (a drawer over it in a narrow window) that starts with one
-sentence on what routing did ("Tried studio-max: rate limited. Then pro-main answered in 2.4 s."),
-then why that account was chosen, what each attempt came to as a timeline, the request's facts and
-the one next step (Open the account, or its log). The trace links to the request's log on the Logs page for a failed request,
-and for a successful one only while `observability.logs.request-log` is on (the log of a
-successful request is kept only then); otherwise it shows as text to copy. The filters are in the
-address, shown as All | Failed and a Filter button whose lists (provider, account, model, key) turn
-into chips that come off with a press: `failed=1`, `provider`, `account` (the account's ID, which is what a request
-records; a public ID is turned into it), `model` and `key`. `trace=<id>` opens one request, reading down
-the record until it finds it. **Save as spreadsheet** writes the newest 10,000 matching requests,
-with the columns `Time, Model, Provider, Account, Client key, Failed, Status, Latency, Tokens,
-Trace ID`, newest first.
+### Extensions
 
-**Usage** (`#/activity/usage`) adds the requests up over 24 hours, 7 days or 30 days: the totals as
-tiles (requests, the share that went through, tokens, the average time), a chart with a bar per
-hour (24 hours) or per local day, and a breakdown by provider, model, account or key, each row
-with a bar for its share. The first three tiles are also the chart's tabs: it shows the requests
-(went through in ink, failed on top in red), the share that went through, or the tokens. Core adds closed days from its day files (kept 90 days) and today from memory, so
-the 7 and 30 days are real, though Requests holds less. `GET /usage` is asked for hourly steps and
-the page adds them into the person's local days. When core could not write some requests to its
-usage files (`write_errors` and `dropped` in `GET /usage`), Requests says how many.
+- **Address:** `#/extensions` (`data-page="extensions"`), group **pluxy**.
+- **Header action:** **Refresh** reloads installed packages, running status and registries. Polls
+  every 1.5 seconds while any extension is in state **Starting**. Displays a warning notice when
+  core runs with `pluxy serve -safe-mode`.
+- **Installed:** lists installed extensions with provider name, package ID, version and state badge.
+  Selecting an extension opens its detail view:
+  - Facts: **State**, **Version**, **Installed from**, **Installed**, **Checksum** (first 16 hex
+    chars), **Why it stopped** (if any), and for each running process copy: **Process ID**,
+    **Requests now**, **Restarts**, and **Last error**.
+  - **Settings** form (when enabled and the extension declares a settings schema): saves
+    extension-specific settings with **Save** (secret fields show `A value is set.` with a **Clear
+    {label}** checkbox).
+  - **Turn off** / **Turn on:** stops or starts the extension program (its accounts stop taking
+    requests while off, but are kept).
+  - **Remove:** asks for confirmation, then deletes the extension program while keeping its
+    accounts.
+- **Available to install:** lists uninstalled packages from `packages.registries` (and the bundled
+  registry) with **Install**. Warns individually for any registry that could not be read; links to
+  **Open the settings file** (`#/config/source`) when no registry is configured.
+- **Spends or deletes:** **Remove** deletes the installed extension package after confirmation
+  (accounts stay).
+- **Settings keys:** `packages.registries` ([config.md](config.md#packages)).
 
-The page is in the panel, not only in the desktop app, because core keeps the record and no other
-page lists requests. It shows only what core records: tokens, with no prices or cost views, and the
-app has none either. Home shows the last 7 days as one bar for each local day, and the ten latest requests; it has no
-breakdown by model, account or key, which is what the Usage tab is for.
+### Logs
 
-## Themes reach every page
+- **Address:** `#/logs` (`data-page="logs"`), group **pluxy**. `#/logs/<trace ID>` opens the
+  **Failed requests** tab on that trace ID. When **Hide names** is on, a notice states that masking
+  applies on screen only and downloads contain the raw log.
+- **pluxy's log** (tab):
+  - Follows core's log file every 2 seconds while visible and **Follow new lines** is on (both
+    **Follow new lines** and **Wrap lines** start on). Keeps the latest 10,000 lines in browser
+    memory.
+  - **Find in log** and **Show** (**All lines**, **Warnings**, **Errors**) filter the loaded lines.
+  - **Download:** saves the currently shown lines as `pluxy-log.txt` (unmasked).
+  - **Clear log:** asks for confirmation (**Yes, clear**) and deletes core's log file; failed
+    request logs stay.
+  - When `logs.to_file` is off, shows **Turn on file logging** (enables `logs.to_file` in one click)
+    and **Logging settings** (`#/config/logging`).
+- **Failed requests** (tab):
+  - Lists full logs kept for recent failed requests (columns: **Request**, **Time**, **Trace ID**,
+    **Size**). While `logs.request_log` is on, the list is empty and requests are opened by trace
+    ID.
+  - **Trace ID** and **Open:** validates the trace ID format (`YYYYMMDDHHMMSS-<16 hex>`) and opens
+    that request's log.
+  - Opening a log shows **Download** and **Copy trace ID** above the log text. Logs larger than 2
+    MiB cannot be shown or downloaded in the panel (read them in core's `logs` folder).
+- **Spends or deletes:** **Clear log** deletes core's log file after confirmation.
+- **Settings keys:** `logs.to_file`, `logs.max_total_size_mb`, `logs.error_logs_max_files`,
+  `logs.request_log` ([config.md](config.md#logs)).
 
-A theme can restyle and rearrange every page, not only recolour it. So every new page follows
-these rules (the [theme contract](themes.md) has the details):
+### System
 
-- Every list uses the kit's list, so a theme's `list` layout option (`table` or `cards`) applies,
-  and every list with details uses the kit's master and detail view.
-- Every visible part a page adds carries a `data-part` hook that custom CSS can target.
-- Colours come from tokens, never written into the page.
-- A page's CSS sits beside the page, inside the `kit` cascade layer.
-- A new hook, token or layout value goes into the theme contract and `kit/theme/contract.ts` in the
-  same change. Adding one keeps `theme_version`; renaming or removing one raises it, so existing
-  themes keep working as pages are added.
+- **Address:** `#/system` (`data-page="system"`), group **pluxy**.
+- **Header action:** **Refresh** reloads status and served models. Shows a warning notice when core
+  runs with `pluxy serve -safe-mode`.
+- **About:** shows **Version** (and 12-character commit hash), **Built** timestamp, **Address** with
+  **Copy**, and **Settings file** (whether the latest file is in use, or why reload refused it).
+- **Models your tools can ask for:** lists served models grouped by provider and extension ID, with
+  **Model** (and **Copy**), **Also called** (aliases), and **Accounts**. When none are served, links
+  to **Open Accounts** (`#/accounts`) and **Open Extensions** (`#/extensions`).
+- **Addresses for other programs:** lists base URLs with **Copy** for **OpenAI API**
+  (`<origin>/v1`), **Anthropic (Claude) API** (`<origin>`), **Gemini API** (`<origin>`), **Codex
+  with an API key** (`<origin>/v1`), and **Codex signed in with ChatGPT**
+  (`<origin>/backend-api/codex`), and links to **Tools** (`#/tools`).
+- **Spends or deletes:** nothing.
 
-## Texts and locales
+### Setup
 
-Every text the panel shows goes through the kit's string layer. Each page declares its English
-texts beside it, under its own namespace, so pages built side by side never edit one shared
-file. Only English ships today. Other locales come later as data files of texts, which the host
-loads; a text a locale lacks shows in English.
+- **Address:** `#/setup` (`data-page="setup"`), group **pluxy**. Titled **Set up pluxy** on a first
+  run and **Setup** afterwards.
+- **First-run behavior:** on a first run, signing in with no page in the URL hash opens Setup
+  automatically in place of Home. If core does not serve `GET /setup` (404), Setup is omitted from
+  Settings.
+- **CLIProxyAPI import line** (shown above the steps when core detects a CLIProxyAPI setup):
+  - **Preview import** runs a dry run and shows three folded lists (**Will import**, **Set
+    differently in pluxy**, **Left out**).
+  - **Import now** (available only from a current preview; a newer scan clears the preview) runs
+    that exact import, reloads setup and accounts, and pre-ticks needed providers in step 1 (naming
+    any unavailable provider with an **Open Extensions** link). Import never changes core's
+    management key.
+  - Once an import is recorded, the line shows when it ran and offers **Import again**. If core runs
+    on `config.yaml` (409) or lacks the endpoint (404), **More details** shows the terminal command
+    (`pluxy init` or `pluxy import cpa`).
+- **Three numbered steps** (one open at a time; first incomplete step opens on first run, all start
+  folded afterwards):
+  1. **Your AI accounts:** tick provider kinds (detected kinds are pre-ticked with core's reason;
+     additional kinds sit under **More ({count})**), press **Add {names}** to install them, then
+     sign in with the embedded **Add an account** form. Press **Continue** (once at least one
+     account can take requests) or **Skip**.
+  2. **Your coding tool:** shows the same coding-tool list, **Connect** / **Disconnect** actions
+     (for Claude Code and Codex), and three-step **Set up** / **Set up by hand** snippets as
+     **Tools** (keys made in **Set up** / **Set up by hand** stay in memory only while step 2 is
+     open). Press **Continue** / **Skip**, or **Refresh** to re-scan.
+  3. **Check it works:** choose an account (when 2 or more can be tested) and optionally **Choose a
+     model**, then press **Send a test request**. The test is not listed in Activity or Usage. Press
+     **Finish setup** (after passing), **Test again**, **Finish anyway**, or **Finish without
+     testing**.
+- **Leaving setup:** on first run, **Leave setup for now** marks setup done and opens **Home**
+  (Setup stays under Settings). Afterwards, **Back to Home** returns to **Home**.
+- **Spends or deletes:** **Send a test request** spends one request against the chosen account
+  (stated above the button). **Import now** writes imported accounts and settings only after you
+  preview and confirm. In step 2, **Connect** and **Disconnect** write or revert the tool's
+  settings file on core's computer (and create or remove its client key) immediately without asking
+  first.
+
+### Extension pages
+
+- **Address:** `#/ext/<publisher>/<name>/<page>` (`data-page="ext/<publisher>/<name>/<page>"`),
+  group **From extensions**.
+- **How they run:** each page contributed by a running extension renders inside a sandboxed
+  `<iframe>` served from core's separate extension-pages origin (`extension_pages`). The frame never
+  receives the management key; it communicates with the panel over a message channel that provides
+  theme tokens, layout, **Hide names** state, and the extension's own settings. If the frame
+  navigates to another document, the panel closes its channel and offers **Reload**.
+- **Settings keys:** `extension_pages.listen`, `extension_pages.url`
+  ([config.md](config.md#extension_pages)). See the
+  [extension pages contract](extension-pages.md).
+
+## Where API keys added in the panel are kept
+
+An API key added on **Add an account** is stored in core's credential store (`credentials_dir`, by
+default `credentials` beside the config file; [config.md](config.md#top-level)), one file per
+account, readable only by core's user (mode `0600` on Unix; restricted to core's user and `SYSTEM`
+on Windows). It is never written to `config.json` or `config.yaml`, and no management reply shows it
+again.
+
+Accounts already defined in the config file appear in the panel, keep working, and are edited in the
+**Settings file** tab of **Config**.

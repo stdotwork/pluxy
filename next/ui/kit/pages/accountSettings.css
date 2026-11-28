@@ -1,6 +1,11 @@
 @layer kit {
   .account-settings-json {
     margin: 0;
+    padding: calc(var(--s) * 2);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-code-bg);
+    color: var(--px-color-code-text);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
@@ -21,5 +26,14 @@
   }
   .account-edit-row > .btn {
     justify-self: start;
+  }
+  .account-edit [data-part="account-edit-discard"] {
+    padding: calc(var(--s) * 3);
+    border: var(--px-shape-border) solid color-mix(in srgb, var(--px-color-error) 35%, var(--px-color-border));
+    border-radius: var(--r-card);
+    background: var(--px-color-danger-surface);
+  }
+  .account-edit [data-part="account-edit-discard"] p {
+    margin: 0;
   }
 }
