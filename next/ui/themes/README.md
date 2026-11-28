@@ -389,7 +389,7 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="upload-results"` | The result of each CLIProxyAPI auth file imported on Add an account: the account it became, or why it was not added |
 | `data-part="key-notice"` | A notice revealing a newly generated key until closed or its tab is left |
 | `data-part="key-value"` | The selectable value of a newly generated key inside its notice |
-| `data-part="method"` | One way to sign in on Add an account: its name, how it signs in and Start; its sign-in shows under it once started. |
+| `data-part="method"` | One way to sign in on Add an account: its name, a sentence on how it signs in, "Recommended" when pluxy suggests it, and Start; its sign-in shows under it once started. |
 | `data-part="flow"` | A reusable account sign-in flow: inputs, prompts, waiting and terminal states. |
 | `data-part="device-code"` | The user code to enter on a device sign-in page. |
 | `data-part="tier"` | One group of a provider's accounts on Order & fallback (First, Backup 1…), with its name, its priority and its accounts; `data-priority` is its priority |
@@ -420,6 +420,8 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="auth-import"` | Add an account's "Have auth files from CLIProxyAPI?" line and its results |
 | `data-part="round-notice"` | The notice above a page's lists when a round of reads did not all work: what could not be read, and Try again |
 | `data-part="method-group"` | One provider on Add an account, under its name: its ways to sign in, each a row with Start |
+| `data-part="provider-tiles"` | The row of providers to pick from on Add an account: the main kinds as tiles, then More providers opens a second, smaller set (`data-more`) |
+| `data-part="provider-tile"` | One provider to pick on Add an account: its mark, its name and what accounts it takes; `data-compact` is set on the ones under More |
 | `data-part="more-options"` | A sign-in's optional inputs, folded under More options |
 | `data-part="login-details"` | The Details fold of a sign-in that ended with a message from pluxy, such as signing in to a different account |
 | `data-part="account-added"` | What Add an account shows once the sign-in is done: Added, the optional Name, Save name, Open account and Add another |

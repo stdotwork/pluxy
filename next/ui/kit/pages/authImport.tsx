@@ -9,6 +9,7 @@ import { strings } from "../strings";
 import { Button, type Tone, useKit } from "../ui";
 
 const t = strings("authImport", {
+  title: "Or bring them from CLIProxyAPI",
   ask: "Have auth files from CLIProxyAPI?",
   choose: "Import files…",
   added: "Added {name} ({provider})",
@@ -86,12 +87,13 @@ export function AuthImport() {
   };
   return (
     <section class="auth-import" data-part="auth-import">
-      <p class="muted">
-        {t("ask")}{" "}
-        <Button variant="quiet" disabled={busy} busy={busy} onClick={() => input.current?.click()}>
+      <h2>{t("title")}</h2>
+      <div class="auth-import-row">
+        <p>{t("ask")}</p>
+        <Button disabled={busy} busy={busy} onClick={() => input.current?.click()}>
           {t("choose")}
         </Button>
-      </p>
+      </div>
       <input
         ref={input}
         type="file"

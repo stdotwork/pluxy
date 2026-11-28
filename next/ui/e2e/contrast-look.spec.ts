@@ -209,6 +209,17 @@ for (const theme of THEMES) {
           badge.textContent = tone;
           box?.append(badge, " ");
         }
+        const method = document.createElement("div");
+        method.className = "method";
+        const flow = document.createElement("div");
+        flow.className = "login-flow";
+        const wait = document.createElement("p");
+        wait.className = "notice";
+        wait.dataset.tone = "muted";
+        wait.textContent = "Waiting for sign-in…";
+        flow.append(wait);
+        method.append(flow);
+        box?.append(method);
         const offRow = document.createElement("div");
         offRow.className = "account-row";
         offRow.dataset.group = "off";
@@ -239,6 +250,25 @@ for (const theme of THEMES) {
           const dot = over(rgb(getComputedStyle(badge, "::before").backgroundColor), ground);
           out.push({ what: "dot " + badge.dataset.tone + " on the card", ratio: ratio(dot, ground) });
         }
+        const wait = document.querySelector('#look-samples .method .login-flow .notice[data-tone="muted"]');
+        const flowGround = bgOf(wait.parentElement);
+        const waitDot = (label) => {
+          const style = getComputedStyle(wait, "::before");
+          const c = rgb(style.backgroundColor);
+          c[3] = Math.round(c[3] * Number(style.opacity));
+          out.push({ what: "waiting dot " + label + " on login-flow", ratio: ratio(over(c, flowGround), flowGround) });
+        };
+        waitDot("at rest");
+        const anim = document.getAnimations().find((a) => a.effect?.target === wait && a.effect?.pseudoElement === "::before");
+        if (anim) {
+          const dur = Number(anim.effect.getTiming().duration) || 0;
+          anim.pause();
+          for (const pct of [0, 0.5, 0.7]) {
+            anim.currentTime = dur * pct;
+            waitDot("at " + Math.round(pct * 100) + "% pulse");
+          }
+          anim.play();
+        }
         const offDot = document.querySelector('#look-samples .account-row[data-group="off"] .group-mark[data-dot]');
         const offDotColor = over(withOpacity(rgb(getComputedStyle(offDot).color), effOpacity(offDot)), ground);
         out.push({ what: "turned-off dot on the row", ratio: ratio(offDotColor, ground) });
@@ -258,7 +288,7 @@ for (const theme of THEMES) {
         return out;
       })()`);
       const list = results as { what: string; ratio: number }[];
-      expect(list).toHaveLength(12);
+      expect(list).toHaveLength(theme === "pluxy/terminal" ? 13 : 16);
       const low = list.filter((r) => r.ratio < GRAPHIC).map((r) => `${r.what}: ${r.ratio.toFixed(2)}:1`);
       expect(low).toEqual([]);
     });
