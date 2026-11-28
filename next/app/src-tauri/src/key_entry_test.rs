@@ -166,8 +166,11 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
     for w in app.webviews().values() {
         watch(w)?;
     }
-    // Invalid destinations must return their specific error without asking for a secret.
-    main.eval("window.__invalidTarget = null; window.__TAURI_INTERNALS__.invoke('key_entry', {change: {mode: 'remote', url: 'http://example.com'}}).then(v => window.__invalidTarget = v)")
+    // Invalid destinations must return their specific error without asking for a secret. Plain
+    // http to another computer is not one (the key window asks whether the person trusts the
+    // network, and `conn.rs`'s tests cover that); plain http to this computer is: remote mode
+    // reaches it over https only.
+    main.eval("window.__invalidTarget = null; window.__TAURI_INTERNALS__.invoke('key_entry', {change: {mode: 'remote', url: 'http://127.0.0.1:9'}}).then(v => window.__invalidTarget = v)")
         .map_err(|_| "could not request invalid target")?;
     let invalid = wait_for("pre-dialog target validation", || {
         eval(main, "window.__invalidTarget").filter(|v| !v.is_null())

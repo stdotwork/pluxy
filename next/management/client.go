@@ -316,14 +316,45 @@ func (c *Client) SetupApply(ctx context.Context, picks []string) (SetupApplyRepl
 }
 
 // ClientPaste is GET /setup/clients/{id}/paste. keyID, when not empty, names the client key
-// the reply's Key placeholder points at.
-func (c *Client) ClientPaste(ctx context.Context, id, keyID string) (ClientPaste, error) {
-	var q url.Values
+// the reply's Key placeholder points at; model, when not empty, the model the files name.
+func (c *Client) ClientPaste(ctx context.Context, id, keyID, model string) (ClientPaste, error) {
+	q := url.Values{}
 	if keyID != "" {
-		q = url.Values{"key_id": {keyID}}
+		q.Set("key_id", keyID)
+	}
+	if model != "" {
+		q.Set("model", model)
 	}
 	var v ClientPaste
 	err := c.get(ctx, "/setup/clients/"+url.PathEscape(id)+"/paste", q, &v)
+	return v, err
+}
+
+// ConnectClient is POST /setup/clients/{id}/connect: core writes the tool's settings on its own
+// machine, with a client key made for it, labelled label (empty: the tool's name), and model as
+// the model the tool starts with (empty: the best match among those core serves, or none when
+// core serves no model).
+func (c *Client) ConnectClient(ctx context.Context, id, label, model string) (ClientConnection, error) {
+	fields := map[string]string{}
+	if label != "" {
+		fields["label"] = label
+	}
+	if model != "" {
+		fields["model"] = model
+	}
+	var body any
+	if len(fields) > 0 {
+		body = fields
+	}
+	var v ClientConnection
+	_, err := c.Call(ctx, http.MethodPost, "/setup/clients/"+url.PathEscape(id)+"/connect", nil, body, &v)
+	return v, err
+}
+
+// DisconnectClient is POST /setup/clients/{id}/disconnect: core puts back what its connect changed.
+func (c *Client) DisconnectClient(ctx context.Context, id string) (ClientConnection, error) {
+	var v ClientConnection
+	_, err := c.Call(ctx, http.MethodPost, "/setup/clients/"+url.PathEscape(id)+"/disconnect", nil, nil, &v)
 	return v, err
 }
 

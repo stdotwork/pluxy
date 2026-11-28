@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/examples/oauth/oauthtest"
 	mgmt "github.com/stdotwork/pluxy/next/management"
 )
 
@@ -58,7 +60,7 @@ func TestClientPaste(t *testing.T) {
 
 	// Other names for a tool give its canonical ID.
 	for name, want := range map[string]string{"oh-my-pi": "omp", "Codex-CLI": "codex", "pluxy/pi-setup": "pi"} {
-		p, err := client.ClientPaste(ctx, name, "")
+		p, err := client.ClientPaste(ctx, name, "", "")
 		if err != nil || p.Tool != want {
 			t.Errorf("ClientPaste(%q) = %q, %v; want %q", name, p.Tool, err, want)
 		}
@@ -77,17 +79,17 @@ func TestClientPaste(t *testing.T) {
 		t.Errorf("key_id of a held key: %d, key %q, want %q: %s", status, p.Key, want, body)
 	}
 	var apiErr *mgmt.APIError
-	if _, err := client.ClientPaste(ctx, "claude-code", "no-such-key"); !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound || apiErr.Code != "not_found" {
+	if _, err := client.ClientPaste(ctx, "claude-code", "no-such-key", ""); !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound || apiErr.Code != "not_found" {
 		t.Errorf("key_id of a key core does not hold: %v", err)
 	}
 	apiErr = nil
-	if _, err := client.ClientPaste(ctx, "cursor", ""); !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound || apiErr.Code != "not_found" {
+	if _, err := client.ClientPaste(ctx, "cursor", "", ""); !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound || apiErr.Code != "not_found" {
 		t.Errorf("unknown tool: %v", err)
 	}
 
 	// pluxy client show prints the reply's files, and with --json the reply body as it came.
 	cliEnv := append(slices.Clone(env), "PLUXY_URL="+base, "PLUXY_MANAGEMENT_KEY="+managementKey)
-	reply, err := client.ClientPaste(ctx, "pi", "")
+	reply, err := client.ClientPaste(ctx, "pi", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,5 +110,82 @@ func TestClientPaste(t *testing.T) {
 	r = runCLI(t, cliEnv, "client", "show", "pi", "--key-id", "no-such-key")
 	if r.code != 5 {
 		t.Errorf("pluxy client show pi --key-id no-such-key: %s", r)
+	}
+}
+
+// A person whose accounts serve models of another service than the tool's own (here two models
+// the tool has never heard of): the text for the tool names one of them, the models to choose
+// from come with it, a request for the tool's own default is refused with those models named, and
+// pluxy client show --model names the one asked for.
+func TestClientPasteNamesAServedModel(t *testing.T) {
+	t.Parallel()
+	srv := oauthtest.New(t)
+	base := runCore(t, map[string]any{
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "oauth", "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id": "walk", "models": []string{"fake-gpt-1", "fake-gpt-mini"},
+				"settings":   map[string]string{"base_url": srv.URL},
+				"credential": map[string]any{"kind": "oauth", "access_token": srv.IssueToken("text")},
+			}},
+		},
+	})
+	client := &mgmt.Client{URL: base, Key: managementKey}
+	ctx := context.Background()
+
+	p, err := client.ClientPaste(ctx, "claude-code", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Model != "fake-gpt-1" || !slices.Equal(p.Models, []string{"fake-gpt-1", "fake-gpt-mini"}) {
+		t.Errorf("model %q of %q, want fake-gpt-1 of both", p.Model, p.Models)
+	}
+	text := p.Files[0].Content
+	for _, want := range []string{`"model": "fake-gpt-1"`, `"ANTHROPIC_DEFAULT_OPUS_MODEL": "fake-gpt-1"`, `"ANTHROPIC_DEFAULT_HAIKU_MODEL": "fake-gpt-1"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the Claude Code settings lack %s:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "<model-id>") {
+		t.Errorf("the Claude Code settings still hold the placeholder:\n%s", text)
+	}
+
+	// The model the call names is the one in the text, and any name is taken: an account added
+	// later may serve it.
+	p, err = client.ClientPaste(ctx, "codex", "", "fake-gpt-mini")
+	if err != nil || p.Model != "fake-gpt-mini" || !strings.Contains(p.Files[0].Content, `model = "fake-gpt-mini"`) {
+		t.Errorf("codex with a model asked for: %q, %v: %+v", p.Model, err, p.Files)
+	}
+	var apiErr *mgmt.APIError
+	if _, err := client.ClientPaste(ctx, "codex", "", "bad\nname"); !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest || apiErr.Code != "invalid_request" {
+		t.Errorf("a model name with a line break: %v", err)
+	}
+
+	// The tool's own default is not served: the refusal a tool shows names what is.
+	resp := postPath(t, ctx, base, "/v1/chat/completions", clientKey,
+		`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"hi"}]}`)
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var refused struct {
+		Error struct{ Message string }
+	}
+	_ = json.Unmarshal(raw, &refused)
+	const wantMessage = `no account serves model "claude-opus-5-5". pluxy serves: fake-gpt-1, fake-gpt-mini. Set the tool's model to one of them, or add a model alias to an account so that "claude-opus-5-5" goes to one of them.`
+	if resp.StatusCode != http.StatusNotFound || refused.Error.Message != wantMessage {
+		t.Errorf("a request for the tool's own default: %d %s", resp.StatusCode, raw)
+	}
+
+	env := []string{"PLUXY_URL=" + base, "PLUXY_MANAGEMENT_KEY=" + managementKey}
+	r := runCLI(t, env, "client", "show", "codex", "--model", "fake-gpt-mini")
+	if r.code != 0 || !strings.Contains(r.stdout, `model = "fake-gpt-mini"`) || strings.Contains(r.stderr, "<model-id>") {
+		t.Errorf("pluxy client show codex --model: %s", r)
+	}
+	r = runCLI(t, env, "client", "show", "codex")
+	if r.code != 0 || !strings.Contains(r.stdout, `model = "fake-gpt-1"`) {
+		t.Errorf("pluxy client show codex names the best match: %s", r)
 	}
 }

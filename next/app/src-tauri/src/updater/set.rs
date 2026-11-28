@@ -1153,8 +1153,6 @@ pub(super) mod tests {
     // against the kept set, and drops the record: the earlier set is whole again.
     #[test]
     fn a_crash_part_way_is_undone_at_the_next_start() {
-        // Renames before the program's: two per core part. A stop after 5 is between the
-        // program's own two (no program under its name: the README's case).
         for n in 0..=4 {
             let tmp = temp(&format!("set-crash-{n}"));
             let (folder, dir, p) = staged(&tmp, "update");
@@ -1381,7 +1379,6 @@ pub(super) mod tests {
             let r = apply(&Stop::after(n), &folder, &m, None);
             assert_eq!(r.is_ok(), n == 6, "{n}");
             if n == 5 {
-                // Between the program's two renames: nothing can start (the README's case).
                 assert!(!folder.join(EXE).exists());
                 fs::remove_dir_all(&tmp).unwrap();
                 continue;

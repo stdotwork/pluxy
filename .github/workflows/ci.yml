@@ -109,7 +109,7 @@ jobs:
                 next/app-tools/lib/files/* | next/app-tools/Cargo.toml | next/app-tools/Cargo.lock)
                 native=true ;;
             esac
-            # The docs TestDocs reads (next/cmd/pluxy/docs_test.go: docFiles and docs/*.md) run it too.
+            # The docs TestDocs reads (next/cmd/pluxy/docs_test.go: docFiles, docs/*.md and docs/design/*.md) run it too.
             case $path in next/* | .github/workflows/next-ci.yml | README.md | AGENTS.md | docs/*.md) run[next-ci]=true ;; esac
             case $path in next/* | .github/workflows/next-app.yml | .github/actions/apt-install/*) run[next-app]=true ;; esac
             case $path in

@@ -73,9 +73,7 @@ type Config struct {
 	ManagementAllowRemote bool `json:"management_allow_remote,omitempty"`
 	// CredentialsDir is the folder that keeps accounts added by login, relative to the config
 	// file. Default: "credentials" beside the config file.
-	CredentialsDir string `json:"credentials_dir,omitempty"`
-	// ExtensionPages says where extension pages are served: on a site of their own, never the
-	// one serving the panel (next/ui/extension-pages/README.md).
+	CredentialsDir string               `json:"credentials_dir,omitempty"`
 	ExtensionPages ExtensionPagesConfig `json:"extension_pages"`
 	// CORS says which web pages may call the client API from a browser. Default: none.
 	CORS CORSConfig `json:"cors"`
@@ -705,8 +703,9 @@ func IsLoopbackHost(host string) bool {
 }
 
 // LocalURL is the address a program on this machine reaches a server listening on listen at:
-// a listen address with no host or an unspecified one (every interface) is reached at the
-// loopback address of its family.
+// a listen address with no host or an unspecified one (0.0.0.0 or ::, every interface) is
+// reached at 127.0.0.1 (Go's dual-stack tcp listener accepts IPv4 loopback even when the OS
+// reports [::]). Specific addresses, including [::1], stay as written.
 func LocalURL(listen string, tlsEnable bool) (string, error) {
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
@@ -714,9 +713,6 @@ func LocalURL(listen string, tlsEnable bool) (string, error) {
 	}
 	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
 		host = "127.0.0.1"
-		if ip != nil && ip.To4() == nil {
-			host = "::1"
-		}
 	}
 	scheme := "http"
 	if tlsEnable {

@@ -1,6 +1,6 @@
 // Package management holds the management API's request and reply types and a client for it.
 // Core's handlers write these types and the pluxy command reads them, so the two cannot drift.
-// README.md in this folder describes the API and the command.
+// docs/management-api.md describes the API; docs/cli.md describes the command.
 package management
 
 import (
@@ -135,7 +135,7 @@ type RegistriesReply struct {
 	Registries []Registry `json:"registries"`
 }
 
-// Health is an account's health (Account.Health; the README's "Accounts").
+// Health is an account's health (Account.Health; docs/management-api.md, "Account fields").
 type Health = route.Health
 
 // Health states (Health.State) and where a block's end came from (Health.Source).
@@ -639,6 +639,44 @@ type SetupClient struct {
 	Version   string `json:"version,omitempty"`
 	Config    string `json:"config"`
 	State     string `json:"state"`
+	// CanConnect: core can write this tool's settings itself (POST /setup/clients/{id}/connect).
+	CanConnect bool `json:"can_connect,omitempty"`
+	// ConnectedByPluxy: core connected this tool and keeps its settings as they were before, which
+	// POST /setup/clients/{id}/disconnect puts back.
+	ConnectedByPluxy bool `json:"connected_by_pluxy,omitempty"`
+}
+
+// ClientConnection is the reply to POST /setup/clients/{id}/connect and .../disconnect: the tool
+// as core reads it afterwards and what changed.
+type ClientConnection struct {
+	Client SetupClient            `json:"client"`
+	Files  []ClientConnectionFile `json:"files"`
+	// Key is the client key the tool sends after a connect, masked; never its value.
+	Key *ClientKey `json:"key,omitempty"`
+	// KeyMade: the connect made Key for the tool.
+	KeyMade bool `json:"key_made,omitempty"`
+	// KeyRemoved: the disconnect removed the client key its connect had made.
+	KeyRemoved bool `json:"key_removed,omitempty"`
+	// Model is the model the connect wrote for the tool to start with: the one the call asked for,
+	// else the best match among the models pluxy serves; empty when no model was served and none
+	// was asked for (the tool's own model setting, if any, was left alone), and on disconnect.
+	Model string `json:"model,omitempty"`
+}
+
+// Changes to a tool's settings file (ClientConnectionFile.Change).
+const (
+	ClientFileCreated   = "created"   // connect: there was no file
+	ClientFileChanged   = "changed"   // connect: the file's settings point the tool at core now
+	ClientFileUnchanged = "unchanged" // the file already was what the call leaves
+	ClientFileRestored  = "restored"  // disconnect: the file is as it was before the connect
+	ClientFileRemoved   = "removed"   // disconnect: there was no file before the connect
+	ClientFileMerged    = "merged"    // disconnect: the file changed since; core's settings are out, the rest stays
+)
+
+// ClientConnectionFile is one settings file a connect or disconnect changed, from the home folder (~).
+type ClientConnectionFile struct {
+	Path   string `json:"path"`
+	Change string `json:"change"`
 }
 
 // SetupSignIn is an existing sign-in core saw on the machine (no token is read).
@@ -759,6 +797,12 @@ type ClientPaste struct {
 	Files []ClientPasteFile `json:"files"`
 	// Note says what the files need besides themselves; left out when nothing.
 	Note string `json:"note,omitempty"`
+	// Model is the model the files name for the tool to start with: the one the call asked for
+	// (its model parameter), else the best match among Models; empty when no model is served and
+	// none was asked for, and the files then hold the placeholder <model-id>.
+	Model string `json:"model,omitempty"`
+	// Models are the names of the models pluxy serves now, to choose Model from.
+	Models []string `json:"models"`
 }
 
 // ClientPasteFile is one file of a ClientPaste: where it goes (from the home folder, ~) and

@@ -27,6 +27,7 @@ import { Section } from "./clientPage";
 import { reply } from "./host";
 import { lifetimeFor } from "./launcherForm";
 import { askFirst, Details, Intro, TextField } from "./pageBits";
+import { nativeReply } from "./toolWords";
 
 const t = strings("launcher", {
   title: "Launcher",
@@ -105,9 +106,9 @@ const PACKAGE = "pluxy/execution";
 
 const launcher = {
   state: () => reply<State>("launcher_state"),
-  terminals: () => reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
-  launch: (launch: Record<string, unknown>) => reply<unknown>("launcher_launch", { launch }),
-  start: (id: string) => reply<unknown>("launcher_start", { id }),
+  terminals: () => nativeReply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
+  launch: (launch: Record<string, unknown>) => nativeReply<unknown>("launcher_launch", { launch }),
+  start: (id: string) => nativeReply<unknown>("launcher_start", { id }),
   forget: (id: string) => reply<State>("launcher_forget", { id }),
   settings: (notice: boolean) => reply<State>("launcher_settings", { notice }),
   runtimes: async (): Promise<Reply<Runtime[]>> => {
@@ -115,7 +116,7 @@ const launcher = {
     return r.body ? { status: 200, body: r.body.runtimes ?? [] } : { status: r.status, error: r.error };
   },
   runtime: (op: "stop" | "restart", runtime: string) =>
-    reply<unknown>("program_call", { package: PACKAGE, op: "control", input: { op, runtime } }),
+    nativeReply<unknown>("program_call", { package: PACKAGE, op: "control", input: { op, runtime } }),
 };
 
 /** A program's name from a path of either kind, for a launch with no name of its own. */

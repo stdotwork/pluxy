@@ -1,18 +1,3 @@
-//! Declared jobs in this device's catalog (`../app-host/README.md`, "Jobs"). A native tool
-//! registers, in its manifest, the kinds of data it produces (`produces`: a namespaced kind, the
-//! schema version it produces it at and the operation that runs a job of it), and the kinds it
-//! consumes (`consumes`: a kind in its own namespace, the schema versions it accepts and the
-//! operation the host delivers batches to). A registration is never something a tool says: it is
-//! read here, at each request, from the manifest of an enabled, admitted tool's active release,
-//! with the package, version, digest, generation, source and signer the catalog admitted it with.
-//! Disabling, updating, rolling back, swapping or removing the tool ends its registration.
-//!
-//! A consumer lists the registrations of a kind it consumes (`Catalog::registrations`) and starts
-//! a job naming one exactly (`Catalog::job_grant`), which the router decides as any call. Its
-//! deliver operation takes only the host's deliveries: the window, pages and other tools are
-//! refused it (`host_only`), and no manifest may export it. Discovery adds no import: a consumer
-//! does not depend on its producers.
-
 use super::*;
 
 /// Kinds a package may produce, and consume.

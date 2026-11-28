@@ -178,3 +178,112 @@ test("an account set in the settings file offers no Remove… on its page; one a
   await expect(page).toHaveURL(/#\/accounts$/);
   await expect.poll(async () => (await listed()).some((a) => a.id === "gone-01")).toBe(false);
 });
+
+test("provider chips filter with a pool card, and List | Cards stores an Accounts-only choice without changing other lists", async ({
+  page,
+}) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Accounts");
+
+  const chips = page.getByRole("group", { name: "Filter by provider" });
+  await expect(chips.getByRole("button", { name: /^All\s+3$/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(chips.getByRole("button", { name: /Alpha\s+2/ })).toBeVisible();
+  await expect(chips.getByRole("button", { name: /Local\s+1/ })).toBeVisible();
+  await expect(page.locator('[data-part="pool-card"]')).toHaveCount(0);
+
+  await chips.getByRole("button", { name: /Alpha/ }).click();
+  await expect(chips.getByRole("button", { name: /Alpha/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".accounts-counts")).toHaveText("2 Alpha accounts · 2 serving");
+  await expect(page.locator('[data-part="pool-card"][data-provider="alpha"]')).toContainText(
+    "2 of 2 serving",
+  );
+  await expect(page.locator('[data-part="account-row"]')).toHaveCount(2);
+  await expect(accountRow(page, "alpha-1")).toBeVisible();
+  await expect(accountRow(page, "alpha-2")).toBeVisible();
+
+  await chips.getByRole("button", { name: /^All/ }).click();
+  await expect(page.locator(".accounts-counts")).toHaveText("3 accounts at 2 providers · 3 serving");
+  await expect(page.locator('[data-part="pool-card"]')).toHaveCount(0);
+  await expect(page.locator('[data-part="account-row"]')).toHaveCount(3);
+
+  const viewSwitch = page.getByRole("group", { name: "Account view" });
+  const listBtn = viewSwitch.getByRole("button", { name: "List", exact: true });
+  const cardsBtn = viewSwitch.getByRole("button", { name: "Cards", exact: true });
+  await expect(listBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "list");
+  await expect(page.locator("html")).toHaveAttribute("data-list", "table");
+
+  await cardsBtn.click();
+  await expect(cardsBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "cards");
+  await expect(page.locator("html")).toHaveAttribute("data-list", "table");
+  await expect(accountRow(page, "alpha-1")).toBeVisible();
+
+  await page.goto(`${core.base}/panel/#/system`);
+  await expect(page.locator("html")).toHaveAttribute("data-list", "table");
+  await expect(page.locator("table.table").first()).toBeVisible();
+
+  await page.goto(`${core.base}/panel/#/accounts`);
+  await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "cards");
+  await page.reload();
+  await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "cards");
+  await expect(cardsBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("html")).toHaveAttribute("data-list", "table");
+
+  await page.setViewportSize({ width: 560, height: 800 });
+  await expect(accountRow(page, "alpha-1")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
+
+  await listBtn.click();
+  await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "list");
+  await expect(page.locator("html")).toHaveAttribute("data-list", "table");
+});
+
+test("Select's sticky batch bar keeps the focused last row above it while scrolling", async ({ page }) => {
+  const many = Array.from({ length: 12 }, (_, i) => ({
+    id: `scroll-${String(i + 1).padStart(2, "0")}`,
+    label: `scroll-${String(i + 1).padStart(2, "0")}`,
+    extension: "test/alpha",
+    source: "login",
+    state: "active",
+    refreshable: false,
+  }));
+  await page.route("**/v0/management/accounts", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ accounts: many }),
+    });
+  });
+
+  await page.setViewportSize({ width: 1280, height: 480 });
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Accounts");
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  const bar = page.getByRole("toolbar", { name: "Actions for the selected accounts" });
+  await expect(bar).toBeVisible();
+
+  for (let i = 1; i <= many.length; i++) {
+    const id = `scroll-${String(i).padStart(2, "0")}`;
+    const box = page.getByRole("checkbox", { name: `Select ${id}`, exact: true });
+    await box.evaluate((el) => (el as HTMLElement).focus());
+    const focusedRect = await box.boundingBox();
+    const barRect = await bar.boundingBox();
+    expect(focusedRect).not.toBeNull();
+    expect(barRect).not.toBeNull();
+    expect((focusedRect?.y ?? 0) + (focusedRect?.height ?? 0)).toBeLessThanOrEqual(barRect?.y ?? 0);
+  }
+
+  await page.locator(".main").evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  const lastRowRect = await page.locator(".accounts-item").last().boundingBox();
+  const endBarRect = await bar.boundingBox();
+  expect(lastRowRect).not.toBeNull();
+  expect(endBarRect).not.toBeNull();
+  expect((lastRowRect?.y ?? 0) + (lastRowRect?.height ?? 0)).toBeLessThanOrEqual(endBarRect?.y ?? 0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
+});

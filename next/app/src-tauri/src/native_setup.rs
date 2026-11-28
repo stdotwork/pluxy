@@ -9,10 +9,10 @@
 //! - `first`: the window opens on Setup by itself (`#/setup`, "Set up pluxy") with step 1, "Your AI
 //!   accounts", open; the Claude kind is ticked, saying Claude Code is installed on this computer;
 //!   "Add Claude" adds it (its row says Added, and `GET /packages` through the app's host lists it
-//!   enabled); step 2, opened, has the app's one button on Claude Code's row: Install add-on, then
-//!   Turn on add-on (answered in the native confirmation), then a "Set up" link to `#/claude-code`;
-//!   pressing it opens the app's Claude Code page with "Setting up pluxy." and "Back to setup"
-//!   above it, which goes back to `#/setup`; a later visit to the page by its address has no way
+//!   enabled); step 2, opened, has the app's one button on Claude Code's row: Install add-on, which
+//!   installs the add-on and goes on to turn it on, in the one native confirmation it opens (which
+//!   says first "Turn on the" add-on); once that is answered, the app's Claude Code page opens by
+//!   itself, with "Setting up pluxy." and "Back to setup" above it, which goes back to `#/setup`; a later visit to the page by its address has no way
 //!   back; "Leave setup for now" lands on Home and `GET /setup` has `first_run` false.
 //! - `second`: the next launch opens on Home, not Setup; Setup, opened, is titled "Setup" with
 //!   every step folded and no "Leave setup for now"; step 1, opened, says pluxy can connect to Claude; the stage
@@ -245,72 +245,57 @@ fn first(c: &mut Checks, app: &AppHandle) {
         return;
     }
     // The add-on is offered by the curated registry and not installed: the row's one button
-    // installs it (asking nothing), turns it on (the native confirmation), and only then offers
-    // the page. The buttons come once the device's catalog and the registries' offers have loaded.
-    let wait_row = |buttons: Value, links: Value, secs: u64| {
-        let want = json!({ "links": links, "buttons": buttons });
-        let row = within(secs, || {
+    // installs it (asking nothing for that), turns it on (the native confirmation), and then opens
+    // the tool's page. The button comes once the device's catalog and the registries' offers have
+    // loaded.
+    let (ok, row) = {
+        let want = json!({ "links": [], "buttons": ["Install add-on"] });
+        let row = within(20, || {
             let r = tool_row(app);
             (r == want).then_some(r)
         })
         .unwrap_or_else(|| tool_row(app));
         (row == want, row)
     };
-    let (ok, row) = wait_row(json!(["Install add-on"]), json!([]), 20);
     c.check(
         ok,
         format!("Claude Code's row in step 2 offers Install add-on and nothing else ({row})"),
     );
     shot("tool");
-    let press_row = |label: &str| {
+    c.check(
         until(
             app,
             10,
-            &format!("(() => {{ const b = [...({TOOL_ROW}?.querySelectorAll('button') ?? [])].find((b) => b.textContent.trim() === {label}); if (!b || b.disabled) return false; b.click(); return true; }})()", label = json!(label)),
-        )
-    };
-    c.check(press_row("Install add-on"), "Install add-on is pressed");
-    let (ok, row) = wait_row(json!(["Turn on add-on"]), json!([]), 60);
-    c.check(
-        ok,
-        format!("once installed, Claude Code's row offers Turn on add-on ({row})"),
+            &format!("(() => {{ const b = [...({TOOL_ROW}?.querySelectorAll('button') ?? [])].find((b) => b.textContent.trim() === 'Install add-on'); if (!b || b.disabled) return false; b.click(); return true; }})()"),
+        ),
+        "Install add-on is pressed",
     );
-    c.check(press_row("Turn on add-on"), "Turn on add-on is pressed");
     let confirmed = super::vault::dialog_with(
         app,
         &["pluxy/claude-code", "full access to your user account"],
     )
-    .and_then(|_| {
+    .and_then(|t| {
+        if !t.starts_with("Turn on the ") {
+            return Err(format!("it does not say first what it turns on: {t}"));
+        }
         std::thread::sleep(Duration::from_millis(1300));
         super::admission::press("alt+o")
     });
     c.check(
         confirmed.is_ok(),
-        format!("the confirmation names pluxy/claude-code and is answered ({confirmed:?})"),
+        format!("Install add-on goes on to the turn-on confirmation, which says first \"Turn on the\", names pluxy/claude-code and is answered ({confirmed:?})"),
     );
-    let (ok, row) = wait_row(json!([]), json!([["Set up", "#/claude-code"]]), 30);
-    c.check(
-        ok,
-        format!("once turned on, Claude Code's row has the app's \"Set up\" link to #/claude-code and no other control ({row})"),
-    );
-    shot("tool-on");
 
-    // The link goes to the app's own page for the tool, with the way back to setup above it.
-    let followed = until(
+    // Once on, the app's own page for the tool opens, with the way back to setup above it.
+    let tool_page = until(
         app,
-        10,
-        &format!("(() => {{ const a = {TOOL_ROW}?.querySelector('a[href=\"#/claude-code\"]'); if (!a) return false; a.click(); return true; }})()"),
+        30,
+        "location.hash === '#/claude-code' && document.querySelector('[data-tool=claude-code]') !== null && document.querySelector('[data-part=page-title]')?.textContent === 'Claude Code'",
     );
-    let tool_page = followed
-        && until(
-            app,
-            30,
-            "location.hash === '#/claude-code' && document.querySelector('[data-tool=claude-code]') !== null && document.querySelector('[data-part=page-title]')?.textContent === 'Claude Code'",
-        );
     c.check(
         tool_page,
         format!(
-            "pressing \"Set up\" opens the Claude Code page ({})",
+            "once the add-on is on, the Claude Code page opens by itself ({})",
             page(app)
         ),
     );

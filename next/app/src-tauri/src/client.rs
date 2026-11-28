@@ -4,7 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use ureq::tls::{Certificate, RootCerts, TlsConfig};
 
@@ -50,6 +51,95 @@ impl Reply {
 pub struct Client {
     base: String,
     agent: ureq::Agent,
+    /// Nothing is sent unless Tailscale carries the connection (`Route::tailscale_only`).
+    tailscale_only: bool,
+    /// The address every connection is pinned to (`Route::pin`), when there is one.
+    pin: Option<std::net::SocketAddr>,
+    /// With `tailscale_only` and no pin: the address the name last resolved to, which the next
+    /// check of the interfaces says whether Tailscale carries (`Client::peer`).
+    seen: Arc<Mutex<Option<std::net::IpAddr>>>,
+    /// How many TLS handshakes this client's connections have completed (`TlsDone`): a call that
+    /// ends in a reset or an early close says it was the handshake that failed only if this did
+    /// not move meanwhile (`Client::kind`).
+    tls_done: Arc<AtomicUsize>,
+}
+
+/// Where a client's connections go (`Client::routed`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Route {
+    /// Every connection goes to this address, whatever the core's name resolves to later; the
+    /// request still names the core's host, and https still checks its certificate for that name.
+    /// Ignored when a proxy from the environment carries the calls.
+    pub pin: Option<std::net::SocketAddr>,
+    /// Each new connection is made only to an address Tailscale carries from this computer
+    /// (`tailnet::carries_with`, with the interfaces as they are then); otherwise nothing is
+    /// sent, and the call fails as `tailscale`.
+    pub tailscale_only: bool,
+}
+
+/// Why nothing was sent: Tailscale does not carry the connection to the core's address from this
+/// computer (`Route::tailscale_only`).
+#[derive(Debug)]
+pub struct NotOverTailscale;
+
+impl std::fmt::Display for NotOverTailscale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Tailscale does not carry the connection to this address")
+    }
+}
+
+impl std::error::Error for NotOverTailscale {}
+
+/// The resolver of a routed client: the pinned address, or what the name resolves to, and with
+/// `tailscale_only` only the addresses Tailscale carries now.
+#[derive(Debug)]
+struct Routed(Route, Arc<Mutex<Option<std::net::IpAddr>>>);
+
+impl ureq::unversioned::resolver::Resolver for Routed {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+        use ureq::unversioned::resolver::DefaultResolver;
+        let found = match self.0.pin {
+            Some(addr) => {
+                let mut one = self.empty();
+                one.push(addr);
+                one
+            }
+            None => DefaultResolver::default().resolve(uri, config, timeout)?,
+        };
+        if !self.0.tailscale_only {
+            return Ok(found);
+        }
+        let locals = crate::tailnet::local_addresses().unwrap_or_default();
+        let mut carried = self.empty();
+        for addr in found.iter() {
+            if crate::tailnet::carries_with(addr.ip(), &locals) {
+                carried.push(*addr);
+            }
+        }
+        // What the status line is told about this link: the address Tailscale carries, or else
+        // the first one found, which the interfaces then say it does not.
+        if let Ok(mut seen) = self.1.lock() {
+            *seen = carried.iter().chain(found.iter()).next().map(|a| a.ip());
+        }
+        if carried.is_empty() {
+            return Err(ureq::Error::Io(std::io::Error::other(NotOverTailscale)));
+        }
+        Ok(carried)
+    }
+}
+
+/// Whether calls to base go through a proxy from the environment: never to a core on this
+/// computer or over plain http, where a proxy would see the key; over https, as the environment
+/// says, since a proxy sees no key there.
+pub fn proxied(base: &str) -> bool {
+    let direct =
+        url::Url::parse(base).is_ok_and(|u| crate::conn::is_loopback(&u) || u.scheme() == "http");
+    !direct && ureq::Proxy::try_from_env().is_some()
 }
 
 /// The calls core takes as PUT: the config, the theme that is on, and one stored theme, whose
@@ -159,12 +249,61 @@ fn transport_message(error: &ureq::Error) -> String {
             return format!("nothing sent to the app's core: {why}");
         }
     }
-    let _ = error;
+    if not_over_tailscale(error) {
+        return format!("nothing sent: {NotOverTailscale}");
+    }
     "core transport failed".into()
 }
 
+/// Whether error is a routed client's refusal to send outside Tailscale (`Route::tailscale_only`).
+fn not_over_tailscale(error: &ureq::Error) -> bool {
+    matches!(error, ureq::Error::Io(e) if e.get_ref().is_some_and(|e| e.is::<NotOverTailscale>()))
+}
+
+/// Counts the TLS handshakes a client's connections complete: a connector placed after ureq's own
+/// TLS one, which sees a transport only once its handshake is done.
+#[derive(Debug)]
+struct TlsDone(Arc<AtomicUsize>);
+
+impl ureq::unversioned::transport::Connector<Box<dyn ureq::unversioned::transport::Transport>>
+    for TlsDone
+{
+    type Out = Box<dyn ureq::unversioned::transport::Transport>;
+
+    fn connect(
+        &self,
+        _: &ureq::unversioned::transport::ConnectionDetails,
+        chained: Option<Self::Out>,
+    ) -> Result<Option<Self::Out>, ureq::Error> {
+        if chained.as_ref().is_some_and(|t| t.is_tls()) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(chained)
+    }
+}
+
+/// Whether error is the end of a connection that a peer gave no answer on: reset (Unix and
+/// Windows alike) or aborted (what Windows reports for a reset it saw while sending), or closed
+/// before it said anything. On Windows that is how a server that speaks plain http ends a TLS
+/// handshake it cannot read (it closes with the ClientHello unread, which resets the connection
+/// before the client reads the 400 it sent: Windows drops the received bytes of a reset
+/// connection, Linux hands them over, and rustls then fails on them as `InvalidData`).
+fn connection_cut(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::{ConnectionAborted, ConnectionReset, UnexpectedEof};
+    matches!(
+        e.kind(),
+        ConnectionReset | ConnectionAborted | UnexpectedEof
+    )
+}
+
 // Classify transport failures without formatting library errors: those may include request data.
-fn transport_kind(error: &ureq::Error) -> &'static str {
+// handshaking: the call was over https and no TLS handshake had completed when it failed, so a
+// cut connection (`connection_cut`) ended the handshake itself; after one, the same error is the
+// connection failing, `io`.
+fn transport_kind(error: &ureq::Error, handshaking: bool) -> &'static str {
+    if not_over_tailscale(error) {
+        return "tailscale";
+    }
     match error {
         ureq::Error::Tls(_) | ureq::Error::Rustls(_) | ureq::Error::TlsRequired => "tls",
         ureq::Error::Timeout(_) => "timeout",
@@ -172,9 +311,9 @@ fn transport_kind(error: &ureq::Error) -> &'static str {
         ureq::Error::Io(e) => {
             // Rustls can surface through an I/O wrapper; inspect its type, never its text.
             if let Some(inner) = e.get_ref().and_then(|e| e.downcast_ref::<ureq::Error>()) {
-                return transport_kind(inner);
+                return transport_kind(inner, handshaking);
             }
-            if e.kind() == std::io::ErrorKind::InvalidData {
+            if e.kind() == std::io::ErrorKind::InvalidData || (handshaking && connection_cut(e)) {
                 "tls"
             } else {
                 "io"
@@ -397,14 +536,69 @@ impl Client {
                 core_tcp::CoreConnector(Arc::new(pin)),
                 DefaultResolver::default(),
             ),
+            tailscale_only: false,
+            pin: None,
+            seen: Arc::default(),
+            tls_done: Arc::default(),
+        }
+    }
+
+    /// A client for the core at base whose connections go where route says (`Route`).
+    pub fn routed(
+        base: &str,
+        certs: Option<Vec<Certificate<'static>>>,
+        mut route: Route,
+    ) -> Client {
+        if route == Route::default() {
+            return Client::build(base, certs);
+        }
+        if proxied(base) {
+            // The proxy's address is resolved, not the core's.
+            route.pin = None;
+        }
+        let seen = Arc::new(Mutex::new(None));
+        let tls_done = Arc::<AtomicUsize>::default();
+        Client {
+            base: base.trim_end_matches('/').to_string(),
+            agent: ureq::Agent::with_parts(
+                Client::config(base, certs),
+                Client::connector(&tls_done),
+                Routed(route, seen.clone()),
+            ),
+            tailscale_only: route.tailscale_only,
+            pin: route.pin,
+            seen,
+            tls_done,
         }
     }
 
     fn build(base: &str, certs: Option<Vec<Certificate<'static>>>) -> Client {
+        let tls_done = Arc::<AtomicUsize>::default();
         Client {
             base: base.trim_end_matches('/').to_string(),
-            agent: Client::config(base, certs).into(),
+            agent: ureq::Agent::with_parts(
+                Client::config(base, certs),
+                Client::connector(&tls_done),
+                ureq::unversioned::resolver::DefaultResolver::default(),
+            ),
+            tailscale_only: false,
+            pin: None,
+            seen: Arc::default(),
+            tls_done,
         }
+    }
+
+    /// ureq's own connectors, then `TlsDone`.
+    fn connector(tls_done: &Arc<AtomicUsize>) -> impl ureq::unversioned::transport::Connector {
+        use ureq::unversioned::transport::{Connector, DefaultConnector};
+        DefaultConnector::default().chain(TlsDone(tls_done.clone()))
+    }
+
+    /// Why a call that began when `tls_done` read before failed with error, as a code (`transport_kind`).
+    fn kind(&self, error: &ureq::Error, before: usize) -> &'static str {
+        let handshaking =
+            self.base.starts_with("https:") && self.tls_done.load(Ordering::SeqCst) == before;
+        transport_kind(error, handshaking)
     }
 
     fn config(base: &str, certs: Option<Vec<Certificate<'static>>>) -> ureq::config::Config {
@@ -412,13 +606,10 @@ impl Client {
             Some(c) => RootCerts::Specific(Arc::new(c)),
             None => RootCerts::WebPki,
         };
-        // A core on this computer is reached directly: a proxy from the environment would see
-        // the key. Others honour the proxy settings; over https a proxy sees no key.
-        let direct = url::Url::parse(base).is_ok_and(|u| crate::conn::is_loopback(&u));
-        let proxy = if direct {
-            None
-        } else {
+        let proxy = if proxied(base) {
             ureq::Proxy::try_from_env()
+        } else {
+            None
         };
         ureq::Agent::config_builder()
             .proxy(proxy)
@@ -436,7 +627,21 @@ impl Client {
         &self.base
     }
 
-    /// Calls `method` on path (under `/v0/management`) with key.
+    /// Whether this client sends only where Tailscale carries the connection (`Route`).
+    pub fn tailscale_only(&self) -> bool {
+        self.tailscale_only
+    }
+
+    /// The address the client's connections go to: its pin, or else the address its name last
+    /// resolved to when a connection was last made (none before that).
+    pub fn peer(&self) -> Option<std::net::IpAddr> {
+        self.pin
+            .map(|p| p.ip())
+            .or_else(|| self.seen.lock().ok().and_then(|s| *s))
+    }
+
+    /// Calls `method` on path (under `/v0/management`) with key; with an empty key, with no
+    /// Authorization header at all.
     pub fn call(&self, key: &str, method: &str, path: &str, body: Option<&Value>) -> Reply {
         self.send(key, method, path, body, None)
     }
@@ -445,6 +650,7 @@ impl Client {
     /// as bearer token (200 when it does, 401 once it is no longer one of core's client keys), or
     /// the transport's failure. Nothing of the reply is read but its status.
     pub fn client_key_status(&self, key: &str) -> Result<u16, &'static str> {
+        let before = self.tls_done.load(Ordering::SeqCst);
         self.agent
             .get(&format!("{}/v1/models", self.base))
             .config()
@@ -453,7 +659,7 @@ impl Client {
             .header("Authorization", &format!("Bearer {key}"))
             .call()
             .map(|r| r.status().as_u16())
-            .map_err(|e| transport_kind(&e))
+            .map_err(|e| self.kind(&e, before))
     }
 
     /// Calls as call does, giving up after limit instead of the client's 300 seconds.
@@ -476,20 +682,28 @@ impl Client {
         body: Option<&Value>,
         limit: Option<Duration>,
     ) -> Reply {
+        /// The request with the client's limit replaced by limit, and the key as its bearer
+        /// token; an empty key sends no Authorization header.
         fn within<B>(
             r: ureq::RequestBuilder<B>,
             limit: Option<Duration>,
+            key: &str,
         ) -> ureq::RequestBuilder<B> {
-            match limit {
+            let r = match limit {
                 Some(l) => r.config().timeout_global(Some(l)).build(),
                 None => r,
+            };
+            if key.is_empty() {
+                r
+            } else {
+                r.header("Authorization", &format!("Bearer {key}"))
             }
         }
         if let Some(p) = path_problem(path) {
             return Reply::failed(400, "invalid_request", p);
         }
         let url = format!("{}{MANAGEMENT}{path}", self.base);
-        let auth = format!("Bearer {key}");
+        let before = self.tls_done.load(Ordering::SeqCst);
         let encoded = match body {
             Some(b) => match serde_json::to_vec(b) {
                 Ok(v) if v.len() <= MAX_BODY => Some(v),
@@ -499,12 +713,8 @@ impl Client {
             None => None,
         };
         let result = match method {
-            "GET" => within(self.agent.get(&url), limit)
-                .header("Authorization", &auth)
-                .call(),
-            "DELETE" => within(self.agent.delete(&url), limit)
-                .header("Authorization", &auth)
-                .call(),
+            "GET" => within(self.agent.get(&url), limit, key).call(),
+            "DELETE" => within(self.agent.delete(&url), limit, key).call(),
             "POST" | "PATCH" | "PUT" => {
                 if method == "PUT" && !put_allowed(path) {
                     return Reply::failed(
@@ -522,8 +732,8 @@ impl Client {
                         self.agent.patch(&url)
                     },
                     limit,
-                )
-                .header("Authorization", &auth);
+                    key,
+                );
                 match encoded {
                     Some(b) => req.header("Content-Type", "application/json").send(&b[..]),
                     None => req.send_empty(),
@@ -533,7 +743,7 @@ impl Client {
         };
         let mut resp = match result {
             Ok(r) => r,
-            Err(e) => return Reply::failed(0, transport_kind(&e), transport_message(&e)),
+            Err(e) => return Reply::failed(0, self.kind(&e, before), transport_message(&e)),
         };
         let status = resp.status().as_u16();
         let bytes = match resp.body_mut().with_config().limit(MAX_REPLY).read_to_vec() {
@@ -628,6 +838,66 @@ mod tests {
         // Port 1 on loopback: no test listens there and nothing hands it out, unlike a port
         // taken from `:0` and freed, which a test running at the same time can be given.
         let r = Client::new("http://127.0.0.1:1", None).call("k", "GET", "/status", None);
+        assert_eq!(r.status, 0);
+        assert_eq!(r.error.unwrap().code, "io");
+    }
+
+    /// How a connection cut during the TLS handshake reads, and how the same errors read
+    /// otherwise. Windows ends the handshake with a server that speaks plain http as a reset (or
+    /// an abort, when it saw the reset while sending), not as the bytes of its 400 reply that
+    /// Linux hands rustls: so those errors, fed here as they come, are the handshake failing
+    /// while no handshake has completed, and the connection failing after one, or over http.
+    #[test]
+    fn a_cut_connection_is_a_handshake_failure_only_before_the_handshake_completed() {
+        use std::io::{Error, ErrorKind};
+        let io = |kind: ErrorKind| ureq::Error::Io(Error::from(kind));
+        for kind in [
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::UnexpectedEof,
+        ] {
+            assert_eq!(transport_kind(&io(kind), true), "tls", "{kind:?}");
+            assert_eq!(transport_kind(&io(kind), false), "io", "{kind:?}");
+        }
+        // Not a cut connection: nothing listening, no route, no permission stay I/O whatever the
+        // scheme; garbage where a TLS record should be (Linux's shape) is the handshake either way.
+        for kind in [
+            ErrorKind::ConnectionRefused,
+            ErrorKind::BrokenPipe,
+            ErrorKind::PermissionDenied,
+            ErrorKind::NotConnected,
+        ] {
+            assert_eq!(transport_kind(&io(kind), true), "io", "{kind:?}");
+        }
+        assert_eq!(transport_kind(&io(ErrorKind::InvalidData), false), "tls");
+    }
+
+    /// The same, on a real connection: an https address whose server closes with the ClientHello
+    /// unread, which resets the connection (on Windows, with no bytes of a reply for the client
+    /// to read; here too, the reset arriving before any is read). A person who typed https for a
+    /// plain-http pluxy is told the handshake failed, not "failed (I/O)", and a plain http
+    /// address that resets the same way stays I/O.
+    #[test]
+    fn https_to_a_server_that_resets_the_handshake_is_a_tls_failure() {
+        /// Resets the first connection once its first bytes have arrived, unread.
+        fn resetter() -> String {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                let mut byte = [0];
+                while matches!(stream.peek(&mut byte), Ok(0)) {}
+                drop(stream);
+            });
+            addr.to_string()
+        }
+        let r =
+            Client::new(&format!("https://{}", resetter()), None).call("", "GET", "/status", None);
+        assert_eq!(r.status, 0);
+        assert_eq!(r.error.unwrap().code, "tls");
+        // Over http the same reset is the connection failing.
+        let r =
+            Client::new(&format!("http://{}", resetter()), None).call("", "GET", "/status", None);
         assert_eq!(r.status, 0);
         assert_eq!(r.error.unwrap().code, "io");
     }

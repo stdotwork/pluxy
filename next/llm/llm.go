@@ -4,7 +4,7 @@
 // close output items and end in exactly one terminal event. The shapes follow the prompt and
 // stream-part types of Vercel's AI SDK Language Model Specification and the items and streaming
 // events of Open Responses. Client formats and provider extensions translate to and from this
-// model; the extension protocol carries it on the wire (see ../protocol/README.md).
+// model; the extension protocol carries it on the wire (see docs/protocol.md).
 package llm
 
 import (

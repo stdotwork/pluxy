@@ -463,6 +463,25 @@ func TestImportKeepsManagementKey(t *testing.T) {
 	}
 }
 
+func TestImportDisableControlPanelReason(t *testing.T) {
+	const want = "the panel is always served, and signing in takes the management key"
+	res := importYAML(t, "management: {disable-control-panel: true}\n")
+	row, list := rowOf(t, res, "management.disable-control-panel")
+	if list != NotBrought || row.Why != want {
+		t.Errorf("true: list=%d row=%+v, want NotBrought with Why %q", list, row, want)
+	}
+	if !slices.ContainsFunc(res.Notices, func(n string) bool {
+		return strings.Contains(n, "management.disable-control-panel ("+want+")")
+	}) {
+		t.Errorf("notices = %v, want disable-control-panel reason %q", res.Notices, want)
+	}
+	off := importYAML(t, "management: {disable-control-panel: false}\n")
+	offRow, offList := rowOf(t, off, "management.disable-control-panel")
+	if offList != NotBrought || !strings.HasPrefix(offRow.Why, want+"; ") {
+		t.Errorf("false: list=%d row=%+v, want NotBrought with Why prefix %q", offList, offRow, want+"; ")
+	}
+}
+
 // A provider group is one row: brought with its accounts, changed with what was left out, or not
 // brought.
 func TestImportGroupRows(t *testing.T) {

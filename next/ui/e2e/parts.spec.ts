@@ -149,6 +149,22 @@ for (const theme of THEMES) {
         );
         expect(squeezed).toEqual([]);
 
+        // In a narrow row (<= 52em) the condition word drops its trailing middot so a wrapped reason
+        // does not leave a stray "·" at the end of the line.
+        const strayDots = await page.evaluate(() => {
+          const out: string[] = [];
+          for (const row of document.querySelectorAll('#specimen [data-part="account-row"]')) {
+            const em = Number.parseFloat(getComputedStyle(row).fontSize);
+            if (row.getBoundingClientRect().width > 52 * em) continue;
+            const word = row.querySelector(".account-word");
+            if (!word) continue;
+            const content = getComputedStyle(word, "::after").content;
+            if (content !== "none") out.push(`${word.textContent}: ${content}`);
+          }
+          return out;
+        });
+        expect(strayDots).toEqual([]);
+
         // Every button is as high as the theme's controls (size.control: 28 pixels on the default
         // theme, 36 on Paper, 24 on Terminal, the compact one), and never under 24 pixels.
         const small = await page.evaluate(() => {

@@ -6,7 +6,7 @@
 #
 # It holds a static pluxy with the web panel built in, and every extension packed by
 # pluxy-pack as the bundled packages, which core installs only when asked. See
-# "Run it in a container" in README.md.
+# "Run it in a container" in docs/setup.md.
 
 ARG BUN_VERSION=1.4.3
 ARG GO_VERSION=1.26.11
@@ -25,7 +25,8 @@ RUN bun run build
 # pluxy and the packed extensions, cross-compiled for the image's platform.
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
 ARG TARGETARCH
-# The build info core reports; empty means a build without them (README, "Run it").
+# The build info core reports; empty means a build without them (docs/setup.md, "Build from
+# source").
 ARG VERSION=
 ARG COMMIT=
 ARG DATE=
@@ -60,7 +61,8 @@ VOLUME /config
 WORKDIR /config
 USER 65532:65532
 EXPOSE 8400
-# Asks the port the README's config uses; with another listen port or tls.enable, override it.
+# Asks the port the config in docs/setup.md ("Run it in a container") uses; with another listen
+# port or tls.enable, override it.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
   CMD wget -q -O /dev/null http://127.0.0.1:8400/healthz || exit 1
 ENTRYPOINT ["/opt/pluxy/pluxy"]
