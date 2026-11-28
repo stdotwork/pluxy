@@ -505,6 +505,8 @@ test("a change of page opens the new page at its top; a change inside a page kee
     "aria-selected",
     "true",
   );
+  // The Settings tab draws while settings are still loading; wait for its rows before scrolling.
+  await expect(page.locator("#network h2")).toBeVisible();
   await scrollDown();
   await page.evaluate(() => {
     location.hash = "#/config/logging";
