@@ -93,6 +93,9 @@
     gap: calc(var(--s) * 2);
     padding-inline: calc(var(--s) * 1);
     margin-top: calc(var(--s) * 0.5);
+    /* Resolved against the active theme so each dot's hairline ring stays visible on the card
+       even when the previewed theme's own colour matches it. */
+    --theme-dot-ring: var(--px-color-text-muted);
   }
 
   .theme-name {
@@ -132,7 +135,7 @@
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    border: var(--px-shape-border) solid var(--px-color-border);
+    border: var(--px-shape-border) solid var(--theme-dot-ring, var(--px-color-text-muted));
   }
 
   .theme-dots i:nth-child(1) {
