@@ -930,6 +930,64 @@ test("a setting that was saved says Saved, and the next change takes it away unt
   await m.unmount();
 });
 
+test("a 401 reply or empty error string never says Saved, and 401 asks to sign in", async () => {
+  let answer: (r: Reply<unknown> | string | undefined) => void = noop;
+  let unauthorizedCalls = 0;
+  const kit = { unauthorized: () => unauthorizedCalls++ } as unknown as Kit;
+  function Probe() {
+    const s = useSetting(
+      false,
+      () => new Promise<Reply<unknown> | string | undefined>((resolve) => (answer = resolve)),
+    );
+    return (
+      <SettingRow name="Log every request" saving={s.saving} saved={s.saved} error={s.error}>
+        <Switch label="Log every request" checked={s.value} onChange={s.set} />
+      </SettingRow>
+    );
+  }
+  const m = await mountIn(
+    <KitContext.Provider value={kit}>
+      <Probe />
+    </KitContext.Provider>,
+  );
+  const input = all(m.root, "input")[0] as FakeNode;
+  const toggle = async (on: boolean) => {
+    input.checked = on;
+    await act(async () => {
+      input.dispatchEvent(new Event("change"));
+    });
+    await settle();
+  };
+  const reply = async (r: Reply<unknown> | string | undefined) => {
+    await act(async () => {
+      answer(r);
+    });
+    await settle();
+  };
+
+  // 401: signs out, shows no error and no Saved, and reverts the control.
+  await toggle(true);
+  await reply({ status: 401, error: { code: "unauthorized", message: "session expired" } });
+  expect(unauthorizedCalls).toBe(1);
+  expect(m.text()).not.toContain("Saved");
+  expect(m.text()).not.toContain("Saving…");
+  expect(m.text()).not.toContain("session expired");
+  expect(input.checked).toBe(false);
+
+  // An empty string outcome (no error text from useOutcome) also does not flash Saved.
+  await toggle(true);
+  await reply("");
+  expect(m.text()).not.toContain("Saved");
+  expect(input.checked).toBe(false);
+
+  // Explicit undefined (nothing returned when it worked) still flashes Saved.
+  await toggle(true);
+  await reply(undefined);
+  expect(m.text()).toContain("Saved");
+  expect(input.checked).toBe(true);
+  await m.unmount();
+});
+
 test("a Settings page's search keeps the rows that hold every word, in the name, sentence, note or key", async () => {
   const rows = () => (
     <>

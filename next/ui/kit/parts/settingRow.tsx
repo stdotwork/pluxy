@@ -56,6 +56,13 @@ export function useSavedTick() {
   };
 }
 
+/** Whether a save's outcome means the change was saved (nothing, or a 2xx reply). */
+function savedOk(result: Outcome): boolean {
+  if (result === undefined) return true;
+  if (typeof result === "string") return false;
+  return result.status >= 200 && result.status < 300;
+}
+
 /**
  * A setting's value for a row that saves on change. saved is the value core holds; set shows the
  * new value at once and saves it with save, which gives back the reply, an error to show, or
@@ -91,21 +98,27 @@ export function useSetting<T>(saved: T, save: (value: T) => Promise<Outcome> | O
   }, [saved]);
   const send = async () => {
     let why: string | undefined;
+    let ok = false;
     for (let next = waiting.current; next; next = waiting.current) {
       waiting.current = undefined;
       try {
-        why = outcome(await saveNow.current(next.value));
+        const result = await saveNow.current(next.value);
+        why = outcome(result);
+        ok = why === undefined && savedOk(result);
       } catch (err) {
         why = err instanceof Error ? err.message : String(err);
+        ok = false;
       }
     }
     sending.current = undefined;
     if (!live.current) return;
     setSaving(false);
-    if (why !== undefined) {
+    if (ok) {
+      tick.flash();
+    } else {
       setValue(savedNow.current);
-      setError(why);
-    } else tick.flash();
+      if (why !== undefined) setError(why);
+    }
   };
   const set = (next: T): Promise<void> => {
     setValue(next);
