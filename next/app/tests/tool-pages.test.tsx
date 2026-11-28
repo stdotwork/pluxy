@@ -409,6 +409,59 @@ describe("the head, by state", () => {
     expect(ch.reads.length).toBe(2);
   });
 
+  // The add-on's preview while the tool has never run here: no folder, nothing pinned, and the
+  // folder Connect makes named (next/app-tools/claude-code and pi-setup, create_folder).
+  const unmade = (file: string) => ({
+    selected: file,
+    link: null,
+    target: file,
+    identity: { link: null, parent: null, file: null },
+    sha256: null,
+  });
+  for (const [name, read, button, line] of [
+    [
+      "Claude Code",
+      { ...claudeCode("not-configured"), targets: [unmade(SETTINGS)], create_folder: "/home/me/.claude" },
+      "Connect Claude Code",
+      "Claude Code has not run here yet. You can connect it now: Connect makes Claude Code's folder and puts pluxy's settings in it. When Claude Code first starts, it asks you to pick a text style and whether you trust your project folder, but not to sign in.",
+    ],
+    [
+      "Pi",
+      {
+        ...pi("not-configured", false, plugin(false)),
+        targets: ["cliproxyapi.json", "settings.json", "cliproxyapi-models.json"].map((f) =>
+          unmade(`/home/me/.pi/agent/${f}`),
+        ),
+        create_folder: "/home/me/.pi/agent",
+      },
+      "Install plugin",
+      "Pi has not run on this computer yet. You can set it up now: Install plugin makes Pi's folder, installs the plugin there and connects Pi to pluxy.",
+    ],
+  ] as const) {
+    test(`${name} that has never run here: not connected, and Connect makes its folder in the same write`, async () => {
+      const ch = channel();
+      const page = await mount(TOOLS.find((t) => t.name === name)?.page as () => VNode, ch.invoke);
+      ch.reads[0]?.answer(read);
+      await settle();
+      expect(page.text()).toContain(line);
+      expect(page.text()).not.toContain("Could not read");
+      expect(page.text()).not.toContain("run Claude Code once");
+      await page.click(button);
+      // One write, as for a tool that has run: the folder it makes is in what its confirmation shows.
+      expect(applies(ch).map((w) => [w.input.create_folder, w.input.targets])).toEqual([
+        [read.create_folder, read.targets],
+      ]);
+      expect(ch.writes.map((w) => w.op)).toEqual(["apply"]);
+    });
+  }
+
+  test("Claude Code's folder made: Connect names no folder to make", async () => {
+    const { ch, page } = await opened(TOOLS[0] as Tool, "not-configured");
+    expect(page.text()).not.toContain("has not run here yet");
+    await page.click("Connect Claude Code");
+    expect(applies(ch).map((w) => "create_folder" in w.input)).toEqual([false]);
+  });
+
   test("a read that fails says so, with Try again", async () => {
     const ch = channel();
     const page = await mount(() => <CodexPage />, ch.invoke);
