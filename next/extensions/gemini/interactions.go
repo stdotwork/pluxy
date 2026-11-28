@@ -205,6 +205,12 @@ func interactionsBody(raw json.RawMessage, model string) ([]byte, bool, error) {
 	return body, string(m["stream"]) == "true", nil
 }
 
+// sanitizeInput removes from an Interactions input (a list of steps) what the upstream refuses:
+// a function_call step without an id takes its call_id as its id, and loses call_id; every
+// other step, and every content part of a step that is not a thought, loses its id. A thought
+// step keeps only its signature (the first of signature, thought_signature and thoughtSignature
+// that is not blank, at signature), losing id, content, text and the other two spellings; one
+// with no signature is left out.
 func sanitizeInput(in json.RawMessage) (json.RawMessage, bool) {
 	var steps []map[string]json.RawMessage
 	if json.Unmarshal(in, &steps) != nil {

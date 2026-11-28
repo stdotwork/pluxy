@@ -32,6 +32,8 @@ var loginMethods = []protocol.LoginMethod{
 	{Method: "device", Kind: protocol.LoginDevice, Label: "Kimi Code (device code)"},
 }
 
+// It follows no redirect, which would send the form (a device
+// code or refresh token) wherever the redirect points.
 var authClient = &http.Client{
 	Transport:     sdk.Upstream(http.DefaultTransport.(*http.Transport).Clone()),
 	Timeout:       30 * time.Second,

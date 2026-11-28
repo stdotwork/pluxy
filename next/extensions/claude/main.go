@@ -375,6 +375,9 @@ func buildBodyWithTTL(req llm.Request, cacheTTL string) ([]byte, *llm.Translatio
 	return buildBodyWith(req, cacheTTL, serviceOptions(anthropicmessages.EncodeOptions{}, req, defaultBaseURL))
 }
 
+// Only Anthropic's own API is known to take a service tier (a third-party host may
+// refuse a field it does not list), and its fast mode is sent where post adds the beta header it
+// needs.
 func serviceOptions(opts anthropicmessages.EncodeOptions, req llm.Request, baseURL string) anthropicmessages.EncodeOptions {
 	anthropic := isAnthropicBase(baseURL)
 	opts.ServiceTier = anthropic

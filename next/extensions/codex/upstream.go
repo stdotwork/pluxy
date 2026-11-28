@@ -414,8 +414,6 @@ func (c codexError) code() string {
 	return ""
 }
 
-// errorObject finds the error object in a Codex error body: {"error": {...}}, a bare error
-// object, or a response.failed event's response.error.
 func errorObject(raw []byte) codexError {
 	var b struct {
 		codexError
@@ -537,6 +535,9 @@ func classify(err error) error {
 	return e
 }
 
+// The error object may be in "error", at the top of the body, or in
+// "body.error" (a WebSocket message) or "response.error" (a response.failed event), searched in
+// that order; the first code found decides.
 func capacityRefusal(raw []byte) bool {
 	var b struct {
 		codexError

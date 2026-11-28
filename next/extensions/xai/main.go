@@ -318,8 +318,6 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 	}
 }
 
-// upstreamError turns a non-2xx reply from xAI into a structured error. xAI's bodies name the
-// error in error.message and error.code, or with a top-level code and a string error.
 func upstreamError(resp *http.Response, model string) *llm.Error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var parsed struct {

@@ -42,6 +42,8 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	}
 	q := &protocol.Quota{Limits: usageLimits(u)}
 	raw := map[string]json.RawMessage{"usage": usage}
+	// A setup token belongs to a subscription, so its usage is read, but not its profile: such a
+	// token is made for inference and lacks the profile scope.
 	if ctx.Err() == nil && !setupToken {
 		if profile, err := getJSON(ctx, call.Account.Credential, s.BaseURL+profilePath); err == nil {
 			raw["profile"] = profile
@@ -144,6 +146,7 @@ func usageLimits(u map[string]json.RawMessage) []protocol.QuotaLimit {
 			continue
 		}
 		id, label, family, feature := w.id, w.label, w.family, w.feature
+		// Claude gives the length of none: the 5-hour window is named so, the others are weekly.
 		secs := int64(weekSeconds)
 		if w.key == "five_hour" {
 			secs = fiveHourSeconds

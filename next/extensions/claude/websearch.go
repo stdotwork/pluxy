@@ -6,6 +6,10 @@ import (
 	"sync"
 )
 
+// Anthropic encrypts a web_search_result's encrypted_content for the credential that ran the
+// search and refuses it from another credential (a 400 naming the search_result block), while
+// routing can send a client's history to any of the extension's accounts.
+
 const searchOwnerMax = 16384
 
 type searchOwnersCache struct {

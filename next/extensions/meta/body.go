@@ -79,6 +79,7 @@ func museTools(tools []any) []any {
 			}
 			if sub, ok := tool["tools"].([]any); ok {
 				for _, s := range sub {
+					// A web_search tool loses search_content_types, which Meta refuses.
 					if st, _ := s.(map[string]any); st != nil && st["type"] == "web_search" {
 						delete(st, "search_content_types")
 					}
@@ -89,6 +90,8 @@ func museTools(tools []any) []any {
 			delete(tool, "search_content_types")
 		}
 	}
+	// A request with tools also carries Muse Code's own tool namespace, which Meta's API wants
+	// on a subscription key's tool requests.
 	if !has {
 		var ns any
 		_ = json.Unmarshal([]byte(museNamespace), &ns)

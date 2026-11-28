@@ -45,6 +45,7 @@ var loginMethods = []protocol.LoginMethod{
 	{Method: "device", Kind: protocol.LoginDevice, Label: "Grok account (device code)"},
 }
 
+// It follows no redirect, which would send the form wherever it points.
 var authClient = &http.Client{
 	Transport:     sdk.Upstream(http.DefaultTransport.(*http.Transport).Clone()),
 	Timeout:       30 * time.Second,

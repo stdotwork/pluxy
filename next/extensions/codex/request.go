@@ -96,6 +96,9 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 		keepOutput: nativeLite && (ws || req.Stream), encryptedReasoning: sh.encryptedReasoning}, nil
 }
 
+// takesTier reports whether the account's upstream is known to take a service tier and a verbosity
+// in a Responses request: the hosts of the two default base URLs, OpenAI's API and the ChatGPT
+// backend Codex uses. Any other base_url may be a third-party host.
 func takesTier(s settings, a account) bool {
 	u, err := url.Parse(baseURL(s, a))
 	if err != nil {
@@ -397,6 +400,8 @@ func (h *shaper) input() error {
 	return nil
 }
 
+// include asks for the reasoning's encrypted content, which the Codex endpoint needs to carry
+// reasoning between turns without storing responses.
 func (h *shaper) include() {
 	inc := []string{"reasoning.encrypted_content"}
 	var asked []string
