@@ -50,6 +50,9 @@ var clientModelPreferences = map[string][]string{
 // them) that a tool should start with: the one made for that tool when pluxy serves one, else the
 // first that is a chat model. It is empty when names holds none.
 func SuggestClientModel(tool string, names []string) string {
+	if id, ok := clientSnippetID(tool); ok {
+		tool = id
+	}
 	var chat []string
 	for _, n := range names {
 		if !containsAny(strings.ToLower(n), notChat) {

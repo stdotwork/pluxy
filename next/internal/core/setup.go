@@ -430,10 +430,11 @@ func (c *Core) handleSetup(m *server.Management) {
 		writeJSON(w, http.StatusOK, reply)
 	})
 	m.Handle("GET /setup/clients/{id}/paste", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if _, ok := ClientSnippetFor(id, "", "", ""); !ok {
+		rawID := r.PathValue("id")
+		id, ok := clientSnippetID(rawID)
+		if !ok {
 			writeError(w, http.StatusNotFound, "not_found",
-				fmt.Sprintf("no settings to paste for client tool %q (supported: %s)", id, strings.Join(ClientSnippetTools, ", ")))
+				fmt.Sprintf("no settings to paste for client tool %q (supported: %s)", rawID, strings.Join(ClientSnippetTools, ", ")))
 			return
 		}
 		model, err := checkClientModel(r.URL.Query().Get("model"))
