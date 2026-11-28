@@ -111,7 +111,11 @@
       "motion.easing-drawer": "cubic-bezier(0.32, 0.72, 0, 1)",
       "motion.press-scale": "0.97",
       "meter.mid-below": "70",
-      "meter.low-below": "30"
+      "meter.low-below": "30",
+      "color.provider-claude": "#d97757",
+      "color.provider-codex": "#5b5ff5",
+      "color.provider-gemini": "#3186ff",
+      "color.provider-kimi": "#1783ff"
     },
     "dark": {
       "color.bg": "#111113",
@@ -224,7 +228,11 @@
       "motion.easing-drawer": "cubic-bezier(0.32, 0.72, 0, 1)",
       "motion.press-scale": "0.97",
       "meter.mid-below": "70",
-      "meter.low-below": "30"
+      "meter.low-below": "30",
+      "color.provider-claude": "#e08a6d",
+      "color.provider-codex": "#8b93ff",
+      "color.provider-gemini": "#5b9dff",
+      "color.provider-kimi": "#4ea1ff"
     }
   },
   "pluxy/paper": {
@@ -339,7 +347,11 @@
       "motion.easing-drawer": "cubic-bezier(0.32, 0.72, 0, 1)",
       "motion.press-scale": "0.97",
       "meter.mid-below": "70",
-      "meter.low-below": "30"
+      "meter.low-below": "30",
+      "color.provider-claude": "#d97757",
+      "color.provider-codex": "#5b5ff5",
+      "color.provider-gemini": "#3186ff",
+      "color.provider-kimi": "#1783ff"
     },
     "dark": {
       "color.bg": "#1c1814",
@@ -452,7 +464,11 @@
       "motion.easing-drawer": "cubic-bezier(0.32, 0.72, 0, 1)",
       "motion.press-scale": "0.97",
       "meter.mid-below": "70",
-      "meter.low-below": "30"
+      "meter.low-below": "30",
+      "color.provider-claude": "#e08a6d",
+      "color.provider-codex": "#8b93ff",
+      "color.provider-gemini": "#5b9dff",
+      "color.provider-kimi": "#4ea1ff"
     }
   },
   "pluxy/terminal": {
@@ -567,7 +583,11 @@
       "motion.easing-drawer": "cubic-bezier(0.32, 0.72, 0, 1)",
       "motion.press-scale": "1",
       "meter.mid-below": "70",
-      "meter.low-below": "30"
+      "meter.low-below": "30",
+      "color.provider-claude": "#e08a6d",
+      "color.provider-codex": "#8b93ff",
+      "color.provider-gemini": "#5b9dff",
+      "color.provider-kimi": "#4ea1ff"
     },
     "dark": {
       "color.bg": "#0b0f0c",
@@ -680,7 +700,11 @@
       "motion.easing-drawer": "cubic-bezier(0.32, 0.72, 0, 1)",
       "motion.press-scale": "1",
       "meter.mid-below": "70",
-      "meter.low-below": "30"
+      "meter.low-below": "30",
+      "color.provider-claude": "#e08a6d",
+      "color.provider-codex": "#8b93ff",
+      "color.provider-gemini": "#5b9dff",
+      "color.provider-kimi": "#4ea1ff"
     }
   }
 }

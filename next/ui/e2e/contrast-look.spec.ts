@@ -37,6 +37,15 @@ async function addSamples(page: Page) {
       pill.textContent = `${tier} plan`;
       surface.append(pill, " ");
     }
+    for (const series of ["1", "2", "3", "4", "5", "6"]) {
+      const mark = document.createElement("span");
+      mark.className = "provider-mark";
+      mark.dataset.part = "provider-mark";
+      mark.dataset.initial = "";
+      mark.dataset.series = series;
+      mark.textContent = "M";
+      surface.append(mark, " ");
+    }
     for (const tone of ["ok", "warn", "danger"]) {
       const meter = document.createElement("div");
       meter.className = "meter";
@@ -60,6 +69,12 @@ async function addSamples(page: Page) {
       notice.textContent = `${tone} notice`;
       host.append(notice);
     }
+    const stale = document.createElement("div");
+    stale.className = "home-body";
+    stale.dataset.stale = "";
+    stale.innerHTML =
+      '<div class="home-fade"><div class="card"><span class="account-sub"><span class="account-word">Serving</span></span><p class="pool-foot"><span>2 of 3 serving</span></p></div></div>';
+    host.append(stale);
     document.querySelector("main")?.prepend(host);
   });
 }
@@ -72,6 +87,12 @@ function rgbScript() {
     const lum = ([r, g, b]) => { const l = (v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }; return 0.2126 * l(r) + 0.7152 * l(g) + 0.0722 * l(b); };
     const ratio = (a, b) => { const [h, o] = [lum(a), lum(b)].sort((x, y) => y - x); return (h + 0.05) / (o + 0.05); };
     const over = (top, below) => { const a = top[3] / 255; return [0, 1, 2].map((i) => top[i] * a + below[i] * (1 - a)).concat(255); };
+    const effOpacity = (el) => {
+      let o = 1;
+      for (let e = el; e; e = e.parentElement) o *= Number.parseFloat(getComputedStyle(e).opacity);
+      return o;
+    };
+    const withOpacity = (c, o) => [c[0], c[1], c[2], c[3] * o];
     // The colour stops of a gradient (computed background-image): its top-level arguments, less the
     // angle or direction and any stop position, each resolved by the browser on a probe.
     const gradientStops = (image) => {
@@ -129,6 +150,9 @@ for (const theme of THEMES) {
           "#look-samples thead th",
           '#look-samples .plan-pill[data-plan-tier="mid"]',
           '#look-samples .plan-pill[data-plan-tier="free"]',
+          "#look-samples .provider-mark[data-initial]",
+          "#look-samples .home-body[data-stale] .home-fade .account-word",
+          "#look-samples .home-body[data-stale] .home-fade .pool-foot span",
         ].join(", "),
       );
       const measured = await measureContrast(parts);
@@ -176,6 +200,7 @@ for (const theme of THEMES) {
       await addSamples(page);
       await page.evaluate(() => {
         const box = document.querySelector("#look-samples .card");
+        const host = document.querySelector("#look-samples");
         for (const tone of ["ok", "warn", "danger", "info", "update"]) {
           const badge = document.createElement("span");
           badge.className = "badge";
@@ -184,6 +209,21 @@ for (const theme of THEMES) {
           badge.textContent = tone;
           box?.append(badge, " ");
         }
+        const offRow = document.createElement("div");
+        offRow.className = "account-row";
+        offRow.dataset.group = "off";
+        offRow.innerHTML =
+          '<span class="account-mark"><span class="provider-mark">A</span><span class="group-mark" data-group="off" data-dot=""></span></span>';
+        box?.append(offRow);
+        const bar = document.createElement("div");
+        bar.className = "home-state-bar";
+        bar.innerHTML = '<span data-group="off"></span>';
+        host?.append(bar);
+        const poolBar = document.createElement("div");
+        poolBar.className = "pool-bar";
+        poolBar.innerHTML =
+          '<span class="pool-segment" data-kind="unknown"></span><span class="pool-segment" data-kind="out"></span>';
+        box?.append(poolBar);
       });
       const results = await page.evaluate(`(() => {
         ${rgbScript()}
@@ -199,10 +239,26 @@ for (const theme of THEMES) {
           const dot = over(rgb(getComputedStyle(badge, "::before").backgroundColor), ground);
           out.push({ what: "dot " + badge.dataset.tone + " on the card", ratio: ratio(dot, ground) });
         }
+        const offDot = document.querySelector('#look-samples .account-row[data-group="off"] .group-mark[data-dot]');
+        const offDotColor = over(withOpacity(rgb(getComputedStyle(offDot).color), effOpacity(offDot)), ground);
+        out.push({ what: "turned-off dot on the row", ratio: ratio(offDotColor, ground) });
+        const offBar = document.querySelector('#look-samples .home-state-bar [data-group="off"]');
+        const pageGround = bgOf(offBar.parentElement);
+        const offBarColor = over(withOpacity(rgb(getComputedStyle(offBar).backgroundColor), effOpacity(offBar)), pageGround);
+        out.push({ what: "turned-off bar on the page", ratio: ratio(offBarColor, pageGround) });
+        for (const seg of document.querySelectorAll("#look-samples .pool-segment")) {
+          const style = getComputedStyle(seg);
+          const track = over(rgb(style.backgroundColor), ground);
+          const stops = (style.backgroundImage.match(/(?:rgba?|color|oklab|oklch|lab|lch)\\([^()]*\\)/g) ?? [])
+            .map(rgb)
+            .filter((c) => c[3] > 0);
+          const stroke = stops[0] ? over(stops[0], track) : track;
+          out.push({ what: "pool hatch " + seg.dataset.kind + " on its track", ratio: ratio(stroke, track) });
+        }
         return out;
       })()`);
       const list = results as { what: string; ratio: number }[];
-      expect(list).toHaveLength(8);
+      expect(list).toHaveLength(12);
       const low = list.filter((r) => r.ratio < GRAPHIC).map((r) => `${r.what}: ${r.ratio.toFixed(2)}:1`);
       expect(low).toEqual([]);
     });
@@ -224,6 +280,8 @@ for (const theme of THEMES) {
         for (const n of [1, 2, 3, 4, 5, 6]) {
           const bar = document.createElement("span");
           bar.dataset.series = String(n);
+          // Only these probes are measured: the samples also hold marks that carry a series.
+          bar.dataset.probe = "series";
           bar.style.display = "inline-block";
           bar.style.width = "12px";
           bar.style.height = "12px";
@@ -256,7 +314,7 @@ for (const theme of THEMES) {
         out.push({ what: "input border on the card", ratio: ratio(edge, ground), min: 3, inputs: true });
         out.push({ what: "input border on its fill", ratio: ratio(edge, fill), min: 3, inputs: true });
         // Chart series on a card and on the page.
-        for (const bar of document.querySelectorAll("#look-samples [data-series]")) {
+        for (const bar of document.querySelectorAll('#look-samples [data-probe="series"]')) {
           const under = bgOf(bar.parentElement);
           const colour = over(rgb(getComputedStyle(bar).backgroundColor), under);
           const where = "onPage" in bar.dataset ? "the page" : "the card";

@@ -21,7 +21,7 @@ export function meterTone(percent: number, thresholds: MeterThresholds = DEFAULT
 }
 
 /** The active theme's thresholds; the defaults outside the kit's shell. Re-renders on a theme change. */
-function useThresholds(): MeterThresholds {
+export function useThresholds(): MeterThresholds {
   const kit = useContext(KitContext);
   const themes = kit?.themes;
   const [, bump] = useState(0);
