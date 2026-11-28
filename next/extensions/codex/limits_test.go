@@ -16,7 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// sentBody builds the upstream request for req and returns it with its body read as JSON.
 func sentBody(t *testing.T, req llm.Request) (*upstreamRequest, struct {
 	Input      []map[string]any `json:"input"`
 	Tools      []map[string]any `json:"tools"`
@@ -52,10 +51,6 @@ func isPortable(s string) bool {
 	return true
 }
 
-// A request core translated (here with no native body, as from Chat, Messages or Gemini) goes
-// upstream with function names the endpoint takes, the same name in the tools, the tool choice
-// and the calls in the conversation, and call IDs within the limit that still pair a call with
-// its result. The reply's names map back.
 func TestTranslatedRequestNamesAndCallIDs(t *testing.T) {
 	longA := "mcp__" + strings.Repeat("s", 70) + "__lookup_issue"
 	longB := "mcp__" + strings.Repeat("t", 70) + "__lookup_issue"
@@ -125,7 +120,6 @@ func TestTranslatedRequestNamesAndCallIDs(t *testing.T) {
 	}
 }
 
-// A request that needs no change sends no names back to rewrite.
 func TestShortNamesNeedNoMapping(t *testing.T) {
 	req := llm.Request{Model: "gpt-test",
 		Items: []llm.Item{{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "hi"}}}},
@@ -139,7 +133,6 @@ func TestShortNamesNeedNoMapping(t *testing.T) {
 	}
 }
 
-// A call ID is cut at a character boundary, so the result stays within the limit.
 func TestShortCallIDKeepsCharactersWhole(t *testing.T) {
 	id := strings.Repeat("a", 46) + strings.Repeat("é", 30)
 	got := shortCallID(id)
@@ -151,8 +144,6 @@ func TestShortCallIDKeepsCharactersWhole(t *testing.T) {
 	}
 }
 
-// A Responses client's own body goes to the endpoint as it is, as today's core sends it: its
-// function names and call IDs are not touched, and no name is given back in the reply.
 func TestResponsesBodyKeepsNamesAndCallIDs(t *testing.T) {
 	long := "mcp__" + strings.Repeat("s", 70) + "__lookup_issue"
 	longCall := "call_" + strings.Repeat("c", 100)
@@ -182,7 +173,6 @@ func (c *collectedEvents) Send(ev llm.Event) error {
 	return nil
 }
 
-// A tool call in the reply, streamed or not, names the function as the client did.
 func TestReplyGivesBackClientNames(t *testing.T) {
 	names := map[string]string{"mcp__lookup_issue": "mcp__server__lookup_issue"}
 	call := `{"type":"function_call","call_id":"call_1","name":"mcp__lookup_issue","arguments":"{}"}`
@@ -215,7 +205,6 @@ func TestReplyGivesBackClientNames(t *testing.T) {
 	}
 }
 
-// itemIDs builds the upstream request for a Responses body and returns its input items.
 func itemIDs(t *testing.T, input string) []map[string]any {
 	t.Helper()
 	req, err := openairesponses.ParseRequest([]byte(`{"model":"gpt-test","input":` + input + `}`))
@@ -231,8 +220,6 @@ func idOf(it map[string]any) string {
 	return id
 }
 
-// An input item ID is within 64 characters and holds only ASCII letters, digits, _ and -, with the
-// prefix of its item type; what is already right stays as it is.
 func TestInputItemIDs(t *testing.T) {
 	id64 := strings.Repeat("a", 64)
 	id65 := strings.Repeat("b", 65)
@@ -261,7 +248,7 @@ func TestInputItemIDs(t *testing.T) {
 		"ctc_item_custom",
 		"ctco_item_custom_out",
 		"tsc_call_4000860",
-		"", // the output sent for c3, which has none (see history), has no ID
+		"",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("%d input items, want %d: %v", len(got), len(want), got)
@@ -278,18 +265,16 @@ func TestInputItemIDs(t *testing.T) {
 	}
 }
 
-// Two different IDs never come out the same, an ID that was right never changes to make room, and
-// the same ID with the same type comes out the same each time.
 func TestInputItemIDsStayDistinct(t *testing.T) {
 	msg := func(id string) string { return `{"type":"message","role":"user","id":"` + id + `","content":[]}` }
 	out := func(id string) string {
 		return `{"type":"function_call_output","id":"` + id + `","call_id":"c","output":"ok"}`
 	}
 	long := strings.Repeat("grok-item-", 10)
-	cut := strings.Repeat("grok-item-", 4) + "grok-it" + "_" + hashOf(long) // what long is cut to
+	cut := strings.Repeat("grok-item-", 4) + "grok-it" + "_" + hashOf(long)
 	for name, tc := range map[string]struct {
 		in       string
-		keepIdx  int // the item whose ID was already right
+		keepIdx  int
 		keepWant string
 	}{
 		"prefixed ID last":  {`[` + msg("item_x") + `,` + msg("msg_item_x") + `]`, 1, "msg_item_x"},
@@ -310,7 +295,6 @@ func TestInputItemIDsStayDistinct(t *testing.T) {
 					t.Errorf("ID %q has %d characters", idOf(it), n)
 				}
 			}
-			// What was sent goes through again unchanged.
 			again, _ := json.Marshal(got)
 			if second := itemIDs(t, string(again)); !slices.EqualFunc(second, got, func(a, b map[string]any) bool { return idOf(a) == idOf(b) }) {
 				t.Errorf("a second pass changed the IDs: %v then %v", got, second)
@@ -323,8 +307,6 @@ func TestInputItemIDsStayDistinct(t *testing.T) {
 	}
 }
 
-// A reasoning item with encrypted content and an ID over the limit is left out; one with a short
-// ID, or without encrypted content, is kept.
 func TestOverlongEncryptedReasoningIsDropped(t *testing.T) {
 	long := "rs_" + strings.Repeat("a", 64)
 	short := "rs_" + strings.Repeat("b", 48)

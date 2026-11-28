@@ -9,8 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// idTokenWithAuth is an unsigned ID token whose ChatGPT auth claim is auth, for the cases a plan
-// claim is missing or null.
 func idTokenWithAuth(auth map[string]any) string {
 	enc := func(v any) string {
 		b, _ := json.Marshal(v)
@@ -21,9 +19,6 @@ func idTokenWithAuth(auth map[string]any) string {
 	}) + ".x"
 }
 
-// TestSubscriptionPlan checks the plan an account carries, as today's core reads it from the ID
-// token (core/internal/watcher/synthesizer/file.go): an ID token with no plan, or one that does
-// not parse, is the free plan, and a credential with no ID token has no plan to read.
 func TestSubscriptionPlan(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -50,9 +45,6 @@ func TestSubscriptionPlan(t *testing.T) {
 	}
 }
 
-// TestImageToolOffered checks the hosted image_generation tool for each kind of account: a free
-// plan gets none, as in today's core (core/internal/runtime/executor/codex_executor_request.go),
-// and an account with no ID token keeps it.
 func TestImageToolOffered(t *testing.T) {
 	for _, tc := range []struct {
 		name string

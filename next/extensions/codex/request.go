@@ -14,37 +14,23 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// upstreamRequest is what one generate call sends.
 type upstreamRequest struct {
-	body []byte
-	tr   *llm.Translation
-	// model is the model sent upstream, without a thinking suffix.
-	model string
-	// sessionID is the prompt cache key the request carries, also sent as the Session-Id header.
-	sessionID string
-	// names maps the function names the request sent upstream in place of the client's to the
-	// client's, for the reply.
-	names map[string]string
-	// keepOutput says that the reply's terminal event is left as the upstream sent it, without
-	// the id restoration and without the output rebuild (see repairs).
-	keepOutput bool
-	// encryptedReasoning holds the input paths of the reasoning items with encrypted content, which a
-	// retry after Codex refused that content leaves out (dropForeignReasoning).
+	body               []byte
+	tr                 *llm.Translation
+	model              string
+	sessionID          string
+	names              map[string]string
+	keepOutput         bool
 	encryptedReasoning []string
 }
 
-// repairs returns the repairs the request's reply gets.
 func (u *upstreamRequest) repairs() *repairs {
 	p := newRepairs()
 	p.keepOutput = u.keepOutput
 	return p
 }
 
-// buildRequest returns the Codex request for req: the client's Responses body, or the request
-// translated to Responses, in the shape the Codex endpoint takes (shape). ws shapes it for the
-// Responses WebSocket, which keeps previous_response_id and generate.
 func buildRequest(req llm.Request, accountID string, s settings, a account, ws bool) (*upstreamRequest, error) {
-	// Core has taken a thinking suffix off the model name (llm.SplitThinkingSuffix).
 	model, effort := req.Model, ""
 	if s := req.Options.ThinkingSuffix; s != "" {
 		effort = llm.ThinkingEffort(s)
@@ -60,10 +46,6 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 	} else {
 		r := req
 		r.Model = model
-		// The Codex endpoint takes a service tier and a verbosity, and so does OpenAI's API; a
-		// custom base_url may be a third-party host that refuses a field it does not list, so it
-		// gets neither from a translated request (takesTier). At the default hosts the routed
-		// model's catalog entry says what it takes, as the Codex CLI reads it (narrowToModel).
 		host := takesTier(s, a)
 		var narrowed []llm.Loss
 		if host {
@@ -97,16 +79,11 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the request body is not a JSON object", Scope: llm.ScopeRequest}
 	}
 	sh := shaper{m: m, req: req, tr: tr, model: model, effort: effort, s: s, a: a, accountID: accountID, ws: ws}
-	// A Responses-lite client's stream, or its turn over the upstream WebSocket, keeps its
-	// output as the upstream sent it, as today's core does (preserveNativeOutput). Core's
-	// Responses writer still rebuilds an empty output for an HTTP client, as today's HTTP
-	// handler does.
 	nativeLite := sh.passthrough() && sh.lite()
 	if err := sh.shape(); err != nil {
 		return nil, err
 	}
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
-		// Shaping dropped what the endpoint cannot take (see history).
 		paths := tr.DroppedPaths()
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
 			Message: "the Codex endpoint cannot take parts of this request: " + strings.Join(paths, ", ")}
@@ -119,9 +96,6 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 		keepOutput: nativeLite && (ws || req.Stream), encryptedReasoning: sh.encryptedReasoning}, nil
 }
 
-// takesTier reports whether the account's upstream is known to take a service tier and a verbosity
-// in a Responses request: the hosts of the two default base URLs, OpenAI's API and the ChatGPT
-// backend Codex uses. Any other base_url may be a third-party host.
 func takesTier(s settings, a account) bool {
 	u, err := url.Parse(baseURL(s, a))
 	if err != nil {
@@ -147,25 +121,19 @@ var removedFields = []string{
 	"generate",
 }
 
-// shaper puts a Responses body in the shape the Codex endpoint takes. The rules follow what
-// today's core does to a request before sending it to Codex (the corpus records it); a SIWC
-// account's request then gets the SIWC rules (siwcBody).
 type shaper struct {
 	m         map[string]json.RawMessage
 	req       llm.Request
-	tr        *llm.Translation // gets the losses the shaping causes
+	tr        *llm.Translation
 	model     string
-	effort    string // from a thinking suffix on the model name
+	effort    string
 	s         settings
 	a         account
-	accountID string // the account's ID in core
-	ws        bool   // for the Responses WebSocket
+	accountID string
+	ws        bool
 
-	sessionID string
-	// names maps each function name the request sent upstream in place of the client's to the
-	// client's (see limits).
-	names map[string]string
-	// encryptedReasoning: see upstreamRequest.
+	sessionID          string
+	names              map[string]string
 	encryptedReasoning []string
 }
 
@@ -214,13 +182,10 @@ func (h *shaper) shape() error {
 	}
 	h.streamOptions()
 	h.serviceTier()
-	// A Responses-lite request from a Responses client goes without instructions when it has
-	// none, as today's core sends it; any other request gets empty instructions.
 	if v, ok := m["instructions"]; (!ok || string(v) == "null") && !(h.passthrough() && h.lite()) {
 		m["instructions"] = raw("")
 	}
 	h.reasoning()
-	// Before tools(), which adds the image generation tool after any web search tool.
 	webSearchForHistory(h.m, h.lite())
 	h.tools()
 	h.limits()
@@ -228,13 +193,10 @@ func (h *shaper) shape() error {
 	if h.a.siwc {
 		siwcBody(m, h.effort != "")
 		if h.ws {
-			// Today's core sends a SIWC turn over the WebSocket without these.
 			delete(m, "stream")
 			delete(m, "background")
 		}
 	}
-	// Last, so it covers an effort from any source: the client's, a thinking suffix, or a
-	// configuration update a SIWC account's request folded in.
 	h.clampEffort()
 	return nil
 }
@@ -243,8 +205,6 @@ func (h *shaper) shape() error {
 // answers a smaller one with invalid_request_error (Claude Code's model switch asks for 1).
 const codexMinOutputTokens = 16
 
-// minOutputTokens raises a whole-number output budget under 16 to 16. A budget that is missing,
-// not a number, not a whole number, or below 1 is left for the upstream to judge.
 func (h *shaper) minOutputTokens() {
 	v, ok := h.m["max_output_tokens"]
 	if !ok {
@@ -257,12 +217,8 @@ func (h *shaper) minOutputTokens() {
 	h.m["max_output_tokens"] = raw(codexMinOutputTokens)
 }
 
-// effortOrder lists the reasoning efforts the Codex catalog knows, lowest first.
 var effortOrder = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
-// clampEffortTo returns the level of levels to send for effort: effort itself when the model takes
-// it, else the highest level below it, else the lowest level above it. An effort or a level the
-// order does not know is not touched, and the result's second value says whether it changed.
 func clampEffortTo(effort string, levels []string) (string, bool) {
 	rank := slices.Index(effortOrder, strings.ToLower(effort))
 	if rank < 0 {
@@ -290,8 +246,6 @@ func clampEffortTo(effort string, levels []string) (string, bool) {
 	return effort, false
 }
 
-// modelEffortLevels returns the reasoning levels the Codex catalog lists for model, nil when it
-// does not list the model.
 func modelEffortLevels(model string) []string {
 	templates := clientTemplates()
 	t, ok := templates[model]
@@ -314,8 +268,6 @@ func modelEffortLevels(model string) []string {
 	return out
 }
 
-// clampEffort changes a reasoning effort the model does not take to one it does (clampEffortTo),
-// and reports the change as a loss. A model the catalog does not list keeps the effort.
 func (h *shaper) clampEffort() {
 	var r map[string]json.RawMessage
 	if json.Unmarshal(h.m["reasoning"], &r) != nil || r == nil {
@@ -341,7 +293,6 @@ func (h *shaper) clampEffort() {
 	}
 }
 
-// lite reports whether the client is a Responses-lite client (see liteRequest).
 func (h *shaper) lite() bool {
 	var headers map[string]string
 	if h.req.Native != nil {
@@ -350,13 +301,10 @@ func (h *shaper) lite() bool {
 	return liteRequest(headers, h.m)
 }
 
-// liteRequest reports whether a request comes from a Responses-lite client, as today's core reads
-// it (see openairesponses.LiteRequest). m holds the request's top-level fields.
 func liteRequest(headers map[string]string, m map[string]json.RawMessage) bool {
 	return openairesponses.LiteRequest(headers, m)
 }
 
-// webSearchTools are the tool types that declare hosted web search.
 var webSearchTools = []string{"web_search", "web_search_preview", "web_search_preview_2025_03_11"}
 
 // webSearchForHistory makes a request that replays web searches acceptable to the Codex endpoint,
@@ -403,12 +351,9 @@ func webSearchForHistory(m map[string]json.RawMessage, lite bool) {
 		m["input"] = raw(kept)
 		return
 	}
-	// tools that is missing or not a list is replaced.
 	m["tools"] = raw(append(tools, raw(map[string]string{"type": "web_search"})))
 }
 
-// input makes input a list of items (a string is one user message), gives system messages the
-// developer role, and gives function calls with blank arguments "{}".
 func (h *shaper) input() error {
 	v, ok := h.m["input"]
 	if !ok || string(v) == "null" {
@@ -452,9 +397,6 @@ func (h *shaper) input() error {
 	return nil
 }
 
-// include asks for the reasoning's encrypted content, which the Codex endpoint needs to carry
-// reasoning between turns without storing responses. Of the client's include values only web
-// search sources are kept.
 func (h *shaper) include() {
 	inc := []string{"reasoning.encrypted_content"}
 	var asked []string
@@ -462,15 +404,12 @@ func (h *shaper) include() {
 	if slices.Contains(asked, "web_search_call.action.sources") {
 		inc = append(inc, "web_search_call.action.sources")
 	}
-	// A translated request's code interpreter outputs, asked for where the code tool was sent
-	// (api.openai.com; the ChatGPT backend gets no translated code tool).
 	if !h.passthrough() && !isChatGPTHost(h.s, h.a) && slices.Contains(asked, "code_interpreter_call.outputs") {
 		inc = append(inc, "code_interpreter_call.outputs")
 	}
 	h.m["include"] = raw(inc)
 }
 
-// streamOptions keeps only reasoning_summary_delivery of the client's stream_options.
 func (h *shaper) streamOptions() {
 	var so map[string]json.RawMessage
 	if json.Unmarshal(h.m["stream_options"], &so) == nil {
@@ -482,12 +421,6 @@ func (h *shaper) streamOptions() {
 	delete(h.m, "stream_options")
 }
 
-// serviceTier keeps the service tiers the Codex endpoint takes: fast and priority become
-// priority, ultrafast stays, anything else is removed. A translated request's tier has already been
-// narrowed to what its model lists (narrowToModel), which reports the tiers it dropped; this also
-// filters a Responses client's own body, which goes as it came and loses nothing it did not lose
-// before. The routing hint a subscription's request gets is made from the body this leaves
-// (setClientHeaders).
 func (h *shaper) serviceTier() {
 	switch t := h.str("service_tier"); t {
 	case "fast", "priority":
@@ -498,11 +431,6 @@ func (h *shaper) serviceTier() {
 	}
 }
 
-// reasoning sets the request's reasoning settings. A thinking suffix's effort wins. A translated
-// request (Chat, Messages or Gemini) that names no effort gets medium, or for Messages its
-// output_config effort, as today's core sends it; a Responses request is left as the client sent
-// it. A Chat client that names an effort also asks for a reasoning summary, which comes back as
-// reasoning_content.
 func (h *shaper) reasoning() {
 	var r map[string]json.RawMessage
 	_ = json.Unmarshal(h.m["reasoning"], &r)
@@ -545,11 +473,6 @@ func (h *shaper) reasoning() {
 	}
 }
 
-// tools offers the hosted image_generation tool, as the Codex CLI does, and sets
-// parallel_tool_calls: on when there are tools and the client did not turn it off, absent when
-// there are none. A Responses-lite client (the X-Openai-Internal-Codex-Responses-Lite header)
-// gets neither image generation nor parallel calls. It also rewrites the schema forms of function
-// tools that the endpoint rejects (fixToolSchemas).
 func (h *shaper) tools() {
 	var tools []json.RawMessage
 	_ = json.Unmarshal(h.m["tools"], &tools)
@@ -558,17 +481,13 @@ func (h *shaper) tools() {
 		from = h.req.Native.Format
 	}
 	if _, ok := h.m["tool_choice"]; !ok && len(tools) > 0 && (from == llm.FormatAnthropicMessages || from == llm.FormatGeminiGenerate) {
-		// Messages and Gemini requests leave the choice to the model when they name none.
 		h.m["tool_choice"] = raw("auto")
 	}
 	lite := h.lite()
-	// A SIWC account gets no image tool, as in today's core.
 	if h.s.imageTool() && !h.s.imageOff(h.model) && !lite && !h.a.siwc && !strings.HasSuffix(h.model, "spark") && !strings.EqualFold(h.a.planType, "free") && !hasTool(tools, "image_generation") {
 		tools = append(tools, raw(map[string]string{"type": "image_generation", "output_format": "png"}))
 		h.m["tools"] = raw(tools)
 	}
-	// The endpoint rejects some schema forms whoever wrote the tool, so this covers the client's
-	// own Responses tools too.
 	lose := func(path, detail string) {
 		h.tr.Losses = llm.AddLoss(h.tr.Losses, llm.Loss{Kind: llm.LossApproximated, Path: path, Detail: detail})
 	}
@@ -586,8 +505,6 @@ func (h *shaper) tools() {
 			continue
 		}
 		if _, ok := o["strict"]; !ok {
-			// Translated function tools say strict false: the client's schema is taken as it
-			// is, not checked against strict mode's rules.
 			o["strict"] = raw(false)
 		}
 		if from == llm.FormatGeminiGenerate {
@@ -606,8 +523,6 @@ func (h *shaper) tools() {
 	}
 }
 
-// closedSchema returns a Gemini function's parameter schema as today's core sends it to Codex:
-// without $schema, and with additionalProperties false at the top.
 func closedSchema(params json.RawMessage) json.RawMessage {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(params, &m) != nil || m == nil {
@@ -634,7 +549,6 @@ func (h *shaper) passthrough() bool {
 	return h.req.Native != nil && h.req.Native.Format == llm.FormatOpenAIResponses
 }
 
-// header returns a client header that came with the request (lower-case name).
 func (h *shaper) header(name string) string {
 	if h.req.Native == nil {
 		return ""
@@ -642,11 +556,6 @@ func (h *shaper) header(name string) string {
 	return h.req.Native.Headers[name]
 }
 
-// promptCacheKey sets the request's prompt cache key, which keeps a conversation's requests on
-// the upstream's warm prompt cache: the client's prompt_cache_key, else nothing when the client
-// names a session of its own with Session-Id, else a key derived from the account, the model and
-// Claude Code's session and agent, else a key derived from the account, the model and the
-// conversation's start, so every turn of a conversation gets the same key.
 func (h *shaper) promptCacheKey() {
 	if k := h.str("prompt_cache_key"); k != "" {
 		h.sessionID = k
@@ -656,8 +565,6 @@ func (h *shaper) promptCacheKey() {
 	if h.header("session-id") != "" {
 		return
 	}
-	// Claude Code's session, with its agent (a subagent has its own prompt), keeps each agent's
-	// requests on one key.
 	if session := h.claudeCodeSession(); session != "" {
 		agent := strings.TrimSpace(h.header("x-claude-code-agent-id"))
 		if agent == "" {
@@ -675,12 +582,8 @@ func (h *shaper) promptCacheKey() {
 	h.m["prompt_cache_key"] = raw(h.sessionID)
 }
 
-// sessionSuffix is how Claude Code's older metadata.user_id ends: _session_<id>.
 var sessionSuffix = regexp.MustCompile(`_session_([a-f0-9-]+)$`)
 
-// claudeCodeSession returns a Claude Code conversation's session ID, from the request's
-// X-Claude-Code-Session-Id header or else a Messages body's metadata.user_id, which Claude Code
-// writes either as user_<...>_session_<id> or as a JSON object with session_id.
 func (h *shaper) claudeCodeSession() string {
 	if s := strings.TrimSpace(h.header("x-claude-code-session-id")); s != "" {
 		return s
@@ -711,8 +614,6 @@ func (h *shaper) claudeCodeSession() string {
 	return ""
 }
 
-// conversationRoot returns what identifies a conversation from its first turn: the text of the
-// developer messages before the first user message, and that message's text.
 func conversationRoot(input json.RawMessage) string {
 	var items []struct {
 		Role    string          `json:"role"`
@@ -753,7 +654,6 @@ func contentText(c json.RawMessage) string {
 	return b.String()
 }
 
-// uuid5 returns a name-based UUID (RFC 9562 version 5) for name in the OID namespace.
 func uuid5(name string) string {
 	ns := []byte{0x6b, 0xa7, 0xb8, 0x12, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8}
 	h := sha1.New()

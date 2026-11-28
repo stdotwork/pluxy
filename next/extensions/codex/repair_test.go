@@ -12,8 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// applyAll feeds events to one repairs, as relay does, and returns the last event's output, or the
-// error of the event that failed.
 func applyAll(events ...string) (string, error) {
 	p := newRepairs()
 	var out []byte
@@ -35,9 +33,6 @@ func incompleteWith(usage, output string) string {
 	return `{"type":"response.incomplete","response":{"id":"r","status":"incomplete","output":` + output + `,"usage":` + usage + `}}`
 }
 
-// A response.incomplete that produced nothing and reports exactly 0 output tokens is a silent
-// abort: an error that is not retried and does not blame the account. Anything that shows output,
-// or a usage that does not say exactly 0, leaves it a reply.
 func TestEmptyIncompleteIsAnError(t *testing.T) {
 	_, err := applyAll(incompleteZero)
 	var e *llm.Error
@@ -74,7 +69,6 @@ func TestEmptyIncompleteIsAnError(t *testing.T) {
 		}
 	}
 
-	// Deltas with no text, or events that name no item, do not count as output.
 	for _, events := range [][]string{
 		{`{"type":"response.output_text.delta","output_index":0,"delta":"  "}`, incompleteZero},
 		{`{"type":"response.output_text.delta","output_index":0}`, incompleteZero},
@@ -87,8 +81,6 @@ func TestEmptyIncompleteIsAnError(t *testing.T) {
 	}
 }
 
-// An output item of the terminal event with no id (missing, null or blank) gets the id of the
-// finished item at the same position; every other item stays as it came.
 func TestOutputItemIDsAreRestored(t *testing.T) {
 	done := func(i int, item string) string {
 		return `{"type":"response.output_item.done","output_index":` + string(rune('0'+i)) + `,"item":` + item + `}`
@@ -149,7 +141,6 @@ func TestOutputItemIDsAreRestored(t *testing.T) {
 		}
 	}
 
-	// The rest of an item is not touched, and an incomplete reply is restored like a completed one.
 	out, err := applyAll(done(0, `{"id":"msg_1","type":"message"}`),
 		`{"type":"response.incomplete","response":{"id":"r","status":"incomplete","output":[{"type":"message","status":"completed","content":[{"type":"output_text","text":"Hi"}]}],"usage":{"output_tokens":1}}}`)
 	if err != nil {
@@ -170,9 +161,6 @@ func TestOutputItemIDsAreRestored(t *testing.T) {
 	}
 }
 
-// A Responses-lite client's reply keeps the terminal event as the upstream sent it where the
-// request says so (keepOutput): an output item's missing id stays missing and an empty output
-// stays empty.
 func TestLiteRepairsAreSkipped(t *testing.T) {
 	done := `{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message"}}`
 	withIDs := `{"type":"response.completed","response":{"id":"r","status":"completed","output":[{"type":"message"}]}}`
@@ -200,7 +188,6 @@ func TestLiteRepairsAreSkipped(t *testing.T) {
 	}
 }
 
-// relay fails an empty incomplete reply with the error and sends no terminal event.
 func TestRelayEmptyIncomplete(t *testing.T) {
 	body := "data: " + `{"type":"response.created","response":{"id":"r","status":"in_progress","model":"gpt-test","output":[]}}` + "\n\n" +
 		"data: " + incompleteZero + "\n\n"
@@ -218,13 +205,9 @@ func TestRelayEmptyIncomplete(t *testing.T) {
 	}
 }
 
-// usageLimitFailedFirst is a stream's first event: response.failed with a used-up usage limit.
 const usageLimitFailedFirst = `{"type":"response.failed","sequence_number":0,"response":{"id":"r","object":"response","status":"failed","model":"gpt-test","output":[],` +
 	`"error":{"type":"usage_limit_reached","code":"usage_limit_reached","message":"The usage limit has been reached","resets_in_seconds":7200}}}`
 
-// A usage limit in a response.failed that is the stream's first event is the account's quota, a
-// 429 with its reset time, as when it comes later in the stream or as an HTTP 429; nothing is
-// sent before it.
 func TestRelayFailedFirstEvent(t *testing.T) {
 	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}},
 		Body: io.NopCloser(strings.NewReader("event: response.failed\ndata: " + usageLimitFailedFirst + "\n\n"))}

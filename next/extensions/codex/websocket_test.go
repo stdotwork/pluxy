@@ -18,8 +18,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// An account takes a session only with "websockets": true; others answer unsupported on the
-// credential, so core sends their turns as generate calls.
 func TestOpenSessionNeedsWebsockets(t *testing.T) {
 	key := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-test"}
 	for _, c := range []struct {
@@ -46,8 +44,6 @@ func TestOpenSessionNeedsWebsockets(t *testing.T) {
 	s.Close()
 }
 
-// A socket that ends during a turn: closed with 1009 the message was too big; lost without a
-// close message the turn's outcome is unknown; another close code is an upstream failure.
 func TestLostError(t *testing.T) {
 	var e *llm.Error
 	if err := lostError(websocket.CloseError{Code: websocket.StatusMessageTooBig, Reason: "frame too large"}); !errors.As(err, &e) ||
@@ -65,7 +61,6 @@ func TestLostError(t *testing.T) {
 	}
 }
 
-// An error message carries its HTTP status in the message; it decides the error's code.
 func TestFrameErrorStatus(t *testing.T) {
 	for status, code := range map[int]string{
 		http.StatusUnauthorized:    llm.CodeAuth,
@@ -81,14 +76,12 @@ func TestFrameErrorStatus(t *testing.T) {
 	}
 }
 
-// fakeWS is an upstream Responses WebSocket that records each handshake and answers each
-// message with the given replies.
 type fakeWS struct {
 	*httptest.Server
 	mu       sync.Mutex
 	headers  []http.Header
 	received [][]byte
-	replies  func(conn *websocket.Conn, msg []byte) // nil: answer nothing
+	replies  func(conn *websocket.Conn, msg []byte)
 }
 
 func newFakeWS(t *testing.T) *fakeWS {
@@ -151,8 +144,6 @@ func wsRequest(t *testing.T, body string) llm.Request {
 	return req
 }
 
-// A subscription's socket is opened with its access token, its ChatGPT account and the routing
-// hint, and the WebSocket beta and session headers.
 func TestSubscriptionSocketHandshake(t *testing.T) {
 	f := newFakeWS(t)
 	cred := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "access-test", Data: json.RawMessage(`{"account_id":"chatgpt-acct"}`)}
@@ -187,8 +178,6 @@ func TestSubscriptionSocketHandshake(t *testing.T) {
 	}
 }
 
-// A turn that continues a response when the session has no socket (never had one, or lost it)
-// is refused with previous_response_not_found, without connecting.
 func TestContinuationWithoutSocket(t *testing.T) {
 	f := newFakeWS(t)
 	s, acct := wsSessionFor(t, f, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-test"})
@@ -206,8 +195,6 @@ func TestContinuationWithoutSocket(t *testing.T) {
 	}
 }
 
-// During a turn an upstream silent for the liveness timeout counts as lost: the turn fails with
-// upstream_websocket_lost and the socket is given up, so a continuation is then refused.
 func TestSilentUpstreamIsLost(t *testing.T) {
 	old := wsIdleTimeout
 	wsIdleTimeout = 100 * time.Millisecond
@@ -239,8 +226,6 @@ func TestSilentUpstreamIsLost(t *testing.T) {
 	}
 }
 
-// The upstream's events come back as the turn's events, and a later message on the socket
-// is relayed for the turn that waits for it.
 func TestRelayEvents(t *testing.T) {
 	f := newFakeWS(t)
 	f.replies = func(c *websocket.Conn, _ []byte) {
@@ -277,8 +262,6 @@ func TestRelayEvents(t *testing.T) {
 	}
 }
 
-// A turn that ends with an empty response.incomplete (nothing produced, exactly 0 output tokens)
-// fails as an error on the request, and no terminal event is sent.
 func TestSessionRelayEmptyIncomplete(t *testing.T) {
 	f := newFakeWS(t)
 	f.replies = func(c *websocket.Conn, _ []byte) {
@@ -318,7 +301,6 @@ func TestSessionRelayEmptyIncomplete(t *testing.T) {
 	}
 }
 
-// wsFrameError is the error relay makes of one upstream error message.
 func wsFrameError(t *testing.T, data string) *llm.Error {
 	t.Helper()
 	_, err := openairesponses.NewStreamDecoder().Decode([]byte(data))
@@ -332,10 +314,6 @@ func wsFrameError(t *testing.T, data string) *llm.Error {
 	return e
 }
 
-// An error message's own status decides its meaning, as an HTTP reply's status does, whatever
-// its body's error type says; before a reply starts, a refused credential lets routing try
-// another account; a usage limit wrapped in body keeps its reset time; a capacity refusal is a
-// rate limit on the model.
 func TestFrameErrorFollowsStatus(t *testing.T) {
 	for _, c := range []struct {
 		data       string
@@ -348,8 +326,6 @@ func TestFrameErrorFollowsStatus(t *testing.T) {
 		{`{"type":"error","status":401,"error":{"type":"server_error","message":"no"}}`, llm.CodeAuth, 401, true, 0},
 		{`{"type":"error","status":429,"body":{"error":{"type":"usage_limit_reached","message":"limit","resets_in_seconds":3600}}}`, llm.CodeQuota, 429, true, 3600000},
 		{`{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"bad input"}}`, llm.CodeInvalidRequest, 400, false, 0},
-		// The turn limit and the model limit are rate limits on the model whatever the status; the
-		// socket's connection limit keeps its status like any other message.
 		{`{"type":"error","status":429,"headers":{"Retry-After":"20"},"error":{"type":"rate_limit_error","code":"turn_rate_limit_exceeded","message":"Codex is at capacity"}}`, llm.CodeRateLimit, 429, true, 20000},
 		{`{"type":"error","status":503,"body":{"error":{"code":"model_at_capacity","message":"busy"}}}`, llm.CodeRateLimit, 429, true, 0},
 		{`{"type":"error","status":429,"error":{"type":"invalid_request_error","code":"websocket_connection_limit_reached","message":"Responses websocket connection limit reached (60 minutes)."}}`, llm.CodeRateLimit, 429, true, 0},
@@ -363,8 +339,6 @@ func TestFrameErrorFollowsStatus(t *testing.T) {
 	}
 }
 
-// A turn_rate_limit_exceeded message blocks the model on the account, not the account, whether
-// its error is in "error" or in "body.error"; the error keeps the upstream's code and message.
 func TestFrameErrorCapacityScope(t *testing.T) {
 	for _, data := range []string{
 		`{"type":"error","status":429,"error":{"type":"rate_limit_error","code":"turn_rate_limit_exceeded","message":"Codex is at capacity"}}`,
@@ -378,8 +352,6 @@ func TestFrameErrorCapacityScope(t *testing.T) {
 	}
 }
 
-// A usage limit in a response.failed that is the turn's first message is the account's quota, a
-// 429 with its reset time, as on HTTP.
 func TestSessionRelayFailedFirstMessage(t *testing.T) {
 	f := newFakeWS(t)
 	f.replies = func(c *websocket.Conn, _ []byte) {
@@ -412,9 +384,6 @@ func TestSessionRelayFailedFirstMessage(t *testing.T) {
 	}
 }
 
-// A response.failed message that also carries a status keeps what its response.error means, as
-// today's core reads only an error message's status: a usage limit stays the account's quota
-// with its reset time.
 func TestSessionRelayFailedWithStatus(t *testing.T) {
 	f := newFakeWS(t)
 	f.replies = func(c *websocket.Conn, _ []byte) {

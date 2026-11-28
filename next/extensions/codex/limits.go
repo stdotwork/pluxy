@@ -9,19 +9,13 @@ import (
 	"unicode/utf8"
 )
 
-// The Codex endpoint refuses a request whose input item IDs, call IDs or function names are over
-// its limits or use characters it does not take. A client, or the conversation of another
-// provider that the client replays, can carry such values: a Claude Code MCP tool is named
-// mcp__<server>__<tool>, and other providers' item IDs are long or hold + and /. limits rewrites
-// them the way today's core does, so the request is not refused.
 const (
-	itemIDLimit = 64 // input item IDs, in characters
-	callIDLimit = 64 // call IDs, in bytes
-	nameLimit   = 64 // function names, in bytes
-	hashChars   = 16 // hex characters of SHA-256 that end a shortened ID
+	itemIDLimit = 64
+	callIDLimit = 64
+	nameLimit   = 64
+	hashChars   = 16
 )
 
-// itemIDPrefixes are the prefixes the endpoint wants on the IDs of these item types.
 var itemIDPrefixes = map[string]string{
 	"message":                 "msg",
 	"reasoning":               "rs",
@@ -31,10 +25,6 @@ var itemIDPrefixes = map[string]string{
 	"tool_search_call":        "tsc",
 }
 
-// limits keeps the request's IDs and names within the endpoint's limits. Input item IDs are
-// made so on every request. Call IDs and function names are made so only on a request core
-// translated, not on a Responses client's own body, which today's core sends as it came. When a
-// name changes, h.names records how to give the client its own name back in the reply.
 func (h *shaper) limits() {
 	var raws []json.RawMessage
 	if json.Unmarshal(h.m["input"], &raws) != nil {
@@ -42,7 +32,7 @@ func (h *shaper) limits() {
 	}
 	objs := make([]map[string]json.RawMessage, len(raws))
 	for i, r := range raws {
-		_ = json.Unmarshal(r, &objs[i]) // an item that is not an object stays nil
+		_ = json.Unmarshal(r, &objs[i])
 	}
 	changed := make([]bool, len(raws))
 	if !h.passthrough() {
@@ -73,7 +63,6 @@ func (h *shaper) limits() {
 	}
 }
 
-// str returns v's value when v is a JSON string.
 func str(v json.RawMessage) (string, bool) {
 	var s string
 	if len(v) == 0 || json.Unmarshal(v, &s) != nil {
@@ -82,16 +71,11 @@ func str(v json.RawMessage) (string, bool) {
 	return s, true
 }
 
-// nameHolder is an object that names a function: a function or custom tool, the tool choice, or
-// a function or custom tool call in the input.
 type nameHolder struct {
 	o    map[string]json.RawMessage
 	mark func()
 }
 
-// limitNames gives every function name the endpoint takes, in the tools, the tool choice and the
-// calls in the conversation so far, and fills h.names. Two names that would end up the same are
-// told apart (see shortNames). The names are counted in this order, as today's core counts them.
 func (h *shaper) limitNames(objs []map[string]json.RawMessage, changed []bool) {
 	var tools []json.RawMessage
 	_ = json.Unmarshal(h.m["tools"], &tools)
@@ -149,11 +133,6 @@ func (h *shaper) limitNames(objs []map[string]json.RawMessage, changed []bool) {
 	}
 }
 
-// shortNames maps each of names to the name sent in its place (the same name, when it needs no
-// change). A name is made of ASCII letters, digits, _ and -, and at most 64 bytes: other
-// characters become _, and a longer name is cut to 64 bytes after keeping "mcp__" and what
-// follows the last "__" of an MCP tool name (mcp__server__tool becomes mcp__tool). Names that come
-// out the same get _1, _2 and so on, so the model can tell its tools apart.
 func shortNames(names []string) map[string]string {
 	used := map[string]bool{}
 	m := map[string]string{}
@@ -189,7 +168,6 @@ func shortName(name string) string {
 	return s[:nameLimit]
 }
 
-// portable replaces every character other than an ASCII letter, digit, _ and - with _.
 func portable(s string) string {
 	ok := true
 	for i := 0; i < len(s) && ok; i++ {
@@ -213,8 +191,6 @@ func portableByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'
 }
 
-// shortCallID cuts a call ID over the limit to 47 bytes and ends it with _ and 16 hex characters
-// of its SHA-256. The same ID always comes out the same, so a call and its result still pair.
 func shortCallID(id string) string {
 	if len(id) <= callIDLimit {
 		return id
@@ -222,13 +198,11 @@ func shortCallID(id string) string {
 	suffix := hashSuffix(id, 0)
 	n := callIDLimit - len(suffix)
 	for n > 0 && !utf8.RuneStart(id[n]) {
-		n-- // do not cut a character in two
+		n--
 	}
 	return id[:n] + suffix
 }
 
-// hashSuffix returns "_" and 16 hex characters of the SHA-256 of id; a later attempt hashes the
-// attempt number in as well, for another suffix of the same ID.
 func hashSuffix(id string, attempt int) string {
 	if attempt > 0 {
 		id += "\x00" + strconv.Itoa(attempt)
@@ -237,25 +211,15 @@ func hashSuffix(id string, attempt int) string {
 	return "_" + hex.EncodeToString(sum[:])[:hashChars]
 }
 
-// limitItemIDs gives the IDs of the input items (objs; nil for an item that is not an object) the
-// endpoint takes, and marks the items it changed. It returns the items to leave out: a reasoning
-// item with encrypted content whose ID is over the limit, which could not be sent as it is and
-// whose content the endpoint could not read under another ID.
-//
-// An ID gets the prefix of its item type if it lacks one, then ASCII letters, digits, _ and -
-// only. One over 64 characters is cut to 47 and ends with _ and 16 hex characters of the SHA-256
-// of the ID. An ID that needs no change is never changed, and two different IDs never end up
-// the same: the one that needs a change takes another hash suffix. The same ID with the same
-// type always comes out the same, and a result goes through again unchanged.
 func limitItemIDs(objs []map[string]json.RawMessage, changed []bool) (dropped []bool) {
 	dropped = make([]bool, len(objs))
 	type item struct {
 		typ, id, normal string
-		ok              bool // the item has an ID
-		keep            bool // the ID needs no change
+		ok              bool
+		keep            bool
 	}
 	items := make([]item, len(objs))
-	taken := map[string]bool{} // IDs the result already uses
+	taken := map[string]bool{}
 	for i, o := range objs {
 		id, ok := str(o["id"])
 		if !ok {
@@ -263,7 +227,6 @@ func limitItemIDs(objs []map[string]json.RawMessage, changed []bool) (dropped []
 		}
 		typ, _ := str(o["type"])
 		if unsendableReasoning(o) {
-			// Reported by history.
 			dropped[i] = true
 			continue
 		}
@@ -273,7 +236,7 @@ func limitItemIDs(objs []map[string]json.RawMessage, changed []bool) (dropped []
 			taken[id] = true
 		}
 	}
-	final := map[[2]string]string{} // (normal ID, ID) -> the ID sent
+	final := map[[2]string]string{}
 	for i, it := range items {
 		if !it.ok || it.keep {
 			continue
@@ -299,8 +262,6 @@ func limitItemIDs(objs []map[string]json.RawMessage, changed []bool) (dropped []
 	return dropped
 }
 
-// prefixedItemID gives id the prefix of its item type, unless it starts with it. A tool search
-// call's legacy ts_ prefix becomes tsc_.
 func prefixedItemID(typ, id string) string {
 	if after, ok := strings.CutPrefix(id, "ts_"); ok && typ == "tool_search_call" && after != "" {
 		return "tsc_" + after
@@ -312,9 +273,6 @@ func prefixedItemID(typ, id string) string {
 	return p + "_" + id
 }
 
-// normalItemID is the ID with its type's prefix and, when that is within the limit, only the
-// characters the endpoint takes. One over the limit is left for shortItemID, which cleans the
-// part it keeps.
 func normalItemID(typ, id string) string {
 	id = prefixedItemID(typ, id)
 	if utf8.RuneCountInString(id) > itemIDLimit {
@@ -323,7 +281,6 @@ func normalItemID(typ, id string) string {
 	return portable(id)
 }
 
-// shortItemID returns the first 47 characters of id, cleaned, and a hash suffix.
 func shortItemID(id string, attempt int) string {
 	suffix := hashSuffix(id, attempt)
 	runes := []rune(id)

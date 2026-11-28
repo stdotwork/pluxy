@@ -9,8 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// An access token's lifetime from the server is bounded before it becomes an expiry time: a huge
-// one must not overflow into the past (renewal churn), a negative one must not expire the token.
 func TestTokenLifetimeIsBounded(t *testing.T) {
 	before := time.Now()
 	for _, tc := range []struct {
@@ -39,7 +37,6 @@ func TestTokenLifetimeIsBounded(t *testing.T) {
 	}
 }
 
-// A JWT access token carries its own expiry; an absurd one is bounded the same way.
 func TestJWTExpiryIsBounded(t *testing.T) {
 	seg := func(v string) string { return base64.RawURLEncoding.EncodeToString([]byte(v)) }
 	access := seg(`{"alg":"none"}`) + "." + seg(`{"exp":9223372036854775807}`) + "." + seg("sig")

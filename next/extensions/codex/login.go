@@ -22,27 +22,17 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// OpenAI's login for the Codex CLI, as today's core speaks it: OAuth 2.0 with PKCE (RFC 7636) for
-// the browser, and OpenAI's own device-code flow, which ends in the same authorization code
-// exchange.
 const (
-	clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
-	// redirectURI is the redirect registered for clientID. The browser is sent there after
-	// sign-in; the extension listens on it when it can, and the user can paste the address
-	// otherwise.
-	redirectURI      = "http://localhost:1455/auth/callback"
-	callbackAddr     = "127.0.0.1:1455"
-	callbackPath     = "/auth/callback"
-	loginScope       = "openid email profile offline_access"
-	refreshScope     = "openid profile email"
-	deviceRedirect   = "https://auth.openai.com/deviceauth/callback"
-	deviceVerifyPath = "/codex/device"
-	// defaultPollInterval is how often a device login polls when the server does not say.
+	clientID            = "app_EMoamEEZ73f0CkXaXp7hrann"
+	redirectURI         = "http://localhost:1455/auth/callback"
+	callbackAddr        = "127.0.0.1:1455"
+	callbackPath        = "/auth/callback"
+	loginScope          = "openid email profile offline_access"
+	refreshScope        = "openid profile email"
+	deviceRedirect      = "https://auth.openai.com/deviceauth/callback"
+	deviceVerifyPath    = "/codex/device"
 	defaultPollInterval = 5 * time.Second
-	// refreshLead is how long before its access token expires a subscription is renewed. Codex
-	// access tokens last days, and renewing well ahead keeps a missed renewal from cutting off
-	// requests (today's core uses the same lead).
-	refreshLead = 96 * time.Hour
+	refreshLead         = 96 * time.Hour
 )
 
 var loginMethods = []protocol.LoginMethod{
@@ -55,9 +45,6 @@ var loginMethods = []protocol.LoginMethod{
 	}},
 }
 
-// authClient talks to the login server. Its timeout covers only signing in and renewing, never a
-// model request. It follows no redirect: following a 307 or 308 would send the request body (a
-// refresh token, or an authorization code and its verifier) wherever the redirect points.
 var authClient = &http.Client{
 	Transport:     sdk.Upstream(http.DefaultTransport.(*http.Transport).Clone()),
 	Timeout:       30 * time.Second,
@@ -82,20 +69,13 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 	return nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("no login method %q", call.Method), Scope: llm.ScopeRequest}
 }
 
-// loginClient is client without redirects: a redirect answer to the key check is not an
-// acceptance, and following it would send the key again to wherever it points.
 var loginClient = &http.Client{
 	Transport:     sdk.Upstream(upstreamTransport()),
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
-// openAIHost is the host of the default API address, the one that always has a model list.
 const openAIHost = "api.openai.com"
 
-// apiKeyBase returns where an API key sign-in checks the key and whether that address was chosen
-// (an account setting, which wins, or the base_url input) and is not the default. The address is
-// held to the rules of the openai-compatible extension's base_url: an HTTP or HTTPS URL with a host
-// and no user information, query or fragment.
 func apiKeyBase(set settings, input string) (base string, chosen bool, err error) {
 	raw := strings.TrimSpace(set.BaseURL)
 	if raw == "" {
@@ -113,8 +93,6 @@ func apiKeyBase(set settings, input string) (base string, chosen bool, err error
 	return raw, !strings.EqualFold(u.Hostname(), openAIHost), nil
 }
 
-// keyRefusal reports whether an upstream error says the key is refused or the account closed,
-// by its status or by what its body names, whatever the status.
 func keyRefusal(e *llm.Error) bool {
 	if e.Code == llm.CodeAuth || e.Code == llm.CodePermission || e.Code == llm.CodeAccountClosed {
 		return true
@@ -127,13 +105,6 @@ func keyRefusal(e *llm.Error) bool {
 	return strings.Contains(m, "incorrect api key") || strings.Contains(m, "invalid api key")
 }
 
-// apiKeyLogin checks a key by listing models, which costs nothing, and keeps it when the upstream
-// accepts it: a 200 whose body has a model list (a "data" array). The check goes to the base_url
-// the sign-in gives or the account sets, and that address is returned in the grant's settings; with
-// none it goes to OpenAI's. No redirect is followed. An upstream other than OpenAI's that has no
-// model list (a 404 or 405 whose body does not refuse the key) has no call that checks a key
-// without running a model, so the key is taken as it is, as Gemini's extension takes a Vertex
-// express mode key; OpenAI's own address always has one, so there a 404 or 405 is an error.
 func apiKeyLogin(ctx context.Context, set settings, input map[string]string) (*protocol.Grant, error) {
 	key := strings.TrimSpace(input["api_key"])
 	if key == "" {
@@ -155,20 +126,16 @@ func apiKeyLogin(ctx context.Context, set settings, input map[string]string) (*p
 	if b := strings.TrimSpace(input["base_url"]); b != "" && strings.TrimSpace(set.BaseURL) == "" {
 		grant.Settings, _ = json.Marshal(map[string]string{"base_url": base})
 	}
-	// Core redacts the key as the user entered it; this one is trimmed, so remove it here too.
 	redact := protocol.NewRedactor(grant.Credential)
 	clean := func(e *llm.Error) error {
 		e = redact.Event(llm.Event{Type: llm.EventError, Error: e}).Error
 		e.Message = sdk.UpstreamText(e.Message, key)
 		e.ProviderCode = sdk.LoginCode(e.ProviderCode)
-		// A login needs the reason, not a raw body that may echo credentials.
 		e.Raw = nil
-		// A login call that got an answer reached the upstream and may have run: it is not retried.
 		e.Retryable = false
 		return e
 	}
 	parent := ctx
-	// The shared client has no timeout, so a silent upstream must not hold the sign-in forever.
 	ctx, cancel := context.WithTimeout(ctx, authClient.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models", nil)
@@ -183,7 +150,6 @@ func apiKeyLogin(ctx context.Context, set settings, input map[string]string) (*p
 		if parent.Err() != nil {
 			return nil, parent.Err()
 		}
-		// A login error is retryable only when the request never reached the upstream.
 		e := &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach " + who + ": " + err.Error(), Retryable: !sent(), Scope: llm.ScopeEndpoint}
 		e = redact.Event(llm.Event{Type: llm.EventError, Error: e}).Error
 		e.Message = sdk.UpstreamText(e.Message, key)
@@ -215,10 +181,6 @@ func apiKeyLogin(ctx context.Context, set settings, input map[string]string) (*p
 	return nil, clean(e)
 }
 
-// browserLogin runs the authorization code flow with PKCE. The user opens the sign-in URL; the
-// browser comes back to redirectURI, which the extension serves when the port is free on this
-// machine. When it is not (or core runs on another machine), the user pastes the address the
-// browser ended on.
 func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*protocol.Grant, error) {
 	verifier := randomString(64)
 	sum := sha256.Sum256([]byte(verifier))
@@ -248,9 +210,6 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 	return grantFrom(tr, nil)
 }
 
-// awaitRedirect shows the sign-in link authURL and waits for the browser's return from it: to the
-// callback the extension serves when it can, or as the address the user pastes. It returns the
-// query of the result for this login (state), which has an authorization code.
 func awaitRedirect(ctx context.Context, set settings, s *sdk.LoginSession, authURL, state, message string) (url.Values, error) {
 	results := make(chan url.Values, 2)
 	if set.CallbackListen == nil || *set.CallbackListen {
@@ -278,7 +237,6 @@ func awaitRedirect(ctx context.Context, set settings, s *sdk.LoginSession, authU
 		case params = <-results:
 		case in, ok := <-inputs:
 			if !ok {
-				// The forwarder stopped; its error, or ctx being done, ends the login.
 				inputs = nil
 				continue
 			}
@@ -301,9 +259,6 @@ func awaitRedirect(ctx context.Context, set settings, s *sdk.LoginSession, authU
 	}
 }
 
-// forwardInputs reads the login's inputs on its own goroutine, so the login can wait for an
-// input and the browser's return at once. It stops, closing inputs, when ctx is done or reading
-// fails; a failure is sent on the error channel first.
 func forwardInputs(ctx context.Context, input func(context.Context) (map[string]string, error)) (<-chan map[string]string, <-chan error) {
 	inputs := make(chan map[string]string, 1)
 	inputErr := make(chan error, 1)
@@ -325,9 +280,6 @@ func forwardInputs(ctx context.Context, input func(context.Context) (map[string]
 	return inputs, inputErr
 }
 
-// signInResult reads a browser sign-in result, the query of the address the browser was sent back
-// to. ok is false when the result is not for this login (its state differs), and it is then
-// ignored, whatever else it says; a refusal or a result with no code ends the login.
 func signInResult(params url.Values, state string) (code string, ok bool, err error) {
 	if params.Get("state") != state {
 		return "", false, nil
@@ -341,8 +293,6 @@ func signInResult(params url.Values, state string) (code string, ok bool, err er
 	return code, true, nil
 }
 
-// callbackHandler answers the browser's redirect to redirectURI and sends a sign-in result for
-// this login (state) to results. A result for any other login is answered and not passed on.
 func callbackHandler(state string, results chan<- url.Values) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -364,8 +314,6 @@ func callbackHandler(state string, results chan<- url.Values) http.HandlerFunc {
 	}
 }
 
-// listenCallback serves h on redirectURI's path at callbackAddr. It returns nil when the address
-// is taken.
 func listenCallback(h http.HandlerFunc) (stop func()) {
 	l, err := net.Listen("tcp", callbackAddr)
 	if err != nil {
@@ -378,8 +326,6 @@ func listenCallback(h http.HandlerFunc) (stop func()) {
 	return func() { _ = srv.Close() }
 }
 
-// deviceLogin runs OpenAI's device-code flow: get a user code, show it, poll until the user has
-// entered it, then exchange the authorization code the poll returns.
 func deviceLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*protocol.Grant, error) {
 	base := strings.TrimRight(set.authBase(), "/")
 	var uc struct {
@@ -424,7 +370,6 @@ func deviceLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*proto
 		}
 		switch {
 		case status == http.StatusForbidden || status == http.StatusNotFound:
-			// Not entered yet.
 			continue
 		case status >= 400 && status < 500 && status != http.StatusTooManyRequests:
 			if e := loginFailure(status, body); e.Code == llm.CodeAuth {
@@ -463,7 +408,6 @@ func pollInterval(raw json.RawMessage) time.Duration {
 	return time.Duration(n) * time.Second
 }
 
-// tokenResponse is a successful reply of the token endpoint.
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
@@ -482,7 +426,6 @@ func exchangeCode(ctx context.Context, set settings, code, verifier, redirect st
 	})
 }
 
-// refresh renews a subscription's tokens with its refresh token.
 func refresh(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, error) {
 	set, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -515,7 +458,6 @@ func refresh(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, e
 	return g.Credential, nil
 }
 
-// tokenRequest posts form to the login server's token endpoint at path.
 func tokenRequest(ctx context.Context, set settings, path string, form url.Values) (*tokenResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(set.authBase(), "/")+path, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -537,8 +479,6 @@ func tokenRequest(ctx context.Context, set settings, path string, form url.Value
 	return &tr, nil
 }
 
-// grantFrom builds the credential from a token reply. old is the credential being renewed: the
-// login server may not send a new refresh token or ID token, and then the old ones stay.
 func grantFrom(tr *tokenResponse, old *protocol.Credential) (*protocol.Grant, error) {
 	c := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: tr.AccessToken, RefreshToken: tr.RefreshToken}
 	var d credentialData
@@ -572,7 +512,6 @@ func grantFrom(tr *tokenResponse, old *protocol.Credential) (*protocol.Grant, er
 			c.RefreshAt = at.Unix()
 		}
 	}
-	// Members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
 	identity := map[string]string{}
 	if claims.email != "" {
 		identity["email"] = claims.email
@@ -583,13 +522,10 @@ func grantFrom(tr *tokenResponse, old *protocol.Credential) (*protocol.Grant, er
 	return &protocol.Grant{Credential: c, Label: claims.email, Identity: identity}, nil
 }
 
-// idClaims are the parts of an OpenAI ID token the extension uses.
 type idClaims struct {
 	email, accountID, planType string
 }
 
-// parseIDToken reads an ID token's claims without checking its signature: the token came
-// straight from the login server over TLS, and its claims only name the account.
 func parseIDToken(tok string) (idClaims, bool) {
 	var c struct {
 		Email string `json:"email"`
@@ -604,7 +540,6 @@ func parseIDToken(tok string) (idClaims, bool) {
 	return idClaims{email: c.Email, accountID: c.Auth.AccountID, planType: c.Auth.PlanType}, true
 }
 
-// jwtExpiry returns a JWT's exp claim, or 0 when tok is not a JWT with one.
 func jwtExpiry(tok string) int64 {
 	var c struct {
 		Exp int64 `json:"exp"`
@@ -638,8 +573,6 @@ func postJSON(ctx context.Context, endpoint string, v any) (int, []byte, error) 
 	return do(req)
 }
 
-// sentError is the error of a request that was written to the connection, in whole or in part,
-// before it failed.
 type sentError struct{ error }
 
 func (e sentError) Unwrap() error { return e.error }
@@ -661,8 +594,6 @@ func do(req *http.Request) (int, []byte, error) {
 	return resp.StatusCode, body, nil
 }
 
-// requestError is the error for a login server request that got no whole reply. Only a request
-// that never reached the login server is retryable: one that did may have run.
 func requestError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -671,13 +602,8 @@ func requestError(ctx context.Context, err error) error {
 	return &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach the login server: " + err.Error(), Retryable: !errors.As(err, &sent), Scope: llm.ScopeEndpoint}
 }
 
-// grantRefusals are the error codes with which the login server refuses a grant for good: only a
-// new sign-in helps.
 var grantRefusals = []string{"invalid_grant", "refresh_token_reused", "refresh_token_expired", "refresh_token_invalidated", "token_revoked", "invalid_client"}
 
-// loginFailure turns a refusal from the login server into an error. Its body is an OAuth error
-// ({"error": "invalid_grant"}) or an OpenAI one ({"error": {"code": ...}}). A 429 is retryable; a
-// 5xx is not, because the request reached the login server and may have run.
 func loginFailure(status int, body []byte) *llm.Error {
 	var b struct {
 		Error json.RawMessage `json:"error"`
@@ -716,7 +642,6 @@ func refused(msg string) *llm.Error {
 	return &llm.Error{Code: llm.CodeAuth, Message: msg, Scope: llm.ScopeCredential}
 }
 
-// randomString returns n random bytes, base64url encoded without padding.
 func randomString(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)

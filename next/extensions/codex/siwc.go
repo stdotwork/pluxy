@@ -1,12 +1,5 @@
 package main
 
-// Sign in with ChatGPT (SIWC): a ChatGPT sign-in made for agents other than the Codex client,
-// whose token calls the OpenAI API (https://api.openai.com/v1) on the user's ChatGPT plan. Today's
-// core keeps it as a second token set inside a Codex subscription's auth file and binds it
-// through its management API; here it is a login method of its own ("siwc") that makes its own
-// account. The login, its renewal and the request rules follow today's core
-// (core/internal/auth/codex/siwc_auth.go, core/internal/runtime/executor/codex_executor_request.go).
-
 import (
 	"context"
 	"crypto/rand"
@@ -26,29 +19,17 @@ import (
 )
 
 const (
-	// siwcClientID asks the login server to register a client for this agent; the client ID it
-	// issues comes back with the sign-in result, and the code exchange and every renewal use it.
-	siwcClientID      = "dynamic_agent_client"
-	siwcAuthorizePath = "/api/accounts/authorize"
-	siwcTokenPath     = "/api/accounts/oauth/token"
-	// siwcResource is the API the tokens are for.
-	siwcResource = "https://api.openai.com/v1"
-	// siwcRedirectURI is served on the same address and path as the browser login's redirect
-	// (callbackAddr, callbackPath), under the host name SIWC registers.
-	siwcRedirectURI = "http://127.0.0.1:1455/auth/callback"
-	// siwcDirectScope lets the token call the OpenAI API directly; a grant without it is useless.
-	siwcDirectScope = "chatgpt.tokens.use.direct"
-	siwcScope       = "openid profile email offline_access resource.invoke " + siwcDirectScope
-	// siwcRefreshLead is how long before its access token expires a SIWC credential is renewed,
-	// as today's core renews it.
-	siwcRefreshLead = 5 * time.Minute
-	// defaultSIWCIdentifier names this program to a SIWC sign-in. Today's core says
-	// "CLIProxyAPI", its own name.
+	siwcClientID          = "dynamic_agent_client"
+	siwcAuthorizePath     = "/api/accounts/authorize"
+	siwcTokenPath         = "/api/accounts/oauth/token"
+	siwcResource          = "https://api.openai.com/v1"
+	siwcRedirectURI       = "http://127.0.0.1:1455/auth/callback"
+	siwcDirectScope       = "chatgpt.tokens.use.direct"
+	siwcScope             = "openid profile email offline_access resource.invoke " + siwcDirectScope
+	siwcRefreshLead       = 5 * time.Minute
 	defaultSIWCIdentifier = "pluxy"
 )
 
-// siwcIdentifier is the signin_with_chatgpt_identifier setting: the agent name the sign-in page
-// shows, and the start of the requests' User-Agent.
 func (s settings) siwcIdentifier() string {
 	if v := strings.TrimSpace(s.SIWCIdentifier); v != "" {
 		return v
@@ -56,13 +37,10 @@ func (s settings) siwcIdentifier() string {
 	return defaultSIWCIdentifier
 }
 
-// siwcUserAgent is the User-Agent of a SIWC account's requests.
 func siwcUserAgent(s settings) string {
 	return fmt.Sprintf("%s (%s; %s)", s.siwcIdentifier(), runtime.GOOS, runtime.GOARCH)
 }
 
-// siwcLogin signs in with ChatGPT: an authorization code flow with PKCE, a nonce and this
-// device's ID, whose result also carries the client ID the login server issued.
 func siwcLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*protocol.Grant, error) {
 	verifier := randomString(64)
 	state := randomString(32)
@@ -76,7 +54,6 @@ func siwcLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*protoco
 	return siwcExchange(ctx, set, params, verifier, deviceID)
 }
 
-// siwcAuthURL is the sign-in link of a SIWC login.
 func siwcAuthURL(set settings, verifier, state, nonce, deviceID string) string {
 	sum := sha256.Sum256([]byte(verifier))
 	q := url.Values{
@@ -95,8 +72,6 @@ func siwcAuthURL(set settings, verifier, state, nonce, deviceID string) string {
 	return strings.TrimRight(set.authBase(), "/") + siwcAuthorizePath + "?" + q.Encode()
 }
 
-// siwcExchange trades a SIWC sign-in result (params, the query the browser came back with) for
-// the account's credential, as the client the login server issued.
 func siwcExchange(ctx context.Context, set settings, params url.Values, verifier, deviceID string) (*protocol.Grant, error) {
 	issued := strings.TrimSpace(params.Get("client_id"))
 	if issued == "" {
@@ -116,7 +91,6 @@ func siwcExchange(ctx context.Context, set settings, params url.Values, verifier
 	return siwcGrant(tr, nil, issued, deviceID), nil
 }
 
-// siwcRefresh renews a SIWC credential with its refresh token and issued client ID.
 func siwcRefresh(ctx context.Context, set settings, c *protocol.Credential, d credentialData) (*protocol.Credential, error) {
 	if d.ClientID == "" {
 		return nil, refused("the SIWC credential has no issued client ID; sign in again")
@@ -133,9 +107,6 @@ func siwcRefresh(ctx context.Context, set settings, c *protocol.Credential, d cr
 	return siwcGrant(tr, c, d.ClientID, d.DeviceID).Credential, nil
 }
 
-// siwcToken asks the token endpoint for a SIWC grant and checks it as today's core does: tokens,
-// scope and lifetime present, an ID token after a sign-in (a renewal need not send one), and the
-// scope that lets the token call the API.
 func siwcToken(ctx context.Context, set settings, form url.Values, signIn bool) (*tokenResponse, error) {
 	tr, err := tokenRequest(ctx, set, siwcTokenPath, form)
 	if err != nil {
@@ -150,8 +121,6 @@ func siwcToken(ctx context.Context, set settings, form url.Values, signIn bool) 
 	return tr, nil
 }
 
-// siwcGrant builds a SIWC credential from a token reply. old is the credential being renewed,
-// whose ID token stays when the reply has none.
 func siwcGrant(tr *tokenResponse, old *protocol.Credential, clientID, deviceID string) *protocol.Grant {
 	c := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: tr.AccessToken, RefreshToken: tr.RefreshToken}
 	var d credentialData
@@ -181,8 +150,6 @@ func siwcGrant(tr *tokenResponse, old *protocol.Credential, clientID, deviceID s
 	return &protocol.Grant{Credential: c, Label: claims.email, Identity: identity}
 }
 
-// randomUUID returns a random (version 4) UUID in lower case: the device ID a SIWC sign-in names
-// its host by.
 func randomUUID() string {
 	u := make([]byte, 16)
 	_, _ = rand.Read(u)
@@ -191,7 +158,6 @@ func randomUUID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
 }
 
-// isSIWC reports whether c is a SIWC credential.
 func isSIWC(c *protocol.Credential) bool {
 	if c == nil || len(c.Data) == 0 {
 		return false
@@ -201,11 +167,8 @@ func isSIWC(c *protocol.Credential) bool {
 	return d.SIWC
 }
 
-// codexClientAgents are what the User-Agent of a Codex client contains, as today's core tells
-// them apart (core/sdk/cliproxy/auth/types.go, IsCodexClientUserAgent).
 var codexClientAgents = []string{"codex-desktop", "codex desktop", "codex-rs", "codex_cli_rs", "codex-tui", "codex_exec"}
 
-// codexClient reports whether req comes from a Codex client.
 func codexClient(req llm.Request) bool {
 	if req.Native == nil {
 		return false
@@ -214,24 +177,15 @@ func codexClient(req llm.Request) bool {
 	return slices.ContainsFunc(codexClientAgents, func(s string) bool { return strings.Contains(ua, s) })
 }
 
-// siwcUnsupported refuses a request a SIWC account does not serve, so that core tries another
-// account. Today's core serves a Codex client's requests on such a record with the
-// subscription's own token, which a SIWC account does not have.
 func siwcUnsupported(what string) error {
 	return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 		Message: "a Sign in with ChatGPT (SIWC) account does not serve " + what}
 }
 
-// siwcCodexClient is the refusal of a Codex client's request on a SIWC account.
 func siwcCodexClient() error {
 	return siwcUnsupported("Codex clients, which need a ChatGPT subscription's sign-in")
 }
 
-// siwcBody applies today's SIWC body rules to a Responses request that has had the Codex shape:
-// the OpenAI API refuses configuration_update input items on a SIWC token, so they become the
-// request's reasoning effort (a thinking suffix's effort, suffix true, wins and the items are
-// only removed); the fields it does not take are removed; and blank instructions are left out
-// rather than sent empty.
 func siwcBody(m map[string]json.RawMessage, suffix bool) {
 	collapseConfigurationUpdates(m, suffix)
 	for _, k := range []string{"prompt_cache_retention", "prompt_cache_options", "max_completion_tokens", "temperature"} {
@@ -243,9 +197,6 @@ func siwcBody(m map[string]json.RawMessage, suffix bool) {
 	}
 }
 
-// collapseConfigurationUpdates removes the configuration_update items of a list input and,
-// unless keepEffort, sets reasoning.effort to the last of their non-empty efforts, as today's
-// core does (core/internal/thinking/configuration_update.go).
 func collapseConfigurationUpdates(m map[string]json.RawMessage, keepEffort bool) {
 	var items []json.RawMessage
 	if json.Unmarshal(m["input"], &items) != nil {

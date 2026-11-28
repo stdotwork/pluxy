@@ -9,7 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A 529 keeps the upstream's Retry-After, with the code and scope of any other 5xx.
 func TestStatus529KeepsRetryAfter(t *testing.T) {
 	resp := &http.Response{StatusCode: 529, Status: "529", Header: http.Header{"Retry-After": {"7"}},
 		Body: io.NopCloser(strings.NewReader(`{"error":{"message":"overloaded"}}`))}

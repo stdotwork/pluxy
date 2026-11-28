@@ -52,8 +52,6 @@ func inputTokenCall(settings map[string]any, cred *protocol.Credential, body str
 	}
 }
 
-// An API-key account sends the client's Responses body to {base_url}/responses/input_tokens and
-// returns the upstream's JSON unchanged.
 func TestInputTokensAPIPassthrough(t *testing.T) {
 	const (
 		apiKey = "made-up-codex-input-token-key"
@@ -86,8 +84,6 @@ func TestInputTokensAPIPassthrough(t *testing.T) {
 	}
 }
 
-// A ChatGPT subscription has no input-token endpoint, so the extension refuses the account and
-// core can estimate its input.
 func TestInputTokensRefusesSubscription(t *testing.T) {
 	call := inputTokenCall(map[string]any{"base_url": "https://example.invalid/v1"}, subscription("tok-sub", ""), `{"model":"gpt-test","input":"hello"}`)
 	err := inputTokens(context.Background(), call, nil)
@@ -97,8 +93,6 @@ func TestInputTokensRefusesSubscription(t *testing.T) {
 	}
 }
 
-// An account's alias names the model upstream by another name: the count goes to the upstream
-// under the model routing chose.
 func TestInputTokensNamesTheRoutedModel(t *testing.T) {
 	var gotBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

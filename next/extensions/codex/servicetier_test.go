@@ -15,11 +15,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A client's service tier reaches Codex whatever its format, through the model's service tier, when
-// the routed model's catalog entry lists it (TestServiceTierPerModel); no entry lists ultrafast, so
-// a translated request loses it. The subscription's routing hint names the tier that was sent. A
-// tier the model does not list is reported as dropped, at the client's field, except auto and
-// default, which are Codex's standard service.
 func TestServiceTierTranslated(t *testing.T) {
 	chat := func(extra string) llm.Request {
 		r, err := openaichat.ParseRequest([]byte(`{"model":"gpt-6.1-sol","messages":[{"role":"user","content":"hi"}]` + extra + `}`))
@@ -52,12 +47,11 @@ func TestServiceTierTranslated(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		req     llm.Request
-		tier    string // service_tier of the body Codex gets; "" for none
+		tier    string
 		dropped []string
 	}{
 		{"chat priority", chat(`,"service_tier":"priority"`), "priority", nil},
 		{"chat fast", chat(`,"service_tier":"fast"`), "priority", nil},
-		// No model in the catalog lists ultrafast, so it is dropped and reported.
 		{"chat ultrafast", chat(`,"service_tier":"ultrafast"`), "", []string{"service_tier"}},
 		{"messages speed fast", messages(`,"speed":"fast"`), "priority", nil},
 		{"gemini priority", gemini(`,"serviceTier":"priority"`), "priority", nil},
@@ -70,8 +64,6 @@ func TestServiceTierTranslated(t *testing.T) {
 		{"chat scale", chat(`,"service_tier":"scale"`), "", []string{"service_tier"}},
 		{"gemini flex", gemini(`,"serviceTier":"flex"`), "", []string{"serviceTier"}},
 		{"chat none", chat(``), "", nil},
-		// A Responses body goes as the client wrote it, and Codex's filter loses what it lost before,
-		// without a report.
 		{"responses priority", responses(`,"service_tier":"priority"`), "priority", nil},
 		{"responses flex", responses(`,"service_tier":"flex"`), "", nil},
 	} {
@@ -114,7 +106,6 @@ func TestServiceTierTranslated(t *testing.T) {
 	}
 }
 
-// Verbosity from a Chat client goes to Codex as text.verbosity.
 func TestVerbosityTranslated(t *testing.T) {
 	req, err := openaichat.ParseRequest([]byte(`{"model":"gpt-6.1-sol","verbosity":"low","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
@@ -137,10 +128,6 @@ func TestVerbosityTranslated(t *testing.T) {
 	}
 }
 
-// What Codex takes depends on the account's base_url: only OpenAI's API and the ChatGPT backend, the
-// two default hosts, are known to take a service tier and a verbosity. At any other host a request
-// translated from another format carries neither, and each is reported as dropped at the client's
-// field; a Responses client's own body goes as it came, through Codex's filter.
 func TestServiceTierByBaseURL(t *testing.T) {
 	parsedChat, err := openaichat.ParseRequest([]byte(`{"model":"gpt-6.1-sol","service_tier":"priority","verbosity":"low","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
@@ -193,12 +180,6 @@ func TestServiceTierByBaseURL(t *testing.T) {
 	}
 }
 
-// The routed model's entry in the client catalog says what a translated request may carry, as the
-// Codex CLI filters on the same data: a service tier only if the entry lists it ("fast" counts as
-// "priority"), a verbosity only if it takes one. A model the catalog does not list takes neither.
-// Each is reported as dropped at the client's field, except auto and default, which ask for the
-// standard service every request gets and are left off with no loss. A Responses client's own body
-// is not narrowed.
 func TestServiceTierPerModel(t *testing.T) {
 	for _, c := range []struct {
 		name, model, extra string
@@ -252,7 +233,6 @@ func TestServiceTierPerModel(t *testing.T) {
 			}
 		})
 	}
-	// A Responses client's own body is not narrowed to the model.
 	own, err := openairesponses.ParseRequest([]byte(`{"model":"gpt-6-chat-thinking","service_tier":"priority","text":{"verbosity":"low"},"input":"hi"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -266,9 +246,6 @@ func TestServiceTierPerModel(t *testing.T) {
 	}
 }
 
-// overProtocol returns r as the extension gets it: encoded to JSON and decoded again, as the
-// extension protocol carries a request from core, so a test of a body builder starts from a client's
-// real body parsed by its format's own parser and sent the way core sends it.
 func overProtocol(t *testing.T, r llm.Request) llm.Request {
 	t.Helper()
 	b, err := json.Marshal(r)
