@@ -107,6 +107,14 @@ for (const theme of THEMES) {
         .filter((m) => m.ratio < AA)
         .map((m) => `"${m.text}": ${m.ratio.toFixed(2)}:1 (${m.fg} on ${m.bg})`);
       expect(low).toEqual([]);
+      // Words stay at full opacity; only bars and marks fade to 0.6.
+      const opacities = await page.evaluate(() => ({
+        fade: getComputedStyle(document.querySelector(".account-fade") as Element).opacity,
+        mark: getComputedStyle(document.querySelector(".account-hero-mark") as Element).opacity,
+        limitBar: getComputedStyle(document.querySelector(".account-limit-bar") as Element).opacity,
+        weekBar: getComputedStyle(document.querySelector(".account-bar-track") as Element).opacity,
+      }));
+      expect(opacities).toEqual({ fade: "1", mark: "0.6", limitBar: "0.6", weekBar: "0.6" });
     });
 
     test(`waiting header reason text is readable on the warning band: ${name}`, async ({ page }) => {

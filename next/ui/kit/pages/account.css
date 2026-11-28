@@ -14,10 +14,11 @@
     min-width: 0;
   }
 
-  /* Keep every piece of text at full contrast during a stale refresh and dim only the bars. */
+  /* Under a stale notice, words keep their normal colours; only bars and marks fade. */
+  .account-page[data-stale] .account-hero-mark,
   .account-page[data-stale] .account-limit-bar,
   .account-page[data-stale] .account-bar-track {
-    opacity: 0.55;
+    opacity: 0.6;
   }
 
   /* ---- Opening header ----------------------------------------------------------------------- */
