@@ -1,11 +1,13 @@
 // The one line above Setup's steps when core found a CLIProxyAPI setup on its computer: a preview of
 // what importing it would do, then the import, each only when the person asks. Nothing is sent
 // with dry_run false unless a preview is on screen that came from the same config, auth folder,
-// account-file count and import record; Import now sends exactly what that preview sent. Any change
-// to what core found drops an open preview; a background scan that finds the same setup keeps it,
-// and never drops an in-flight call, a refusal or a completed report for the same config.
+// account-file count, import record and scan; Import now sends exactly what that preview sent. A
+// later scan, or any change to what core found, clears an open preview and says so; a background
+// scan of the same config keeps only what imports nothing (in-flight calls, refusals, completed
+// reports, lost-reply warnings and not-run), clearing refusals and warnings once a newer import is
+// recorded.
 
-import { useRef, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { type ImportReport, type ImportRow, problem, type Setup, type SetupImport } from "../api";
 import type { Reply } from "../host";
 import { providerName } from "../parts";
@@ -37,6 +39,7 @@ const t = strings("setupImport", {
     other: "This pluxy does not offer {names}, so the accounts that need them cannot be used yet.",
   },
   openExtensions: "Open Extensions",
+  previewDropped: "Setup looked again, so the preview was cleared. Preview again before importing.",
   notRun: "The import did not run: pluxy has no record of it.",
   close: "Close",
   keep: "To keep it: {how}",
@@ -101,12 +104,19 @@ export function refusalWords(r: Refusal): string {
 }
 
 /**
- * What a preview is bound to: the config, the auth folder an import of it names, the number of
- * account files the scan counted there, and the last recorded import. Any change is another setup
- * and drops an open preview; a newer scan that found the same setup keeps it.
+ * What an open preview is bound to: the config, the auth folder an import of it names, the number
+ * of account files the scan counted there, the last recorded import, and when that scan ran. Any
+ * change—including a newer scan—drops an open preview so Import now cannot run on files that were
+ * never previewed.
  */
-function setupKey(found: SetupImport): string {
-  return JSON.stringify([found.config, authDir(found) ?? "", found.accounts, found.last_import?.at ?? ""]);
+function scanKey(setup: Setup, found: SetupImport): string {
+  return JSON.stringify([
+    found.config,
+    authDir(found) ?? "",
+    found.accounts,
+    found.last_import?.at ?? "",
+    setup.scanned_at ?? "",
+  ]);
 }
 
 /** Where the import stands on this page, for the setup it started from (key). */
@@ -120,26 +130,37 @@ interface ImportState {
   report?: ImportReport;
   done?: boolean;
   refusal?: Refusal;
-  /** For a call whose reply was lost or found not run: core's last import record before it. */
+  /** Core's last import record before this state started, so a newer record can clear it. */
   lastBefore?: string;
   /** Refresh after a lost reply found no new record: the import did not run. */
   notRun?: boolean;
+  /** A newer scan or setup change cleared an open or in-flight preview. */
+  dropped?: boolean;
+}
+
+function hasNewerImport(lastBefore: string | undefined, found: SetupImport): boolean {
+  return found.last_import !== undefined && found.last_import.at !== lastBefore;
 }
 
 /**
- * Whether state still belongs to found. An open preview must match setupKey so Import now cannot
- * confirm one setup and import another; in-flight calls, refusals and completed reports stay for
- * the same config across background scans (a lost Import now or notRun clears once core records a
- * newer import).
+ * Reconciles state with the latest setup from core, clearing (never hiding) anything that no longer
+ * matches. An open preview is bound to scanKey and becomes a dropped notice when a later scan or
+ * setup change lands; refusals, not-run and dropped notices stay for the same config across
+ * background scans and clear once a newer import record arrives; completed reports and in-flight
+ * calls stay for the same config.
  */
-function isMine(state: ImportState | undefined, found: SetupImport): boolean {
-  if (!state || state.config !== found.config) return false;
-  if (state.busy) return true;
-  if (state.report && !state.done) return state.key === setupKey(found);
-  if ((state.refusal && !state.refusal.preview && state.refusal.status === 0) || state.notRun) {
-    if (found.last_import !== undefined && found.last_import.at !== state.lastBefore) return false;
+function reconcile(state: ImportState | undefined, setup: Setup): ImportState | undefined {
+  if (!state) return undefined;
+  const found = setup.found.imports[0];
+  if (!found || state.config !== found.config) return undefined;
+  if (state.busy || state.done) return state;
+  if (hasNewerImport(state.lastBefore, found)) return undefined;
+  if (state.report) {
+    const key = scanKey(setup, found);
+    if (state.key === key) return state;
+    return { key, config: found.config, dropped: true, lastBefore: found.last_import?.at };
   }
-  return true;
+  return state;
 }
 
 function Code(props: { value: string }) {
@@ -232,37 +253,76 @@ export function ImportLine(props: {
   const { api, unauthorized } = useKit();
   const found = props.setup.found.imports[0];
   const [state, setState] = useState<ImportState>();
+  // Latest setup prop, so an in-flight call's reply checks the scan on screen when it lands.
+  const latest = useRef(props.setup);
+  latest.current = props.setup;
   // A call in flight, also while what it started from is not yet the setup on screen.
   const busy = useRef(false);
   // Try again or Refresh waits for a new scan.
   const [rescanning, setRescanning] = useState(false);
+
+  const mine = reconcile(state, props.setup);
+  useEffect(() => {
+    if (mine !== state) {
+      setState((cur) => (cur === state ? mine : reconcile(cur, props.setup)));
+    }
+  }, [mine, props.setup, state]);
+
   if (!found) return null;
-  const mine = isMine(state, found) ? state : undefined;
 
   // A preview of what setup found (target), or the import of the preview on screen.
   const run = async (preview: boolean, setup: Setup = props.setup) => {
     const target = setup.found.imports[0];
     if (busy.current || !target) return;
-    // Import now only ever follows a preview of this same setup, and sends what it sent.
-    if (!preview && (!mine?.report || mine.done)) return;
+    const key = scanKey(setup, target);
+    // Import now only ever follows a preview of this same scan and setup, and sends what it sent.
+    if (!preview && (!mine?.report || mine.done || mine.key !== key)) return;
     const sent = preview
-      ? { key: setupKey(target), config: target.config, authDir: authDir(target) }
+      ? { key, config: target.config, authDir: authDir(target) }
       : { key: mine?.key ?? "", config: mine?.config ?? "", authDir: mine?.authDir };
+    const lastBefore = target.last_import?.at;
     busy.current = true;
-    setState({ ...sent, report: preview ? undefined : mine?.report, busy: preview ? "preview" : "import" });
+    setState({
+      ...sent,
+      report: preview ? undefined : mine?.report,
+      busy: preview ? "preview" : "import",
+      lastBefore,
+    });
     const reply: Reply<ImportReport> = await api.importSetup(sent.config, sent.authDir, preview);
     busy.current = false;
     if (reply.status === 401) return unauthorized();
+    const current = latest.current;
+    const currentFound = current.found.imports[0];
     if (!reply.body || reply.status >= 300) {
       // The preview goes too: what a later try would do is for a new preview to say.
+      if (!currentFound || currentFound.config !== sent.config || hasNewerImport(lastBefore, currentFound)) {
+        return setState(undefined);
+      }
       return setState({
         ...sent,
         refusal: { status: reply.status, message: reply.error?.message ?? problem(reply) ?? "", preview },
-        lastBefore: target.last_import?.at,
+        lastBefore,
       });
     }
-    setState({ ...sent, report: reply.body, done: !preview });
-    if (!preview) props.onImported(reply.body);
+    if (!preview) {
+      props.onImported(reply.body);
+      if (!currentFound || currentFound.config !== sent.config) return setState(undefined);
+      return setState({ ...sent, report: reply.body, done: true, lastBefore });
+    }
+    // A preview reply that arrives after a newer scan or setup change shows as dropped, never open.
+    if (!currentFound || currentFound.config !== sent.config || hasNewerImport(lastBefore, currentFound)) {
+      return setState(undefined);
+    }
+    const currentKey = scanKey(current, currentFound);
+    if (currentKey !== sent.key) {
+      return setState({
+        key: currentKey,
+        config: currentFound.config,
+        dropped: true,
+        lastBefore: currentFound.last_import?.at,
+      });
+    }
+    setState({ ...sent, report: reply.body, done: false, lastBefore });
   };
   // Try again: look again, then preview what the new scan found.
   const again = async () => {
@@ -281,11 +341,11 @@ export function ImportLine(props: {
     // A scan that failed says so itself; the line keeps saying the result is not known.
     if (!fresh) return;
     const target = fresh.found.imports[0];
-    if (!target || (target.last_import !== undefined && target.last_import.at !== lastBefore)) {
+    if (!target || hasNewerImport(lastBefore, target)) {
       return setState(undefined);
     }
     setState({
-      key: setupKey(target),
+      key: scanKey(fresh, target),
       config: target.config,
       authDir: authDir(target),
       notRun: true,
@@ -293,7 +353,7 @@ export function ImportLine(props: {
     });
   };
 
-  const last = !mine ? found.last_import : undefined;
+  const last = !mine || mine.dropped ? found.last_import : undefined;
   const refusal = mine?.refusal;
   const offered = new Set(providerPicks(props.setup).map((pick) => pick.id));
   const needs = mine?.done ? (mine.report?.needs ?? []) : [];
@@ -332,6 +392,7 @@ export function ImportLine(props: {
           )}
         </div>
       )}
+      {mine?.dropped && <Notice tone="warn">{t("previewDropped")}</Notice>}
       {mine?.notRun && <Notice tone="warn">{t("notRun")}</Notice>}
       {refusal && (
         <div class="setup-import-refusal">
