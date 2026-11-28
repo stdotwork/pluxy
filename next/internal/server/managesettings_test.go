@@ -18,8 +18,6 @@ func (copyRefusingRedactor) RestoreSettings(_, _ []byte) ([]byte, error) {
 	return nil, fmt.Errorf("%w: line 3: a redacted value is a copy of a secret", ErrSecretCopy)
 }
 
-// A PATCH whose settings hold a refused copy of a secret's placeholder is answered with the
-// copy's line, not only that a placeholder is where no secret goes.
 func TestPatchSettingsCopyRefusalNamesItsLine(t *testing.T) {
 	m := &Management{Redactor: copyRefusingRedactor{configdoc.NewRedactor()}}
 	a := route.Account{ID: "a", Settings: json.RawMessage(`{"api_key": "fake-settings-key-1"}`)}

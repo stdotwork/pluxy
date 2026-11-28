@@ -21,9 +21,6 @@ type singleEventStream struct {
 func (s *singleEventStream) Next() llm.Event { return s.ev }
 func (s *singleEventStream) Close()          {}
 
-// PATCH {"disabled": false} on a config account unbans it and answers 200 without modifying the
-// config; any other field, disabled: true, or disabled: false on a config-disabled account
-// still gets 409 Conflict.
 func TestPatchConfigAccountUnban(t *testing.T) {
 	cfg := &Config{
 		Extension: ExtensionConfig{
@@ -54,7 +51,6 @@ func TestPatchConfigAccountUnban(t *testing.T) {
 
 	m := NewManagement(func() *Config { return cfg }, nil, state)
 
-	// Any other field or disabled: true still returns 409.
 	for _, body := range []string{
 		`{"disabled": true}`,
 		`{"disabled": false, "priority": 2}`,
@@ -69,7 +65,6 @@ func TestPatchConfigAccountUnban(t *testing.T) {
 		}
 	}
 
-	// PATCH {"disabled": false} on banned cfg-acct unbans it and returns 200.
 	req := httptest.NewRequest(http.MethodPatch, "/accounts/cfg-acct", strings.NewReader(`{"disabled": false}`))
 	req.SetPathValue("id", "cfg-acct")
 	rec := httptest.NewRecorder()

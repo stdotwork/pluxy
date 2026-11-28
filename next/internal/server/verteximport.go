@@ -16,17 +16,12 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// vertexImportWait is how long POST /vertex/import waits for the login: the Gemini extension's
-// token fetch has a 30 second timeout of its own.
 const vertexImportWait = 45 * time.Second
 
-// defaultVertexLocation is the location an import without one uses, as in today's core.
 const defaultVertexLocation = "us-central1"
 
-// vertexImportLoginMethod is the Gemini extension's login method that takes a service account key.
 const vertexImportLoginMethod = "service_account"
 
-// Codes of the import's own errors: today's `error` words, as codes.
 const (
 	codeFileRequired       = "file_required"
 	codeInvalidJSON        = "invalid_json"
@@ -34,11 +29,6 @@ const (
 	codeProjectIDMissing   = "project_id_missing"
 )
 
-// importVertex is POST /vertex/import: the multipart field file holds a Google service account
-// key, and location (a form field or a query parameter) the Vertex location. It adds the account
-// vertex-<project_id> by the Gemini extension's service_account login, or signs in to it again
-// when a login added it before (so the key replaces the old one only if it is the same service
-// account), waits for the login to end and replies once.
 func (m *Management) importVertex(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxManagementBody)
 	if err := r.ParseMultipartForm(maxManagementBody); err != nil {
@@ -96,8 +86,6 @@ func (m *Management) importVertex(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, http.StatusConflict, "conflict", fmt.Sprintf("account %q is set in core's config", id))
 		return
 	}
-	// An account a login added before gets a new login: its settings stay as they are, so the
-	// location it has is the one that counts.
 	var existing *cred.Record
 	for _, rec := range m.creds.Records() {
 		if rec.ID == id {
@@ -106,9 +94,6 @@ func (m *Management) importVertex(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if existing != nil {
-		// Only the same project's Vertex service account is signed in to again: another account
-		// that happens to have this ID (an API key, another project whose ID sanitises the same)
-		// must not get this key with its own settings.
 		if existing.Extension != legacy.Gemini || existing.Credential.Kind != vertexImportLoginMethod || vertexProject(existing.Account.Settings) != project {
 			writeManagementError(w, http.StatusConflict, "conflict", fmt.Sprintf(
 				"account %q exists and is not project %q's Vertex service account; remove it or import into another account", id, project))
@@ -143,9 +128,6 @@ func (m *Management) importVertex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if l.State == cred.LoginPending {
-		// The login ended nothing in time (or waits for input a key import never gets), or the
-		// client went away. Cancel it and wait, briefly, for it to end, so an import tried again
-		// at once is not refused as a login already running.
 		_ = m.creds.CancelLogin(l.ID)
 		for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
 			if v, ok := m.creds.Login(l.ID); !ok || v.State != cred.LoginPending {
@@ -162,8 +144,6 @@ func (m *Management) importVertex(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "account": id, "project_id": project, "email": email, "location": location})
 }
 
-// writeVertexImportFailure answers a login that did not end done: a key Google or the extension
-// refused is 400, a token endpoint that could not be reached or answered badly 502.
 func writeVertexImportFailure(w http.ResponseWriter, l cred.LoginView) {
 	e := l.Error
 	switch {
@@ -185,14 +165,10 @@ func stringField(m map[string]any, name string) string {
 	return s
 }
 
-// vertexAccountID returns the ID of the account an imported key for project gets: vertex- and
-// the project ID as today's core names its auth file (a path separator or colon becomes _, a
-// space -).
 func vertexAccountID(project string) string {
 	return "vertex-" + strings.NewReplacer("/", "_", `\`, "_", ":", "_", " ", "-").Replace(project)
 }
 
-// vertexLabel is the label of an imported account, as today's core makes it.
 func vertexLabel(project, email string) string {
 	if email == "" {
 		return project
@@ -200,7 +176,6 @@ func vertexLabel(project, email string) string {
 	return project + " (" + email + ")"
 }
 
-// vertexProject returns the vertex.project in an account's settings, or "".
 func vertexProject(settings json.RawMessage) string {
 	var s struct {
 		Vertex struct {
@@ -211,8 +186,6 @@ func vertexProject(settings json.RawMessage) string {
 	return s.Vertex.Project
 }
 
-// vertexLocation returns the vertex.location in an account's settings; "global" (the Gemini
-// extension's default) when it sets none.
 func vertexLocation(settings json.RawMessage) string {
 	var s struct {
 		Vertex struct {

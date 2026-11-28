@@ -9,11 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// The estimate counts the text today's core's local counter counts, in the same order: the
-// system text; each message's role and text; reasoning; a tool call's ID, name and arguments; a
-// tool result's call ID and output; each tool's name, description and parameters; the tool choice.
-// The expected numbers are what o200k_base gives today's core for the first three requests
-// (core/internal/runtime/executor tests and the corpus), within the estimate's tolerance.
 func TestEstimateInputTokens(t *testing.T) {
 	messages := func(body string) llm.Request {
 		t.Helper()
@@ -32,10 +27,8 @@ func TestEstimateInputTokens(t *testing.T) {
 		return req
 	}
 	for _, c := range []struct {
-		name string
-		req  llm.Request
-		// text is what the estimate is made from; want is today's core's count (o200k_base) and
-		// est the estimate of this core.
+		name      string
+		req       llm.Request
 		text      string
 		want, est int64
 	}{
@@ -63,13 +56,11 @@ func TestEstimateInputTokens(t *testing.T) {
 	}
 }
 
-// Images and files add nothing, and a request with no text is 0.
 func TestEstimateInputTokensIgnoresNonText(t *testing.T) {
 	req, err := anthropicmessages.ParseRequest([]byte(`{"model":"m","max_tokens":9,"temperature":1,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Only the role is text.
 	if got, want := estimateInputTokens(req), tokenest.Estimate("user"); got != want {
 		t.Errorf("estimate = %d, want %d", got, want)
 	}

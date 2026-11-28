@@ -12,17 +12,11 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Fallback chains: a request for a chain's name goes through its steps in order, each a model
-// with, optionally, one provider and named accounts. With no chain, a name is served by the
-// accounts of one provider.
-
 const (
 	claudeExt = "pluxy/claude"
 	codexExt  = "pluxy/codex"
 )
 
-// chainAccounts are two Claude accounts serving opus and sonnet and one Codex account serving
-// sol.
 func chainAccounts() []Account {
 	claude := []ModelEntry{{Name: "opus"}, {Name: "sonnet"}}
 	return []Account{
@@ -36,7 +30,6 @@ func opusChain() map[string][]Step {
 	return map[string][]Step{"opus": {{Model: "opus", Provider: claudeExt}, {Model: "sol"}}}
 }
 
-// chainHarness is a harness whose requests record each attempt's step and model.
 type chainHarness struct {
 	*harness
 	steps []Attempt
@@ -53,8 +46,6 @@ func (h *chainHarness) req(model, session string) Request {
 	return r
 }
 
-// served sends a request and returns the attempt that served it, failing the test unless it
-// finished.
 func (h *chainHarness) served(model, session string) Attempt {
 	h.t.Helper()
 	evs := h.run(h.req(model, session))
@@ -64,8 +55,6 @@ func (h *chainHarness) served(model, session string) Attempt {
 	return h.steps[len(h.steps)-1]
 }
 
-// A chain's steps are tried in order: the first step's accounts while one can serve, the next
-// step once none can, and the request names the step's model upstream. Moving on needs no wait.
 func TestChainStepOrder(t *testing.T) {
 	h := newChainHarness(t, Config{Chains: opusChain(), MaxWaitMS: 600_000, Strategy: StrategyFillFirst}, chainAccounts()...)
 	if a := h.served("opus", ""); a.Account != "c1" || a.Model != "opus" || a.Step != 1 {
@@ -76,14 +65,12 @@ func TestChainStepOrder(t *testing.T) {
 	if a := h.served("opus", ""); a.Account != "x1" || a.Model != "sol" || a.Step != 2 || a.Extension != codexExt {
 		t.Errorf("with Claude refusing: served by %+v, want x1 with sol at step 2", a)
 	}
-	// Both Claude accounts are blocked now: straight to step 2, without waiting for them.
 	if a := h.served("opus", ""); a.Account != "x1" {
 		t.Errorf("with Claude blocked: served by %+v, want x1", a)
 	}
 	if len(h.slept) != 0 {
 		t.Errorf("slept %v; a step that can serve now is used at once", h.slept)
 	}
-	// Once Claude is back, step 1 serves again.
 	h.now = h.now.Add(2 * time.Minute)
 	h.on("c1", ok())
 	h.on("c2", ok())
@@ -93,8 +80,6 @@ func TestChainStepOrder(t *testing.T) {
 	h.wantAttempts("c1", "c1", "c2", "x1", "x1", "c1")
 }
 
-// When no step can serve now, the request waits for the first account of any step to come back,
-// as a request for a model waits for its accounts.
 func TestChainWaitsForAnyStep(t *testing.T) {
 	h := newChainHarness(t, Config{Chains: opusChain(), MaxWaitMS: 600_000}, chainAccounts()...)
 	h.on("c1", rateLimited(time.Minute), ok())
@@ -106,8 +91,6 @@ func TestChainWaitsForAnyStep(t *testing.T) {
 	}
 }
 
-// Once the reply has started, a failure goes to the client: no other account and no other
-// step, though step 2's account would serve the next request.
 func TestChainNoMoveAfterReplyStarted(t *testing.T) {
 	h := newChainHarness(t, Config{Chains: opusChain()}, chainAccounts()[0], chainAccounts()[2])
 	limit := llm.Error{Code: llm.CodeRateLimit, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 60_000}
@@ -117,19 +100,16 @@ func TestChainNoMoveAfterReplyStarted(t *testing.T) {
 		t.Fatalf("events = %+v, want the reply's start and then its error", evs)
 	}
 	h.wantAttempts("c1")
-	// c1 is cooling now: the next request moves to step 2.
 	if a := h.served("opus", ""); a.Account != "x1" || a.Step != 2 {
 		t.Errorf("next request served by %+v, want x1 at step 2", a)
 	}
 }
 
-// An error about the request itself (a 400, a refusal of its content) ends the request: the
-// next step would refuse it too. Step 2's account serves a request c1 refuses for its limit.
 func TestChainNoMoveForRequestError(t *testing.T) {
 	for _, e := range []llm.Error{
 		{Code: llm.CodeInvalidRequest, Status: 400, Scope: llm.ScopeRequest, Retryable: true},
 		{Code: llm.CodeAccountClosed, Status: 403, Scope: llm.ScopeRequest, Retryable: true},
-		{Code: llm.CodeUpstream, Status: 500, Scope: llm.ScopeEndpoint}, // the upstream may have run it
+		{Code: llm.CodeUpstream, Status: 500, Scope: llm.ScopeEndpoint},
 	} {
 		t.Run(e.Code, func(t *testing.T) {
 			h := newChainHarness(t, Config{Chains: opusChain()}, chainAccounts()[0], chainAccounts()[2])
@@ -146,9 +126,6 @@ func TestChainNoMoveForRequestError(t *testing.T) {
 	}
 }
 
-// A chain has at most 8 steps, at least one, and its steps name models, never another chain. A
-// step may name the chain's own name: the model of that name, as the first step of a chain that
-// keeps a model's name usually does.
 func TestChainLimits(t *testing.T) {
 	steps := func(n int) []Step {
 		var out []Step
@@ -160,7 +137,7 @@ func TestChainLimits(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		chains map[string][]Step
-		want   string // a word of the error; "" for none
+		want   string
 	}{
 		{"eight steps", map[string][]Step{"x": steps(8)}, ""},
 		{"nine steps", map[string][]Step{"x": steps(9)}, "8"},
@@ -187,9 +164,6 @@ func TestChainLimits(t *testing.T) {
 	}
 }
 
-// A session bound to an account of a later step stays there while it can serve, even once an
-// earlier step could serve again: its conversation keeps the prompt cache it has there.
-// Requests without the session go back to step 1.
 func TestChainAffinityAcrossSteps(t *testing.T) {
 	h := newChainHarness(t, Config{Chains: opusChain()}, chainAccounts()...)
 	h.on("c1", rateLimited(time.Minute), ok())
@@ -204,7 +178,6 @@ func TestChainAffinityAcrossSteps(t *testing.T) {
 	if a := h.served("opus", ""); a.Step != 1 {
 		t.Errorf("a request without the session: served by %+v, want step 1", a)
 	}
-	// When the bound account cannot serve, the session moves and is bound again.
 	h.on("x1", rateLimited(time.Minute))
 	if a := h.served("opus", "s1"); a.Step != 1 {
 		t.Errorf("with x1 refusing: served by %+v, want step 1", a)
@@ -215,8 +188,6 @@ func TestChainAffinityAcrossSteps(t *testing.T) {
 	}
 }
 
-// One account can be in two steps with two models. A session bound to it at step 2 stays on
-// step 2's model.
 func TestChainAffinityKeepsTheStepsModel(t *testing.T) {
 	chains := map[string][]Step{"opus": {{Model: "opus"}, {Model: "sonnet"}}}
 	h := newChainHarness(t, Config{Chains: chains}, Account{ID: "c1", Extension: claudeExt, Models: []ModelEntry{{Name: "opus"}, {Name: "sonnet"}}})
@@ -233,7 +204,6 @@ func TestChainAffinityKeepsTheStepsModel(t *testing.T) {
 	}
 }
 
-// A step can name its provider and its accounts: only those serve it.
 func TestChainStepProviderAndAccounts(t *testing.T) {
 	accounts := append(chainAccounts(), Account{ID: "o1", Extension: "pluxy/openai-compatible", Models: []ModelEntry{{Name: "opus"}}, Priority: 5})
 	chains := map[string][]Step{"best": {{Model: "opus", Accounts: []string{"c2"}}, {Model: "opus", Provider: "pluxy/openai-compatible"}}}
@@ -247,9 +217,6 @@ func TestChainStepProviderAndAccounts(t *testing.T) {
 	}
 }
 
-// With no chain, a name is served by one provider's accounts: the provider of the
-// highest-priority account that serves it. When they cannot serve, the request fails; it does
-// not go to another provider that serves the same name.
 func TestDefaultIsOneProvider(t *testing.T) {
 	m := []ModelEntry{{Name: "m"}}
 	h := newChainHarness(t, Config{}, Account{ID: "p1", Extension: "P", Models: m}, Account{ID: "q1", Extension: "Q", Models: m, Priority: 1},
@@ -271,8 +238,6 @@ func TestDefaultIsOneProvider(t *testing.T) {
 	}
 }
 
-// The model lists describe a name two providers list as the model of the provider that serves it,
-// with that provider's accounts.
 func TestModelListNamesTheServingProvider(t *testing.T) {
 	m := []ModelEntry{{Name: "m"}}
 	h := newChainHarness(t, Config{}, Account{ID: "p1", Extension: "P", Models: m}, Account{ID: "q1", Extension: "Q", Models: m, Priority: 1},
@@ -283,7 +248,6 @@ func TestModelListNamesTheServingProvider(t *testing.T) {
 	}
 }
 
-// A priority tie goes to the provider of the account first in config order.
 func TestDefaultProviderTieByConfigOrder(t *testing.T) {
 	m := []ModelEntry{{Name: "m"}}
 	h := newChainHarness(t, Config{}, Account{ID: "p1", Extension: "P", Models: m}, Account{ID: "q1", Extension: "Q", Models: m},
@@ -294,9 +258,6 @@ func TestDefaultProviderTieByConfigOrder(t *testing.T) {
 	h.wantAttempts("p1", "p2", "p1", "p2")
 }
 
-// An account whose model list cannot be read serves any model, but it does not choose the
-// provider of a name another account lists: it would take every name from the providers that
-// list them.
 func TestDefaultProviderFromAccountsThatListTheModel(t *testing.T) {
 	h := newChainHarness(t, Config{}, Account{ID: "u1", Extension: "U"}, Account{ID: "k1", Extension: "K", Models: []ModelEntry{{Name: "m"}}})
 	h.r.UseCatalog(func(context.Context, Account, *protocol.Credential) (*protocol.ModelList, *llm.Error) {
@@ -307,13 +268,11 @@ func TestDefaultProviderFromAccountsThatListTheModel(t *testing.T) {
 			t.Errorf("served by %+v, want k1, the account that lists m", a)
 		}
 	}
-	// A name no account lists goes to the accounts that serve any model.
 	if a := h.served("other", ""); a.Account != "u1" {
 		t.Errorf("other served by %+v, want u1", a)
 	}
 }
 
-// GET /route's plan: each step's accounts in the order they would be tried.
 func TestChainPlan(t *testing.T) {
 	h := newChainHarness(t, Config{Chains: opusChain(), Strategy: StrategyFillFirst}, chainAccounts()...)
 	h.on("c2", rateLimited(time.Minute))
@@ -338,15 +297,12 @@ func TestChainPlan(t *testing.T) {
 	if want := []string{"1:c1:opus:cooling", "1:c2:opus:cooling"}; !slices.Equal(left, want) {
 		t.Errorf("left_out = %v, want %v", left, want)
 	}
-	// A name with no chain has one step and no step numbers.
 	p = h.r.Plan(context.Background(), "sol")
 	if len(p.Chain) != 0 || len(p.Order) != 1 || p.Order[0].Step != 0 {
 		t.Errorf("plan for sol = %+v", p)
 	}
 }
 
-// The error of a chain that no step could serve names each step's accounts with their
-// provider and model.
 func TestChainErrorNamesEachStep(t *testing.T) {
 	h := newChainHarness(t, Config{Chains: opusChain()}, chainAccounts()...)
 	h.on("c1", rateLimited(time.Minute))
@@ -367,7 +323,6 @@ func TestChainErrorNamesEachStep(t *testing.T) {
 	}
 }
 
-// A chain's name may be new: it is then in the model lists, as its first step's model.
 func TestChainNameInModelList(t *testing.T) {
 	chains := map[string][]Step{"my-fast": {{Model: "sonnet"}, {Model: "sol"}}, "opus": {{Model: "opus"}, {Model: "sol"}}}
 	h := newChainHarness(t, Config{Chains: chains}, chainAccounts()...)
@@ -389,8 +344,6 @@ func TestChainNameInModelList(t *testing.T) {
 	}
 }
 
-// A chain's new name whose serving accounts' model lists are unknown is listed too, built from
-// the first serving account.
 func TestChainNameOverUnknownListsInModelList(t *testing.T) {
 	chains := map[string][]Step{"my-fast": {{Model: "m"}}}
 	h := newChainHarness(t, Config{Chains: chains}, Account{ID: "u1", Extension: "U"})
@@ -410,8 +363,6 @@ func TestChainNameOverUnknownListsInModelList(t *testing.T) {
 	}
 }
 
-// CheckSteps refuses a step no account can serve, and one naming an account that is unknown or
-// does not serve it, naming the step or the account.
 func TestCheckSteps(t *testing.T) {
 	accounts := append(chainAccounts(), Account{ID: "h1", Extension: codexExt, Models: []ModelEntry{{Name: "sol"}}, Held: HealthNeedsLogin})
 	h := newChainHarness(t, Config{}, accounts...)
@@ -421,7 +372,7 @@ func TestCheckSteps(t *testing.T) {
 	}{
 		{[]Step{{Model: "opus"}, {Model: "sol"}}, ""},
 		{[]Step{{Model: "opus", Provider: claudeExt, Accounts: []string{"c2"}}}, ""},
-		{[]Step{{Model: "sol", Accounts: []string{"x1", "h1"}}}, ""}, // a held account that serves the step
+		{[]Step{{Model: "sol", Accounts: []string{"x1", "h1"}}}, ""},
 		{[]Step{{Model: "opus"}, {Model: "nobody-serves"}}, "nobody-serves"},
 		{[]Step{{Model: "sol", Provider: claudeExt}}, "sol"},
 		{[]Step{{Model: "opus", Accounts: []string{"x1"}}}, "opus"},
@@ -437,9 +388,6 @@ func TestCheckSteps(t *testing.T) {
 	}
 }
 
-// Under the weighted strategy a weight-0 account serves no request, so the checks and the model
-// lists leave it out as routing does: a step only it serves is refused, its names are not listed,
-// and it does not choose a name's provider.
 func TestWeightZeroIsLeftOutEverywhere(t *testing.T) {
 	m := []ModelEntry{{Name: "m"}}
 	zero := 0
@@ -473,9 +421,6 @@ func TestWeightZeroIsLeftOutEverywhere(t *testing.T) {
 	}
 }
 
-// The model lists name the provider and accounts routing uses: a same-provider account of higher
-// priority than another provider's top account keeps the name on its provider, and the entry
-// lists that provider's accounts, the one routing tries first leading.
 func TestModelListAgreesWithRouting(t *testing.T) {
 	m := []ModelEntry{{Name: "m"}}
 	h := newChainHarness(t, Config{}, Account{ID: "p1", Extension: "P", Models: m}, Account{ID: "p2", Extension: "P", Models: m, Priority: 5},
@@ -490,16 +435,12 @@ func TestModelListAgreesWithRouting(t *testing.T) {
 	}
 }
 
-// heldHarness has p1, an account of P that serves no requests (held as state), and q1, a usable
-// account of Q that also lists m. p1 has the higher priority, or the same and comes first.
 func heldHarness(t *testing.T, state string, priority int) *chainHarness {
 	m := []ModelEntry{{Name: "m"}}
 	return newChainHarness(t, Config{}, Account{ID: "p1", Extension: "P", Models: m, Priority: priority, Held: state},
 		Account{ID: "q1", Extension: "Q", Models: m})
 }
 
-// An account that is out of service keeps its name on its provider: the request fails and names
-// it, rather than going to another provider that lists the name. Each held kind alike.
 func TestHeldAccountKeepsTheProvider(t *testing.T) {
 	for _, c := range []struct {
 		state    string
@@ -527,8 +468,6 @@ func TestHeldAccountKeepsTheProvider(t *testing.T) {
 	}
 }
 
-// A held account keeps the model list read while it was in service, and its extension is not
-// asked again while it is held.
 func TestHeldAccountKeepsTheModelListReadInService(t *testing.T) {
 	m := []ModelEntry{{Name: "m"}}
 	accounts := []Account{
@@ -584,7 +523,6 @@ func TestHeldAccountKeepsTheModelListReadInService(t *testing.T) {
 	h.wantAttempts()
 }
 
-// A banned account keeps its name on its provider too.
 func TestBannedAccountKeepsTheProvider(t *testing.T) {
 	m := []ModelEntry{{Name: "m"}}
 	h := newChainHarness(t, Config{}, Account{ID: "p1", Extension: "P", Models: m, Priority: 1}, Account{ID: "q1", Extension: "Q", Models: m})
@@ -603,8 +541,6 @@ func TestBannedAccountKeepsTheProvider(t *testing.T) {
 	}
 }
 
-// Two steps that resolve to the same account and model try it once, even when its refusal set no
-// block; the chain then goes on to its next step.
 func TestOverlappingStepsTryAnAccountOnce(t *testing.T) {
 	m := []ModelEntry{{Name: "m"}}
 	h := newChainHarness(t, Config{DisableCooling: true, Chains: map[string][]Step{"m": {{Model: "m", Provider: "A"}, {Model: "m"}, {Model: "m", Provider: "B"}}}},
@@ -616,7 +552,6 @@ func TestOverlappingStepsTryAnAccountOnce(t *testing.T) {
 	h.wantAttempts("a1", "b1")
 }
 
-// A chain may not repeat a step.
 func TestChainRefusesIdenticalSteps(t *testing.T) {
 	for _, steps := range [][]Step{
 		{{Model: "m"}, {Model: "m"}},
@@ -631,7 +566,6 @@ func TestChainRefusesIdenticalSteps(t *testing.T) {
 	}
 }
 
-// A chain's entry in the model lists has the accounts of each step as routing finds them.
 func TestChainModelListFollowsTheSteps(t *testing.T) {
 	accounts := []Account{{ID: "p1", Extension: "P", Models: []ModelEntry{{Name: "m"}}, Priority: 1},
 		{ID: "q1", Extension: "Q", Models: []ModelEntry{{Name: "m"}, {Name: "s"}}}}
@@ -643,18 +577,14 @@ func TestChainModelListFollowsTheSteps(t *testing.T) {
 		}
 		return got
 	}
-	// A new name whose step names a provider other than the model's default one.
 	if my := list(map[string][]Step{"my": {{Model: "m", Provider: "Q"}}})["my"]; my.Extension != "Q" || !slices.Equal(my.Accounts, []string{"q1"}) {
 		t.Errorf("my = %+v, want Q with q1", my)
 	}
-	// A chain named like a model it serves.
 	if m := list(map[string][]Step{"m": {{Model: "m"}, {Model: "s"}}})["m"]; m.Extension != "P" || !slices.Equal(m.Accounts, []string{"p1", "q1"}) {
 		t.Errorf("m = %+v, want P with p1 and q1 (step 2, s)", m)
 	}
 }
 
-// The Codex client's catalogue marks a chain that can reach another provider non_codex, and has
-// a new chain name whose steps Codex serves.
 func TestCodexNamesKnowChains(t *testing.T) {
 	names := func(chains map[string][]Step) map[string]Name {
 		h := newChainHarness(t, Config{Chains: chains}, chainAccounts()...)
@@ -679,9 +609,6 @@ func TestCodexNamesKnowChains(t *testing.T) {
 	}
 }
 
-// The Codex client catalogue follows routing's provider choice for names outside chains. A
-// held higher-priority Claude account that lists m keeps m away from Codex, just as it does for
-// a request and the normal model list.
 func TestCodexNamesFollowRoutingProvider(t *testing.T) {
 	m := []ModelEntry{{Name: "m"}}
 	h := newChainHarness(t, Config{},

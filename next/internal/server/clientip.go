@@ -9,12 +9,9 @@ import (
 	"strings"
 )
 
-// anyForwardHeaders are the headers a proxy may name the client in: the two core reads the client
-// from (X-Forwarded-For and X-Real-IP, see forwardedClient) and RFC 7239's Forwarded, which core
-// does not read.
+// RFC 7239's Forwarded, which core does not read.
 var anyForwardHeaders = []string{"X-Forwarded-For", "X-Real-IP", "Forwarded"}
 
-// parseTrustedProxies reads trusted_proxies: IP addresses and CIDR ranges.
 func parseTrustedProxies(list []string) ([]netip.Prefix, error) {
 	var out []netip.Prefix
 	for i, s := range list {
@@ -44,12 +41,6 @@ func trustedProxy(trusted []netip.Prefix, a netip.Addr) bool {
 	return false
 }
 
-// forwardedClient returns where r came from when its peer is one of the trusted proxies: the
-// client it names, as today's core reads it. In X-Forwarded-For (every line of it, read as one
-// list) that is the last address that is not a trusted proxy, read from the right, or the first
-// when all are; else the first line of X-Real-IP. A header with an entry that is not an IP address
-// is not used. It returns false when the peer is not a trusted proxy or names no client core can
-// read; clientOf then takes the peer.
 func forwardedClient(trusted []netip.Prefix, r *http.Request) (netip.Addr, bool) {
 	peer := remoteAddr(r)
 	if !peer.IsValid() || !trustedProxy(trusted, peer) {
@@ -60,7 +51,7 @@ func forwardedClient(trusted []netip.Prefix, r *http.Request) (netip.Addr, bool)
 		for i := len(items) - 1; i >= 0; i-- {
 			a, ok := parseClient(items[i])
 			if !ok {
-				break // not an address: the header is not used
+				break
 			}
 			if i == 0 || !trustedProxy(trusted, a) {
 				return a, true
@@ -70,7 +61,6 @@ func forwardedClient(trusted []netip.Prefix, r *http.Request) (netip.Addr, bool)
 	return parseClient(r.Header.Get("X-Real-IP"))
 }
 
-// parseClient reads one address from a forwarding header.
 func parseClient(s string) (netip.Addr, bool) {
 	a, err := netip.ParseAddr(strings.TrimSpace(s))
 	if err != nil || a.Zone() != "" {
@@ -79,7 +69,6 @@ func parseClient(s string) (netip.Addr, bool) {
 	return a.Unmap(), true
 }
 
-// remoteAddr returns the address of the connection's peer, or the zero Addr.
 func remoteAddr(r *http.Request) netip.Addr {
 	ap, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
@@ -88,9 +77,7 @@ func remoteAddr(r *http.Request) netip.Addr {
 	return ap.Addr().Unmap()
 }
 
-// localAddr returns the address the request's connection arrived at (http.LocalAddrContextKey,
-// which net/http sets for each connection, HTTP/2 over TLS included), or the zero Addr when it is
-// not known or not an IP address.
+// http.LocalAddrContextKey, which net/http sets for each connection, HTTP/2 over TLS included
 func localAddr(r *http.Request) netip.Addr {
 	a, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
 	if !ok || a == nil {
@@ -103,25 +90,17 @@ func localAddr(r *http.Request) netip.Addr {
 	return ap.Addr().Unmap()
 }
 
-// client is where a request came from, as WithClientIP found it.
 type client struct {
-	addr netip.Addr
-	// forwarded: the request names another client in a forwarding header core did not take
-	// the client from: the peer is not a trusted proxy, or it is but core cannot read the
-	// header (Forwarded, or an X-Forwarded-For that is not a list of addresses). Such a request
-	// comes from somewhere else, whatever addr is.
+	addr      netip.Addr
 	forwarded bool
-	// ownAddress: addr is the connection's peer and the same address the connection arrived
-	// at. Only a program on this machine can open such a connection: the other end of a TCP
-	// handshake sends its replies to the source address, which here is this machine's own.
-	// It is false when addr is a client a trusted proxy named, since that is the proxy's word.
+	// addr is the connection's peer and the same address the connection arrived at. Only a
+	// program on this machine can open such a connection: the other end of a TCP handshake sends
+	// its replies to the source address, which here is this machine's own.
 	ownAddress bool
 }
 
 type clientKey struct{}
 
-// WithClientIP finds each request's client address with the trusted proxies of the config cfg
-// returns when the request arrives, for ClientIP in the handlers after it.
 func WithClientIP(cfg func() *Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c := clientOf(cfg().trusted, r)
@@ -152,20 +131,8 @@ func clientFor(r *http.Request) client {
 	return clientOf(nil, r)
 }
 
-// ClientIP returns where r came from, as WithClientIP found it; without WithClientIP, the
-// connection's peer.
 func ClientIP(r *http.Request) netip.Addr { return clientFor(r).addr }
 
-// FromThisMachine reports whether r came from this machine and was not forwarded from
-// elsewhere. A request comes from this machine when it came from a loopback address, or from
-// the very address its connection arrived at (core listening on a network address of this
-// machine, called by a program here at that address). A source that this machine's own network
-// translation rewrites to the address the call arrived at (a Docker bridge source on the host)
-// counts too; a source that arrives unchanged at another address does not. A request that names
-// another client in X-Forwarded-For, X-Real-IP or Forwarded, where core did not take the client
-// from that header, does not count, so a proxy on this machine that sets one of those headers
-// keeps its callers remote. A forwarder here that sets none counts as this machine, as one on
-// loopback already does.
 func FromThisMachine(r *http.Request) bool {
 	c := clientFor(r)
 	return (c.addr.IsLoopback() || c.ownAddress) && !c.forwarded

@@ -8,15 +8,11 @@ import (
 	"strings"
 )
 
-// ModelEntry is one model an account's config lists: Name is the model's name upstream, Alias
-// the name clients use for it (default Name). In JSON it is the name as a string, or an object
-// {"name": ..., "alias": ...}.
 type ModelEntry struct {
 	Name  string `json:"name"`
 	Alias string `json:"alias,omitempty"`
 }
 
-// UnmarshalJSON reads a model name or a {"name", "alias"} object.
 func (m *ModelEntry) UnmarshalJSON(b []byte) error {
 	if b = bytes.TrimSpace(b); len(b) > 0 && b[0] == '"' {
 		*m = ModelEntry{}
@@ -33,7 +29,6 @@ func (m *ModelEntry) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// MarshalJSON writes a model without an alias as its name.
 func (m ModelEntry) MarshalJSON() ([]byte, error) {
 	if m.Alias == "" || m.Alias == m.Name {
 		return json.Marshal(m.Name)
@@ -42,7 +37,6 @@ func (m ModelEntry) MarshalJSON() ([]byte, error) {
 	return json.Marshal(plain(m))
 }
 
-// public is the name clients use for the model.
 func (m ModelEntry) public() string {
 	if m.Alias != "" {
 		return m.Alias
@@ -50,18 +44,13 @@ func (m ModelEntry) public() string {
 	return m.Name
 }
 
-// ModelAlias renames a model the account serves, as today's oauth-model-alias does: requests for
-// Alias go to the model Name. Without Fork the model is served only as Alias; with Fork under both
-// names. Name matches regardless of case.
 type ModelAlias struct {
-	Name  string `json:"name"`
-	Alias string `json:"alias"`
-	Fork  bool   `json:"fork,omitempty"`
-	// DisplayName replaces the model's display name in model lists.
+	Name        string `json:"name"`
+	Alias       string `json:"alias"`
+	Fork        bool   `json:"fork,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
 }
 
-// CheckNames checks the account's naming settings, naming the account in the error.
 func (a *Account) CheckNames() error {
 	if err := a.checkNames(); err != nil {
 		return fmt.Errorf("account %q: %w", a.ID, err)
@@ -69,14 +58,12 @@ func (a *Account) CheckNames() error {
 	return nil
 }
 
-// checkNames checks the account's naming settings.
 func (a *Account) checkNames() error {
 	first := map[string]int{}
 	for i, m := range a.Models {
 		if strings.TrimSpace(m.Name) == "" {
 			return fmt.Errorf("models[%d] has no name", i)
 		}
-		// A name clients use maps to one upstream model; a second entry would be ignored.
 		if j, ok := first[m.public()]; !ok {
 			first[m.public()] = i
 		} else if a.Models[j].Name != m.Name {
@@ -94,38 +81,22 @@ func (a *Account) checkNames() error {
 	return nil
 }
 
-// Name is one name an account serves a model under.
 type Name struct {
-	// Public is the name clients use, with the account's prefix when it has one.
-	Public string
-	// Upstream is the model's name upstream: what requests for Public are sent as.
-	Upstream string
-	// Base is the name the model had before an alias renamed it: Upstream for a model of the
-	// extension's list, the config entry's name for one of the account's own.
-	Base string
-	// DisplayName is a display name an alias gave the model; empty when it gave none.
+	Public      string
+	Upstream    string
+	Base        string
 	DisplayName string
-	// NonCodex marks a listed fallback chain whose steps can go to another extension
-	// (ModelNames only).
-	NonCodex bool
+	NonCodex    bool
 }
 
-// Names returns every name the account serves models under, given the upstream names catalog
-// its extension lists for it, as names does.
 func (a *Account) Names(catalog []string, forcePrefix bool) []Name {
 	return a.names(catalog, forcePrefix)
 }
 
-// names returns every name the account serves models under, given the models it serves without
-// renaming: its config's Models, else catalog (the upstream names its extension lists for it).
-// The rules apply in today's core's order: exclusions on those names, then aliases, then the
-// prefix. forcePrefix is routing's force-model-prefix: a prefixed account then serves its models
-// only with the prefix, except one whose name is the prefix itself.
 func (a *Account) names(catalog []string, forcePrefix bool) []Name {
 	return a.prefixed(a.baseNames(catalog), forcePrefix)
 }
 
-// baseNames is names without the prefix.
 func (a *Account) baseNames(catalog []string) []Name {
 	var base []Name
 	if len(a.Models) > 0 {
@@ -165,7 +136,6 @@ func (a *Account) baseNames(catalog []string) []Name {
 	return out
 }
 
-// prefixed applies the account's prefix to names.
 func (a *Account) prefixed(names []Name, forcePrefix bool) []Name {
 	if a.Prefix == "" {
 		return names
@@ -182,11 +152,6 @@ func (a *Account) prefixed(names []Name, forcePrefix bool) []Name {
 	return out
 }
 
-// resolve returns the upstream name of model on the account, and whether the account serves it.
-// An account whose config lists Models serves only those (as renamed); one that lists none
-// serves the models of catalog, the upstream names its extension lists for it (as renamed);
-// with no catalog either, any model its rules leave it: not excluded, not renamed away by an
-// alias without Fork.
 func (a *Account) resolve(model string, forcePrefix bool, catalog []string) (string, bool) {
 	for _, name := range a.unprefixed(model, forcePrefix) {
 		if len(a.Models) > 0 || len(catalog) > 0 {
@@ -214,7 +179,6 @@ func (a *Account) resolve(model string, forcePrefix bool, catalog []string) (str
 	return "", false
 }
 
-// unprefixed returns the names model may stand for on the account once its prefix is taken off.
 func (a *Account) unprefixed(model string, forcePrefix bool) []string {
 	if a.Prefix == "" {
 		return []string{model}
@@ -228,7 +192,6 @@ func (a *Account) unprefixed(model string, forcePrefix bool) []string {
 	return nil
 }
 
-// aliasesOf returns the alias rules that rename the model called name (any case).
 func (a *Account) aliasesOf(name string) []ModelAlias {
 	var out []ModelAlias
 	for _, r := range a.ModelAlias {
@@ -239,7 +202,6 @@ func (a *Account) aliasesOf(name string) []ModelAlias {
 	return out
 }
 
-// aliasNamed returns the alias rule whose alias is name.
 func (a *Account) aliasNamed(name string) (ModelAlias, bool) {
 	for _, r := range a.ModelAlias {
 		if r.Alias == name && !strings.EqualFold(r.Name, r.Alias) {
@@ -249,8 +211,6 @@ func (a *Account) aliasNamed(name string) (ModelAlias, bool) {
 	return ModelAlias{}, false
 }
 
-// excluded reports whether one of the account's ExcludedModels patterns matches name. A pattern
-// is a name, or has "*" standing for any text (prefix-*, *-suffix, *part*); case does not count.
 func (a *Account) excluded(name string) bool {
 	name = strings.ToLower(name)
 	for _, p := range a.ExcludedModels {

@@ -1,15 +1,5 @@
 package server
 
-// OpenAI Responses over WebSocket (GET /v1/responses upgraded, OpenAI's WebSocket mode). A
-// client sends response.create (or response.append) messages and gets each turn's stream events
-// back as text messages. Core pins the socket to one session on one account when the account's
-// extension holds sessions (protocol 0.1): every turn goes to that session, so a turn can
-// continue the previous response with previous_response_id. On an account that takes no
-// sessions each turn is a separate generate call carrying the whole conversation, which core
-// keeps (openairesponses.Transcript). What clients see follows today's core, which the corpus
-// records: the refused messages and their errors, which upstream errors reach the client and
-// which close the socket without a message, interrupts, warmups and lost upstream sockets.
-
 import (
 	"context"
 	"crypto/rand"
@@ -31,30 +21,21 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Session is an open session on a provider extension.
 type Session interface {
 	AccountID() string
-	// Ended reports whether the session is over: closed by core, or by the extension.
 	Ended() bool
 	Turn(ctx context.Context, account protocol.Account, req llm.Request) Stream
-	// Interrupt passes the client's control message for the running turn.
 	Interrupt(raw []byte)
 	Close()
 }
 
-// OpenSessionFunc opens a session on extension for account. An error with code unsupported and
-// scope credential means the account takes no sessions.
 type OpenSessionFunc func(ctx context.Context, extension string, account protocol.Account, info protocol.SessionInfo) (Session, *llm.Error)
 
-// wsQueue is how many client messages wait while a turn runs, as in today's core; the reader
-// stops reading the socket while it is full.
 const wsQueue = 16
 
-// wsCloseReasonMax is the most bytes a close reason may have: a close message's payload is at
-// most 125 bytes, two of which are the code.
+// a close message's payload is at most 125 bytes, two of which are the code.
 const wsCloseReasonMax = 123
 
-// codexOriginators are the Originator values of the Codex clients, which get response.metadata.
 var codexOriginators = []string{"codex desktop", "codex-tui", "codex_cli_rs"}
 
 func serveResponsesWebSocket(w http.ResponseWriter, r *http.Request, src Source) {
@@ -65,20 +46,16 @@ func serveResponsesWebSocket(w http.ResponseWriter, r *http.Request, src Source)
 		responsesFormat.writeError(w, e)
 		return
 	}
-	// The handshake's reply carries the socket's trace ID; the account of a turn comes later.
 	r, t := requestTrace(r)
 	w.Header().Set(TraceHeader, t.id)
 	if ts := r.Header.Get("X-Codex-Turn-State"); ts != "" {
-		// Keeps the client's sticky turn state across reconnects, as today's core does.
 		w.Header().Set("X-Codex-Turn-State", ts)
 	}
-	// A request that passed the client key check may come from any origin, as in today's core:
-	// a web page cannot set the key's header on a WebSocket. Without client keys, a web page on
-	// another site could drive core, so the library's same-origin check stays.
+	// a web page cannot set the key's header on a WebSocket.
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionNoContextTakeover,
 		InsecureSkipVerify: len(cfg.ClientKeys) > 0})
 	if err != nil {
-		return // Accept has written the HTTP error
+		return
 	}
 	conn.SetReadLimit(MaxRequestBody)
 	ctx, cancel := context.WithCancel(r.Context())
@@ -93,7 +70,6 @@ func serveResponsesWebSocket(w http.ResponseWriter, r *http.Request, src Source)
 			return
 		case msg := <-queue:
 			if msg.epoch < s.epoch.Load() {
-				// Written before the client heard of an upstream loss: the client resends.
 				if s.sendError(openairesponses.PreviousResponseNotFound()) != nil {
 					return
 				}
@@ -121,38 +97,30 @@ func isCodexClient(r *http.Request) bool {
 	return false
 }
 
-// wsSocket is one client socket.
 type wsSocket struct {
 	conn        *websocket.Conn
-	r           *http.Request // the upgrade request: its headers stand for every turn's
+	r           *http.Request
 	src         Source
 	ctx         context.Context
 	codexClient bool
-	trace       *trace // the socket's: a turn's error names it in its pluxy member
+	trace       *trace
 
-	// Owned by the loop that runs turns.
 	session    Session
 	sessionExt string
-	noSession  map[string]bool // extension and account that take no sessions
+	noSession  map[string]bool
 	transcript openairesponses.Transcript
-	// pinned is the account a session turn last ran on; later turns stay on it, as in today's
-	// core ("the next full create reconnects on it, never on another one").
-	pinned    string
-	lastModel string
-	lastMode  string // the mode of the last turn that completed: wsModeSession, wsModeHTTP or ""
+	pinned     string
+	lastModel  string
+	lastMode   string
 
-	// epoch counts upstream losses; each queued message carries the count when it was read.
 	epoch atomic.Uint64
 
 	mu   sync.Mutex
-	turn *wsTurn // the running turn, for interrupts
+	turn *wsTurn
 
-	// capture keeps the messages sent during the running turn for its request log; nil when
-	// none is kept.
 	capture atomic.Pointer[capture]
 }
 
-// wsMessage is a client message waiting for the turn loop.
 type wsMessage struct {
 	data  []byte
 	epoch uint64
@@ -163,17 +131,14 @@ const (
 	wsModeHTTP    = "http"
 )
 
-// wsTurn is the running turn as an interrupt sees it.
 type wsTurn struct {
 	mode        string
 	session     Session
-	responseID  string // from the turn's response.start
+	responseID  string
 	cancel      context.CancelFunc
-	interrupted string // the client's response_id, once an HTTP turn was interrupted
+	interrupted string
 }
 
-// read reads client messages: an interrupt is answered at once, anything else waits in queue
-// for the turn loop. The socket ending ends the loop.
 func (s *wsSocket) read(queue chan<- wsMessage, cancel context.CancelFunc) {
 	defer cancel()
 	for {
@@ -203,7 +168,6 @@ func (s *wsSocket) close() {
 	_ = s.conn.CloseNow()
 }
 
-// send writes one text message.
 func (s *wsSocket) send(data []byte) error {
 	if c := s.capture.Load(); c != nil {
 		_, _ = c.Write(data)
@@ -212,9 +176,6 @@ func (s *wsSocket) send(data []byte) error {
 	return s.conn.Write(s.ctx, websocket.MessageText, data)
 }
 
-// sendError writes an error message: {"type":"error","status":...,"error":{...}}. The error
-// object is the upstream's when it sent one, else built from e as an HTTP error body is, with a
-// code only when e has a provider code (core's own refusals carry none, as in today's core).
 func (s *wsSocket) sendError(e *llm.Error) error {
 	status, body := openaichat.ErrorResponse(e)
 	var b struct {
@@ -223,7 +184,6 @@ func (s *wsSocket) sendError(e *llm.Error) error {
 	obj := map[string]json.RawMessage(nil)
 	if json.Unmarshal(e.Raw, &b) == nil && b.Error != nil && (e.ProviderCode != llm.ProviderContextLengthExceeded ||
 		string(b.Error["code"]) == `"`+llm.ProviderContextLengthExceeded+`"`) {
-		// An overflow from an upstream of another format has the code only in the rendered body.
 		obj = b.Error
 	} else if b.Error = nil; json.Unmarshal(body, &b) == nil {
 		obj = b.Error
@@ -236,7 +196,6 @@ func (s *wsSocket) sendError(e *llm.Error) error {
 	}
 	m := map[string]any{"type": "error", "status": status, "error": obj}
 	if u := e.UsageLimit; u != nil {
-		// The usage-limit reply's headers ride in the message, as today's core sends them.
 		h := map[string]string{}
 		for _, kv := range u.Headers() {
 			h[kv[0]] = kv[1]
@@ -250,8 +209,6 @@ func (s *wsSocket) sendError(e *llm.Error) error {
 	return s.send(msg)
 }
 
-// refuseTurn sends e as a turn's error, marks the turn failed for its request log (t, when one is
-// kept), and returns false when the socket must close.
 func (s *wsSocket) refuseTurn(t *trace, e *llm.Error) bool {
 	if t != nil && e.Code != llm.CodeCancelled {
 		t.failed = true
@@ -263,8 +220,6 @@ func clientError(status int, msg string) *llm.Error {
 	return &llm.Error{Code: llm.CodeInvalidRequest, Status: status, Scope: llm.ScopeRequest, Message: msg}
 }
 
-// interrupt answers a response.interrupt: on a session it goes to the extension when it targets
-// the running response; on an HTTP turn core cancels the turn and ends it for the client.
 func (s *wsSocket) interrupt(data []byte) {
 	g, release := s.src.Acquire()
 	e := refused(g.Config, s.r, false)
@@ -300,8 +255,6 @@ func (s *wsSocket) interrupt(data []byte) {
 		sess.Interrupt(data)
 		return
 	default:
-		// An HTTP upstream cannot be told: cancel the turn; the turn loop ends it for the
-		// client with response.incomplete for the client's response ID.
 		if t.interrupted == "" {
 			t.interrupted = id
 			t.cancel()
@@ -310,7 +263,6 @@ func (s *wsSocket) interrupt(data []byte) {
 	}
 }
 
-// handle runs one queued client message. It returns false when the socket must close.
 func (s *wsSocket) handle(data []byte) bool {
 	g, release := s.src.Acquire()
 	defer release()
@@ -348,7 +300,6 @@ func (s *wsSocket) handle(data []byte) bool {
 		return refuse(clientError(http.StatusBadRequest, "missing model in response.create request"))
 	}
 
-	// A turn that continues a response held on a session must go to that session.
 	if continues && s.lastMode == wsModeSession {
 		if s.session == nil || s.session.Ended() {
 			return refuse(openairesponses.PreviousResponseNotFound())
@@ -372,19 +323,14 @@ func isJSONArray(v json.RawMessage) bool {
 	return len(v) > 0 && v[0] == '['
 }
 
-// runTurn routes one turn and writes its reply. mode is the mode the turn must take, or "" to
-// let the chosen account decide. It returns false when the socket must close.
 func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model, mode string) bool {
 	arrived := time.Now()
-	// The client's message with the model filled in: as it is, it is a session turn's request.
 	native := make(map[string]json.RawMessage, len(msg))
 	for k, v := range msg {
 		native[k] = v
 	}
 	native["model"], _ = json.Marshal(model)
 	nativeBody, _ := json.Marshal(native)
-	// The turn's request log holds the client's message and what was sent back, as a request's
-	// holds its body and reply.
 	var turnTrace *trace
 	if g.RequestLog != nil {
 		turnLog := g.RequestLog.newCapture()
@@ -404,7 +350,6 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	takeThinkingSuffix(&sessReq)
 	s.nativeHeaders(&sessReq)
 
-	// An HTTP turn's request carries the whole conversation.
 	var httpTurn openairesponses.TranscriptTurn
 	var httpReq llm.Request
 	if mode != wsModeSession {
@@ -426,15 +371,14 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	if g.RequestLog != nil && g.RequestLog.All {
 		ctx = turnTrace.captureUpstream(ctx, g.RequestLog.Redact)
 	}
-	// The turn is listed as being served until runTurn returns, also by a panic.
 	entry := g.Requests.beginTurn(s.r, g, s.trace.id, arrived, sessReq.Model, cancel)
 	defer g.Requests.end(entry)
 	turn := &wsTurn{cancel: cancel}
-	var opened []Session // sessions this turn opened
-	var sess Session     // the session the last attempt ran on; nil for an HTTP attempt
+	var opened []Session
+	var sess Session
 	var sessExt string
-	chosen := "" // the mode of the last attempt
-	ranOn := ""  // the account of the last attempt
+	chosen := ""
+	ranOn := ""
 	attempted := func(m string, on Session, ext string) {
 		chosen, sess, sessExt = m, on, ext
 		if on != nil {
@@ -450,12 +394,9 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	}
 	switch mode {
 	case wsModeSession:
-		// The response it continues is on the session: only the session's account can run it.
 		if rr.Pin == "" || rr.Pin == s.pinned {
 			rr.Pin = s.session.AccountID()
 		}
-		// Each attempt takes the request the router made for the account (its upstream model
-		// and its caller), as an HTTP request is sent.
 		rr.Attempt = func(ctx context.Context, ext string, a protocol.Account, req llm.Request) route.Stream {
 			if ext != s.sessionExt || a.ID != s.session.AccountID() || s.session.Ended() {
 				attempted("", nil, "")
@@ -494,8 +435,6 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			if httpTurn.Warmup {
 				return newWarmup(model)
 			}
-			// The router renamed the turn's own request; the HTTP one, which carries the whole
-			// conversation, is renamed the same way.
 			send := route.Renamed(httpReq, req.Model)
 			send.Caller = req.Caller
 			return g.Attempt(ctx, ext, a, send)
@@ -504,8 +443,6 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	s.mu.Lock()
 	s.turn = turn
 	s.mu.Unlock()
-	// The turn is over for an interrupt once its last message is on its way to the client: a
-	// client that has read that message and interrupts next must be told no turn is running.
 	endTurn := func() {
 		s.mu.Lock()
 		s.turn = nil
@@ -516,7 +453,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	turnReq := sessReq
 	turnReq.Stream = true
 	m := g.newMeter(s.r, arrived, turnReq, clientToken(s.r, false))
-	var attemptExt string // the extension of the last account tried
+	var attemptExt string
 	rr.Attempting = func(a route.Attempt) {
 		attemptExt = a.Extension
 		m.attempt(a, "")
@@ -526,14 +463,9 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 		}
 	}
 	rr.AttemptFailed = m.attemptFailed
-	// Payload rules reach a turn sent as an HTTP call through sdk.Upstream; a turn on an upstream
-	// session gets them on its session.turn frame (protocol 0.15), and an extension that reports
-	// less than 0.15 is refused a turn that rules apply to.
 	stream := meterStream(g.Router.Generate(host.WithPayloadClient(ctx, sessReq.Model, s.r.Header), rr), m)
 	defer stream.Close()
 	ev := stream.Next()
-	// The session the turn ran on is the socket's from now on, whatever the outcome; the
-	// others it opened, and the socket's last one when another replaced it, are closed.
 	if sess != nil && sess != s.session {
 		if s.session != nil {
 			s.session.Close()
@@ -550,7 +482,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	if chosen == wsModeHTTP {
 		req = httpReq
 	}
-	var output []json.RawMessage // finished output items, for an interrupted HTTP turn
+	var output []json.RawMessage
 	var completed json.RawMessage
 	sw := openairesponses.NewMessageWriter(func(typ string, data []byte) error {
 		switch typ {
@@ -593,13 +525,9 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 		}
 		return s.send(data)
 	}, req)
-	// A Responses-lite turn on a Codex account reaches the client as the upstream sent it, with
-	// an empty output left empty, as today's core does (its preserveNativeOutput).
 	sw.KeepOutput = attemptExt == legacy.Codex && liteTurn(sessReq)
 	defer func() { logTranslation(s.r, nil, sw) }()
 	if ev.Type != llm.EventError && chosen == wsModeHTTP && httpTurn.Warmup {
-		// A warmup reaches no upstream: nothing to record, even when the client goes away
-		// during its reply.
 		m.drop()
 	}
 	for {
@@ -609,8 +537,6 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			s.mu.Unlock()
 			if id == "" {
 				if chosen == wsModeSession && ev.Error.ProviderCode == openairesponses.CodeUpstreamWebsocketLost {
-					// The next full create reconnects on the same account, and what the client
-					// sent before hearing of the loss is refused.
 					s.pinned = ranOn
 					s.epoch.Add(1)
 				}
@@ -622,22 +548,16 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 				return s.turnFailed(ev.Error)
 			}
 			m.fail(ev.Error, http.StatusOK)
-			// An HTTP turn the client interrupted: it ends for the client, and the conversation
-			// keeps what it said so far.
 			if s.send(openairesponses.InterruptedMessage(id, output)) != nil {
 				return false
 			}
 			completed = marshalItems(output)
 			break
 		}
-		// The turn is recorded before its last message is written: a client that has read that
-		// message may ask for the usage record next. The finish carries that message, or, in a
-		// stream that opened with it, response.start does, and the finish with the turn's usage
-		// is read before response.start is written.
 		end, ahead := ev, opensWithEnd(ev)
 		if ahead {
 			if end = stream.Next(); end.Type == llm.EventError {
-				ev = end // nothing of the reply was written
+				ev = end
 				continue
 			}
 		}
@@ -648,7 +568,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			return false
 		}
 		if m != nil {
-			m.sent = http.StatusOK // the turn's reply has begun
+			m.sent = http.StatusOK
 		}
 		if ev.Terminal() {
 			break
@@ -678,9 +598,6 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	return true
 }
 
-// opensWithEnd reports whether ev is the response.start of a Responses stream that opened with
-// its last message (response.completed or response.incomplete, with no response.created): the
-// stream decoder puts that message on response.start, and the finish follows it.
 func opensWithEnd(ev llm.Event) bool {
 	if ev.Type != llm.EventResponseStart || ev.Response == nil || ev.Response.Format != llm.FormatOpenAIResponses {
 		return false
@@ -692,7 +609,6 @@ func opensWithEnd(ev llm.Event) bool {
 	return d.Type == "response.completed" || d.Type == "response.incomplete"
 }
 
-// liteTurn reports whether the client's turn is a Responses-lite one.
 func liteTurn(req llm.Request) bool {
 	if req.Native == nil {
 		return false
@@ -710,7 +626,6 @@ func marshalItems(items []json.RawMessage) json.RawMessage {
 	return b
 }
 
-// nativeHeaders gives a turn's request the client's Responses headers from the upgrade request.
 func (s *wsSocket) nativeHeaders(req *llm.Request) {
 	if req.Native == nil {
 		return
@@ -725,11 +640,6 @@ func (s *wsSocket) nativeHeaders(req *llm.Request) {
 	}
 }
 
-// turnFailed handles a turn that ended in an error, as today's core does: a lost upstream socket
-// or a continuation of a response no socket holds is reported and the socket stays open; an
-// upstream close for a message too big closes the socket with 1009; a request the upstream
-// found at fault is reported and the socket closes; any other failure closes the socket
-// without a message. It returns false when the socket must close.
 func (s *wsSocket) turnFailed(e *llm.Error) bool {
 	if e.Code == llm.CodeCancelled {
 		return false
@@ -750,9 +660,6 @@ func (s *wsSocket) turnFailed(e *llm.Error) bool {
 	return false
 }
 
-// exposed reports whether a failed turn's error reaches the client before the socket closes:
-// the upstream refused the request itself (status 400, 409, 413 or 422, or an error of type
-// invalid_request_error), and not for the account's sake (401, 402, 403, 429).
 func exposed(e *llm.Error) bool {
 	switch e.Status {
 	case 401, 402, 403, 429:
@@ -768,7 +675,6 @@ func exposed(e *llm.Error) bool {
 	return e.Status >= 400 && json.Unmarshal(e.Raw, &b) == nil && b.Error.Type == "invalid_request_error"
 }
 
-// cutReason cuts a close reason to wsCloseReasonMax bytes on a UTF-8 boundary.
 func cutReason(s string) string {
 	if len(s) <= wsCloseReasonMax {
 		return s
@@ -780,12 +686,10 @@ func cutReason(s string) string {
 	return s[:cut]
 }
 
-// failedTurn is a reply that is one error.
 func failedTurn(e *llm.Error) route.Stream {
 	return &eventsStream{evs: []llm.Event{{Type: llm.EventError, Error: e}}}
 }
 
-// eventsStream is a reply made of the given events, the last of them terminal.
 type eventsStream struct {
 	evs []llm.Event
 	i   int
@@ -801,9 +705,6 @@ func (w *eventsStream) Next() llm.Event {
 
 func (w *eventsStream) Close() {}
 
-// newWarmup answers a warmup (generate: false) on an account whose upstream holds no socket
-// state, as today's core does, without an upstream request: an empty response, created and
-// completed. The events carry the Responses messages in raw, which the client gets as they are.
 func newWarmup(model string) route.Stream {
 	id := "resp_prewarm_" + rand.Text()
 	created := time.Now().Unix()

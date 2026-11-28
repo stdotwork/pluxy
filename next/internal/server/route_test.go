@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// A client key sent as x-api-key (as Anthropic clients send it) names the same tenant as the
-// same key sent as a bearer token, and different keys name different tenants, so session
-// bindings stay per client key whichever header carries it.
 func TestTenantFollowsTheClientKey(t *testing.T) {
 	bearer := httptest.NewRequest("POST", "/v1/messages", nil)
 	bearer.Header.Set("Authorization", "Bearer key-a")
@@ -28,7 +25,6 @@ func TestTenantFollowsTheClientKey(t *testing.T) {
 		t.Errorf("no key gave tenant %q, want empty", tenant(none))
 	}
 
-	// Gemini clients send the key in x-goog-api-key or the key query parameter.
 	goog := httptest.NewRequest("POST", "/v1beta/models/m:generateContent", nil)
 	goog.Header.Set("X-Goog-Api-Key", "key-a")
 	query := httptest.NewRequest("POST", "/v1beta/models/m:generateContent?key=key-a", nil)
@@ -37,9 +33,6 @@ func TestTenantFollowsTheClientKey(t *testing.T) {
 	}
 }
 
-// A request without a session header is bound by its body's prompt_cache_key, read as
-// json.Unmarshal reads it into a string field: any letter case, the last one, escapes decoded,
-// and none when one of them is not a string or the body is not a JSON object.
 func TestSessionKeyReadsPromptCacheKeyAsUnmarshalDoes(t *testing.T) {
 	for body, want := range map[string]string{
 		"{\"model\":\"m\",\"prompt_cache_key\":\"k1\",\"messages\":[]}":        "k1",

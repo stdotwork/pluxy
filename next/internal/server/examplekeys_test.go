@@ -17,7 +17,7 @@ func TestExampleClientKeys(t *testing.T) {
 		{[]string{"sk-mine"}, nil},
 		{[]string{"your-api-key-1"}, []string{"your-api-key-1"}},
 		{[]string{"sk-mine", " your-api-key-3\n", "your-api-key-2", "your-api-key-3"}, []string{"your-api-key-3", "your-api-key-2"}},
-		{[]string{"your-api-key-4", "your-api-key"}, nil}, // only the example config's three
+		{[]string{"your-api-key-4", "your-api-key"}, nil},
 	} {
 		c := &Config{ClientKeys: tc.keys}
 		if got := c.ExampleClientKeys(); !slices.Equal(got, tc.want) {
@@ -26,10 +26,6 @@ func TestExampleClientKeys(t *testing.T) {
 	}
 }
 
-// Today's core refuses every proxy request while a client key is one of the example config's
-// public ones (its "example API-key safe mode"): the keys are public, so whoever configured them
-// has not set up access. A request that does not carry a configured key is refused as ever, so
-// the state is shown only to those who hold a key.
 func TestExampleClientKeysRefuseEveryRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -48,7 +44,7 @@ func TestExampleClientKeysRefuseEveryRequest(t *testing.T) {
 			h := testHandler(t, &Config{ClientKeys: tc.keys}, hello)
 			for _, req := range []struct {
 				method, path, body string
-				refusalOnly        bool // the test handler serves no such route, so only a refusal is checked
+				refusalOnly        bool
 			}{
 				{"POST", "/v1/chat/completions", chatBody, false},
 				{"POST", "/v1/messages", `{"model":"m","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`, false},
@@ -57,7 +53,7 @@ func TestExampleClientKeysRefuseEveryRequest(t *testing.T) {
 				{"GET", "/v1beta/models", "", false},
 				{"POST", "/v1/messages/count_tokens", `{"model":"m","messages":[{"role":"user","content":"hi"}]}`, true},
 				{"POST", "/v1beta/models/m:countTokens", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, true},
-				{"GET", "/v1/responses", "", true}, // the WebSocket upgrade, refused before it is accepted
+				{"GET", "/v1/responses", "", true},
 			} {
 				if req.refusalOnly && tc.want == http.StatusOK {
 					continue
@@ -80,7 +76,6 @@ func TestExampleClientKeysRefuseEveryRequest(t *testing.T) {
 				if tc.want != http.StatusForbidden {
 					continue
 				}
-				// Every format says why; the OpenAI shape also carries the code.
 				if !strings.Contains(w.Body.String(), "client_keys holds the example config's key") {
 					t.Errorf("%s %s: body %s does not say why", req.method, req.path, w.Body)
 				}
@@ -92,7 +87,6 @@ func TestExampleClientKeysRefuseEveryRequest(t *testing.T) {
 	}
 }
 
-// Core starts with an example key and says so at every load, through the config's notices.
 func TestParseConfigNamesExampleClientKeys(t *testing.T) {
 	parse := func(keys string) []string {
 		t.Helper()

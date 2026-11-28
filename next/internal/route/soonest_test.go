@@ -9,21 +9,15 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// The harness's clock starts at 2023-11-14 22:13:20 UTC; the resets below are chosen against it.
-
 const (
 	day  = 24 * time.Hour
 	week = 7 * day
 )
 
-// weeklyReading is a reading with a five-hour window that resets in an hour and a weekly window
-// that resets weekly from now, neither full.
 func weeklyReading(now time.Time, weekly time.Duration) *protocol.Quota {
 	return windows(now, 40, time.Hour, 10, weekly)
 }
 
-// soonestHarness is a harness on soonest-reset whose accounts read as reads gives, after one
-// refresh; an account reads gives nothing for has no reading.
 func soonestHarness(t *testing.T, reads map[string]func(now time.Time) *protocol.Quota, cfg Config, accounts ...Account) (*harness, *fakeReadings) {
 	t.Helper()
 	cfg.Strategy = StrategySoonestReset
@@ -43,7 +37,6 @@ func weeklyIn(d time.Duration) func(time.Time) *protocol.Quota {
 	return func(now time.Time) *protocol.Quota { return weeklyReading(now, d) }
 }
 
-// planOrder is the IDs of the accounts a request for m would try, in order.
 func planOrder(h *harness, m string) []string {
 	var out []string
 	for _, s := range h.r.Plan(context.Background(), m).Order {
@@ -64,8 +57,6 @@ func wantOrder(t *testing.T, got []string, want ...string) {
 	}
 }
 
-// New requests go to the account whose longest window resets soonest, whatever its shorter
-// windows say; the plan ranks every account that way, with the account that has no reading last.
 func TestSoonestResetOrder(t *testing.T) {
 	h, _ := soonestHarness(t, map[string]func(time.Time) *protocol.Quota{
 		"a": weeklyIn(5 * day),
@@ -89,12 +80,10 @@ func TestSoonestResetOrder(t *testing.T) {
 	}
 }
 
-// Resets rounded to the hour tie: two accounts whose weeks end 20 minutes apart take turns,
-// and one whose week ends three hours later waits.
 func TestSoonestResetHourRoundingTies(t *testing.T) {
 	h, _ := soonestHarness(t, map[string]func(time.Time) *protocol.Quota{
-		"a": weeklyIn(2*day + 70*time.Minute), // 23:23:20, the hour 23:00
-		"b": weeklyIn(2*day + 50*time.Minute), // 23:03:20, the hour 23:00
+		"a": weeklyIn(2*day + 70*time.Minute),
+		"b": weeklyIn(2*day + 50*time.Minute),
 		"c": weeklyIn(2*day + 3*time.Hour),
 	}, Config{}, accts("a", "b", "c")...)
 	for range 4 {
@@ -103,8 +92,6 @@ func TestSoonestResetHourRoundingTies(t *testing.T) {
 	h.wantAttempts("a", "b", "a", "b")
 }
 
-// An account with no known reset comes after every account with one, and an account with a
-// full window after both, however soon its week ends.
 func TestSoonestResetUnknownAndFullLast(t *testing.T) {
 	h, _ := soonestHarness(t, map[string]func(time.Time) *protocol.Quota{
 		"full": func(now time.Time) *protocol.Quota { return windows(now, 100, time.Hour, 10, day) },
@@ -118,12 +105,10 @@ func TestSoonestResetUnknownAndFullLast(t *testing.T) {
 		t.Fatalf("full's rank %+v, want full until its five-hour reset", f)
 	}
 
-	// Once the full window has reset, the account ranks by its week again, and goes first.
 	h.now = h.now.Add(time.Hour + time.Second)
 	wantOrder(t, planOrder(h, "m"), "full", "late", "unknown")
 }
 
-// A blocked account and a held one are never picked, however soon their weeks end.
 func TestSoonestResetNeverPicksBlockedOrHeld(t *testing.T) {
 	held := Account{ID: "held", Held: HealthNeedsLogin}
 	h, _ := soonestHarness(t, map[string]func(time.Time) *protocol.Quota{
@@ -133,15 +118,13 @@ func TestSoonestResetNeverPicksBlockedOrHeld(t *testing.T) {
 		"late":    weeklyIn(6 * day),
 	}, Config{}, Account{ID: "blocked"}, held, Account{ID: "mid"}, Account{ID: "late"})
 	h.on("blocked", rateLimited(time.Hour))
-	h.runOK("m") // blocked refuses, mid serves
+	h.runOK("m")
 	h.runOK("m")
 	h.runOK("m")
 	h.wantAttempts("blocked", "mid", "mid", "mid")
 	wantOrder(t, planOrder(h, "m"), "mid", "late")
 }
 
-// Priority comes first: a higher-priority account is picked even when a lower one's week ends
-// sooner.
 func TestSoonestResetPriorityFirst(t *testing.T) {
 	h, _ := soonestHarness(t, map[string]func(time.Time) *protocol.Quota{
 		"low":   weeklyIn(day),
@@ -154,24 +137,20 @@ func TestSoonestResetPriorityFirst(t *testing.T) {
 	wantOrder(t, planOrder(h, "m"), "high4", "high6", "low")
 }
 
-// A session stays on its account when a new reading ranks another first; new sessions follow
-// the new reading.
 func TestSoonestResetKeepsSessionAffinity(t *testing.T) {
 	reads := map[string]func(time.Time) *protocol.Quota{"a": weeklyIn(2 * day), "b": weeklyIn(5 * day), "c": weeklyIn(6 * day)}
 	h, _ := soonestHarness(t, reads, Config{}, accts("a", "b", "c")...)
 	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
 	s2 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s2"}
-	h.run(s1) // a
+	h.run(s1)
 	reads["c"] = weeklyIn(day)
 	h.now = h.now.Add(defaultQuotaRefresh)
 	h.r.Refresh(context.Background())
-	h.run(s1) // still a
-	h.run(s2) // c
+	h.run(s1)
+	h.run(s2)
 	h.wantAttempts("a", "a", "c")
 }
 
-// Refresh reads every routed account once per routing.quota_refresh_ms (30 minutes when unset),
-// and not at all when it is 0 or the strategy is another.
 func TestQuotaRefreshInterval(t *testing.T) {
 	reads := map[string]func(time.Time) *protocol.Quota{"a": weeklyIn(day), "b": weeklyIn(2 * day)}
 	h, rd := soonestHarness(t, reads, Config{}, accts("a", "b")...)
@@ -189,7 +168,6 @@ func TestQuotaRefreshInterval(t *testing.T) {
 	h.r.Refresh(context.Background())
 	wantCalls(4)
 
-	// A shorter interval from the config.
 	ms := int64(time.Minute / time.Millisecond)
 	h2, rd2 := soonestHarness(t, reads, Config{QuotaRefreshMS: &ms}, accts("a")...)
 	h2.now = h2.now.Add(time.Minute)
@@ -198,7 +176,6 @@ func TestQuotaRefreshInterval(t *testing.T) {
 		t.Fatalf("one-minute interval: %d readings, want 2", len(rd2.calls))
 	}
 
-	// 0 turns the readings off.
 	zero := int64(0)
 	h3, rd3 := soonestHarness(t, reads, Config{QuotaRefreshMS: &zero}, accts("a", "b")...)
 	for range 3 {
@@ -209,7 +186,6 @@ func TestQuotaRefreshInterval(t *testing.T) {
 		t.Fatalf("quota_refresh_ms 0: %d readings, want none", len(rd3.calls))
 	}
 
-	// Another strategy reads nothing.
 	h4 := newHarness(t, Config{}, accts("a")...)
 	rd4 := &fakeReadings{}
 	h4.r.UseReadings(rd4)
@@ -226,15 +202,13 @@ func TestQuotaRefreshNegativeIsInvalid(t *testing.T) {
 	}
 }
 
-// A reading the checks of long blocks take ranks the account too.
 func TestSoonestResetUsesCheckReadings(t *testing.T) {
 	zero := int64(0)
 	h, rd := soonestHarness(t, nil, Config{QuotaRefreshMS: &zero}, accts("a", "b", "c")...)
 	h.r.state.SetCheckInterval(15 * time.Minute)
 	h.on("a", quotaOut(3*time.Hour))
-	h.runOK("m") // a refuses for 3 hours, b serves; with no readings the turn goes on to c
+	h.runOK("m")
 	h.wantAttempts("a", "b")
-	// a's check reads its window free again, its week ending sooner than the others' (unknown).
 	rd.read = func(id string) (*protocol.Quota, *llm.Error) {
 		if id == "a" {
 			return weeklyReading(h.now, 2*day), nil

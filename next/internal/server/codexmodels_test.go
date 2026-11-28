@@ -186,8 +186,6 @@ func TestCatalogSharedNamesAndOptionalDisplay(t *testing.T) {
 		if err := json.Unmarshal(req.Native.Body, &body); err != nil {
 			t.Fatal(err)
 		}
-		// Routing gives the shared name to the earlier other extension, leaving Codex's
-		// unaliased fork of its own model.
 		if len(body.Models) != 1 || body.Models[0]["name"] != "gpt-6.1-sol" {
 			t.Fatalf("catalog names = %v", body.Models)
 		}

@@ -10,44 +10,31 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// SavedBan is a banned account as core saves it across a restart.
 type SavedBan struct {
 	Account string    `json:"account"`
 	Why     string    `json:"why,omitempty"`
 	At      time.Time `json:"at,omitempty"`
 }
 
-// SavedBlock is a block on an account's credential or one of its models as core saves it across
-// a restart.
 type SavedBlock struct {
-	Account string `json:"account"`
-	// Scope is credential (the whole account) or model (Model on it).
-	Scope string `json:"scope"`
-	Model string `json:"model,omitempty"`
-	// Kind is quota, rate_limit or cooldown (failures that gave no reset time). A block with no
-	// kind, as a file an older core wrote holds, is a quota block.
-	Kind   string    `json:"kind"`
-	Until  time.Time `json:"until"`
-	Source string    `json:"source"`
-	// Error is the failure that set the block; absent in a file an older core wrote.
-	Error *SavedError `json:"error,omitempty"`
+	Account string      `json:"account"`
+	Scope   string      `json:"scope"`
+	Model   string      `json:"model,omitempty"`
+	Kind    string      `json:"kind"`
+	Until   time.Time   `json:"until"`
+	Source  string      `json:"source"`
+	Error   *SavedError `json:"error,omitempty"`
 }
 
-// SavedError is the failure that set a saved block, as GET /accounts shows it, with its message
-// cut to maxSavedMessage bytes.
 type SavedError struct {
-	Code    string `json:"code"`
-	Status  int    `json:"status,omitempty"`
-	Message string `json:"message,omitempty"`
-	// At, when set, is when the failure happened: it was the account's last error then, and is
-	// put back as that.
-	At *time.Time `json:"at,omitempty"`
+	Code    string     `json:"code"`
+	Status  int        `json:"status,omitempty"`
+	Message string     `json:"message,omitempty"`
+	At      *time.Time `json:"at,omitempty"`
 }
 
-// Changes is signalled, at most once until it is read, when what Saved returns may have changed.
 func (s *State) Changes() <-chan struct{} { return s.changes }
 
-// notify signals Changes. It never waits.
 func (s *State) notify() {
 	select {
 	case s.changes <- struct{}{}:
@@ -55,20 +42,12 @@ func (s *State) notify() {
 	}
 }
 
-// minSaved: a block with this long left or less is not saved, since it ends about as soon as core
-// is back.
 const minSaved = 30 * time.Second
 
-// maxSavedMessage bounds a saved error's message, in bytes.
 const maxSavedMessage = 256
 
-// restartedWhy is the reason of a quota block read back from a file that keeps no error for it.
 const restartedWhy = "a usage window was used up before pluxy restarted"
 
-// Saved returns the blocks of every kind on accounts' credentials and models that have more than
-// minSaved left at now, each with the failure that set it, for core to save so that a restart
-// sends no requests to accounts whose usage ran out, that a provider rate limited, or that it
-// refused. The failure that is its account's last error says when it happened.
 func (s *State) Saved(now time.Time) []SavedBlock {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -99,8 +78,6 @@ func (s *State) Saved(now time.Time) []SavedBlock {
 	return out
 }
 
-// savedError returns e as a saved block keeps it: its code, status and message, the message cut
-// to maxSavedMessage bytes on a character boundary.
 func savedError(e *llm.Error) *SavedError {
 	if e == nil {
 		return nil
@@ -116,15 +93,6 @@ func savedError(e *llm.Error) *SavedError {
 	return &SavedError{Code: e.Code, Status: e.Status, Message: msg}
 }
 
-// Load puts back saved blocks, as Saved returned them before a restart, for the accounts known
-// reports, each into its kind with its error; an error that was its account's last error is that
-// again. Blocks that have ended by now are left out, and so is what does not read as a block. A
-// block with no kind is a quota block, and one with no error keeps a reason that says core
-// restarted. Each quota block that would be checked is checked at once (Router.Check), so one that
-// no longer holds ends at the first check; a rate limit is checked an interval on, as it would
-// have been had core kept running, so a restart sends no request to the account sooner. The file
-// keeps no usage window to bound a block by, so one saved further off than maxReset is held as an
-// unbelieved one; the check then ends it or sets its end again.
 func (s *State) Load(saved []SavedBlock, now time.Time, known func(id string) bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -189,7 +157,6 @@ func (s *State) Load(saved []SavedBlock, now time.Time, known func(id string) bo
 	s.notify()
 }
 
-// SavedBans returns the banned accounts for core to save across a restart.
 func (s *State) SavedBans() []SavedBan {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -204,8 +171,6 @@ func (s *State) SavedBans() []SavedBan {
 	return out
 }
 
-// LoadBans puts back saved bans, as SavedBans returned them before a restart, for the accounts
-// known reports.
 func (s *State) LoadBans(saved []SavedBan, known func(id string) bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

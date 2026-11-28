@@ -8,9 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Runtime lists an account's live blocks on each scope, latest end first, with the error that
-// set each (without its raw body) and the last failure; Reset clears them all, and the backoff
-// step with them, and leaves other accounts' state alone.
 func TestRuntimeAndReset(t *testing.T) {
 	s := NewState()
 	now := time.Unix(1_800_000_000, 0)
@@ -54,7 +51,6 @@ func TestRuntimeAndReset(t *testing.T) {
 	if until, _, _ := s.availability(&a, "m1", now.Add(time.Second)); !until.IsZero() {
 		t.Errorf("after Reset the account is blocked until %v", until)
 	}
-	// The backoff step went with the block: the next transient failure starts from the bottom.
 	s.rand = func() float64 { return 1 }
 	s.failure(&a, "m1", 0, &llm.Error{Code: llm.CodeUpstream, Message: "again"}, now.Add(2*time.Second), 0)
 	if rt := s.Runtime(a, now.Add(2*time.Second)); len(rt.Cooldowns) != 1 || rt.Cooldowns[0].BackoffLevel != 1 {
@@ -65,8 +61,6 @@ func TestRuntimeAndReset(t *testing.T) {
 	}
 }
 
-// The last error goes with a success from an attempt that started after it, not with one that
-// started before.
 func TestLastErrorClearedBySuccess(t *testing.T) {
 	s := NewState()
 	now := time.Now()
@@ -88,7 +82,6 @@ func TestLastErrorClearedBySuccess(t *testing.T) {
 	if rt := s.Runtime(a, now); rt.LastError != nil || len(rt.Cooldowns) != 0 {
 		t.Fatalf("a later success left %+v", rt)
 	}
-	// A failure that is about the request records no last error.
 	s.failure(&a, "m", 0, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad request"}, now, 0)
 	if rt := s.Runtime(a, now); rt.LastError != nil {
 		t.Fatalf("a request failure was recorded: %+v", rt.LastError)

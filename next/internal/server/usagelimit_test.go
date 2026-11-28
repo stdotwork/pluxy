@@ -19,9 +19,6 @@ func usageLimitError() *llm.Error {
 		RetryAfterMS: (2 * time.Hour).Milliseconds(), UsageLimit: u}
 }
 
-// The usage-limit reply is a 429 without Retry-After, with X-Should-Retry false and Codex's
-// window headers, and today's core's body: the same object for OpenAI, Responses and Gemini
-// clients, a rate_limit_error with the time to the reset for Anthropic clients.
 func TestUsageLimitReplies(t *testing.T) {
 	for name, f := range map[string]clientFormat{"chat": chatFormat, "responses": responsesFormat, "gemini": geminiFormat, "messages": messagesFormat} {
 		w := httptest.NewRecorder()
@@ -52,7 +49,6 @@ func TestUsageLimitReplies(t *testing.T) {
 			t.Errorf("%s body = %s", name, w.Body)
 		}
 	}
-	// Without the mark, a 429 still tells the client when to retry.
 	w := httptest.NewRecorder()
 	chatFormat.writeError(w, &llm.Error{Code: llm.CodeQuota, Status: 429, RetryAfterMS: 1500})
 	if w.Header().Get("Retry-After") != "2" || w.Header().Get("X-Should-Retry") != "" {
@@ -60,8 +56,6 @@ func TestUsageLimitReplies(t *testing.T) {
 	}
 }
 
-// A Chat Completions stream that ends with the usage-limit reply is closed with [DONE], as in
-// today's core; any other error is not.
 func TestUsageLimitEndsChatStreamWithDone(t *testing.T) {
 	for _, e := range []*llm.Error{usageLimitError(), {Code: llm.CodeQuota, Status: 429, Message: "used up"}} {
 		var buf bytes.Buffer

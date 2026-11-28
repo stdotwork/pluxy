@@ -16,15 +16,11 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// endpointHandler returns the client API handler with accounts "a" and "b" whose endpoint
-// attempts answer with reply; generate attempts fail the test. It returns the requests each
-// attempt received, with the account they went to.
 func endpointHandler(t *testing.T, reply func(account string, req llm.Request) []llm.Event) (http.Handler, *[]string, *[]llm.Request) {
 	t.Helper()
 	return endpointHandlerOver(t, []route.Account{{ID: "a"}, {ID: "b"}}, reply)
 }
 
-// endpointHandlerOver is endpointHandler over the given accounts.
 func endpointHandlerOver(t *testing.T, accounts []route.Account, reply func(account string, req llm.Request) []llm.Event) (http.Handler, *[]string, *[]llm.Request) {
 	t.Helper()
 	var tried []string
@@ -67,8 +63,6 @@ func bodyReply(contentType string, pieces ...string) []llm.Event {
 	return append(evs, llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}})
 }
 
-// endpointStreamHandler returns the client API handler whose endpoint attempts answer with the
-// routed request and a stream made by reply.
 func endpointStreamHandler(t *testing.T, reply func(req llm.Request) route.Stream) http.Handler {
 	t.Helper()
 	gen := func(context.Context, string, protocol.Account, llm.Request) route.Stream {
@@ -88,8 +82,6 @@ type endpointPause struct {
 	release chan struct{}
 }
 
-// pausedEndpointReply is an endpoint reply whose given body pieces pause before they are written,
-// after every preceding piece reached the client. It lets a test observe the quiet between events.
 func pausedEndpointReply(format, contentType string, pieces []string, pauses map[int]endpointPause) route.Stream {
 	raw, _ := json.Marshal(llm.EndpointReply{ContentType: contentType})
 	steps := []func() llm.Event{
@@ -129,7 +121,6 @@ func (s *stepStream) Next() llm.Event {
 
 func (*stepStream) Close() {}
 
-// responseWriter is an http.ResponseWriter whose body can be read while a handler still writes it.
 type responseWriter struct {
 	mu      sync.Mutex
 	header  http.Header
@@ -200,10 +191,6 @@ func serveEndpointAsync(h http.Handler, w http.ResponseWriter, path, body string
 	return done
 }
 
-// A compaction request goes to an account as an endpoint call carrying the client's body, model,
-// thinking suffix and Codex headers (the User-Agent among them, by which a Codex extension tells
-// a Codex client); the reply's body pieces reach the client as written, under
-// the extension's content type, on both routes.
 func TestEndpointCompactPassesBodyThrough(t *testing.T) {
 	h, _, seen := endpointHandler(t, func(string, llm.Request) []llm.Event {
 		return bodyReply("application/json", `{"object":"response.compaction",`, `"output":[]}`)
@@ -224,8 +211,6 @@ func TestEndpointCompactPassesBodyThrough(t *testing.T) {
 	}
 }
 
-// A compaction request that asks for a stream, and a body that is not a JSON object, are refused
-// before they reach an account.
 func TestEndpointCompactRefusals(t *testing.T) {
 	h, accounts, _ := endpointHandler(t, func(string, llm.Request) []llm.Event {
 		return bodyReply("application/json", `{}`)
@@ -244,8 +229,6 @@ func TestEndpointCompactRefusals(t *testing.T) {
 	}
 }
 
-// An error before the reply starts moves the request to the next account, as for a generate
-// request; when every account fails the client gets an OpenAI-style error.
 func TestEndpointErrorsRoute(t *testing.T) {
 	n := 0
 	h, accounts, _ := endpointHandler(t, func(string, llm.Request) []llm.Event {
@@ -269,8 +252,6 @@ func TestEndpointErrorsRoute(t *testing.T) {
 	}
 }
 
-// A streamed endpoint reply is flushed piece by piece, and an error after it started ends it with
-// an error event; a reply that carries items breaks the protocol and ends the body.
 func TestEndpointStreamAndBreaches(t *testing.T) {
 	h, _, _ := endpointHandler(t, func(string, llm.Request) []llm.Event {
 		evs := bodyReply("text/event-stream", "data: 1\n\n")
@@ -310,8 +291,6 @@ func TestEndpointStreamAndBreaches(t *testing.T) {
 	}
 }
 
-// A quiet SSE endpoint reply gets comments only between whole events; a JSON endpoint reply gets
-// none at all, however long it pauses between body pieces.
 func TestEndpointKeepAlive(t *testing.T) {
 	shortKeepAlive(t, 80*time.Millisecond)
 	release := func(once *sync.Once, ch chan struct{}) { once.Do(func() { close(ch) }) }
@@ -411,9 +390,6 @@ func TestEndpointKeepAlive(t *testing.T) {
 	})
 }
 
-// A search request goes to an account as an endpoint call on both routes, with the client's body
-// and the headers today's core passes on. A request with no model is served by an account that
-// lists models; one that names a model goes only to an account that lists it.
 func TestEndpointAlphaSearch(t *testing.T) {
 	h, accounts, seen := endpointHandlerOver(t, []route.Account{{ID: "a", Models: []route.ModelEntry{{Name: "gpt-x"}}}},
 		func(string, llm.Request) []llm.Event {
@@ -438,20 +414,15 @@ func TestEndpointAlphaSearch(t *testing.T) {
 			}
 		}
 	}
-	// The model is still what routes a request that names one.
 	*seen, *accounts = nil, nil
 	if w := postEndpoint(h, "/v1/alpha/search", `{"model":"other"}`, nil); w.Code != http.StatusNotFound || len(*accounts) != 0 {
 		t.Fatalf("unknown model: got %d %s after %v", w.Code, w.Body, *accounts)
 	}
-	// Compaction still needs a model that an account serves.
 	if w := postEndpoint(h, "/v1/responses/compact", `{"input":"hi"}`, nil); w.Code != http.StatusNotFound || len(*accounts) != 0 {
 		t.Fatalf("compact without a model: got %d %s after %v", w.Code, w.Body, *accounts)
 	}
 }
 
-// An account that cannot count Responses input tokens answers unsupported, and core replaces the
-// endpoint's usual no-auth reply with its input estimate in OpenAI's token-count shape. The
-// client's body and Responses headers still travel with the endpoint call.
 func TestEndpointInputTokensEstimatesWhenNoAccountCanCount(t *testing.T) {
 	const body = `{"model":"gpt-test","instructions":"Be brief.","input":[{"role":"user","content":[{"type":"input_text","text":"Say hello"}]}],"tools":[{"type":"function","name":"get_weather","description":"Weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}]}`
 	h, accounts, seen := endpointHandlerOver(t, []route.Account{{ID: "chat", Models: []route.ModelEntry{{Name: "gpt-test"}}}},

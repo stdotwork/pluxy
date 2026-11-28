@@ -26,8 +26,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// The test binary doubles as the fake extension below. Core clears an extension's environment,
-// so the fake reads its behaviour from the extension ID core passes it.
 func TestMain(m *testing.M) {
 	if mode, ok := strings.CutPrefix(os.Getenv(protocol.EnvExtensionID), "servertest/"); ok {
 		frameExtension(mode)
@@ -36,7 +34,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// frameSeen is what the fake extension saw of a generate call's frame.
 type frameSeen struct {
 	NativeOnly bool `json:"native_only"`
 	Items      int  `json:"items"`
@@ -45,10 +42,6 @@ type frameSeen struct {
 	Native     bool `json:"native"`
 }
 
-// frameExtension describes itself at core's minor, with core's native_parser when mode is
-// "parses" and none otherwise. It writes what each generate call's frame held to the file
-// "frame" in its working folder (the package folder), answers with an empty reply, and exits
-// when core closes its stdin.
 func frameExtension(mode string) {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
@@ -61,7 +54,6 @@ func frameExtension(mode string) {
 	}
 	os.Stdout.WriteString(protocol.HandshakeLine(protocol.Version, socket))
 	go func() {
-		// Core closes stdin to stop the extension.
 		_, _ = io.Copy(io.Discard, os.Stdin)
 		os.Exit(0)
 	}()
@@ -102,8 +94,6 @@ func frameExtension(mode string) {
 	}
 }
 
-// frameServer serves core's client API with one account on a real extension that runs
-// frameExtension in mode, and returns the server and the extension's package folder.
 func frameServer(t *testing.T, mode string) (*httptest.Server, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -146,7 +136,6 @@ func frameServer(t *testing.T, mode string) (*httptest.Server, string) {
 	return srv, dir
 }
 
-// readFrame waits for the frame the fake extension saw.
 func readFrame(t *testing.T, dir string) frameSeen {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -166,8 +155,6 @@ func readFrame(t *testing.T, dir string) frameSeen {
 	}
 }
 
-// wantFrame is the frame of a request with one item, one tool and an origin: native-only to an
-// extension that parses with core's parsers, and the full request to one that does not.
 func wantFrame(mode string) frameSeen {
 	if mode == "parses" {
 		return frameSeen{NativeOnly: true, Native: true}
@@ -175,8 +162,6 @@ func wantFrame(mode string) frameSeen {
 	return frameSeen{Items: 1, Tools: 1, Origin: true, Native: true}
 }
 
-// A request a client sends over HTTP reaches an extension that parses with core's parsers as a
-// native-only call, and one that does not as the full request (serve marks what it parsed).
 func TestServeSendsNativeOnlyFrame(t *testing.T) {
 	for _, mode := range []string{"parses", "full"} {
 		t.Run(mode, func(t *testing.T) {
@@ -201,9 +186,6 @@ func TestServeSendsNativeOnlyFrame(t *testing.T) {
 	}
 }
 
-// A Responses WebSocket turn that starts a response, on an extension without sessions, goes as
-// an HTTP call of its whole conversation: native-only to an extension that parses with core's
-// parsers, and the full request to one that does not (runTurn marks what it parsed).
 func TestWebSocketTurnSendsNativeOnlyFrame(t *testing.T) {
 	for _, mode := range []string{"parses", "full"} {
 		t.Run(mode, func(t *testing.T) {
