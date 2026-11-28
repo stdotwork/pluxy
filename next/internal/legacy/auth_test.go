@@ -112,6 +112,8 @@ func TestReadAuthDir(t *testing.T) {
 		"devin-empty.json": map[string]any{"type": "devin"},
 		"gemini-old.json":  map[string]any{"type": "gemini", "access_token": "fake"},
 		"notype.json":      map[string]any{"access_token": "fake"},
+		"nulltype.json":    map[string]any{"type": nil, "access_token": "fake"},
+		"blanktype.json":   map[string]any{"type": " ", "access_token": "fake"},
 		"broken.json":      []byte("{"),
 		"codex-empty.json": map[string]any{"type": "codex"},
 		"notes.txt":        []byte("not a credential"),
@@ -220,8 +222,10 @@ func TestReadAuthDir(t *testing.T) {
 	}
 	for file, want := range map[string]string{
 		"devin-empty.json": "it holds no token",
-		"gemini-old.json":  "today's core does not load it either",
-		"notype.json":      "today's core does not load it either",
+		"gemini-old.json":  "type gemini is not supported (CLIProxyAPI does not load it either)",
+		"notype.json":      "it names no type (CLIProxyAPI does not load it either)",
+		"nulltype.json":    "it names no type (CLIProxyAPI does not load it either)",
+		"blanktype.json":   "it names no type (CLIProxyAPI does not load it either)",
 		"broken.json":      "not a JSON object",
 		"codex-empty.json": "it holds no token",
 	} {
@@ -229,7 +233,7 @@ func TestReadAuthDir(t *testing.T) {
 			t.Errorf("%s skipped for %q, want %q", file, reasons[file], want)
 		}
 	}
-	if len(skipped) != 5 {
+	if len(skipped) != 7 {
 		t.Errorf("skipped %v", skipped)
 	}
 }
@@ -404,8 +408,12 @@ func TestCheckImportFolders(t *testing.T) {
 		filepath.Join(root, "credentials"):     true,
 		filepath.Join(root, "auths-elsewhere"): true,
 	} {
-		if err := CheckImportFolders(auth, credDir); (err == nil) != ok {
+		err := CheckImportFolders(auth, credDir)
+		if (err == nil) != ok {
 			t.Errorf("CheckImportFolders(auths, %s) = %v", credDir, err)
+		}
+		if !ok && err != nil && !strings.Contains(err.Error(), "is CLIProxyAPI's auth folder or inside it") {
+			t.Errorf("CheckImportFolders(auths, %s) = %q, want CLIProxyAPI auth folder message", credDir, err)
 		}
 	}
 }
@@ -502,7 +510,7 @@ func TestAuthFileCopiedHeaders(t *testing.T) {
 		t.Errorf("headers = %v, want %v", got, want)
 	}
 	ignored := strings.Join(files[0].Ignored, "\n")
-	for _, w := range []string{"headers.X-Cpa (its value holds $CPA-SESSION-ID", "headers.X-Key (it copies the client's Authorization header"} {
+	for _, w := range []string{"headers.X-Cpa (its value holds $CPA-SESSION-ID, a CLIProxyAPI session ID that pluxy does not have)", "headers.X-Key (it copies the client's Authorization header"} {
 		if !strings.Contains(ignored, w) {
 			t.Errorf("ignored does not say %q:\n%s", w, ignored)
 		}

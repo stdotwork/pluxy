@@ -447,7 +447,7 @@ var commands = []command{
 		summary: "change an account: disabled (true or false), priority, weight, disable_cooling, max_concurrency, request_retry, prefix, models, excluded_models, model_alias, proxy_url, headers, timeouts or settings (null sets any but disabled back)",
 		run:     runAccountSet},
 	{words: "account import", args: []string{"file"}, routes: []string{"POST /accounts/import", "POST /vertex/import"},
-		summary: "add an account from a credential file: a Google service account key (a JSON object with a private_key and a project_id) is imported as a Vertex account, any other file as today's core's credential file (- reads a service account key from standard input)",
+		summary: "add an account from a credential file: a Google service account key (a JSON object with a private_key and a project_id) is imported as a Vertex account, any other file as a CLIProxyAPI credential file (- reads a service account key from standard input)",
 		run:     runAccountImport},
 	{words: "account list", routes: []string{"GET /accounts"}, summary: "every account and its state",
 		run: func(x *invocation) error {

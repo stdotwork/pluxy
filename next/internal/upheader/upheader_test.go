@@ -39,8 +39,8 @@ func TestCheck(t *testing.T) {
 		{map[string]string{"X-A": "$x-goog-api-key"}, "cannot copy the client's X-Goog-Api-Key header"},
 		{map[string]string{"X-A": "$Cookie"}, "cannot copy the client's Cookie header"},
 		{map[string]string{"X-A": "$Proxy-Authorization"}, "cannot copy the client's Proxy-Authorization header"},
-		{map[string]string{"X-A": "$CPA-SESSION-ID"}, "$CPA-SESSION-ID (today's core's own session ID) is not supported"},
-		{map[string]string{"X-A": "id-$cpa-session-id"}, "$CPA-SESSION-ID (today's core's own session ID) is not supported"},
+		{map[string]string{"X-A": "$CPA-SESSION-ID"}, "$CPA-SESSION-ID (a CLIProxyAPI session ID, which pluxy does not have) is not supported"},
+		{map[string]string{"X-A": "id-$cpa-session-id"}, "$CPA-SESSION-ID (a CLIProxyAPI session ID, which pluxy does not have) is not supported"},
 		// "$" elsewhere is part of a value sent as written.
 		{map[string]string{"X-Price": "5$"}, ""},
 	} {
@@ -74,8 +74,9 @@ func TestImport(t *testing.T) {
 	if want := []string{"X-Key", "X-Session"}; !reflect.DeepEqual(names, want) {
 		t.Errorf("left out %v, want %v", left, want)
 	}
-	if len(left) == 2 && (!strings.Contains(left[0].Why, "client's Authorization header") || !strings.Contains(left[1].Why, "$CPA-SESSION-ID")) {
-		t.Errorf("left out %v: the reasons do not name the client's key header and $CPA-SESSION-ID", left)
+	const wantSessionWhy = "its value holds $CPA-SESSION-ID, a CLIProxyAPI session ID that pluxy does not have"
+	if len(left) == 2 && (!strings.Contains(left[0].Why, "client's Authorization header") || left[1].Why != wantSessionWhy) {
+		t.Errorf("left out %v: want client's Authorization header and %q", left, wantSessionWhy)
 	}
 	// What Import brings, Check accepts.
 	if err := Check("headers", got); err != nil {
