@@ -1040,9 +1040,11 @@ test("a pluxy that cannot rename (405) loses Rename on every key and says so onc
     rename: () => ({ status: 405, error: { code: "method_not_allowed", message: "method not allowed" } }),
   });
   const m = await w.mount(<ToolsPage />);
+  for (const r of keyRows(m.root).reverse()) {
+    await openKeyMenu(r);
+    expect(hasButton(r, "Rename")).toBe(true);
+  }
   const first = keyRows(m.root)[0] as FakeNode;
-  await openKeyMenu(first);
-  expect(hasButton(first, "Rename")).toBe(true);
   await press(buttonIn(first, "Rename"));
   await type(all(first, "input")[0] as FakeNode, "x");
   await submit(all(first, "form")[0] as FakeNode);
