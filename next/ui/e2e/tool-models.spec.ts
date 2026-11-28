@@ -47,6 +47,7 @@ test("the steps under a tool name a model pluxy serves, and picking another chan
   expect(names.length).toBeGreaterThan(1);
   await goTo(page, "Tools");
   const claude = page.locator('[data-part="tool-row"]').filter({ hasText: "Claude Code" });
+  await expect(claude).toBeAttached();
   if (await claude.isHidden()) {
     await page.getByText(/^Other tools \(/).click();
   }
