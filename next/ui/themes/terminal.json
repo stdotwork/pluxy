@@ -37,8 +37,20 @@
     "size.control-main": "28px",
     "shape.radius": "0px",
     "shadow.raised": "none",
-    "motion.duration": "0ms"
+    "motion.duration": "0ms",
+    "color.card": "transparent",
+    "color.card-border": "transparent",
+    "color.danger-surface": "transparent",
+    "color.warn-surface": "transparent",
+    "color.success-surface": "transparent",
+    "color.info-surface": "transparent",
+    "color.message-action": "var(--px-color-accent)",
+    "size.card-padding": "0px",
+    "motion.duration-menu": "0ms",
+    "motion.duration-slow": "0ms",
+    "motion.press-scale": "1",
+    "color.message-action-foreground": "var(--px-color-accent-text)"
   },
-  "layout": { "nav": "rail" },
+  "layout": { "frame": "flat", "nav": "rail" },
   "css": "[data-part=\"page-title\"]::before { content: \"$ \"; color: var(--px-color-accent); }"
 }

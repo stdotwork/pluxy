@@ -242,7 +242,14 @@ pub(crate) fn show(
         s.get()
     });
     let wide = spec.review.is_some() || !spec.rows.is_empty();
-    let width = if wide { spec.area.0.max(640.0) } else { 420.0 };
+    // The bottom buttons, each as wide as its label needs, and the dialog wide enough for them.
+    let widths: Vec<f64> = spec
+        .buttons
+        .iter()
+        .map(|(_, title)| crate::confirmation::text::button_width_mac(title))
+        .collect();
+    let row = widths.iter().sum::<f64>() + 8.0 * widths.len().saturating_sub(1) as f64;
+    let width = (if wide { spec.area.0.max(640.0) } else { 420.0 }).max(row + 2.0 * MARGIN);
     let inner = width - 2.0 * MARGIN;
     // Laid out top down in a flipped view.
     let mut y = MARGIN;
@@ -376,16 +383,14 @@ pub(crate) fn show(
         y += area_h + GAP;
     }
     // The buttons, right-aligned, in their given order.
-    let bw = 110.0;
-    let n = spec.buttons.len() as f64;
-    let mut x = width - MARGIN - n * (bw + 8.0) + 8.0;
-    for (id, title) in &spec.buttons {
+    let mut x = width - MARGIN - row;
+    for ((id, title), bw) in spec.buttons.iter().zip(&widths) {
         let b = button(
             mtm,
             &panel,
             title,
             *id,
-            NSRect::new(NSPoint::new(x, y), NSSize::new(bw, 32.0)),
+            NSRect::new(NSPoint::new(x, y), NSSize::new(*bw, 32.0)),
         );
         if spec.default == Some(*id) {
             b.setKeyEquivalent(&ns("\r"));

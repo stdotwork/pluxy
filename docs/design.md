@@ -184,10 +184,12 @@ the GitHub CLI's [environment](https://cli.github.com/manual/gh_help_environment
 ## The desktop app
 
 The app reaches core in one of three ways: it runs its own core, connects to a core already
-running on the same computer, or connects to a remote core over HTTPS. Closing the window to the
-tray destroys the webviews, so the app holds little memory while it sits there. Every app command
-is declared and granted only to the app's own webview, and each extension page runs in a webview
-of its own with no grants.
+running on the same computer, or connects to a remote core over HTTPS, or over plain HTTP that
+Tailscale carries from this computer (a Tailscale interface here, and the resolved address in
+Tailscale's ranges), or on a network the person says, in the native key window, that they trust.
+Closing the window to the tray destroys the webviews, so the app holds little memory while it sits
+there. Every app command is declared and granted only to the app's own webview, and each extension
+page runs in a webview of its own with no grants.
 
 Packages installed in the app itself, not in core, come in two kinds. A web package has pages
 only, and reads the user's files only through folders or files the user grants it, which can be

@@ -31,6 +31,10 @@ const t = strings("themes", {
   confirmRemove: "Yes, remove {name}",
   layout: "Layout",
   resetLayout: "Reset layout",
+  frame: "Frame",
+  frameAbout: "The page on a panel inset from the window, or flush with it.",
+  inset: "Inset",
+  flat: "Flat",
   navigation: "Navigation",
   navigationAbout: "Where the main pages are listed.",
   sidebar: "Sidebar",
@@ -80,6 +84,14 @@ const t = strings("themes", {
 type LayoutRow = { [K in LayoutOption]: { label: string; about: string; choices: Choice<Layout[K]>[] } };
 
 const layoutChoices = (): LayoutRow => ({
+  frame: {
+    label: t("frame"),
+    about: t("frameAbout"),
+    choices: [
+      { value: "inset", label: t("inset") },
+      { value: "flat", label: t("flat") },
+    ],
+  },
   nav: {
     label: t("navigation"),
     about: t("navigationAbout"),
@@ -125,7 +137,7 @@ const layoutChoices = (): LayoutRow => ({
 });
 
 /** The layout rows in the order the page lists them; Density sits after Width. */
-const LAYOUT_ORDER: LayoutOption[] = ["nav", "width", "tabs", "detail", "list"];
+const LAYOUT_ORDER: LayoutOption[] = ["frame", "nav", "width", "tabs", "detail", "list"];
 
 const density = (): Choice<string>[] => [
   { value: "0.75", label: t("compact") },

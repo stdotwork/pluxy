@@ -113,7 +113,7 @@
   [data-part="select"] {
     width: calc(var(--s) * 4);
     height: calc(var(--s) * 4);
-    accent-color: var(--px-color-accent);
+    accent-color: var(--px-color-message-action);
   }
 
   [data-part="select"]:focus-visible {
@@ -267,7 +267,7 @@
   .account-bar-fill {
     grid-column: 1 / -1;
     height: calc(var(--s) * 0.75);
-    border-radius: var(--px-shape-radius);
+    border-radius: 999px;
     background: var(--px-color-text);
   }
 

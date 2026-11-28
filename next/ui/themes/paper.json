@@ -39,8 +39,9 @@
     "size.control": "36px",
     "size.control-main": "40px",
     "size.card-padding": "calc(var(--px-space-unit) * var(--px-density) * 4)",
-    "shape.radius": "14px",
-    "shadow.raised": "0 1px 3px rgb(80 50 20 / 0.10)"
+    "shape.radius": "10px",
+    "shadow.raised": "0 1px 3px rgb(80 50 20 / 0.10)",
+    "size.width-narrow": "760px"
   },
   "dark": {
     "color.bg": "#1c1814",
@@ -56,7 +57,9 @@
     "color.danger": "#ff7b72",
     "color.focus": "#f0a36b",
     "color.diff-add": "#5cc98a",
-    "color.diff-remove": "#ff7b72"
+    "color.diff-remove": "#ff7b72",
+    "color.message-action": "var(--px-color-accent)",
+    "color.message-action-foreground": "var(--px-color-accent-text)"
   },
-  "layout": { "nav": "top", "list": "cards", "width": "narrow" }
+  "layout": { "frame": "flat", "nav": "top", "list": "cards", "width": "narrow" }
 }

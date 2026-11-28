@@ -152,7 +152,7 @@ test("the end of the list says how far back pluxy keeps requests", async ({ page
   await signIn(page, core);
   await page.goto(`${core.base}/panel/#/activity`);
   await expect(rows(page)).toHaveCount(3);
-  await expect(page.getByText(/^That is every request pluxy keeps, back to \w+ \d\d:\d\d\./)).toBeVisible();
+  await expect(page.getByText(/^That is every request pluxy keeps, back to \d\d:\d\d today\./)).toBeVisible();
   await expect(page.getByRole("button", { name: "Show older" })).toHaveCount(0);
 });
 

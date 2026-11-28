@@ -21,7 +21,7 @@
     "operations": [
       {
         "id": "preview",
-        "description": "Pin Pi's three files, cliproxyapi.json, settings.json and cliproxyapi-models.json, in one agent folder (by default ~/.pi/agent, or a selected agent folder, or the three files selected, links followed) and read them back with the state of pluxy's Pi plugin, never the key; files Pi would not take are pinned and reported refused",
+        "description": "Pin Pi's three files, cliproxyapi.json, settings.json and cliproxyapi-models.json, in one agent folder (by default ~/.pi/agent, or a selected agent folder, or the three files selected, links followed) and read them back with the state of pluxy's Pi plugin, never the key; files Pi would not take are pinned and reported refused; while ~/.pi/agent does not exist yet (Pi has not run here), read nothing and name the folder Connect makes, unless ~/.pi is a link, which it refuses",
         "effect": "read",
         "input_schema": {
           "type": "object",
@@ -77,7 +77,7 @@
       },
       {
         "id": "apply",
-        "description": "Point Pi at pluxy: install pluxy's reviewed copy of the CLIProxyAPI provider plugin for Pi in a pluxy-cliproxyapi-provider folder beside the previewed files when it is not there, write pluxy's address and the client key into cliproxyapi.json, list the plugin in settings.json (instead of an older app's npm copy) with its provider and the model as Pi's defaults, and remove the plugin's model cache, keeping everything else. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "description": "Point Pi at pluxy: install pluxy's reviewed copy of the CLIProxyAPI provider plugin for Pi in a pluxy-cliproxyapi-provider folder beside the previewed files when it is not there, write pluxy's address and the client key into cliproxyapi.json, list the plugin in settings.json (instead of an older app's npm copy) with its provider and the model as Pi's defaults, and remove the plugin's model cache, keeping everything else. With create_folder, first make that folder, Pi's ~/.pi/agent, as Pi makes it when it first runs (Pi has not run here yet). Saving replaces the file; an edit made in the same instant by another program may be lost.",
         "effect": "write",
         "secrets": {
           "key": "value"
@@ -176,6 +176,11 @@
                 ],
                 "additionalProperties": false
               }
+            },
+            "create_folder": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
             },
             "base_url": {
               "type": "string",

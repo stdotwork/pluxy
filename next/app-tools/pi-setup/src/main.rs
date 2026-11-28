@@ -1,9 +1,11 @@
 //! pluxy/pi-setup: sets up Pi to use pluxy's core through the CLIProxyAPI provider adapter it
 //! carries, manages that adapter, and starts Pi, for pluxy's desktop app (README.md). Its
 //! operations: `preview` (read: pins Pi's three files in an agent folder and pluxy's copy of the
-//! adapter, and reads them back, never the key), `apply` (write: installs the adapter when it is
-//! not there, then writes the core's address, the client key, the adapter's registration and Pi's
-//! default provider and model, and removes the adapter's model cache), `update` (write: replaces
+//! adapter, and reads them back, never the key, or names the folder Connect makes while
+//! `~/.pi/agent` does not exist yet), `apply` (write: makes that folder first when the preview
+//! named it, installs the adapter when it is not there, then writes the core's address, the
+//! client key, the adapter's registration and Pi's default provider and model, and removes the
+//! adapter's model cache), `update` (write: replaces
 //! the installed adapter the preview pinned with the one this program carries), `uninstall`
 //! (write: takes the adapter's registration out and removes the folder the preview pinned),
 //! `clear` and `restore` (write), `status` (read), `recipe` (read: how the launcher starts Pi)
@@ -43,20 +45,105 @@ fn home() -> Result<PathBuf, Error> {
         .ok_or_else(|| Error::unavailable("the app gave no home folder (HOME)"))
 }
 
+/// The app's home folder, as a call is given it (tests give their own).
+type Home<'a> = &'a dyn Fn() -> Result<PathBuf, Error>;
+
+/// What a preview reads: three selections, or, while `~/.pi/agent` does not exist yet (Pi has not
+/// run here), nothing: Connect makes that folder.
+enum Selected {
+    Files([Selection; 3]),
+    Unmade(Unmade),
+}
+
+/// The agent folder Connect makes in home, `~/.pi/agent`, and the three targets a preview shows
+/// for it: the files at the paths a preview pins once the folder is there, with no identities and
+/// no bytes. They are no pins (`Pin::from_json` refuses a target whose folder has no identity):
+/// only Connect takes them back, compared whole, with `create_folder`.
+struct Unmade {
+    pi: PathBuf,
+    agent: PathBuf,
+    targets: Value,
+}
+
+/// Whether nothing at all is at path (not even a link to nowhere).
+fn absent(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// Whether path is a folder itself: not a link to one (nor a junction), nor anything else.
+fn real_folder(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir())
+}
+
+/// `~/.pi/agent` as Connect makes it, when nothing is there yet and `~/.pi` is missing too or a
+/// folder itself; None when something is there (it is read, or refused, as any agent folder).
+/// Refused when `~/.pi` is a link (or not a folder): Connect makes no folder through it, outside
+/// the home folder.
+fn unmade(home: &Path) -> Result<Option<Unmade>, Error> {
+    let pi = home.join(".pi");
+    let agent = pi.join("agent");
+    if !absent(&agent) {
+        return Ok(None);
+    }
+    if !absent(&pi) && !real_folder(&pi) {
+        let link = std::fs::symlink_metadata(&pi).is_ok_and(|m| m.file_type().is_symlink());
+        return Err(Error::invalid_request(if link {
+            format!(
+                "{} does not exist yet, and {} is a link to another place, so pluxy does not make it: run Pi once (it makes the folder), then read the settings again",
+                agent.display(),
+                pi.display()
+            )
+        } else {
+            format!(
+                "{} does not exist yet, and {} is not a folder, so pluxy cannot make it: move {} away, then read the settings again",
+                agent.display(),
+                pi.display(),
+                pi.display()
+            )
+        }));
+    }
+    // The resolved folder the files are pinned in once it is there.
+    let (above, rest): (&Path, &[&str]) = if absent(&pi) {
+        (home, &[".pi", "agent"])
+    } else {
+        (&pi, &["agent"])
+    };
+    let real = std::fs::canonicalize(above)
+        .map_err(|e| Error::unavailable(format!("{}: {e}", above.display())))?;
+    let real = rest.iter().fold(real, |p, part| p.join(part));
+    let targets = FILES
+        .iter()
+        .map(|name| {
+            json!({
+                "selected": agent.join(name),
+                "link": null,
+                "target": real.join(name),
+                "identity": {"link": null, "parent": null, "file": null},
+                "sha256": null,
+            })
+        })
+        .collect();
+    Ok(Some(Unmade {
+        pi,
+        agent,
+        targets: Value::Array(targets),
+    }))
+}
+
 /// The selections a preview names: its three targets (`file`, which may be a link, as stow makes:
 /// it is followed and kept), the three files in a selected agent folder (`folder`, which may
 /// itself be a link, as chezmoi can make; files in it may not), or in `~/.pi/agent` (the tool's
 /// environment has no PI_CODING_AGENT_DIR: a person who moved the folder selects it). Pi makes
-/// its agent folder when it first runs; before that there is nothing to set up, and the tool
-/// makes no folder.
-fn selections(input: &Value) -> Result<[Selection; 3], Error> {
+/// its agent folder when it first runs; before that, Connect makes it (`Selected::Unmade`), so Pi
+/// needs no run before it is set up.
+fn selections(input: &Value, home: Home) -> Result<Selected, Error> {
     if let Some(targets) = input.get("targets") {
         return match targets.as_array().map(Vec::as_slice) {
-            Some([a, b, c]) => Ok([
+            Some([a, b, c]) => Ok(Selected::Files([
                 Selection::from_json(a)?,
                 Selection::from_json(b)?,
                 Selection::from_json(c)?,
-            ]),
+            ])),
             _ => Err(Error::invalid_request(
                 "targets holds cliproxyapi.json, settings.json and cliproxyapi-models.json",
             )),
@@ -67,19 +154,50 @@ fn selections(input: &Value) -> Result<[Selection; 3], Error> {
         if !root.is_absolute() {
             return Err(Error::invalid_request("folder is a full path"));
         }
-        return Ok(FILES.map(|name| Selection::Root {
+        return Ok(Selected::Files(FILES.map(|name| Selection::Root {
             root: root.clone(),
             path: name.to_string(),
-        }));
+        })));
     }
-    let agent = home()?.join(".pi").join("agent");
-    if !agent.is_dir() {
-        return Err(Error::invalid_request(format!(
-            "{} does not exist yet: run Pi once (it makes the folder), then read the settings again",
-            agent.display()
-        )));
+    let home = home()?;
+    if let Some(u) = unmade(&home)? {
+        return Ok(Selected::Unmade(u));
     }
-    Ok(FILES.map(|name| Selection::File(agent.join(name))))
+    let agent = home.join(".pi").join("agent");
+    Ok(Selected::Files(
+        FILES.map(|name| Selection::File(agent.join(name))),
+    ))
+}
+
+/// Makes folder for Connect, as Pi makes it itself when it first runs (the system's default
+/// permissions; the files are written private): whether it made it (false when it is there now).
+fn make_folder(folder: &Path) -> Result<bool, Error> {
+    match std::fs::create_dir(folder) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(Error::unavailable(format!("{}: {e}", folder.display()))),
+    }
+}
+
+/// Whether input's targets are a preview's targets of an agent folder that does not exist yet.
+fn is_unmade(input: &Value) -> bool {
+    input["targets"][0]["identity"]
+        .get("parent")
+        .is_some_and(Value::is_null)
+}
+
+/// What a write other than Connect says when it is given the targets of an agent folder that does
+/// not exist yet.
+fn unmade_refusal(op: &str) -> Error {
+    match op {
+        // The page reads "is not applied to these targets" as: no copy from before pluxy.
+        "clear" | "restore" => Error::invalid_request(format!(
+            "{SET} is not applied to these targets: Pi's agent folder does not exist yet"
+        )),
+        _ => Error::invalid_request(
+            "Pi's agent folder does not exist yet, so there is nothing there to change; Connect makes it",
+        ),
+    }
 }
 
 /// A preview and the bytes of cliproxyapi.json and settings.json.
@@ -279,6 +397,29 @@ fn after_files() {
 #[cfg(not(test))]
 fn after_files() {}
 
+// Tests only: called with each folder Connect has just made, or found there, for a preview that
+// named `create_folder` (where another program could put a link in its place).
+#[cfg(test)]
+type MadeHook = Box<dyn FnMut(&Path)>;
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_MAKE: std::cell::RefCell<Option<MadeHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn after_make(folder: &Path) {
+    AFTER_MAKE.with(|h| {
+        if let Some(f) = h.borrow_mut().as_mut() {
+            f(folder)
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn after_make(_: &Path) {}
+
 /// Where Pi's installer puts `pi` on os, in the order the launcher looks: on Linux and macOS
 /// (`pi.dev/install.sh`) its fallback in Pi's own folder first, then `~/.local/bin` (where it
 /// usually goes). On Windows `pi.dev/install.ps1` makes `pi.cmd` launchers, which are not npm's
@@ -305,7 +446,28 @@ fn recipe(os: &str, home: &Path) -> Value {
 /// Reads the three files and the plugin's state, pinning the files and pluxy's copy of the plugin
 /// (`preview`).
 fn preview(vault: &dyn Vault, data: PathBuf, input: &Value) -> Result<Value, Error> {
-    let sels = selections(input)?;
+    preview_in(vault, data, input, &home)
+}
+
+/// `preview` with the app's home folder from home. While `~/.pi/agent` does not exist yet, nothing
+/// is read or made: Pi is not set up, and `create_folder` names the folder Connect makes.
+fn preview_in(vault: &dyn Vault, data: PathBuf, input: &Value, home: Home) -> Result<Value, Error> {
+    let sels = match selections(input, home)? {
+        Selected::Files(sels) => sels,
+        Selected::Unmade(u) => {
+            let mut read = pi::read_back(None, None, input["base_url"].as_str(), false)?;
+            read["adapter"] = adapter::State::Absent.to_json();
+            read["adapter"]["pin"] = Value::Null;
+            return Ok(json!({
+                "set": SET,
+                "targets": u.targets,
+                "applied": false,
+                "edited": [false, false, false],
+                "pi": read,
+                "create_folder": u.agent,
+            }));
+        }
+    };
     let agent = agent_of(&[&sels[0], &sels[1], &sels[2]])?;
     let tx = Transactions::new(vault, data);
     let (mut v, [config, settings]) = pinned_read(|| {
@@ -391,23 +553,113 @@ fn apply(
     input: &Value,
     secrets: &Map<String, Value>,
 ) -> Result<Value, Error> {
-    let (pins, agent) = pins(input)?;
-    let key = input["key"]
-        .as_str()
-        .and_then(|r| secrets.get(r))
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::invalid_request("key names no secret the app delivered"))?;
-    let s = settings(input, key)?;
+    apply_in(vault, data, input, secrets, &home)
+}
+
+/// `apply` with the app's home folder from home. With `create_folder` (the preview found no
+/// `~/.pi/agent`), it first makes that folder (and `~/.pi` when it is missing too), then pins the
+/// three files in it, which must still be at the paths the preview named and still not exist; the
+/// folders it made go again, while still empty, when the write fails.
+fn apply_in(
+    vault: &dyn Vault,
+    data: PathBuf,
+    input: &Value,
+    secrets: &Map<String, Value>,
+    home: Home,
+) -> Result<Value, Error> {
+    let key = |input: &Value| {
+        input["key"]
+            .as_str()
+            .and_then(|r| secrets.get(r))
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::invalid_request("key names no secret the app delivered"))
+            .map(str::to_string)
+    };
+    let Some(asked) = input.get("create_folder") else {
+        let (pins, agent) = pins(input)?;
+        let s = settings(input, &key(input)?)?;
+        return connect(vault, data, pins, &agent, &s);
+    };
+    let s = settings(input, &key(input)?)?;
+    let refused = || {
+        Error::invalid_request(
+            "create_folder is Pi's agent folder in the home folder, and targets the preview's targets in it",
+        )
+    };
+    let u = unmade(&home()?)?.ok_or_else(|| {
+        Error::invalid_request(
+            "Pi's agent folder is there now: read the settings again, then connect",
+        )
+    })?;
+    if *asked != json!(u.agent) || input["targets"] != u.targets {
+        return Err(refused());
+    }
+    // Each folder must be a folder itself at the path the preview named once it is made (or found),
+    // never a link put there meanwhile: the next is made in it, and the files are written in it.
+    let changed = || {
+        Error::invalid_request(format!(
+            "{} changed since it was read: read the settings again",
+            u.agent.display()
+        ))
+    };
+    let made_pi = make_folder(&u.pi)?;
+    after_make(&u.pi);
+    let mut made = false;
+    let r = real_folder(&u.pi)
+        .then_some(())
+        .ok_or_else(changed)
+        .and_then(|()| make_folder(&u.agent))
+        .and_then(|m| {
+            made = m;
+            after_make(&u.agent);
+            if !real_folder(&u.agent) {
+                return Err(changed());
+            }
+            let mut pins = Vec::new();
+            for (i, name) in FILES.iter().enumerate() {
+                let p = Target::resolve(&Selection::File(u.agent.join(name)))?.pin;
+                if json!(p.target) != u.targets[i]["target"]
+                    || p.link.is_some()
+                    || p.sha256.is_some()
+                {
+                    return Err(changed());
+                }
+                pins.push(p);
+            }
+            let pins: [Pin; 3] = pins.try_into().expect("three files");
+            connect(vault, data, pins, &u.agent, &s)
+        });
+    if r.is_err() {
+        // Only empty folders go, and only while still folders: anything Pi or the write put
+        // there stays, and so does a link put in place of one.
+        if made && real_folder(&u.agent) {
+            let _ = std::fs::remove_dir(&u.agent);
+        }
+        if made_pi && real_folder(&u.pi) {
+            let _ = std::fs::remove_dir(&u.pi);
+        }
+    }
+    r
+}
+
+/// Connect's writes, to the three pinned files in agent, with s.
+fn connect(
+    vault: &dyn Vault,
+    data: PathBuf,
+    pins: [Pin; 3],
+    agent: &Path,
+    s: &Settings,
+) -> Result<Value, Error> {
     let (_, config) = Target::open(&pins[0])?.read_now()?;
     let provider = pi::provider_of(config.as_deref())?;
     let tx = Transactions::new(vault, data);
-    let installed = adapter::ensure(&tx, &agent)?;
+    let installed = adapter::ensure(&tx, agent)?;
     let r = tx.apply(
         SET,
         &pins,
         &|i, _, before| match i {
-            0 => pi::apply_config(before, &s).map(Some),
-            1 => pi::apply_settings(before, &s, &provider).map(Some),
+            0 => pi::apply_config(before, s).map(Some),
+            1 => pi::apply_settings(before, s, &provider).map(Some),
             _ => Ok(None),
         },
         &PiMerge,
@@ -458,6 +710,10 @@ fn restore(vault: &dyn Vault, data: PathBuf, input: &Value) -> Result<Value, Err
 impl Handler for Pi {
     fn call(&self, call: &Call) -> Result<Value, Error> {
         let input = &call.input;
+        // The targets of an agent folder that does not exist yet go only to Connect.
+        if !matches!(call.op.as_str(), "preview" | "apply") && is_unmade(input) {
+            return Err(unmade_refusal(&call.op));
+        }
         // The backup browser: manual backups of the three files, diffed by setting name.
         if call.op.starts_with("backup-") {
             let tx = Transactions::new(call, data_dir()?);

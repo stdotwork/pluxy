@@ -91,5 +91,36 @@ export function ready(f: Form): boolean {
   );
 }
 
+/** Names that are no coding model: the best match for Claude Code is never one of these. */
+const NOT_CHAT = /embed|image|tts|whisper|moderation|dall-e|audio|realtime|transcribe/i;
+
+/**
+ * The model Claude Code's three models should start with when its own names are not served: a
+ * served Claude model if there is one (Opus first), else the first served model that is a chat
+ * model. Undefined when pluxy serves none.
+ */
+export function bestServed(served: readonly string[]): string | undefined {
+  const chat = served.filter((m) => !NOT_CHAT.test(m));
+  for (const word of ["claude-opus", "claude-sonnet", "claude"]) {
+    const found = chat.find((m) => m.toLowerCase().includes(word));
+    if (found) return found;
+  }
+  return chat[0];
+}
+
+/**
+ * The form of a settings file pluxy has not set up, for the models pluxy serves: Claude Code's own
+ * model names are served by an account of Claude's, and by no account of another service, so a
+ * form whose Opus, Sonnet and Haiku name none that is served starts with the best served model in
+ * each. A role that names a served model keeps it. Returns f itself when nothing changes.
+ */
+export function withServedModels(f: Form, served: readonly string[]): Form {
+  const best = bestServed(served);
+  if (!best) return f;
+  const roles = ["opus", "sonnet", "haiku"] as const;
+  if (roles.some((r) => served.includes(bare(f.models[r])))) return f;
+  return { ...f, models: { ...f.models, opus: best, sonnet: best, haiku: best } };
+}
+
 /** Where Claude Code keeps its user settings: in the home of the selected WSL user, else `~`. */
 export const settingsNote = (home?: string) => inHome(home ?? "~", ".claude/settings.json");
