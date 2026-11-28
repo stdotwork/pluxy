@@ -29,7 +29,7 @@ still passes, so an exception cannot hide a difference it was not written for.
 
 The bar covers behaviour the new core keeps. An old feature or setting is left out only with a
 written reason: config settings in
-[What each setting does here](../next/README.md#what-each-setting-does-here), and panel features in [What each page leaves out, and why](../next/ui/README.md#what-each-page-leaves-out-and-why).
+[What each setting does](config.md#what-each-setting-does).
 
 ## The recorded replies
 

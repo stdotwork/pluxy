@@ -79,8 +79,8 @@ is Tauri 2, so its native side is Rust.
   file for each UTC day, with a summary file for each closed day. Closed-day files are not
   compressed in this version, which is worth revisiting if the volume grows.
 
-Details: [`next/README.md`](../next/README.md) (routing, reloads, packages, usage and the
-management API).
+Details: [routing](routing.md), [reloads](config.md#reloading), [packages](extensions.md),
+[usage](usage-and-logs.md) and the [management API](management-api.md).
 
 ## The extension model
 
@@ -179,15 +179,17 @@ Tailscale's [state path for a user](https://github.com/tailscale/tailscale/blob/
 Ollama's [FAQ](https://github.com/ollama/ollama/blob/main/docs/faq.mdx); T3 Code's
 [background service](https://github.com/pingdotgg/t3code/blob/main/docs/user/background-service.md);
 the GitHub CLI's [environment](https://cli.github.com/manual/gh_help_environment); Go's
-[`os` package](https://pkg.go.dev/os). Details: [`next/README.md`](../next/README.md#pluxys-home).
+[`os` package](https://pkg.go.dev/os). Details: [pluxy's home](config.md#pluxys-home).
 
 ## The desktop app
 
 The app reaches core in one of three ways: it runs its own core, connects to a core already
-running on the same computer, or connects to a remote core over HTTPS. Closing the window to the
-tray destroys the webviews, so the app holds little memory while it sits there. Every app command
-is declared and granted only to the app's own webview, and each extension page runs in a webview
-of its own with no grants.
+running on the same computer, or connects to a remote core over HTTPS, or over plain HTTP that
+Tailscale carries from this computer (a Tailscale interface here, and the resolved address in
+Tailscale's ranges), or on a network the person says, in the native key window, that they trust.
+Closing the window to the tray destroys the webviews, so the app holds little memory while it sits
+there. Every app command is declared and granted only to the app's own webview, and each extension
+page runs in a webview of its own with no grants.
 
 Packages installed in the app itself, not in core, come in two kinds. A web package has pages
 only, and reads the user's files only through folders or files the user grants it, which can be

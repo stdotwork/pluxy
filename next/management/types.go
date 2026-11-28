@@ -1,6 +1,6 @@
 // Package management holds the management API's request and reply types and a client for it.
 // Core's handlers write these types and the pluxy command reads them, so the two cannot drift.
-// README.md in this folder describes the API and the command.
+// docs/management-api.md describes the API; docs/cli.md describes the command.
 package management
 
 import (
@@ -135,7 +135,7 @@ type RegistriesReply struct {
 	Registries []Registry `json:"registries"`
 }
 
-// Health is an account's health (Account.Health; the README's "Accounts").
+// Health is an account's health (Account.Health; docs/management-api.md, "Account fields").
 type Health = route.Health
 
 // Health states (Health.State) and where a block's end came from (Health.Source).
@@ -759,6 +759,12 @@ type ClientPaste struct {
 	Files []ClientPasteFile `json:"files"`
 	// Note says what the files need besides themselves; left out when nothing.
 	Note string `json:"note,omitempty"`
+	// Model is the model the files name for the tool to start with: the one the call asked for
+	// (its model parameter), else the best match among Models; empty when no model is served and
+	// none was asked for, and the files then hold the placeholder <model-id>.
+	Model string `json:"model,omitempty"`
+	// Models are the names of the models pluxy serves now, to choose Model from.
+	Models []string `json:"models"`
 }
 
 // ClientPasteFile is one file of a ClientPaste: where it goes (from the home folder, ~) and
