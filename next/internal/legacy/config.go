@@ -22,65 +22,31 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/upheader"
 )
 
-// Result is a config.yaml turned into this core's config.
 type Result struct {
-	// Config is this core's config file, as the JSON object the JSON config holds.
-	Config map[string]any
-	// Notices name the settings the file uses that this core does not support yet, ignores
-	// for good, or does not know; core logs them at each load.
-	Notices []string
-	// AuthDir is today's auth folder (oauth.auth-dir), as written; empty when not set.
-	AuthDir string
-	// Import says how accounts imported from AuthDir are set up.
-	Import ImportOptions
-	// HashedManagementKey: management.secret-key holds a bcrypt hash of the key, which today's
-	// core writes over the key and this core cannot use. The config then has no management_key.
+	Config              map[string]any
+	Notices             []string
+	AuthDir             string
+	Import              ImportOptions
 	HashedManagementKey bool
-	// Ledger accounts for every key of the file in an import report.
-	Ledger *Ledger
-	// OldListen is the address today's core listened on: every interface (0.0.0.0) without a host.
-	OldListen string
-	// ListenKeys are the report items of the keys that make up listen (server.host and
-	// server.port, in whichever spelling the file uses), and of server.host when the file sets no
-	// host: the import then has a row for it too.
-	ListenKeys []string
-	// Accounts maps each account the config's provider sections become to the item of the report
-	// that names it (ConfigItem).
-	Accounts map[string]string
+	Ledger              *Ledger
+	OldListen           string
+	ListenKeys          []string
+	Accounts            map[string]string
 }
 
-// ImportOptions are the settings of a config.yaml that apply to accounts imported from today's
-// auth folder.
 type ImportOptions struct {
-	// CodexIdentity is false when upstream.codex.disable-codex-cloaking is set: imported Codex
-	// subscription accounts then get "codex_identity": false.
-	CodexIdentity bool `json:"codex_identity"`
-	// ImageGenerationTool is false when multimedia.disable-image-generation turns off the
-	// hosted image_generation tool: imported Codex accounts then get
-	// "image_generation_tool": false.
-	ImageGenerationTool bool `json:"image_generation_tool"`
-	// Images is false when multimedia.disable-image-generation is true, which also turns off the
-	// Images API routes: imported Codex accounts then get "images": false.
-	Images bool `json:"images"`
-	// InjectXSearch is true when upstream.xai.inject-x-search is set (or its older spelling): the
-	// xAI accounts of the config and imported xAI logins then get "inject_x_search": true, which
-	// injects xAI's native x_search tool. False by default.
-	InjectXSearch bool `json:"inject_x_search"`
-	// SIWCIdentifier is codex.signin-with-chatgpt-identifier, trimmed: imported Sign in with
-	// ChatGPT accounts then get it as "signin_with_chatgpt_identifier". Empty: the extension's
-	// default.
-	SIWCIdentifier string `json:"signin_with_chatgpt_identifier,omitempty"`
-	// ClaudeModelLevelCooling is upstream.claude.model-level-cooling: imported Claude accounts
-	// then get "model_level_cooling": true.
-	ClaudeModelLevelCooling bool `json:"model_level_cooling,omitempty"`
+	CodexIdentity           bool   `json:"codex_identity"`
+	ImageGenerationTool     bool   `json:"image_generation_tool"`
+	Images                  bool   `json:"images"`
+	InjectXSearch           bool   `json:"inject_x_search"`
+	SIWCIdentifier          string `json:"signin_with_chatgpt_identifier,omitempty"`
+	ClaudeModelLevelCooling bool   `json:"model_level_cooling,omitempty"`
 }
 
-// DefaultImportOptions are the import settings when the config sets none.
 var DefaultImportOptions = ImportOptions{CodexIdentity: true, ImageGenerationTool: true, Images: true}
 
-// Package IDs of the extensions today's provider sections and auth files map to.
 const (
-	Antigravity      = "pluxy/antigravity" // archived: not shipped, built by hand (next/archive/antigravity)
+	Antigravity      = "pluxy/antigravity"
 	Codex            = "pluxy/codex"
 	Claude           = "pluxy/claude"
 	Gemini           = "pluxy/gemini"
@@ -91,20 +57,13 @@ const (
 	OpenAICompatible = "pluxy/openai-compatible"
 )
 
-// channels are the oauth.model-alias and oauth.excluded-models channels today's core has, and
-// the package whose accounts added by login they apply to (core/sdk/cliproxy/auth
-// OAuthModelAliasChannel); a channel without one has no extension here.
 var channels = map[string]string{
 	"codex": Codex, "claude": Claude, "antigravity": Antigravity, "vertex": Gemini, "kimi": Kimi, "kimi-ai": Kimi, "kimi.ai": Kimi,
 	"kimi.com": Kimi, "xai": XAI, "meta": Meta, "devin": Devin,
 }
 
-// newKeys are this core's own settings, which keep their JSON names in a config.yaml.
 var newKeys = []string{"packages", "extensions", "extension", "extension_pages", "drop_policy", "token_count_estimate", "credentials_dir", "cors", "client_key_labels"}
 
-// moves are today's older spellings and the v8 paths that replace them, from
-// core/internal/config/config_v8.go. More specific paths come before the paths that contain
-// them. When both are present the v8 value wins, field by field.
 var moves = [][2]string{
 	{"host", "server.host"}, {"port", "server.port"},
 	{"max-request-body-bytes", "server.max-request-body-bytes"}, {"trusted-proxies", "server.trusted-proxies"},
@@ -168,7 +127,6 @@ var moves = [][2]string{
 	{"pprof", "observability.pprof"},
 }
 
-// family is one provider key section.
 type family struct {
 	v8, old, extension string
 }
@@ -184,9 +142,6 @@ var families = []family{
 	{"interactions", "interactions-api-key", Gemini},
 }
 
-// SectionLists returns the keys at the top of a config.yaml whose value is a list of provider key
-// entries, in today's core's older spelling (codex-api-key and the rest). In the v8 layout the
-// sections are the values of the top-level api-keys mapping.
 func SectionLists() []string {
 	var out []string
 	for _, f := range families {
@@ -195,8 +150,6 @@ func SectionLists() []string {
 	return out
 }
 
-// SectionNames returns the keys of the v8 api-keys mapping of a config.yaml that are provider key
-// sections (codex, openai-compatibility and the rest).
 func SectionNames() []string {
 	var out []string
 	for _, f := range families {
@@ -214,12 +167,9 @@ const (
 
 type rule struct {
 	status int
-	note   string // what brings it (later) or why it is dropped
+	note   string
 }
 
-// rules classify each setting by its v8 path. A rule covers its path and everything below it.
-// In provider sections, "*" stands for the section and a key's fields are looked up as the
-// group's. Settings the translation reads are supported.
 var rules = map[string]rule{
 	"config-version": {supported, ""},
 	"server.host":    {supported, ""}, "server.port": {supported, ""},
@@ -268,7 +218,7 @@ var rules = map[string]rule{
 	"client.claude.show-codex-commentary":  {dropped, "off by default and no need found"},
 
 	"upstream.codex.disable-codex-cloaking":                 {supported, ""},
-	"upstream.codex.websocket-compression":                  {supported, ""}, // reported in translate
+	"upstream.codex.websocket-compression":                  {supported, ""},
 	"upstream.codex.model-level-cooling":                    {supported, ""},
 	"upstream.claude.model-level-cooling":                   {supported, ""},
 	"upstream.codex.upstream-request-compression":           {dropped, "it needs a compression library this core does not carry, for an off-by-default saving no one has measured"},
@@ -285,13 +235,13 @@ var rules = map[string]rule{
 
 	"oauth.auth-dir":                                       {supported, ""},
 	"oauth.auth-auto-refresh-workers":                      {dropped, "each account is renewed shortly before it expires"},
-	"oauth.model-alias":                                    {supported, ""}, // reported in oauthModels
-	"oauth.excluded-models":                                {supported, ""}, // reported in oauthModels
+	"oauth.model-alias":                                    {supported, ""},
+	"oauth.excluded-models":                                {supported, ""},
 	"oauth.settings":                                       {dropped, "needs a model catalog, and no page uses it"},
 	"oauth.request-scoped-errors":                          {dropped, "a request-scoped error is already not the account's fault"},
 	"oauth.providers.aistudio.ws-auth":                     {dropped, "the AI Studio relay needs a long-lived listener the extension protocol does not have"},
 	"oauth.providers.codex.live-media-relay":               {dropped, "realtime and WebRTC are out of scope"},
-	"oauth.providers.codex.signin-with-chatgpt-identifier": {supported, ""}, // reported in options
+	"oauth.providers.codex.signin-with-chatgpt-identifier": {supported, ""},
 	"oauth.providers.antigravity":                          {dropped, "the Antigravity extension does not read these settings"},
 	"oauth.providers.devin":                                {dropped, "rewriting words to get past a content filter is out of scope"},
 
@@ -313,7 +263,6 @@ var rules = map[string]rule{
 	"plugins":                                                 {dropped, "replaced by packages"},
 	"credentials":                                             {dropped, "only the Home control plane used them"},
 
-	// Provider sections: group fields, and a key's fields (which override the group's).
 	"api-keys.*[].name":                                        {supported, ""},
 	"api-keys.*[].base-url":                                    {supported, ""},
 	"api-keys.*[].priority":                                    {supported, ""},
@@ -349,7 +298,7 @@ var rules = map[string]rule{
 	"api-keys.vertex[].openapi-location":                       {later, "built when someone calls Vertex partner models (Claude, Llama, Mistral) through a key"},
 	"api-keys.openai-compatibility[].disabled":                 {supported, ""},
 	"api-keys.openai-compatibility[].support-prompt-cache-key": {dropped, "no need found: a payload rule can set a fixed key"},
-	"api-keys.openai-compatibility[].excluded-models":          {dead, ""}, // today's core has no such key there
+	"api-keys.openai-compatibility[].excluded-models":          {dead, ""},
 	"api-keys.claude[].cloak":                                  {dropped, "making other clients look like Claude Code is out of scope"},
 	"api-keys.claude[].fingerprint-profile":                    {dropped, "making other clients look like Claude Code is out of scope"},
 	"api-keys.claude[].native-tool-search":                     {dropped, "Codex's tool search on Claude accounts: off by default, with no panel or app control"},
@@ -358,27 +307,18 @@ var rules = map[string]rule{
 	"api-keys.meta":                                            {dropped, "the login is built; no need for a bare key"},
 }
 
-// aliasLater is the reason an oauth.model-alias entry's setting is not imported yet.
 var aliasLater = map[string]string{
 	"force-mapping": "built when a client needs a reply's model to be the alias it asked for",
 	"openapi":       "built when someone calls Vertex partner models (Claude, Llama, Mistral) through a key",
 }
 
-// tree is a decoded YAML mapping.
 type tree = map[string]any
 
-// literal is a scalar YAML reads as something other than text (a number, true or false, a
-// date): its value as yaml.v3 decodes it into any, and its text as written. Today's core
-// decodes its config into typed fields, so a text setting gets the text (api-key: 0123 is
-// "0123", not 83) and a number or true-or-false setting gets the value.
 type literal struct {
 	value any
 	text  string
 }
 
-// node decodes a YAML value as yaml.v3 decodes it into any, except that a scalar YAML reads
-// as something other than text is a literal. yaml.v3 itself resolves aliases and merge keys
-// and refuses repeated keys in each mapping.
 type node struct{ v any }
 
 func (d *node) UnmarshalYAML(n *yaml.Node) error {
@@ -414,15 +354,11 @@ func (d *node) UnmarshalYAML(n *yaml.Node) error {
 			d.v = literal{value: v, text: n.Value}
 		}
 	default:
-		// A mapping with a key that is not text: as yaml.v3 decodes it into any (which the
-		// translation then refuses where it wants a mapping).
 		return n.Decode(&d.v)
 	}
 	return nil
 }
 
-// stringMap reports whether yaml.v3 decodes the mapping n into a map with text keys
-// (yaml.v3's isStringMap).
 func stringMap(n *yaml.Node) bool {
 	for i := 0; i < len(n.Content); i += 2 {
 		if t := n.Content[i].ShortTag(); t != "!!str" && t != "!!merge" {
@@ -432,7 +368,6 @@ func stringMap(n *yaml.Node) bool {
 	return true
 }
 
-// value returns v, or a literal's value.
 func value(v any) any {
 	if l, ok := v.(literal); ok {
 		return l.value
@@ -440,8 +375,6 @@ func value(v any) any {
 	return v
 }
 
-// plain returns v with each literal below it replaced by its value: v as yaml.v3 decodes it
-// into any, for settings that go across as they are.
 func plain(v any) any {
 	switch v := v.(type) {
 	case literal:
@@ -462,8 +395,6 @@ func plain(v any) any {
 	return v
 }
 
-// asText returns a literal's text, and anything else as plain does: a text field of a setting
-// that goes across as it is, which this core's own check then reads.
 func asText(v any) any {
 	if l, ok := v.(literal); ok {
 		return l.text
@@ -471,8 +402,6 @@ func asText(v any) any {
 	return plain(v)
 }
 
-// each returns the list v with f applied to each item, or v as plain does when it is not a
-// list.
 func each(v any, f func(any) any) any {
 	list, ok := v.([]any)
 	if !ok {
@@ -485,40 +414,15 @@ func each(v any, f func(any) any) any {
 	return out
 }
 
-// The key names of today's payload types (config.PayloadConfig and the types under it). Today's
-// core reads a config.yaml with yaml.v3, which matches a key to a field exactly, so these are
-// the only spellings it reads.
 var (
 	payloadLists     = []string{"default", "default-raw", "override", "override-raw", "filter"}
 	payloadRuleKeys  = []string{"models", "params"}
 	payloadModelKeys = []string{"name", "protocol", "headers", "from-protocol", "match", "not-match", "exist", "not-exist"}
 )
 
-// payloadRules returns payload rules with the field types of today's core
-// (config.PayloadConfig): a rule's params, and a model's match and not-match, hold values; a
-// model's name, protocol, from-protocol, headers, exist and not-exist, and a filter rule's
-// params, are text as written. Anything else goes across as plain does.
-//
-// It carries the rules as today's core applied them, which is not always as written, and names
-// each difference in a notice:
-//   - Today's core matches a key to its field exactly and drops any other key, so a key in
-//     another letter case (Override:, Name:) never took effect there. It is dropped here too:
-//     the JSON config is read with encoding/json, which would match it case-insensitively.
-//   - A -raw rule with a string param that is not JSON is dropped as a whole (a warning in
-//     today's core's log); a -raw param that is null or that json.Marshal refuses (.inf, .nan)
-//     was skipped, and a date is sent as the JSON string of its date (paramValue).
-//   - A param of default or override whose value json.Marshal refuses was skipped, or written
-//     into the body as the invalid text +Inf, NaN or -Inf; it is dropped here.
-//   - A model whose match holds such a value never matched, so it is dropped; a not-match
-//     condition with one never equalled anything, so it never excluded a request, and is dropped.
-//
-// A value JSON cannot hold elsewhere in the rules fails the load, naming the rules.
 func (x *translator) payloadRules(rules tree) (tree, error) {
 	const base = "requests.payload"
 	var ignored, dropped []string
-	// keep returns the entries of m whose key is one of known, and records the others in
-	// ignored: a key that differs from a known one only in letter case with the spelling to use,
-	// any other as unknown.
 	keep := func(where string, m tree, known []string) tree {
 		out := tree{}
 		for _, k := range slices.Sorted(maps.Keys(m)) {
@@ -534,8 +438,6 @@ func (x *translator) payloadRules(rules tree) (tree, error) {
 		return out
 	}
 	drop := func(where, why string) { dropped = append(dropped, where+": "+why) }
-	// items applies f to each item of the list v and keeps the results f accepts; a value that
-	// is not a list goes across as plain does.
 	items := func(v any, f func(i int, e any) (any, bool)) any {
 		list, ok := v.([]any)
 		if !ok {
@@ -549,7 +451,6 @@ func (x *translator) payloadRules(rules tree) (tree, error) {
 		}
 		return out
 	}
-	// model carries one entry of a rule's models, or reports false for one that never matched.
 	model := func(where string) func(int, any) (any, bool) {
 		return func(i int, v any) (any, bool) {
 			at := fmt.Sprintf("%s[%d]", where, i)
@@ -613,7 +514,6 @@ func (x *translator) payloadRules(rules tree) (tree, error) {
 			return out, true
 		}
 	}
-	// rule carries one rule of a list, or reports false for one today's core dropped.
 	rule := func(list string) func(int, any) (any, bool) {
 		raw := strings.HasSuffix(list, "-raw")
 		return func(i int, e any) (any, bool) {
@@ -625,7 +525,6 @@ func (x *translator) payloadRules(rules tree) (tree, error) {
 			kept := keep(at, r, payloadRuleKeys)
 			params, _ := kept["params"].(tree)
 			if raw {
-				// Today's core drops the whole rule for a string param that is not JSON text.
 				for _, name := range slices.Sorted(maps.Keys(params)) {
 					if s, isText := plain(params[name]).(string); isText && !rawText(s) {
 						drop(at, fmt.Sprintf("param %q is a string that is not JSON, rule dropped: CLIProxyAPI dropped the whole rule and logged a warning", name))
@@ -676,8 +575,6 @@ func (x *translator) payloadRules(rules tree) (tree, error) {
 	return out, nil
 }
 
-// conditions returns the maps of a match or not-match list, as today's core reads them; any
-// other shape has none.
 func conditions(v any) []tree {
 	var out []tree
 	list, _ := v.([]any)
@@ -689,8 +586,6 @@ func conditions(v any) []tree {
 	return out
 }
 
-// notJSON returns why json.Marshal refuses the value v, as today's core's payload code calls it,
-// or "" when it takes it. A value it refuses is .inf or .nan, alone or inside a list or mapping.
 func notJSON(v any) string {
 	if _, err := json.Marshal(plain(v)); err != nil {
 		return err.Error()
@@ -698,27 +593,11 @@ func notJSON(v any) string {
 	return ""
 }
 
-// rawText reports whether the string s is JSON text a -raw rule can hold: today's core drops a
-// rule whose string param is empty or not valid JSON once its spaces are trimmed.
 func rawText(s string) bool {
 	t := bytes.TrimSpace([]byte(s))
 	return len(t) > 0 && json.Valid(t)
 }
 
-// paramValue returns what a rule's param holds in this core's config, or why the param is
-// dropped, as today's core applied it.
-//
-// In a -raw rule (raw) the value is sent as JSON text. A string is that text and goes across as
-// it is (the caller has dropped the rule if it is not JSON). Any other value is what json.Marshal
-// makes of it: a date YAML reads as one (2024-01-15) is a time.Time there, which json.Marshal
-// writes as the JSON string "2024-01-15T00:00:00Z", so that text is returned. A param that is
-// null or that json.Marshal refuses (.inf and .nan, also inside a list or mapping) was skipped,
-// and the rule's other params still applied.
-//
-// In any other rule the value is written as a JSON value. When json.Marshal refuses it, today's
-// core either skipped the param or, for a top-level .inf, .nan or -.inf in default (and -.inf in
-// override), wrote the text +Inf, NaN or -Inf into the body, which no upstream accepts. Either
-// way there is no value to carry.
 func paramValue(raw bool, v any) (any, string) {
 	v = plain(v)
 	if raw {
@@ -744,18 +623,8 @@ func paramValue(raw bool, v any) (any, string) {
 	return v, ""
 }
 
-// Translate turns the contents of a config.yaml written for today's core into this core's
-// config. It fails only where today's core would refuse the file too (it is not a mapping, a
-// key appears twice, config-version is not 8) or a value has the wrong type.
 func Translate(b []byte) (*Result, error) { return translateFile(b, "", false) }
 
-// ImportConfig turns a config.yaml written for today's core into this core's config for an import
-// (pluxy import cpa), as Translate does, with the import's own changes: no server.host listens on
-// 127.0.0.1, the management key is not brought (pluxy keeps its own), the example config's client
-// keys are left out, this core's own settings that belong to the config core already runs on
-// (credentials_dir and the like) are not brought, and relative TLS file paths are taken from
-// dir, the file's folder. Result.Ledger then names every key of the file in a report row; it
-// fails when it does not account for one.
 func ImportConfig(b []byte, dir string) (*Result, error) {
 	res, err := translateFile(b, dir, true)
 	if err != nil {
@@ -804,37 +673,29 @@ type translator struct {
 	res *Result
 
 	laterKeys, droppedKeys, unknownKeys []string
-	item                                string   // the provider group being read, as its v8 path
-	notes                               []string // notices about one setting each
+	item                                string
+	notes                               []string
 
-	importing bool   // ImportConfig
-	dir       string // the file's folder, in an import
-	// origin maps the path of a key moved to its v8 place (see moves) to its path in the file.
-	origin map[string]string
-	// why, when not nil, collects what a provider group's notes say, for its report row.
-	why *[]string
-	// whyFor collects, by the v8 path of a report item, what the chains say about it.
-	whyFor map[string][]string
-	// pending are rows of provider groups and alias channels, added once the chains are known.
-	pending []Entry
-	pools   []pool
-	served  []served
+	importing bool
+	dir       string
+	origin    map[string]string
+	why       *[]string
+	whyFor    map[string][]string
+	pending   []Entry
+	pools     []pool
+	served    []served
 }
 
-// pool is an alias of an openai-compatibility key whose models today's core took in turn.
 type pool struct {
 	name, ext, account, item string
 	models                   []string
 }
 
-// served is the model names clients use that a provider serves through the accounts of one
-// item of the report (a provider group, or an alias channel's sign-in accounts).
 type served struct {
 	ext, account, item string
 	names              []string
 }
 
-// fileKey is the path in the file of the key at path.
 func (x *translator) fileKey(path string) string {
 	if o, ok := x.origin[path]; ok {
 		return o
@@ -842,7 +703,6 @@ func (x *translator) fileKey(path string) string {
 	return path
 }
 
-// mark adds a report row to list for the key at path.
 func (x *translator) mark(list int, path string, row Row) {
 	k := x.fileKey(path)
 	if row.What == "" {
@@ -851,13 +711,10 @@ func (x *translator) mark(list int, path string, row Row) {
 	x.res.Ledger.Add(list, ConfigItem(k), row)
 }
 
-// markAll adds row to list for each item of the value v at path.
 func (x *translator) markAll(list int, path string, v any, row Row) {
 	leaves(path, v, func(p string) { x.mark(list, p, row) })
 }
 
-// fill adds a brought row for each item of the value v at path that has none yet: a setting the
-// translation read.
 func (x *translator) fill(path string, v any) {
 	leaves(path, v, func(p string) {
 		if !x.res.Ledger.Has(ConfigItem(x.fileKey(p))) {
@@ -866,7 +723,6 @@ func (x *translator) fill(path string, v any) {
 	})
 }
 
-// note adds a notice, and its why to the provider group being read.
 func (x *translator) note(notice, why string) {
 	x.notes = append(x.notes, notice)
 	if x.why != nil {
@@ -874,9 +730,6 @@ func (x *translator) note(notice, why string) {
 	}
 }
 
-// move moves the value at from to to, as today's core reads its older spellings: when to is set
-// too, the v8 value wins, field by field. Each item of the value keeps its path in the file
-// (origin), and one that loses to the v8 value is named as not brought.
 func (x *translator) move(from, to string) {
 	v, ok := get(x.t, from)
 	if !ok {
@@ -899,8 +752,6 @@ func (x *translator) move(from, to string) {
 	del(x.t, from)
 }
 
-// occupied reports whether merge keeps cur's value at the path rest below it (".a.b", or ""
-// for cur itself) over another's.
 func occupied(cur any, rest string) bool {
 	if rest == "" {
 		return true
@@ -933,7 +784,6 @@ func (x *translator) run() error {
 	}
 	for _, k := range newKeys {
 		if v, ok := x.t[k]; ok {
-			// In an import, core keeps its own folders and its own extension under development.
 			if x.importing && !slices.Contains([]string{"extensions", "cors", "drop_policy", "token_count_estimate"}, k) {
 				x.mark(NotBrought, k, Row{Why: "core keeps its own " + k})
 			} else {
@@ -943,8 +793,6 @@ func (x *translator) run() error {
 			delete(x.t, k)
 		}
 	}
-	// The older layout's client keys are a root api-keys list; the v8 root api-keys is a
-	// mapping of provider sections.
 	var providers tree
 	switch v := x.t["api-keys"].(type) {
 	case []any:
@@ -1023,9 +871,6 @@ func (x *translator) run() error {
 	return nil
 }
 
-// readPaths are the settings the translation reads outside the provider sections. Every
-// mapping on the way to one must be a mapping (or empty), as today's core requires: a
-// malformed parent must not make a setting such as the client keys read as absent.
 var readPaths = []string{
 	"server.host", "server.port", "access.api-keys", "management.secret-key", "management.allow-remote",
 	"server.tls.enable", "server.tls.cert", "server.tls.key", "server.trusted-proxies",
@@ -1041,8 +886,6 @@ var readPaths = []string{
 	"observability.pprof.enable", "observability.pprof.addr",
 }
 
-// mappingsOn checks that every value on the way to path, below the root, is a mapping or
-// empty.
 func mappingsOn(t tree, path string) error {
 	parts := strings.Split(path, ".")
 	var cur any = t
@@ -1059,11 +902,8 @@ func mappingsOn(t tree, path string) error {
 	return nil
 }
 
-// bcryptHash matches a bcrypt hash, which today's core may have written as its management key.
 var bcryptHash = regexp.MustCompile(`^\$2[abxy]?\$\d{2}\$[./A-Za-z0-9]{53}$`)
 
-// managementKeyWhy is why an import does not bring the file's management key: it guards every
-// client of core, so the owner changes core's own with pluxy's command instead.
 const managementKeyWhy = "pluxy keeps its own management key: it guards every client of core, and an import does not change it; change it with POST /v0/management/management-key/rotate"
 
 func (x *translator) server() error {
@@ -1076,7 +916,7 @@ func (x *translator) server() error {
 		return err
 	}
 	if port == 0 {
-		port = 8317 // today's core's default
+		port = 8317
 	}
 	if port < 0 || port > 65535 {
 		return fmt.Errorf("server.port %d is not a port", port)
@@ -1084,7 +924,6 @@ func (x *translator) server() error {
 	host = strings.TrimSpace(host)
 	x.res.OldListen = net.JoinHostPort(cmp.Or(host, "0.0.0.0"), strconv.Itoa(port))
 	if x.importing && host == "" {
-		// Today's core listens on every interface then; pluxy only on this machine (T6).
 		from := "(not set: every interface)"
 		if _, set := get(x.t, "server.host"); set {
 			from = "\"\" (every interface)"
@@ -1094,8 +933,6 @@ func (x *translator) server() error {
 			Why:      "pluxy listens on this machine only unless told otherwise",
 			KeepWith: fmt.Sprintf(`"listen": %q in pluxy's config file, then restart core`, x.res.OldListen)})
 		if _, set := get(x.t, "server.host"); !set {
-			// The row stands for a key the file does not set; an import into a running core
-			// corrects it with the rest of the listen rows (importRows).
 			x.res.ListenKeys = append(x.res.ListenKeys, ConfigItem(x.fileKey("server.host")))
 		}
 	}
@@ -1119,7 +956,6 @@ func (x *translator) server() error {
 		}
 		cert, key = strings.TrimSpace(cert), strings.TrimSpace(key)
 		if x.importing {
-			// Relative to the file's folder, as core reads them relative to its own config's.
 			for _, p := range []*string{&cert, &key} {
 				if *p != "" && !filepath.IsAbs(*p) {
 					*p = filepath.Join(x.dir, *p)
@@ -1128,7 +964,6 @@ func (x *translator) server() error {
 		}
 		x.out["tls"] = map[string]any{"enable": true, "cert": cert, "key": key}
 	} else {
-		// TLS off, as today's core used it: a certificate and key are not used then either.
 		for _, p := range []string{"server.tls.cert", "server.tls.key"} {
 			if _, set := get(x.t, p); set {
 				x.mark(NotBrought, p, Row{Why: "it does nothing while server.tls.enable is off, so nothing is lost"})
@@ -1153,7 +988,6 @@ func (x *translator) server() error {
 		}
 		var examples []string
 		if x.importing {
-			// The example config's keys are public: core refuses every request while one is set.
 			keys = slices.DeleteFunc(keys, func(k string) bool {
 				if slices.Contains(ExampleClientKeys, k) {
 					examples = append(examples, k)
@@ -1169,7 +1003,6 @@ func (x *translator) server() error {
 		if len(examples) > 0 {
 			x.mark(Changed, "access.api-keys", Row{As: as, Why: "left out the example config's public keys " + quoteAll(examples) + ", which anyone can read"})
 		} else if x.importing && len(keys) == 0 {
-			// An import adds keys; it never takes core's away.
 			x.mark(NotBrought, "access.api-keys", Row{Why: "it lists no client keys, and an import keeps the ones core has"})
 		} else {
 			x.mark(Brought, "access.api-keys", Row{As: as})
@@ -1183,11 +1016,8 @@ func (x *translator) server() error {
 	if err != nil {
 		return err
 	}
-	// The key is used as written, as today's core uses it: a space in it is part of it.
 	switch {
 	case x.importing && secret != "":
-		// An import never brings the key, plain or hashed: the key guards every client of core,
-		// the importing one included, so an import does not change who may manage it.
 		x.res.HashedManagementKey = bcryptHash.MatchString(secret)
 		x.mark(NotBrought, "management.secret-key", Row{Why: managementKeyWhy})
 	case bcryptHash.MatchString(secret):
@@ -1220,7 +1050,6 @@ func (x *translator) routing() error {
 	case "soonest-reset":
 		r["strategy"] = "soonest-reset"
 	default:
-		// Today's core uses round-robin for a name it does not know.
 		x.notes = append(x.notes, fmt.Sprintf("config.yaml: routing.strategy %q is not known: using round-robin", s))
 		x.mark(Changed, "routing.strategy", Row{From: s, To: "round-robin", Why: "CLIProxyAPI does not know the name either, and uses round-robin"})
 	}
@@ -1232,22 +1061,17 @@ func (x *translator) routing() error {
 		if s, err := str(x.t, "routing.session-affinity-ttl"); err != nil {
 			return err
 		} else if d, err := time.ParseDuration(strings.TrimSpace(s)); err == nil && d > 0 {
-			ttl = max(d, time.Second) // as today's core reads it
+			ttl = max(d, time.Second)
 		}
 		aff := map[string]any{}
-		// An import sets the TTL only when the file does: the one-hour default is not the file's
-		// setting, and core's own TTL otherwise stays.
 		if ttlSet || !x.importing {
 			aff["ttl_ms"] = ttl.Milliseconds()
 		}
 		if x.importing {
-			// Core's own config may have it off, which a JSON config otherwise is on without.
 			aff["enabled"] = true
 		}
 		r["session_affinity"] = aff
 	} else if _, set := get(x.t, "routing.session-affinity"); set || !x.importing {
-		// Today's core has it off unless the file turns it on; a JSON config has it on unless
-		// it says otherwise. An import leaves core's own setting alone unless the file sets it.
 		r["session_affinity"] = map[string]any{"enabled": false}
 	}
 	if on, err := flag(x.t, "routing.force-model-prefix"); err != nil {
@@ -1260,9 +1084,6 @@ func (x *translator) routing() error {
 	} else if n > 0 {
 		r["max_accounts"] = n
 	}
-	// Rounds as today's core runs them; both settings default to 0 there (no extra rounds, no
-	// waits), whatever its example config shows. An import leaves core's own count alone unless
-	// the file sets it.
 	retry, err := integer(x.t, "routing.retry.request-retry")
 	if err != nil {
 		return err
@@ -1280,7 +1101,6 @@ func (x *translator) routing() error {
 	} else if on {
 		r["disable_cooling"] = true
 	}
-	// 0 is today's fixed minute; this core's default backs off from a second to a minute.
 	if n, err := integer(x.t, "routing.cooldown.transient-error-cooldown-seconds"); err != nil {
 		return err
 	} else if n > 0 {
@@ -1288,7 +1108,6 @@ func (x *translator) routing() error {
 	} else if n < 0 {
 		r["transient_error_cooldown_ms"] = -1
 	}
-	// Read as today's core reads it: letter case and spaces aside; anything else is an error.
 	if s, err := str(x.t, "routing.cooldown.quota-response-mode"); err != nil {
 		return err
 	} else if mode := strings.ToLower(strings.TrimSpace(s)); mode == "usage-limit" {
@@ -1302,7 +1121,6 @@ func (x *translator) routing() error {
 	return nil
 }
 
-// options reads the settings that change how accounts are set up.
 func (x *translator) options() error {
 	if off, err := flag(x.t, "upstream.codex.disable-codex-cloaking"); err != nil {
 		return err
@@ -1357,10 +1175,6 @@ func (x *translator) options() error {
 		}
 		x.out["proxy_url"] = proxy
 	}
-	// The payload rules keep today's names, so they go across under those names, their text
-	// fields as written, a key spelled in another letter case dropped as today's core drops it,
-	// and a -raw param as today's core sent it (payloadRules); the JSON config's own check
-	// (payload.Validate) refuses what this core cannot apply.
 	if rules, _ := get(x.t, "requests.payload"); rules != nil {
 		m, isMap := rules.(tree)
 		if !isMap {
@@ -1383,7 +1197,6 @@ func (x *translator) options() error {
 	return nil
 }
 
-// observability reads the log and usage settings.
 func (x *translator) observability() error {
 	logs := tree{}
 	if on, err := flag(x.t, "observability.logs.logging-to-file"); err != nil {
@@ -1391,7 +1204,6 @@ func (x *translator) observability() error {
 	} else if on {
 		logs["to_file"] = true
 	}
-	// As in today's core, a negative cap is none.
 	if n, err := integer(x.t, "observability.logs.logs-max-total-size-mb"); err != nil {
 		return err
 	} else if n > 0 {
@@ -1402,7 +1214,6 @@ func (x *translator) observability() error {
 	} else if on {
 		logs["request_log"] = true
 	}
-	// As in today's core, a negative count is the default, 10.
 	if v, ok := get(x.t, "observability.logs.error-logs-max-files"); ok && v != nil {
 		n, err := integer(x.t, "observability.logs.error-logs-max-files")
 		if err != nil {
@@ -1422,8 +1233,6 @@ func (x *translator) observability() error {
 		}
 		x.out["usage"] = tree{"enabled": on}
 	}
-	// The profiling pages' switch and address (today's pprof.enable and pprof.addr). Off, the
-	// address asks for nothing; the default address is core's own (server.defaultPprofAddr).
 	if on, err := flag(x.t, "observability.pprof.enable"); err != nil {
 		return err
 	} else if on {
@@ -1440,8 +1249,6 @@ func (x *translator) observability() error {
 	return nil
 }
 
-// providers turns the provider key sections, in either layout, into accounts of the packages
-// that serve them. v8 is the v8 api-keys mapping, or nil.
 func (x *translator) providers(v8 tree) error {
 	var accounts = map[string][]any{}
 	used := map[string]bool{}
@@ -1450,7 +1257,7 @@ func (x *translator) providers(v8 tree) error {
 		path := "api-keys." + f.v8
 		v8v, inV8 := v8[f.v8]
 		oldv, inOld := x.t[f.old]
-		chosen := "" // the list read: path or f.old
+		chosen := ""
 		if inV8 && v8v != nil {
 			chosen = path
 			list, isList := v8v.([]any)
@@ -1479,7 +1286,6 @@ func (x *translator) providers(v8 tree) error {
 				x.mark(NotBrought, path, Row{Why: "empty"})
 			}
 		} else {
-			// Present but empty.
 			if inV8 {
 				x.markAll(NotBrought, path, v8v, Row{Why: "empty"})
 			}
@@ -1521,7 +1327,6 @@ func (x *translator) providers(v8 tree) error {
 				return err
 			}
 			if len(keys) == 0 && !disabled {
-				// Every section: an upstream that needs no key is not supported yet.
 				x.keyless(path)
 				why = append(why, "it has no keys (an upstream that needs no key is not supported yet)")
 			}
@@ -1553,9 +1358,6 @@ func (x *translator) providers(v8 tree) error {
 				if err != nil {
 					return err
 				}
-				// Today's core keeps no Codex API key without a base-url (SanitizeCodexKeys); the
-				// key is dropped and named in the log. A key added by a login, which asks for no
-				// base_url, still gets the extension's default.
 				if st, _ := a["settings"].(map[string]any); f.v8 == "codex" && st["base_url"] == nil {
 					x.note(fmt.Sprintf("config.yaml: %s key %s has no base-url: dropped, as CLIProxyAPI drops a Codex API key without one", display(path), id),
 						fmt.Sprintf("keys[%d] has no base-url: CLIProxyAPI drops a Codex API key without one too", ki))
@@ -1566,7 +1368,6 @@ func (x *translator) providers(v8 tree) error {
 				made = append(made, aid)
 				x.res.Accounts[aid] = ConfigItem(x.fileKey(gpath))
 			}
-			// The key list is read; classify the rest of the group and each key's own fields.
 			rest := tree{}
 			for k, v := range g {
 				if k != "keys" {
@@ -1636,9 +1437,6 @@ func (x *translator) providers(v8 tree) error {
 	return nil
 }
 
-// oldGroup turns one entry of an older-layout section into a v8 group: an openai-compatibility
-// entry is already a group, with api-key-entries as its keys; any other entry is a group with
-// one key.
 func oldGroup(e tree, compat bool) tree {
 	g := tree{}
 	for k, v := range e {
@@ -1660,8 +1458,6 @@ func oldGroup(e tree, compat bool) tree {
 	return g
 }
 
-// field returns a key's value for name, else its group's: a key's fields override the group's
-// (a null key field inherits, as in today's core).
 func field(g, k tree, name string) any {
 	if v, ok := k[name]; ok && v != nil {
 		return v
@@ -1686,7 +1482,6 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		}
 		a["disable_cooling"] = on
 	}
-	// An openai-compatibility group's count is its keys', which have none of their own there.
 	rr := field(g, k, "request-retry")
 	if f.v8 == "openai-compatibility" {
 		rr = g["request-retry"]
@@ -1696,7 +1491,7 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		if !ok {
 			return nil, fmt.Errorf("%s.request-retry must be a whole number", path)
 		}
-		if n >= 0 { // negative inherits routing's count, as in today's core
+		if n >= 0 {
 			a["request_retry"] = n
 		}
 	}
@@ -1713,8 +1508,8 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 			return nil, fmt.Errorf("%s.models must be a list", path)
 		}
 		var models []any
-		public := map[string]string{} // the name clients use, to the upstream name kept for it
-		var pooled []string           // the names clients use that later entries repeat, in order
+		public := map[string]string{}
+		var pooled []string
 		dropped := map[string][]string{}
 		for _, m := range list {
 			e, ok := m.(tree)
@@ -1729,10 +1524,6 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 			if err != nil {
 				return nil, err
 			}
-			// The name clients use is the alias, else the name; the first entry for a name wins.
-			// Today's core does the same in every section but openai-compatibility, where
-			// entries that share an alias are a pool its requests rotate over and fall back
-			// through; this core makes the pool a fallback chain (chains).
 			name, alias = strings.TrimSpace(name), strings.TrimSpace(alias)
 			if name == "" {
 				continue
@@ -1754,7 +1545,7 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 				models = append(models, map[string]any{"name": name, "alias": alias})
 			}
 		}
-		var names []string // the names clients use
+		var names []string
 		for pub := range public {
 			names = append(names, pub)
 		}
@@ -1764,7 +1555,6 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 			x.notes = append(x.notes, fmt.Sprintf("config.yaml: %s key %s: models: the alias %q lists %d upstream models, which CLIProxyAPI rotates over as a pool; pluxy tries them in order as the fallback chain routing.chains.%s",
 				display(path), id, pub, len(members), pub))
 			x.pools = append(x.pools, pool{name: pub, ext: f.extension, account: id, item: x.item, models: members})
-			// Each model of the pool is listed under its own name, which the chain's steps name.
 			models = slices.DeleteFunc(models, func(m any) bool {
 				e, isMap := m.(map[string]any)
 				return isMap && e["alias"] == pub || m == pub
@@ -1793,8 +1583,6 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 		}
 		a["proxy_url"] = p
 	}
-	// A key's headers replace its group's; an openai-compatibility group's are its keys', which
-	// have none of their own there.
 	hv := field(g, k, "headers")
 	if f.v8 == "openai-compatibility" {
 		hv = g["headers"]
@@ -1894,8 +1682,6 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 	return a, nil
 }
 
-// modelPrefix reads a prefix as today's core does: without surrounding spaces and slashes, and
-// none at all when a slash is left inside.
 func modelPrefix(p string) string {
 	p = strings.Trim(strings.TrimSpace(p), "/")
 	if strings.Contains(p, "/") {
@@ -1904,7 +1690,6 @@ func modelPrefix(p string) string {
 	return p
 }
 
-// patterns reads excluded-models patterns as today's core does: trimmed, lower case, each once.
 func patterns(list []string) []string {
 	var out []string
 	for _, p := range list {
@@ -1915,10 +1700,6 @@ func patterns(list []string) []string {
 	return out
 }
 
-// oauthModels reads oauth.model-alias and oauth.excluded-models, each a mapping of today's
-// channels to rules, into the model_alias and excluded_models of the package each channel's
-// accounts belong to (channels). They apply to the package's accounts added by a sign-in (not with an API key), as today's
-// apply to accounts from its auth folder.
 func (x *translator) oauthModels() error {
 	exts, _ := x.out["extensions"].(tree)
 	if x.out["extensions"] != nil && exts == nil {
@@ -2008,8 +1789,6 @@ func (x *translator) oauthModels() error {
 					why = append(why, k+" not brought ("+statusWhy(unknown)+")")
 				}
 			}
-			// As today's core reads them: an empty name or alias, or an alias that is the
-			// name, does nothing; an alias counts once per channel, whatever its case.
 			name, alias = strings.TrimSpace(name), strings.TrimSpace(alias)
 			if name == "" || alias == "" || strings.EqualFold(name, alias) ||
 				slices.ContainsFunc(rules, func(r any) bool { return strings.EqualFold(r.(map[string]any)["alias"].(string), alias) }) {
@@ -2098,7 +1877,6 @@ func (x *translator) oauthModels() error {
 
 var notIDChar = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 
-// accountID makes id a valid account ID that is not in used yet, and records it.
 func accountID(id string, used map[string]bool) string {
 	id = AccountID(id)
 	base := id
@@ -2109,8 +1887,6 @@ func accountID(id string, used map[string]bool) string {
 	return id
 }
 
-// AccountID turns s into a valid account ID: characters an ID cannot hold become "-", and it
-// starts with a letter or digit, is at most 128 characters long and does not end in ".".
 func AccountID(s string) string {
 	s = notIDChar.ReplaceAllString(s, "-")
 	s = strings.TrimLeft(s, "._-")
@@ -2124,8 +1900,6 @@ func AccountID(s string) string {
 	return s
 }
 
-// defaults are today's core's defaults for settings this core does not support: a file that
-// leaves one at its default asks for nothing, so it is not named.
 var defaults = map[string]any{
 	"server.response-compression.enabled":                     true,
 	"server.response-compression.min-bytes":                   1024,
@@ -2143,23 +1917,17 @@ var defaults = map[string]any{
 	"observability.usage.redis-usage-queue-retention-seconds": 60,
 }
 
-// falseAsks are settings whose default is true, so false is the value that asks for something.
 var falseAsks = map[string]bool{
 	"routing.session-affinity-subagents": true,
 }
 
-// sink gets each setting classify reaches: its path, value and status (a rule's, or unknown),
-// the rule's note, and whether the value asks for nothing (quiet).
 type sink func(path string, v any, status int, note string, quiet bool)
 
-// unknown is the status of a key no rule names; partly that of a list whose entries hold
-// settings that are not brought, which the note names.
 const (
 	unknown = dead + 1
 	partly  = dead + 2
 )
 
-// statusWhy is why a setting of status is not brought, when its rule gives no note.
 func statusWhy(status int) string {
 	switch status {
 	case dead:
@@ -2170,9 +1938,6 @@ func statusWhy(status int) string {
 	return ""
 }
 
-// markRule is the sink of the config's settings outside the provider sections and alias
-// channels: a supported setting is brought (unless a reader named it already), any other is
-// not brought, with why.
 func (x *translator) markRule(path string, v any, status int, note string, quiet bool) {
 	why := cmp.Or(note, statusWhy(status))
 	switch status {
@@ -2191,9 +1956,6 @@ func (x *translator) markRule(path string, v any, status int, note string, quiet
 	x.markAll(NotBrought, path, v, Row{Why: why})
 }
 
-// classify names, among the settings at path and below, those that are not supported, are
-// dropped or are not known, and hands each setting it reaches to sink. inherited is the rule of
-// the nearest mapping above that has one.
 func (x *translator) classify(path string, v any, inherited *rule, sink sink) {
 	r, ok := lookup(path)
 	if !ok && inherited != nil {
@@ -2237,8 +1999,6 @@ func (x *translator) classify(path string, v any, inherited *rule, sink sink) {
 			x.classify(p, v[k], nil, sink)
 		}
 	case []any:
-		// A list is one setting. The rules below its entries say what they hold: when some of
-		// that is not brought, the list is brought in part.
 		var scalars bool
 		var part []string
 		for _, c := range v {
@@ -2276,12 +2036,6 @@ func (x *translator) classify(path string, v any, inherited *rule, sink sink) {
 	}
 }
 
-// chains makes a fallback chain (routing.chains) of each name clients use that today's core
-// pooled: an openai-compatibility alias over several models, taken in turn, and a name served by
-// accounts of more than one provider, whose requests today's core shared among them. pluxy
-// serves a name from one provider and one model unless a chain says otherwise, so the chain
-// keeps every model and provider, tried in the order the group lists its models and then the
-// order core reads the provider sections, rather than in turn.
 func (x *translator) chains() error {
 	var order []string
 	steps := map[string][]route.Step{}
@@ -2360,9 +2114,6 @@ func (x *translator) chains() error {
 	}
 	if err := route.ValidateChains(out); err != nil {
 		if x.importing {
-			// The accounts' models are already cut for the chains (each model listed under its
-			// own name), so an import that left the chains out would write accounts no chain
-			// serves as the file did. Fail it, naming the pools, as an item in no list does.
 			var at []string
 			for _, n := range order {
 				at = append(at, items[n]...)
@@ -2370,8 +2121,6 @@ func (x *translator) chains() error {
 			return fmt.Errorf("%s: the models pooled as %s cannot become fallback chains: %v",
 				strings.Join(dedupe(at), ", "), quoteAll(order), err)
 		}
-		// A name that is also a step of another chain; leave the chains out rather than refuse
-		// the file.
 		x.notes = append(x.notes, "config.yaml: the fallback chains for pooled models are left out: "+err.Error())
 		for _, n := range order {
 			for _, it := range items[n] {
@@ -2389,7 +2138,6 @@ func (x *translator) chains() error {
 	return nil
 }
 
-// joinWhy joins reasons into one, each once.
 func joinWhy(why []string) string {
 	var out []string
 	for _, w := range why {
@@ -2407,7 +2155,6 @@ func splitWhy(s string) []string {
 	return strings.Split(s, "; ")
 }
 
-// plural is one when n is 1, else many.
 func plural(n int, one, many string) string {
 	if n == 1 {
 		return one
@@ -2415,7 +2162,6 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// rulesBelow reports whether a setting below path has a rule of its own.
 func rulesBelow(path string) bool {
 	star := ""
 	if rest, ok := strings.CutPrefix(path, "api-keys."); ok {
@@ -2431,8 +2177,6 @@ func rulesBelow(path string) bool {
 	return false
 }
 
-// switchedOff reports whether m is a feature's settings with its switch off (enabled or
-// enable false or missing): the rest of its settings then ask for nothing.
 func switchedOff(m tree) bool {
 	for _, k := range []string{"enabled", "enable"} {
 		if v, ok := m[k]; ok {
@@ -2443,8 +2187,6 @@ func switchedOff(m tree) bool {
 	return false
 }
 
-// asksNothing reports whether the value at path asks for nothing: it is off, zero, empty, at
-// today's default, or a feature switched off.
 func asksNothing(path string, v any) bool {
 	switch v := v.(type) {
 	case tree:
@@ -2469,8 +2211,6 @@ func asksNothing(path string, v any) bool {
 	return isZero(v)
 }
 
-// lookup finds the rule for path: a provider path is looked up with its section as "*" when
-// the section has no rule of its own.
 func lookup(path string) (rule, bool) {
 	if r, ok := rules[path]; ok {
 		return r, true
@@ -2486,10 +2226,8 @@ func lookup(path string) (rule, bool) {
 	return rule{}, false
 }
 
-// display is how a setting is named in a notice.
 func display(path string) string { return strings.ReplaceAll(path, "[]", "") }
 
-// quoteAll writes names as quoted strings separated by commas.
 func quoteAll(names []string) string {
 	q := make([]string, len(names))
 	for i, n := range names {
@@ -2529,7 +2267,6 @@ func dedupe(s []string) []string {
 	return slices.Compact(s)
 }
 
-// get returns the value at a dotted path.
 func get(t tree, path string) (any, bool) {
 	var cur any = t
 	for _, k := range strings.Split(path, ".") {
@@ -2544,7 +2281,6 @@ func get(t tree, path string) (any, bool) {
 	return cur, true
 }
 
-// set sets the value at a dotted path, making the mappings on the way.
 func set(t tree, path string, v any) {
 	parts := strings.Split(path, ".")
 	for _, k := range parts[:len(parts)-1] {
@@ -2558,7 +2294,6 @@ func set(t tree, path string, v any) {
 	t[parts[len(parts)-1]] = v
 }
 
-// del removes the value at a dotted path, and the mappings it leaves empty.
 func del(t tree, path string) {
 	parts := strings.Split(path, ".")
 	if len(parts) == 1 {
@@ -2575,7 +2310,6 @@ func del(t tree, path string) {
 	}
 }
 
-// merge returns cur with the fields of old it lacks, mapping by mapping: the v8 value wins.
 func merge(cur, old any) any {
 	c, ok1 := cur.(tree)
 	o, ok2 := old.(tree)
@@ -2592,7 +2326,6 @@ func merge(cur, old any) any {
 	return c
 }
 
-// str reads the text setting at path (see scalar).
 func str(t tree, path string) (string, error) {
 	v, _ := get(t, path)
 	return scalar(v, path)
@@ -2632,9 +2365,6 @@ func stringList(v any, path string) ([]string, error) {
 	return out, nil
 }
 
-// scalar reads a text setting as today's core's typed decoder does: a scalar is its text as
-// written, whatever YAML reads it as (api-key: 0123 is "0123", true is "true"), and absent or
-// null is empty.
 func scalar(v any, path string) (string, error) {
 	switch v := v.(type) {
 	case nil:
@@ -2647,8 +2377,6 @@ func scalar(v any, path string) (string, error) {
 	return "", fmt.Errorf("%s must be text", path)
 }
 
-// headers reads a headers mapping as today's core does (upheader.Import): each value is a
-// scalar, read as its text (see scalar).
 func headers(v any, path string) (map[string]string, []upheader.Left, error) {
 	if v == nil {
 		return nil, nil, nil
@@ -2672,9 +2400,6 @@ func headers(v any, path string) (map[string]string, []upheader.Left, error) {
 	return h, left, nil
 }
 
-// HeaderText returns a header value of a provider section of a config.yaml as the header core
-// sends: its text as written, without the spaces around it (upheader.ImportValue). ok is false for
-// a value core refuses.
 func HeaderText(n *yaml.Node) (text string, ok bool) {
 	var d node
 	if n.Decode(&d) != nil {
@@ -2684,9 +2409,6 @@ func HeaderText(n *yaml.Node) (text string, ok bool) {
 	return upheader.ImportValue(s), err == nil
 }
 
-// boolean_ reads a true or false setting; absent is false. As today's core's YAML decoder
-// (gopkg.in/yaml.v3) reads a setting it decodes into a true-or-false field, the YAML 1.1 words
-// y, yes, on, n, no and off (in lower, title or upper case) are true or false too.
 func boolean_(v any, path string) (bool, error) {
 	switch v := value(v).(type) {
 	case nil:
@@ -2704,17 +2426,13 @@ func boolean_(v any, path string) (bool, error) {
 	return false, fmt.Errorf("%s must be true or false", path)
 }
 
-// flag reads the true or false setting at path.
 func flag(t tree, path string) (bool, error) {
 	v, _ := get(t, path)
 	return boolean_(v, path)
 }
 
-// ExampleClientKeys are the client keys of today's example config (testdata/config.example.yaml).
-// They are public, so a config that still holds one has not set up access.
 var ExampleClientKeys = []string{"your-api-key-1", "your-api-key-2", "your-api-key-3"}
 
-// keyless reports a key with no api-key in the provider section at path.
 func (x *translator) keyless(path string) {
 	x.laterKeys = append(x.laterKeys, display(path)+" keys without an api-key (an upstream that needs no key)")
 }

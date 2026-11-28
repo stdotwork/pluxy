@@ -10,44 +10,26 @@ import (
 	"strings"
 )
 
-// The Lamplighter plugin for today's core (github.com/PosvdM/cpa-plugin-lamplighter) watches
-// accounts' usage windows, sends notifications about them, and starts an account's next 5-hour
-// window right after it resets (window ignition). pluxy has window ignition built in
-// (routing.ignition); the plugin's notifications and its own page have no counterpart. lamplighter
-// maps the plugin's settings, under plugins.configs.lamplighter, to routing.ignition, and gives
-// each of its keys a row: the plugin's keys and defaults are read as the plugin reads them.
-
 const lampPath = "plugins.configs.lamplighter"
 
-// lampOffWhy is why the plugin's settings are not brought while it is off.
 const lampOffWhy = "the Lamplighter plugin's settings; its window ignition is routing.ignition in pluxy"
 
-// Extension IDs of the plugin's providers that start windows. Antigravity's extension is
-// archived: it serves only once it is installed by hand.
 const lampAntigravity = "pluxy/antigravity"
 
 var lampProviders = []struct {
 	id, ext string
-	ignite  bool // the plugin's default
+	ignite  bool
 }{{"claude", Claude, true}, {"codex", Codex, true}, {"antigravity", lampAntigravity, false}}
 
-// lampNoIgnition are the plugin's providers it starts no windows for, with its other names
-// for them.
 var lampNoIgnition = map[string]string{"kimi": "kimi", "kimi-ai": "kimi", "kimi.ai": "kimi", "kimi.com": "kimi",
 	"xai": "xai", "x-ai": "xai", "x.ai": "xai", "grok": "xai"}
 
-// lampGroups are the plugin's names for Antigravity's model groups, as it reads them from
-// Antigravity's usage reply, and the window ID the antigravity extension gives each group's
-// five-hour window.
 var lampGroups = map[string]string{"gemini": "gemini_models_five_hour", "claude / gpt": "claude_and_gpt_models_five_hour"}
 
-// lampDefaultGroups is the groups the plugin starts when its antigravity block names none.
 var lampDefaultGroups = []string{"Gemini"}
 
 var lampNotAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 
-// lampWindow returns the window ID of the Antigravity group the plugin names label: a known
-// group's, else the one the extension makes of a group of that name.
 func lampWindow(label string) string {
 	l := lampLabel(label)
 	if w, ok := lampGroups[l]; ok {
@@ -56,7 +38,6 @@ func lampWindow(label string) string {
 	return strings.Trim(lampNotAlnum.ReplaceAllString(l, "_"), "_") + "_five_hour"
 }
 
-// The plugin's settings that pluxy has no counterpart for, by key, with why.
 var (
 	lampNotify   = "pluxy sends no usage notifications or reminders; the panel shows each account's usage, and pluxy account list its health"
 	lampDropped  = map[string]string{}
@@ -84,7 +65,6 @@ func init() {
 	}
 }
 
-// lampNumber reads a number the plugin reads: a YAML number, or text holding one.
 func lampNumber(v any) (float64, bool) {
 	switch v := value(v).(type) {
 	case int:
@@ -98,9 +78,6 @@ func lampNumber(v any) (float64, bool) {
 	return 0, false
 }
 
-// lampSetting is one of the plugin's ignition settings: its key, the key in routing.ignition,
-// the factor from the plugin's unit to pluxy's, the plugin's default and the range it holds the
-// value to.
 type lampSetting struct {
 	key, to   string
 	factor    float64
@@ -120,10 +97,6 @@ var lampIgnition = []lampSetting{
 	{"post_success_hold_seconds", "hold_ms", 1000, 60, 15, 24 * 3600, true},
 }
 
-// lamplighter brings the plugin's window ignition to routing.ignition when the plugin was on
-// (plugins.enabled and its own enabled both true, as today's core and the plugin need), and
-// gives each of its keys a row. While it is off its settings are left to the rules, which name
-// them as not brought.
 func (x *translator) lamplighter() {
 	v, ok := get(x.t, lampPath)
 	lt, isMap := v.(tree)
@@ -133,7 +106,6 @@ func (x *translator) lamplighter() {
 	pluginsOn, _ := flag(x.t, "plugins.enabled")
 	on, _ := boolean_(lt["enabled"], lampPath+".enabled")
 	if !on {
-		// The plugin was off: none of its settings did anything.
 		lampLeaves(lampPath, lt, func(p string, _ any) {
 			x.mark(NotBrought, p, Row{Why: lampOffWhy + "; the plugin is off here, so nothing is lost"})
 		})
@@ -141,8 +113,6 @@ func (x *translator) lamplighter() {
 		return
 	}
 	if !pluginsOn {
-		// Its own switch is on, but plugins.enabled keeps every plugin off: the plugin's settings
-		// are named with the rest of plugins, as off.
 		return
 	}
 	x.notes = append(x.notes, "config.yaml: "+lampPath+": the Lamplighter plugin's window ignition runs as routing.ignition; its notifications are not supported")
@@ -199,7 +169,6 @@ func (x *translator) lamplighter() {
 	for _, p := range lampProviders {
 		var block tree
 		key := p.id
-		// The key spelled as the plugin's ID wins; else the first, in order, that reads as it.
 		var also []string
 		found := false
 		for _, k := range slices.Sorted(maps.Keys(provs)) {
@@ -252,8 +221,6 @@ func (x *translator) lamplighter() {
 				row(base+"model", Brought, Row{As: as + ".model"})
 			}
 		}
-		// Said, though an entry is on without it: an import writes a mapping field by field, so an
-		// empty entry would not reach the config file.
 		ext := map[string]any{"enabled": true}
 		if model != "" {
 			ext["model"] = model
@@ -289,7 +256,6 @@ func (x *translator) lamplighter() {
 				}
 			}
 			if len(groups) == 0 {
-				// An empty list starts every group: the two Antigravity has, and any a model is set for.
 				groups = append([]string{"Gemini", "Claude / GPT"}, slices.Sorted(maps.Keys(mt))...)
 			}
 			windows := map[string]any{}
@@ -375,7 +341,6 @@ func (x *translator) lamplighter() {
 			}
 		}
 		if rest == "ignition" || rest == "providers" || top == "providers" && strings.Count(rest, ".") == 1 {
-			// A section that is empty or not a mapping: the plugin reads its defaults in its place.
 			x.mark(NotBrought, p, Row{Why: "empty or not a mapping, so the plugin's defaults apply, here too"})
 			return
 		}
@@ -390,13 +355,8 @@ func (x *translator) lamplighter() {
 	r["ignition"] = ign
 }
 
-// lampLabel is an Antigravity group's name as the plugin compares it: trimmed, in lower case,
-// with its spaces made one.
 func lampLabel(s string) string { return strings.Join(strings.Fields(strings.ToLower(s)), " ") }
 
-// lampLeaves calls f with the path and value of each item of the report below path, as leaves
-// names them (a mapping's keys, and a list as one item); the value is passed along, as a key of
-// the plugin's settings may hold a dot (a credential file's name) that get cannot follow.
 func lampLeaves(path string, v any, f func(string, any)) {
 	if t, ok := v.(tree); ok && len(t) > 0 {
 		for _, k := range slices.Sorted(maps.Keys(t)) {

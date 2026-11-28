@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-// example is today's core's config.example.yaml (copied from core/), with its commented
-// provider key examples uncommented when withKeys is set.
 func example(t *testing.T, withKeys bool) []byte {
 	t.Helper()
 	b, err := os.ReadFile("testdata/config.example.yaml")
@@ -48,7 +46,6 @@ func translate(t *testing.T, yaml string) *Result {
 	return r
 }
 
-// asJSON returns v as the JSON config would hold it, for comparing.
 func asJSON(t *testing.T, v any) any {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -90,11 +87,9 @@ func TestExampleConfig(t *testing.T) {
 	if r.AuthDir != "~/.cli-proxy-api" {
 		t.Errorf("AuthDir = %q", r.AuthDir)
 	}
-	// The example spells out today's default identifier, so imported SIWC accounts get it.
 	if want := (ImportOptions{CodexIdentity: true, ImageGenerationTool: true, Images: true, SIWCIdentifier: "CLIProxyAPI"}); r.Import != want {
 		t.Errorf("Import = %+v", r.Import)
 	}
-	// Everything the example sets is supported, off or at today's default.
 	if len(r.Notices) != 0 {
 		t.Errorf("notices:\n%s", notices(r))
 	}
@@ -131,8 +126,6 @@ func TestExampleProviderSections(t *testing.T) {
 		"settings": {"base_url": "https://example.com/api", "vertex": {}},
 		"credential": {"kind": "api_key", "api_key": "vk-123..."}
 	}`)
-	// A key's null fields inherit the group's (its null headers the group's), its own weight,
-	// proxy and request-retry are its own, and its empty excluded-models clears the group's.
 	first := exts[Gemini].(map[string]any)["accounts"].([]any)[0].(map[string]any)
 	equalJSON(t, first["excluded_models"], `["gemini-2.5-pro", "gemini-2.5-*", "*-preview", "*flash*"]`)
 	equalJSON(t, first["proxy_url"], `"socks5://proxy.example.com:1080"`)
@@ -144,7 +137,6 @@ func TestExampleProviderSections(t *testing.T) {
 		"settings": {"base_url": "https://generativelanguage.googleapis.com"},
 		"credential": {"kind": "api_key", "api_key": "replace-with-second-gemini-key"}
 	}`)
-	// The Interactions key group is a Gemini account that serves the Interactions API.
 	interactions := exts[Gemini].(map[string]any)["accounts"].([]any)[4]
 	equalJSON(t, interactions, `{
 		"id": "interactions-1", "weight": 5, "prefix": "native", "disable_cooling": false, "request_retry": 3,
@@ -247,15 +239,11 @@ openai-compatibility:
 	if r.Import != (ImportOptions{CodexIdentity: false, ImageGenerationTool: false, Images: true}) {
 		t.Errorf("Import = %+v", r.Import)
 	}
-	// disable-codex-cloaking means nothing on a Claude key: it is not a Claude key field.
 	if n := notices(r); !strings.Contains(n, "unknown keys, ignored: api-keys.claude.disable-codex-cloaking") || strings.Contains(n, "allow-remote") {
 		t.Errorf("notices:\n%s", n)
 	}
 }
 
-// Today's core keeps no Codex API key without a base-url: the key is dropped and named in the
-// notices. A key takes its group's base-url when it has none of its own; other providers' keys
-// without one stay.
 func TestCodexKeyWithoutBaseURLIsDropped(t *testing.T) {
 	r := translate(t, `
 codex-api-key:
@@ -327,8 +315,6 @@ api-keys:
 		"routing": {"request_retry": 0, "session_affinity": {"enabled": false}},
 		"extensions": {"pluxy/codex": {"accounts": [{"id": "c", "settings": {"base_url": "https://new.example.com"}, "credential": {"kind": "api_key", "api_key": "new-key"}}]}}
 	}`)
-	// allow-remote came from the older spelling and still counts: the v8 value wins only
-	// field by field.
 	if strings.Contains(notices(r), "allow-remote") {
 		t.Errorf("notices:\n%s", notices(r))
 	}
@@ -373,9 +359,6 @@ observability:
 	}
 }
 
-// TestDecidedDroppedSettings: settings decided not to be built are named as dropped, with their
-// reason, and never as "not supported yet"; the settings that are still to come stay Later, each
-// with what would bring it.
 func TestDecidedDroppedSettings(t *testing.T) {
 	r := translate(t, `
 server:
@@ -459,8 +442,6 @@ models: {catalog: "https://example.com/models.json", codex-catalog: /etc/codex.j
 	}
 }
 
-// TestSessionAffinitySubagents: true is today's default and asks for nothing; false asks to spread
-// subagents over the pool, which is not done here, so it is named.
 func TestSessionAffinitySubagents(t *testing.T) {
 	for _, v := range []string{"true", "false"} {
 		r := translate(t, "routing: {session-affinity: true, session-affinity-subagents: "+v+"}")
@@ -471,8 +452,6 @@ func TestSessionAffinitySubagents(t *testing.T) {
 	}
 }
 
-// TestContainerSettings: a setting of a container that has no rule of its own is an unknown key,
-// not one "not supported yet".
 func TestContainerSettings(t *testing.T) {
 	r := translate(t, "observability: {logs: {mystery: 1}}\nmodels: {mystery: 1}\n")
 	n := notices(r)
@@ -484,8 +463,6 @@ func TestContainerSettings(t *testing.T) {
 	}
 }
 
-// A bcrypt hash of the management key cannot be used as the key: the translation says so and
-// leaves the key out (core refuses to serve the config; pluxy import cpa makes a new key).
 func TestHashedManagementKey(t *testing.T) {
 	r := translate(t, `remote-management: {secret-key: "$2a$10$abcdefghijklmnopqrstuuAbCdEfGhIjKlMnOpQrStUvWxYz01234"}`)
 	if _, ok := r.Config["management_key"]; ok || !r.HashedManagementKey {
@@ -580,8 +557,6 @@ func TestRefusedFiles(t *testing.T) {
 	}
 }
 
-// Text settings written as numbers are read as their digits, as today's core reads them; the
-// management key is used exactly as written.
 func TestScalarsAndExactKeys(t *testing.T) {
 	r := translate(t, `
 access: {api-keys: [123456]}
@@ -598,10 +573,6 @@ claude-api-key:
 	}`)
 }
 
-// A text setting written as a scalar YAML reads as something else (a number in any base, an
-// exponent, infinity, true, a date, a number too big for 64 bits) is its text as written, as
-// today's core's typed decoder keeps it: its loader (config.LoadConfigOptional) reads each of
-// these into its string fields unchanged.
 func TestTextKeptAsWritten(t *testing.T) {
 	for _, s := range []string{
 		"0123", "1e5", "0x1F", "0o17", "0b101", ".inf", "-.Inf", ".NaN", "true", "False", "1_000", "+12", "1.0", "-0",
@@ -706,9 +677,8 @@ api-keys:
 				"listen":          net.JoinHostPort(s, "8317"),
 				"tls":             map[string]any{"enable": true, "cert": s, "key": s},
 				"trusted_proxies": []any{s},
-				// Not a duration, so the default hour, as in today's core.
-				"routing": map[string]any{"request_retry": 0, "session_affinity": map[string]any{"ttl_ms": 3600000}},
-				"pprof":   map[string]any{"enable": true, "addr": s},
+				"routing":         map[string]any{"request_retry": 0, "session_affinity": map[string]any{"ttl_ms": 3600000}},
+				"pprof":           map[string]any{"enable": true, "addr": s},
 				"payload": map[string]any{
 					"override": []any{map[string]any{
 						"models": []any{map[string]any{"name": s, "protocol": s, "from-protocol": s, "headers": map[string]any{"X-H": s},
@@ -750,15 +720,10 @@ api-keys:
 			if n := notices(r); !strings.Contains(n, fmt.Sprintf("routing.strategy %q is not known", s)) {
 				t.Errorf("notices do not name the strategy %q:\n%s", s, n)
 			}
-			// A quota response mode no such text is valid for is refused, naming the text as
-			// written.
 			y := "routing: {cooldown: {quota-response-mode: " + s + "}}"
 			if _, err := Translate([]byte(y)); err == nil || !strings.Contains(err.Error(), strconv.Quote(s)) {
 				t.Errorf("%s: err = %v, want it to name %q", y, err, s)
 			}
-			// No such text is a proxy URL either, so the proxy URL check refuses a proxy-url (its
-			// error does not show a value that is not a URL, so it cannot show which text was
-			// read, but it is the URL check's, not a refusal to read the value as text).
 			for _, y := range []string{"requests: {proxy-url: " + s + "}", "claude-api-key: [{api-key: k, proxy-url: " + s + "}]"} {
 				if _, err := Translate([]byte(y)); err == nil || !strings.Contains(err.Error(), "proxy-url \"(not a valid proxy URL)\"") {
 					t.Errorf("%s: err = %v, want the proxy URL check's error", y, err)
@@ -766,19 +731,14 @@ api-keys:
 			}
 		})
 	}
-	// Payload values (a rule's params, a model's match) are values, as in today's core.
 	r0 := translate(t, "payload:\n  override:\n    - models: [{name: m, match: [{a: 0123}]}]\n      params: {p: 0123, q: true, r: 1e5}\n")
 	equalJSON(t, r0.Config["payload"], `{"override": [{"models": [{"name": "m", "match": [{"a": 83}]}], "params": {"p": 83, "q": true, "r": 100000}}]}`)
-	// Null is no text, as in today's core: no key, so no account.
 	r := translate(t, "access: {api-keys: [k]}\nclaude-api-key:\n  - api-key: ~\n")
 	if _, ok := r.Config["extensions"]; ok {
 		t.Errorf("api-key: ~ made an account: %v", r.Config["extensions"])
 	}
 }
 
-// Aliases and merge keys read as yaml.v3 reads them, text kept as written through them: a key's
-// own field wins over a merged one, and an earlier mapping of a merged list over a later one. A
-// file yaml.v3 refuses (repeated keys, excessive aliasing) is refused.
 func TestAliasesAndMergeKeys(t *testing.T) {
 	r := translate(t, `
 x-first: &first {base-url: 0x1F, prefix: first}
@@ -808,8 +768,6 @@ access: {api-keys: [*k]}
 	}
 }
 
-// A key with no api-key (today's core serves an upstream that needs none) is not supported
-// yet: it adds no account and is named, and the rest of the file still loads.
 func TestKeysWithoutAPIKey(t *testing.T) {
 	r := translate(t, `
 gemini-api-key:
@@ -831,9 +789,6 @@ openai-compatibility:
 	}
 }
 
-// TestModelNaming covers today's model naming settings: per-key model aliases, prefixes and
-// exclusions, force-model-prefix, and the per-channel oauth-model-alias and
-// oauth-excluded-models, which go to the package of each channel's accounts.
 func TestModelNaming(t *testing.T) {
 	r := translate(t, `
 force-model-prefix: true
@@ -887,13 +842,10 @@ openai-compatibility:
 	]`)
 	equalJSON(t, exts[Codex].(map[string]any)["excluded_models"], `["gpt-image-*"]`)
 	equalJSON(t, exts[Kimi], `{"model_alias": [{"name": "kimi-k2", "alias": "k2"}]}`)
-	// The archived Antigravity extension's accounts take their channel's rules like any other's.
 	equalJSON(t, exts[Antigravity], `{
 		"model_alias": [{"name": "gemini-3.8-flash-high", "alias": "ag"}, {"name": "claude-opus-5-5-thinking", "alias": "opus", "display_name": "Opus"}],
 		"excluded_models": ["gemini-2.5-*"]
 	}`)
-	// openai-compatibility has no excluded-models in today's core, and a prefix with a slash
-	// inside is none.
 	equalJSON(t, exts[OpenAICompatible].(map[string]any)["accounts"], `[{
 		"id": "compat", "models": ["m"],
 		"settings": {"base_url": "https://compat.example.com/v1"},
@@ -910,10 +862,6 @@ openai-compatibility:
 	}
 }
 
-// Entries of an openai-compatibility group that share an alias are a pool in today's core. The
-// import keeps the first and names the alias and every member it drops; a model listed twice
-// loses nothing and is not named, and in the other sections, where today's core also takes the
-// first entry, nothing is named.
 func TestAliasPoolBecomesAChain(t *testing.T) {
 	r := translate(t, `
 codex-api-key:
@@ -935,7 +883,6 @@ openai-compatibility:
       - {name: plain}
 `)
 	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
-	// Each model of the pool is served under its own name, which the chain's steps name.
 	equalJSON(t, exts[OpenAICompatible].(map[string]any)["accounts"], `[{
 		"id": "compat", "models": ["plain", "deepseek-v3.1", "glm-5", "kimi-k2.5"],
 		"settings": {"base_url": "https://compat.example.com/v1"},
@@ -952,13 +899,11 @@ openai-compatibility:
 			t.Errorf("notices lack %q:\n%s", want, n)
 		}
 	}
-	// Only openai-compatibility pools: today's core keeps the first entry elsewhere.
 	if strings.Contains(n, "plain") || strings.Contains(n, "pub-a") {
 		t.Errorf("notices name more than the one pool:\n%s", n)
 	}
 }
 
-// server.tls (older spelling tls) becomes the tls section when it is enabled.
 func TestTLS(t *testing.T) {
 	want := map[string]any{"enable": true, "cert": "certs/c.pem", "key": "/etc/k.pem"}
 	for _, yaml := range []string{
@@ -981,7 +926,6 @@ func TestTLS(t *testing.T) {
 	}
 }
 
-// server.trusted-proxies (older spelling trusted-proxies) becomes trusted_proxies.
 func TestTrustedProxies(t *testing.T) {
 	for _, yaml := range []string{
 		"server:\n  trusted-proxies: [10.0.0.0/8, 127.0.0.1]\n",
@@ -1000,8 +944,6 @@ func TestTrustedProxies(t *testing.T) {
 	}
 }
 
-// quota-response-mode, under its v8 name or the older spelling, letter case and spaces aside, as
-// today's core reads it; retryable is the default and adds nothing; another value fails the load.
 func TestQuotaResponseMode(t *testing.T) {
 	for in, want := range map[string]any{
 		"routing: {cooldown: {quota-response-mode: usage-limit}}":     "usage-limit",
@@ -1027,9 +969,6 @@ func TestQuotaResponseMode(t *testing.T) {
 	}
 }
 
-// A key's request-retry is its account's request_retry; a group's counts for keys that set none;
-// an openai-compatibility group's counts for all its keys, which have none of their own; a
-// negative one inherits routing's count.
 func TestKeyRequestRetry(t *testing.T) {
 	r := translate(t, `
 api-keys:
@@ -1058,7 +997,7 @@ api-keys:
 			got[a["credential"].(map[string]any)["api_key"].(string)] = a["request_retry"]
 		}
 	}
-	want := map[string]any{"a": 2.0, "b": 0.0, "c": nil, "d": 3.0} // c: a key's own negative count inherits routing's, not its group's
+	want := map[string]any{"a": 2.0, "b": 0.0, "c": nil, "d": 3.0}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("request_retry by key = %v, want %v", got, want)
 	}
@@ -1070,8 +1009,6 @@ api-keys:
 	}
 }
 
-// disable-image-generation true turns off both the hosted image tool and the Images API on Codex
-// accounts; chat and passthrough keep the Images API, as today's core keeps its image routes.
 func TestDisableImageGeneration(t *testing.T) {
 	for v, want := range map[string]ImportOptions{
 		"true":        {CodexIdentity: true, ImageGenerationTool: false, Images: false},
@@ -1086,8 +1023,6 @@ func TestDisableImageGeneration(t *testing.T) {
 	}
 }
 
-// codex.signin-with-chatgpt-identifier (and its v8 spelling) reaches the import options, trimmed,
-// and is no longer reported as unsupported.
 func TestSIWCIdentifier(t *testing.T) {
 	for _, y := range []string{
 		"codex:\n  signin-with-chatgpt-identifier: '  my-agent '",
@@ -1109,9 +1044,6 @@ func TestSIWCIdentifier(t *testing.T) {
 	}
 }
 
-// An interactions-api-key entry (older spelling) and an api-keys.interactions group (v8) are Gemini
-// accounts with "interactions": true, with the usual fields as the gemini section maps them, and
-// no notice.
 func TestInteractionsKeys(t *testing.T) {
 	r := translate(t, `
 interactions-api-key:
@@ -1151,9 +1083,6 @@ api-keys:
 	}
 }
 
-// A vertex key's interactions: true turns on the Interactions API for its Vertex account, as the
-// setting "interactions": true beside "vertex"; false or absent does not, and a text "true" is
-// refused, as other boolean settings are.
 func TestVertexInteractions(t *testing.T) {
 	r := translate(t, `
 api-keys:
@@ -1173,7 +1102,6 @@ api-keys:
 	if n := notices(r); n != "" {
 		t.Errorf("notices:\n%s", n)
 	}
-	// The older spelling holds interactions in its entry, which oldGroup moves into the key.
 	r = translate(t, "vertex-api-key:\n  - api-key: vk-old\n    interactions: true\n")
 	equalJSON(t, r.Config["extensions"], `{"pluxy/gemini": {"accounts": [
 		{"id": "vertex-api-key-1", "settings": {"vertex": {}, "interactions": true}, "credential": {"kind": "api_key", "api_key": "vk-old"}}
@@ -1186,8 +1114,6 @@ api-keys:
 	}
 }
 
-// claude.model-level-cooling (each spelling) becomes model_level_cooling on the Claude keys'
-// accounts and on imported Claude accounts; off, it adds nothing.
 func TestClaudeModelLevelCooling(t *testing.T) {
 	for _, y := range []string{
 		"claude:\n  model-level-cooling: true\n",
@@ -1213,10 +1139,6 @@ func TestClaudeModelLevelCooling(t *testing.T) {
 	}
 }
 
-// upstream.xai.inject-x-search, and its older spellings (oauth.providers.xai.inject-x-search and
-// the top-level xai), is an import option like Codex's: the xAI API-key accounts of the config get
-// "inject_x_search": true, the imported xAI logins do too (see TestXAIInjectXSearchImport), and it
-// is off by default. The v8 value wins over an older one.
 func TestXAIInjectXSearch(t *testing.T) {
 	const keys = "api-keys: {xai: [{name: grok, keys: [{api-key: xk-1}]}]}"
 	account := func(on bool) string {
@@ -1256,8 +1178,6 @@ func TestXAIInjectXSearch(t *testing.T) {
 	}
 }
 
-// Two names of one header that differ only in spaces or letter case make the file fail to load,
-// naming both and no value, instead of one of them being kept by chance.
 func TestProviderHeadersRefuseSameHeaderTwice(t *testing.T) {
 	_, err := Translate([]byte(`
 claude-api-key:
@@ -1278,11 +1198,6 @@ claude-api-key:
 	}
 }
 
-// A provider key's headers, as today's core reads them: values that are numbers or true or false
-// are their text, names and values are trimmed, empty ones are dropped, a value that copies a
-// client header comes across as "$" and its name, and one this core does not send (a copy of the
-// client's key header, $CPA-SESSION-ID) is named with why and not imported. In the older layout
-// an entry's headers are its key's; an openai-compatibility group's are each of its keys'.
 func TestProviderHeaders(t *testing.T) {
 	r := translate(t, `
 claude-api-key:
@@ -1317,7 +1232,6 @@ openai-compatibility:
 	}
 }
 
-// Payload rules go across with today's names, from either spelling, and no notice names them.
 func TestPayload(t *testing.T) {
 	rules := `
     override:
@@ -1347,12 +1261,6 @@ func TestPayload(t *testing.T) {
 	}
 }
 
-// Today's core reads a config.yaml with yaml.v3, which matches a key to its field exactly: a key
-// written in another letter case, or not a payload key at all, is dropped, and the rule keeps
-// what else it has (a rule without models matches nothing; a model without a name matches
-// nothing). The importer drops the same keys and names each in a notice, where the JSON config's
-// decoder would have matched them case-insensitively and applied them. Each want is what today's
-// core's loader (config.ParseConfigBytes) kept of the same file.
 func TestPayloadKeysExact(t *testing.T) {
 	const rule = "    - models: [{name: m}]\n      params: {p: 1}\n"
 	for _, c := range []struct{ name, payload, want, notice string }{
@@ -1386,13 +1294,10 @@ func TestPayloadKeysExact(t *testing.T) {
 			}
 		})
 	}
-	// The exact spellings carry no notice about keys.
 	r := translate(t, "payload:\n  override:\n"+rule)
 	if n := notices(r); strings.Contains(n, "payload") {
 		t.Errorf("notices name payload for exact keys:\n%s", n)
 	}
-	// Only the payload's own keys are matched exactly: a path, a header name and a match key are
-	// the user's text and keep their case.
 	r = translate(t, "payload:\n  override:\n    - models: [{name: m, headers: {X-Mixed-Case: '*'}, match: [{Mixed.Path: 1}], exist: [Mixed.Path]}]\n      params: {Mixed.Path: 1}\n")
 	equalJSON(t, r.Config["payload"], `{"override": [{"models": [{"name": "m", "headers": {"X-Mixed-Case": "*"}, "match": [{"Mixed.Path": 1}], "exist": ["Mixed.Path"]}], "params": {"Mixed.Path": 1}}]}`)
 	if n := notices(r); strings.Contains(n, "payload") {
@@ -1400,12 +1305,6 @@ func TestPayloadKeysExact(t *testing.T) {
 	}
 }
 
-// A -raw rule's param goes across as today's core sent it upstream (found by running its loader
-// and its payloadRawValue on the same file): a string is the JSON text itself; any other value
-// is what json.Marshal makes of it, so a date YAML reads as one is the JSON string of its
-// RFC 3339 form; a param that is null, or that json.Marshal refuses (.inf, .nan, also inside a
-// list), is skipped, and the rule's other params still apply. The importer carries the first
-// two and drops the skipped ones, naming each.
 func TestPayloadRawParams(t *testing.T) {
 	for _, c := range []struct{ name, params, want, notice string }{
 		{"date", "{p: 2024-01-15}", `{"p": "\"2024-01-15T00:00:00Z\""}`, ""},
@@ -1438,15 +1337,10 @@ func TestPayloadRawParams(t *testing.T) {
 			})
 		}
 	}
-	// A param of a rule that is not a -raw one keeps its value as it is: a date stays a date.
 	r := translate(t, "payload:\n  override:\n    - models: [{name: m}]\n      params: {p: 2024-01-15}\n")
 	equalJSON(t, r.Config["payload"], `{"override": [{"models": [{"name": "m"}], "params": {"p": "2024-01-15T00:00:00Z"}}]}`)
 }
 
-// Today's core drops a -raw rule as a whole when a param of it is a string that is empty or not
-// JSON once trimmed, with a warning in its log, and goes on loading; the rest of the list stays.
-// The importer drops the same rule and names it. Each case is what today's core's loader kept
-// (and, for the last, applied) of the same file.
 func TestPayloadRawStringNotJSON(t *testing.T) {
 	rule := func(list, params string) string {
 		return "payload:\n  " + list + ":\n    - models: [{name: m}]\n      params: " + params + "\n"
@@ -1477,15 +1371,6 @@ func TestPayloadRawStringNotJSON(t *testing.T) {
 	}
 }
 
-// A value json.Marshal refuses (.inf and .nan, alone or in a list or mapping) outside a -raw
-// rule, as today's core's payload code handled it (found by running it on each case):
-//   - in a param of override or default it skipped the param, or, for a top-level .inf, .nan or
-//     -.inf in default and -.inf in override, wrote +Inf, NaN or -Inf into the body, which is not
-//     JSON; the importer drops the param either way, since there is no value to carry;
-//   - in a match, the model never matched, and in a not-match, the condition never equalled and
-//     so never excluded a request; a model of a filter rule is read the same way.
-//
-// Each of these used to fail the whole load with a bare "json: unsupported value".
 func TestPayloadNonJSONValues(t *testing.T) {
 	const wrote = "dropped: CLIProxyAPI skipped the param or wrote invalid JSON into the body"
 	rule := func(list, params string) string {
@@ -1523,7 +1408,6 @@ func TestPayloadNonJSONValues(t *testing.T) {
 		{"not-match inf", model("override", "{name: m, not-match: [{a: .inf}]}"), `{"override": [{"models": [{"name": "m", "not-match": [{}]}], "params": {"p": 1}}]}`, infNotMach},
 		{"not-match inf beside a value", model("override", "{name: m, not-match: [{a: .inf, b: 1}]}"), `{"override": [{"models": [{"name": "m", "not-match": [{"b": 1}]}], "params": {"p": 1}}]}`, infNotMach},
 		{"filter not-match inf", model("filter", "{name: m, not-match: [{a: .inf}]}"), `{"filter": [{"models": [{"name": "m", "not-match": [{}]}], "params": ["a"]}]}`, `requests.payload.filter[0].models[0]: not-match[0]["a"] is not JSON`},
-		// Dates are fine in these places: today's core sends and compares the JSON string of the date.
 		{"date param", rule("override", "{p: 2024-01-15}"), `{"override": [{"models": [{"name": "m"}], "params": {"p": "2024-01-15T00:00:00Z"}}]}`, ""},
 		{"date in match", model("override", "{name: m, match: [{a: 2024-01-15}]}"), `{"override": [{"models": [{"name": "m", "match": [{"a": "2024-01-15T00:00:00Z"}]}], "params": {"p": 1}}]}`, ""},
 	} {
@@ -1535,16 +1419,12 @@ func TestPayloadNonJSONValues(t *testing.T) {
 			}
 		})
 	}
-	// A value JSON cannot hold where today's core reads another type fails the load by naming the
-	// rules (today's core refuses the file too), not with a bare "json: unsupported value".
 	_, err := Translate([]byte("payload:\n  override:\n    - models: [{name: m, match: .inf}]\n      params: {p: 1}\n"))
 	if err == nil || !strings.Contains(err.Error(), "requests.payload: a value is not JSON where CLIProxyAPI reads another type") {
 		t.Errorf("a match that is .inf: err = %v", err)
 	}
 }
 
-// A config.yaml keeps today's default for session affinity, off: the translated config says so,
-// since a JSON config without the section has it on. With the key on it is as today's core has it.
 func TestSessionAffinityStaysOffWithoutItsKey(t *testing.T) {
 	for in, want := range map[string]string{
 		"{}":                                   `{"enabled": false}`,

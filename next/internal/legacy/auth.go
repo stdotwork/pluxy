@@ -21,27 +21,17 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// AuthFile is one credential file of today's auth folder, read as an account of this core.
 type AuthFile struct {
-	// File is the file's name in the folder.
-	File string
-	// Record is the account, ready for the credential store.
-	Record cred.Record
-	// Ignored names the file's settings this core does not support yet.
+	File    string
+	Record  cred.Record
 	Ignored []string
 }
 
-// Skipped is a file of today's auth folder that does not become an account.
 type Skipped struct {
 	File   string
 	Reason string
 }
 
-// How long before expiry the extensions renew what they log in: Codex 4 days ahead, Claude an
-// hour ahead, xAI five minutes ahead and Antigravity half an hour ahead
-// (next/extensions/*/login.go, next/extensions/claude/oauth.go, next/archive/antigravity/login.go),
-// and a Codex SIWC sign-in five minutes ahead (next/extensions/codex/siwc.go). Imported accounts
-// get the same; the others use core's default.
 const (
 	codexRefreshLead       = 96 * time.Hour
 	claudeRefreshLead      = time.Hour
@@ -50,12 +40,8 @@ const (
 	antigravityRefreshLead = 30 * time.Minute
 )
 
-// googleTokenURI is the token endpoint a service account key names by default; the Gemini
-// extension uses it when the credential names none.
 const googleTokenURI = "https://oauth2.googleapis.com/token"
 
-// AuthFiles lists the credential files today's core reads in dir: the .json files at its top
-// level.
 func AuthFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -71,14 +57,10 @@ func AuthFiles(dir string) ([]string, error) {
 	return out, nil
 }
 
-// AuthAccountID is the account ID a file of today's auth folder is imported as: its name less
-// .json, made a valid account ID.
 func AuthAccountID(file string) string {
 	return AccountID(file[:len(file)-len(filepath.Ext(file))])
 }
 
-// ReadAuthDir reads every credential file in dir as an account, as docs/moving-from-cpa.md
-// ("What carries over") describes. now is the current time, for renewal times.
 func ReadAuthDir(dir string, opts ImportOptions, now time.Time) ([]AuthFile, []Skipped, error) {
 	files, err := AuthFiles(dir)
 	if err != nil {
@@ -87,20 +69,16 @@ func ReadAuthDir(dir string, opts ImportOptions, now time.Time) ([]AuthFile, []S
 	return readAuthFiles(files, func(name string) ([]byte, error) { return readLimited(filepath.Join(dir, name)) }, opts, now)
 }
 
-// ReadAuthFile reads one credential file of today's auth folder, named name and holding b, as
-// ReadAuthDir reads a folder that holds only that file: its account, and the SIWC account of a
-// Codex file, or why they are skipped.
 func ReadAuthFile(name string, b []byte, opts ImportOptions, now time.Time) ([]AuthFile, []Skipped) {
 	files, skipped, _ := readAuthFiles([]string{name}, func(string) ([]byte, error) {
 		if len(b) > MaxAuthFile {
 			return nil, errTooLarge
 		}
 		return b, nil
-	}, opts, now) // read never fails otherwise
+	}, opts, now)
 	return files, skipped
 }
 
-// readAuthFiles reads the credential files named files, each with read.
 func readAuthFiles(files []string, read func(name string) ([]byte, error), opts ImportOptions, now time.Time) ([]AuthFile, []Skipped, error) {
 	var out, siwcs []AuthFile
 	var skipped []Skipped
@@ -122,14 +100,10 @@ func readAuthFiles(files []string, read func(name string) ([]byte, error), opts 
 		} else {
 			out = append(out, f)
 		}
-		// A Codex file's SIWC section imports even when the file's own account is skipped.
 		if siwc != nil {
 			siwcs = append(siwcs, *siwc)
 		}
 	}
-	// A SIWC account never takes the ID another file imports as (foo.json's SIWC account and a
-	// foo-siwc.json): it gets -2, -3 and so on. The IDs depend only on the folder's file names,
-	// so importing again finds the same ones and skips them.
 	used := map[string]bool{}
 	for _, name := range files {
 		used[strings.ToLower(AuthAccountID(name))] = true
@@ -141,8 +115,6 @@ func readAuthFiles(files []string, read func(name string) ([]byte, error), opts 
 	return out, skipped, nil
 }
 
-// readAuthFile reads one file; a reason says why its own account is skipped. A Codex file whose
-// siwc section holds a token gives a second account, siwc, whatever happens to the first.
 func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f AuthFile, siwc *AuthFile, reason string) {
 	var m map[string]any
 	if err := json.Unmarshal(b, &m); err != nil {
@@ -198,7 +170,7 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 	case "vertex":
 		r.Extension = Gemini
 		sa, _ := m["service_account"].(map[string]any)
-		pk, _ := sa["private_key"].(string) // as written: a PEM block ends in a newline
+		pk, _ := sa["private_key"].(string)
 		key := map[string]any{"client_email": text(sa, "client_email"), "private_key": pk}
 		if u := text(sa, "token_uri"); u != "" && u != googleTokenURI {
 			key["token_uri"] = u
@@ -213,25 +185,19 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 		}
 		location := text(m, "location")
 		if location == "" {
-			location = "us-central1" // today's core's default
+			location = "us-central1"
 		}
 		v := map[string]any{"location": location}
 		if project != "" {
 			v["project"] = project
 		}
 		settings["vertex"] = v
-		// As today's core reads them: JSON true at the top of the file, not the text "true" and
-		// not a key inside service_account.
 		interactions, _ := m["interactions"].(bool)
 		native, _ := m["native_interactions"].(bool)
 		if interactions || native {
 			settings["interactions"] = true
 		}
 	case "antigravity":
-		// pluxy does not ship this extension (next/archive/antigravity), so the account is added
-		// whether or not it is installed: it serves once it is, and the import's Needs list names it.
-		// A request needs the account's Google Cloud project, which the extension keeps with the
-		// credential; a file without one is renewed at once, which finds it.
 		r.Extension = Antigravity
 		renewAhead(antigravityRefreshLead)
 		project := text(m, "project_id")
@@ -253,9 +219,6 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 			settings["inject_x_search"] = true
 		}
 	case "meta":
-		// The minted API key is the access token and the device (dca:) token the refresh token,
-		// which mints a new key. Today's core keeps the device token in dca_token, or as the
-		// access token when no key was minted yet.
 		r.Extension = Meta
 		key, dca := text(m, "api_key"), text(m, "dca_token")
 		if t := text(m, "access_token"); strings.HasPrefix(t, "dca:") {
@@ -271,10 +234,9 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 		c = protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: key, RefreshToken: dca,
 			Data: object(map[string]any{"base_url": text(m, "base_url")})}
 		if key == "" && dca != "" {
-			c.RefreshAt = now.Unix() // no key yet: core mints one on the first request
+			c.RefreshAt = now.Unix()
 		}
 	case "devin":
-		// A Devin session token is a permanent API key in the Devin extension.
 		r.Extension = Devin
 		tok := text(m, "session_token")
 		if tok == "" {
@@ -292,19 +254,16 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 	case "gemini":
 		return f, nil, "type gemini is not supported (CLIProxyAPI does not load it either)"
 	default:
-		// The type is not quoted: a file may hold a token there.
 		return f, nil, "its type is not one the import takes"
 	}
 	if c.Kind == protocol.CredentialOAuth && c.AccessToken == "" && c.RefreshToken == "" {
 		if typ != "codex" {
 			return f, nil, "it holds no token"
 		}
-		reason = "it holds no token" // the SIWC section may still hold one
+		reason = "it holds no token"
 	}
 	r.Credential = c
 	r.Disabled = boolean(m["disabled"])
-	// The file's own label is a name a person gave the account; its e-mail (Devin's: its user
-	// name) is the provider's label, which the account shows when the file gives no label.
 	r.ProviderLabel = text(m, "email")
 	if r.ProviderLabel == "" && typ == "devin" {
 		r.ProviderLabel = text(m, "user_name")
@@ -330,8 +289,6 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 			break
 		}
 	}
-	// request_retry (or request-retry), as today's core reads it: the first that is a whole
-	// number counts, and a negative one inherits routing's count.
 	for _, k := range []string{"request_retry", "request-retry"} {
 		if n, ok := wholeNumber(m[k]); ok {
 			if n >= 0 {
@@ -342,8 +299,6 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 	}
 	r.Account.ExcludedModels = authExcluded(m)
 	r.Account.ModelAlias = authAliases(m)
-	// proxy_url (or proxy-url), as today's core reads it: the first that is set counts. A value
-	// this core cannot use skips the file rather than sending its traffic without the proxy.
 	for _, k := range []string{"proxy_url", "proxy-url"} {
 		if v, ok := m[k]; ok && !isZero(v) {
 			p, isText := v.(string)
@@ -357,8 +312,6 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 			break
 		}
 	}
-	// headers, as today's core reads them: text values only, trimmed, empty ones dropped. A
-	// header this core refuses skips the file rather than sending its traffic without it.
 	if raw, ok := m["headers"].(map[string]any); ok {
 		text := map[string]string{}
 		for k, v := range raw {
@@ -385,10 +338,6 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 	return f, siwc, reason
 }
 
-// siwcAccount reads the siwc section of a Codex file as an account of its own (login method
-// siwc), or nil when the section holds no token. base is the file's own account, whose label,
-// routing settings and ignored list it shares. As in today's core it is in use only when the file
-// says use_siwc.
 func siwcAccount(m map[string]any, base AuthFile, opts ImportOptions, now time.Time) *AuthFile {
 	s, _ := m["siwc"].(map[string]any)
 	c := protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: text(s, "access_token"), RefreshToken: text(s, "refresh_token")}
@@ -409,8 +358,6 @@ func siwcAccount(m map[string]any, base AuthFile, opts ImportOptions, now time.T
 			c.RefreshAt = at.Unix()
 		}
 	}
-	// siwc is a boolean: core redacts every credential string from replies, and the extension
-	// only needs to know the credential is SIWC.
 	c.Data = object(map[string]any{"siwc": true, "client_id": text(s, "client_id"), "device_id": text(s, "device_id"),
 		"scope": text(s, "scope"), "id_token": text(s, "id_token")})
 	settings := map[string]any{}
@@ -421,7 +368,6 @@ func siwcAccount(m map[string]any, base AuthFile, opts ImportOptions, now time.T
 		settings["signin_with_chatgpt_identifier"] = opts.SIWCIdentifier
 	}
 	r := base.Record
-	// Room for the suffix inside the 128 characters an account ID may have.
 	r.ID = r.ID[:min(len(r.ID), 128-len("-siwc"))] + "-siwc"
 	r.Credential = c
 	r.Disabled = base.Record.Disabled || !boolean(m["use_siwc"])
@@ -432,8 +378,6 @@ func siwcAccount(m map[string]any, base AuthFile, opts ImportOptions, now time.T
 	return &AuthFile{File: base.File, Record: r, Ignored: base.Ignored}
 }
 
-// authExcluded reads a credential file's own excluded models, as today's core does:
-// excluded_models (or excluded-models), a list of patterns or one comma-separated string.
 func authExcluded(m map[string]any) []string {
 	v, ok := m["excluded_models"]
 	if !ok {
@@ -453,9 +397,6 @@ func authExcluded(m map[string]any) []string {
 	return patterns(list)
 }
 
-// authAliases reads a credential file's own model aliases, as today's core does: the entries of
-// model_aliases, model-aliases and models that have a name and an alias that differs from it,
-// each alias (whatever its case) once.
 func authAliases(m map[string]any) []route.ModelAlias {
 	var out []route.ModelAlias
 	for _, k := range []string{"model_aliases", "model-aliases", "models"} {
@@ -474,11 +415,8 @@ func authAliases(m map[string]any) []route.ModelAlias {
 	return out
 }
 
-// MaxAuthFile bounds a credential file: today's are a few KiB, and a credential must fit in
-// one extension protocol frame.
 const MaxAuthFile = 1 << 20
 
-// TooLarge is why a file larger than MaxAuthFile is skipped.
 var TooLarge = fmt.Sprintf("larger than %d KiB", MaxAuthFile>>10)
 
 var errTooLarge = errors.New("file too large")
@@ -496,9 +434,6 @@ func readLimited(path string) ([]byte, error) {
 	return b, err
 }
 
-// kimiDomain is the Kimi site ("kimi.com" or "kimi.ai") of an account, decided as today's core
-// decides it (core/internal/auth/kimi/kimi.go): its domain, else its base_url's host, else its
-// type. Empty: neither, so the Kimi extension's default (kimi.com).
 func kimiDomain(domain, baseURL, typ string) string {
 	site := func(d string) string {
 		d = strings.ToLower(strings.TrimSpace(d))
@@ -523,16 +458,12 @@ func kimiDomain(domain, baseURL, typ string) string {
 	return site(typ)
 }
 
-// CheckImportFolders refuses an import whose credential store (credDir) is today's auth folder
-// (authDir) or inside it: opening the store tidies its folder, and the import must never change
-// today's auth folder.
 func CheckImportFolders(authDir, credDir string) error {
 	real := func(p string) (string, error) {
 		p, err := filepath.Abs(p)
 		if err != nil {
 			return "", err
 		}
-		// The store's folder may not exist yet: resolve the part that does.
 		rest := ""
 		for {
 			if r, err := filepath.EvalSymlinks(p); err == nil {
@@ -576,8 +507,6 @@ func boolean(v any) bool {
 	return false
 }
 
-// parseBool reads true or false written as a boolean or as text, as today's core reads
-// disable_cooling; ok is false for anything else.
 func parseBool(v any) (on, ok bool) {
 	switch v := v.(type) {
 	case bool:
@@ -589,8 +518,6 @@ func parseBool(v any) (on, ok bool) {
 	return false, false
 }
 
-// wholeNumber reads a whole number written as a number (a fraction is cut off) or as text, as
-// today's core reads request_retry; ok is false for anything else.
 func wholeNumber(v any) (n int, ok bool) {
 	switch v := v.(type) {
 	case float64:
@@ -602,8 +529,6 @@ func wholeNumber(v any) (n int, ok bool) {
 	return 0, false
 }
 
-// number reads a whole number written as a number or as text, as today's core reads priority
-// and weight; anything else is 0.
 func number(v any) int {
 	switch v := v.(type) {
 	case float64:
@@ -615,7 +540,6 @@ func number(v any) int {
 	return 0
 }
 
-// object encodes the non-empty values of m as a JSON object, or nil when none is left.
 func object(m map[string]any) json.RawMessage {
 	for k, v := range m {
 		if v == "" {
@@ -629,15 +553,10 @@ func object(m map[string]any) json.RawMessage {
 	return b
 }
 
-// Creator adds accounts: a credential store (cred.Store), or a running core's credential
-// manager (cred.Manager), which also makes them live.
 type Creator interface {
 	Create(r cred.Record) (cred.Record, error)
 }
 
-// Import adds the accounts of files to store, skipping those whose ID store or the config
-// (reserved) already uses, or store refuses as taken (cred.ErrConflict: a login still running
-// will take it). It returns the files it imported and those it skipped.
 func Import(store Creator, files []AuthFile, reserved func(id string) bool) (imported []AuthFile, skipped []Skipped, err error) {
 	for _, f := range files {
 		if reserved(f.Record.ID) {
@@ -648,8 +567,6 @@ func Import(store Creator, files []AuthFile, reserved func(id string) bool) (imp
 		case errors.Is(err, cred.ErrExists):
 			skipped = append(skipped, Skipped{File: f.File, Reason: fmt.Sprintf("the store already has an account %q", f.Record.ID)})
 		case errors.Is(err, cred.ErrConflict):
-			// A running core's manager: a login still running will take the ID. The file's other
-			// accounts still import.
 			skipped = append(skipped, Skipped{File: f.File, Reason: err.Error()})
 		case err != nil:
 			return imported, skipped, err
@@ -660,20 +577,13 @@ func Import(store Creator, files []AuthFile, reserved func(id string) bool) (imp
 	return imported, skipped, nil
 }
 
-// AuthFolder is today's auth folder read for an import: every entry of the folder, and the
-// accounts of its credential files.
 type AuthFolder struct {
-	// Entries are the names of every entry of the folder, sorted.
 	Entries []string
-	// Files are the accounts the credential files become, Skipped those that become none.
 	Files   []AuthFile
 	Skipped []Skipped
-	// read are the entries today's core reads as credential files (AuthFiles).
-	read []string
+	read    []string
 }
 
-// ReadAuthFolder reads today's auth folder dir for an import, as ReadAuthDir does, and lists
-// every entry of the folder, so the report can name each.
 func ReadAuthFolder(dir string, opts ImportOptions, now time.Time) (*AuthFolder, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -691,8 +601,6 @@ func ReadAuthFolder(dir string, opts ImportOptions, now time.Time) (*AuthFolder,
 	return a, err
 }
 
-// Ledger returns the report rows of the folder, one per entry: imported are the accounts the
-// import added (or, in a dry run, would add) and taken the accounts it skipped (legacy.Import).
 func (a *AuthFolder) Ledger(imported []AuthFile, taken []Skipped) *Ledger {
 	l := &Ledger{}
 	for _, name := range a.Entries {

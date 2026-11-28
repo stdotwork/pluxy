@@ -23,8 +23,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// FakeIDToken is an unsigned JWT with the claims of a ChatGPT sign-in, for tests: it names
-// accountID and email.
 func FakeIDToken(accountID, email string) string {
 	enc := base64.RawURLEncoding.EncodeToString
 	claims, _ := json.Marshal(map[string]any{
@@ -34,7 +32,6 @@ func FakeIDToken(accountID, email string) string {
 	return enc([]byte(`{"alg":"none"}`)) + "." + enc(claims) + ".sig"
 }
 
-// fakePrivateKey is a new RSA key in PEM, as a service account key holds one.
 func fakePrivateKey(t *testing.T) string {
 	t.Helper()
 	k, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -142,11 +139,9 @@ func TestReadAuthDir(t *testing.T) {
 		t.Errorf("codex credential: %+v", cc)
 	}
 	equalJSON(t, cc.Data, `{"id_token": "`+FakeIDToken("acct-1", "user@example.com")+`", "account_id": "acct-1"}`)
-	// The file's headers are the account's (they were named as not imported before).
 	if len(c.Ignored) != 0 || !reflect.DeepEqual(c.Record.Account.Headers, map[string]string{"X-A": "b"}) {
 		t.Errorf("codex ignored = %v, headers = %v; want none ignored and headers X-A: b", c.Ignored, c.Record.Account.Headers)
 	}
-	// The file's own naming settings, read as today's core reads them.
 	if a := c.Record.Account; a.Prefix != "team" || !reflect.DeepEqual(a.ExcludedModels, []string{"gpt-image-*", "gpt-x"}) ||
 		!reflect.DeepEqual(a.ModelAlias, []route.ModelAlias{{Name: "gpt-6.1-sol", Alias: "sol", Fork: true, DisplayName: "Sol"}}) {
 		t.Errorf("codex naming: prefix %q, excluded %v, aliases %+v", a.Prefix, a.ExcludedModels, a.ModelAlias)
@@ -170,8 +165,6 @@ func TestReadAuthDir(t *testing.T) {
 		t.Errorf("vertex: %+v", v.Record)
 	}
 	equalJSON(t, v.Record.Account.Settings, `{"vertex": {"project": "my-project", "location": "us-central1"}}`)
-	// Only the key's secret part is the credential: core removes every credential string from
-	// replies, so plain fields such as the project would be cut out of model output.
 	equalJSON(t, v.Record.Credential.Data, `{"client_email": "sa@my-project.iam.gserviceaccount.com", "private_key": `+mustJSON(key)+`}`)
 
 	x := got["xai-user-ab12"]
@@ -184,8 +177,6 @@ func TestReadAuthDir(t *testing.T) {
 	equalJSON(t, xc.Data, `{"token_endpoint": "https://auth.x.ai/oauth2/token"}`)
 	equalJSON(t, x.Record.Account.Settings, `{"base_url": "http://127.0.0.1:3/v1"}`)
 
-	// An Antigravity file is the archived extension's account: the Google Cloud project stays with
-	// the credential and base_url is a setting.
 	ag := got["antigravity-user-example.com"]
 	agc := ag.Record.Credential
 	if ag.Record.Extension != Antigravity || ag.Record.Label != "user@example.com" || agc.Kind != protocol.CredentialOAuth ||
@@ -203,7 +194,6 @@ func TestReadAuthDir(t *testing.T) {
 		t.Errorf("meta: %+v", mm.Record)
 	}
 	equalJSON(t, mc.Data, `{"base_url": "https://api.meta.ai/v1"}`)
-	// A login with no key minted yet has only the device token, so core mints a key at once.
 	mu := got["meta-unminted"].Record.Credential
 	if mu.AccessToken != "" || mu.RefreshToken != "dca:fake-meta-only" || mu.RefreshAt != now.Unix() {
 		t.Errorf("meta without a key: %+v", mu)
@@ -238,9 +228,6 @@ func TestReadAuthDir(t *testing.T) {
 	}
 }
 
-// A Vertex file opts in to the Interactions API when "interactions" or "native_interactions" is JSON
-// true at the top of the file, as today's core reads them: the text "true", a false value and a key
-// inside service_account do not.
 func TestVertexInteractionsFlags(t *testing.T) {
 	key := fakePrivateKey(t)
 	vertex := func(top map[string]any) map[string]any {
@@ -305,12 +292,10 @@ func TestImportSkipsKnownAccounts(t *testing.T) {
 	if err != nil || len(imported) != 2 || len(skipped) != 1 || !strings.Contains(skipped[0].Reason, "config already has") {
 		t.Fatalf("first import: %v %v %v", imported, skipped, err)
 	}
-	// Running it again imports nothing new.
 	imported, skipped, err = Import(store, files, reserved)
 	if err != nil || len(imported) != 0 || len(skipped) != 3 {
 		t.Fatalf("second import: %v %v %v", imported, skipped, err)
 	}
-	// The records are on disk, readable by the store core opens.
 	again, err := cred.Open(cred.FileBackend{Dir: credDir})
 	if err != nil {
 		t.Fatal(err)
@@ -318,13 +303,11 @@ func TestImportSkipsKnownAccounts(t *testing.T) {
 	if r, ok := again.Get("claude-a"); !ok || r.Extension != Claude || r.Credential.AccessToken != "fake-a" || r.State != cred.StateActive {
 		t.Errorf("stored record: %+v", r)
 	}
-	// The auth folder is left as it was.
 	if names, _ := AuthFiles(dir); len(names) != 3 {
 		t.Errorf("auth folder now holds %v", names)
 	}
 }
 
-// conflictCreator refuses one ID as a running core's manager refuses an ID a login will take.
 type conflictCreator struct {
 	Creator
 	id string
@@ -337,8 +320,6 @@ func (c conflictCreator) Create(r cred.Record) (cred.Record, error) {
 	return c.Creator.Create(r)
 }
 
-// An ID the store refuses as taken by something else is skipped like one it already has: the
-// other accounts still import.
 func TestImportSkipsConflictingAccount(t *testing.T) {
 	dir := writeFiles(t, map[string]any{
 		"claude-a.json": map[string]any{"type": "claude", "access_token": "fake-a"},
@@ -362,7 +343,6 @@ func TestImportSkipsConflictingAccount(t *testing.T) {
 	}
 }
 
-// The Kimi site is decided as today's core decides it: domain, then base_url's host, then type.
 func TestKimiDomain(t *testing.T) {
 	for _, c := range []struct{ domain, baseURL, typ, want string }{
 		{"", "", "kimi", "kimi.com"},
@@ -388,7 +368,6 @@ func TestLargeFileIsSkipped(t *testing.T) {
 	}
 }
 
-// The credential store may not be today's auth folder or inside it, by any path to it.
 func TestCheckImportFolders(t *testing.T) {
 	root := t.TempDir()
 	auth := filepath.Join(root, "auths")
@@ -418,9 +397,6 @@ func TestCheckImportFolders(t *testing.T) {
 	}
 }
 
-// A credential file's request_retry (or request-retry), a number or a numeric text, is its
-// account's request_retry, as today's core reads it: request_retry first, a negative one
-// inherits routing's count, and one that is not a number gives way to request-retry.
 func TestAuthFileRequestRetry(t *testing.T) {
 	file := func(fields map[string]any) map[string]any {
 		f := map[string]any{"type": "codex", "access_token": "fake-codex-access", "email": "user@example.com"}
@@ -454,9 +430,6 @@ func TestAuthFileRequestRetry(t *testing.T) {
 	}
 }
 
-// A file's proxy_url (or proxy-url), as today's core writes it, is the account's proxy_url. A
-// value this core cannot use skips the file, with a reason that leaves out the password, rather
-// than import an account that would go without its proxy.
 func TestAuthFileProxyURL(t *testing.T) {
 	file := func(fields map[string]any) map[string]any {
 		f := map[string]any{"type": "codex", "access_token": "fake-codex-access", "email": "user@example.com"}
@@ -495,8 +468,6 @@ func TestAuthFileProxyURL(t *testing.T) {
 	}
 }
 
-// A file's headers that copy a client header come across as "$" and its name; a copy of the
-// client's key header and $CPA-SESSION-ID are named under ignored, with why, and not brought.
 func TestAuthFileCopiedHeaders(t *testing.T) {
 	dir := writeFiles(t, map[string]any{"codex-a.json": map[string]any{"type": "codex", "access_token": "fake-codex-access",
 		"headers": map[string]any{"X-Opencode-Session": "$x-opencode-session", "User-Agent": " $ User-Agent ",
@@ -520,9 +491,6 @@ func TestAuthFileCopiedHeaders(t *testing.T) {
 	}
 }
 
-// An imported xAI login gets "inject_x_search": true when the config turns on
-// upstream.xai.inject-x-search (or its older spelling), and no such setting by default, as an
-// imported Codex login gets its own options.
 func TestXAIInjectXSearchImport(t *testing.T) {
 	dir := writeFiles(t, map[string]any{
 		"xai-user.json": map[string]any{"type": "xai", "access_token": "fake-xai-access", "refresh_token": "fake-xai-refresh", "base_url": "http://127.0.0.1:3/v1"},
@@ -546,8 +514,6 @@ func TestXAIInjectXSearchImport(t *testing.T) {
 	}
 }
 
-// siwcFile is a Codex file as today's core writes it after a Sign in with ChatGPT login: the
-// ChatGPT sign-in at the top and the SIWC token set in "siwc".
 func siwcFile(extra map[string]any) map[string]any {
 	m := map[string]any{
 		"type": "codex", "access_token": "fake-outer-access", "refresh_token": "fake-outer-refresh",
@@ -581,8 +547,6 @@ func readSIWC(t *testing.T, file map[string]any, opts ImportOptions) map[string]
 	return got
 }
 
-// A file with a siwc section gives a second account, in use when use_siwc is on, with the SIWC
-// token set, the file's routing settings and only the settings SIWC reads.
 func TestSIWCAccount(t *testing.T) {
 	opts := ImportOptions{CodexIdentity: false, ImageGenerationTool: false, Images: false, SIWCIdentifier: "my-agent"}
 	got := readSIWC(t, siwcFile(map[string]any{"use_siwc": true}), opts)
@@ -616,14 +580,12 @@ func TestSIWCAccount(t *testing.T) {
 		!reflect.DeepEqual(a.Headers, map[string]string{"X-A": "b"}) || !reflect.DeepEqual(a.Headers, b.Headers) {
 		t.Errorf("siwc account settings: %+v, ignored %v", a, s.Ignored)
 	}
-	// Without the identifier option, or the websockets switch, the settings are left out.
 	got = readSIWC(t, siwcFile(map[string]any{"use_siwc": "true", "websockets": false}), DefaultImportOptions)
 	if s := got["codex-user-siwc"]; s.Record.Disabled || s.Record.Account.Settings != nil {
 		t.Errorf("use_siwc as text: %+v", s.Record)
 	}
 }
 
-// The SIWC account is off unless the file says use_siwc, and off when the file is disabled.
 func TestSIWCDisabled(t *testing.T) {
 	for name, extra := range map[string]map[string]any{
 		"absent":   nil,
@@ -638,9 +600,6 @@ func TestSIWCDisabled(t *testing.T) {
 	}
 }
 
-// A siwc section without a token gives no account; one with only an access token (under the
-// older name "access") or only a refresh token does, and a file whose own tokens are empty is
-// skipped while its SIWC account still imports.
 func TestSIWCTokens(t *testing.T) {
 	if got := readSIWC(t, siwcFile(map[string]any{"use_siwc": true, "siwc": map[string]any{"client_id": "fake-client"}}), DefaultImportOptions); len(got) != 1 {
 		t.Errorf("a siwc section without a token gave %v", got)
@@ -664,7 +623,6 @@ func TestSIWCTokens(t *testing.T) {
 	}
 }
 
-// The suffix keeps the account ID valid and within its length even for a file name at the limit.
 func TestSIWCAccountIDLength(t *testing.T) {
 	name := strings.Repeat("a", 128)
 	files, _, err := ReadAuthDir(writeFiles(t, map[string]any{name + ".json": siwcFile(nil)}), DefaultImportOptions, time.Now())
@@ -676,8 +634,6 @@ func TestSIWCAccountIDLength(t *testing.T) {
 	}
 }
 
-// A SIWC account does not take the ID another file imports as: foo.json's SIWC account beside a
-// foo-siwc.json gets foo-siwc-2, and reading the folder again gives the same IDs.
 func TestSIWCAccountIDCollision(t *testing.T) {
 	dir := writeFiles(t, map[string]any{"foo.json": siwcFile(nil), "foo-siwc.json": siwcFile(nil)})
 	for range 2 {
@@ -697,9 +653,6 @@ func TestSIWCAccountIDCollision(t *testing.T) {
 	}
 }
 
-// One file read on its own gives what reading a folder holding only it gives: a Codex file's own
-// account and its SIWC account, as foo and foo-siwc; a file over MaxAuthFile is skipped, and a
-// file that is not JSON says so.
 func TestReadAuthFile(t *testing.T) {
 	b, _ := json.Marshal(siwcFile(nil))
 	files, skipped := ReadAuthFile("foo.json", b, DefaultImportOptions, time.Now())
@@ -721,7 +674,6 @@ func TestReadAuthFile(t *testing.T) {
 	}
 }
 
-// upstream.claude.model-level-cooling reaches imported Claude accounts as model_level_cooling.
 func TestImportClaudeModelLevelCooling(t *testing.T) {
 	dir := writeFiles(t, map[string]any{"claude-a.json": map[string]any{"type": "claude", "access_token": "fake-a"}})
 	opts := DefaultImportOptions
@@ -733,9 +685,6 @@ func TestImportClaudeModelLevelCooling(t *testing.T) {
 	equalJSON(t, files[0].Record.Account.Settings, `{"model_level_cooling": true}`)
 }
 
-// An Antigravity file with no project_id still imports, and its account is renewed at once when it
-// has a refresh token, because a request needs the Google Cloud project and the extension's
-// renewal finds it. A file with no token at all is skipped, as every other type is.
 func TestAntigravityWithoutProject(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	read := func(file map[string]any) ([]AuthFile, []Skipped) {
@@ -752,7 +701,6 @@ func TestAntigravityWithoutProject(t *testing.T) {
 		t.Errorf("no project: data %s, refresh_at %d (want %d), settings %s", c.Data, c.RefreshAt, now.Unix(), files[0].Record.Account.Settings)
 	}
 
-	// Without a refresh token there is nothing to renew with: the account is left as it is.
 	files, _ = read(map[string]any{"type": "antigravity", "access_token": "fake-a"})
 	if len(files) != 1 || files[0].Record.Credential.RefreshAt != 0 {
 		t.Errorf("no project, no refresh token: %+v", files)
@@ -764,8 +712,6 @@ func TestAntigravityWithoutProject(t *testing.T) {
 	}
 }
 
-// signInProvider is an extension that signs every login in at once with grant, for new logins to
-// imported accounts.
 type signInProvider struct{ grant *protocol.Grant }
 
 func (p *signInProvider) Info() protocol.Info {
@@ -799,11 +745,6 @@ func (c *signInCall) Next() protocol.Reply {
 func (c *signInCall) Send(map[string]string) error { return nil }
 func (c *signInCall) Close()                       {}
 
-// A credential file's own label is a name a person gave the account; its e-mail (Devin: its user
-// name) is the provider's label. Imported, taking the name away shows the e-mail, or no label
-// when the file has none, and a new sign-in is checked against the e-mail, never the name: the
-// same e-mail (letter case aside) is let in and the name stays, another e-mail is refused. The
-// SIWC account of a Codex file has the file's labels.
 func TestImportedFileLabelIsANameAndEmailTheProviders(t *testing.T) {
 	dir := writeFiles(t, map[string]any{
 		"codex-user.json":     siwcFile(map[string]any{"label": "work", "use_siwc": true}),
@@ -839,7 +780,6 @@ func TestImportedFileLabelIsANameAndEmailTheProviders(t *testing.T) {
 	}
 	none := ""
 
-	// Named, signed in again: the e-mail is let in, and the name stays.
 	if v := signIn("codex-user", "someone@example.com"); v.State != cred.LoginFailed {
 		t.Errorf("a new sign-in to codex-user with another e-mail ended %s, want failed", v.State)
 	}
@@ -850,7 +790,6 @@ func TestImportedFileLabelIsANameAndEmailTheProviders(t *testing.T) {
 		t.Errorf("codex-user's label after the new sign-in = %q, want the file's label", r.Label)
 	}
 
-	// The name taken away: the provider's label shows, or none.
 	for id, want := range map[string][2]string{
 		"codex-user-siwc": {"work", "user@example.com"},
 		"codex-nameonly":  {"home", ""},

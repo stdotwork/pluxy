@@ -16,8 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/cred"
 )
 
-// sample are values of the supported settings outside the provider sections, of the type each
-// is read as. Every other rule's setting gets "x".
 var sample = map[string]any{
 	"config-version":          8,
 	"server.host":             "10.9.8.7",
@@ -63,8 +61,6 @@ var sample = map[string]any{
 	"observability.pprof.addr":                     "127.0.0.1:9999",
 }
 
-// groupSample are values of a provider group's supported fields ("api-keys.*[].<field>" and the
-// section's own).
 var groupSample = map[string]any{
 	"name": "g", "base-url": "https://upstream.example.com/v1", "priority": 1, "api-key": "fake-upstream-key",
 	"weight": 2, "prefix": "p", "excluded-models": []any{"old-*"}, "headers": map[string]any{"X-Team": "a"},
@@ -73,9 +69,6 @@ var groupSample = map[string]any{
 	"disabled": false, "rebuild-mid-system-message": true,
 }
 
-// ruleDoc is a config.yaml that sets every setting of the rule table, each to a value that asks
-// for something, and gives every provider section a group with each of its fields. skip, when
-// not empty, is a rule left out: the setting is not in the file.
 func ruleDoc(t *testing.T, skip string) tree {
 	t.Helper()
 	doc := tree{}
@@ -90,7 +83,7 @@ func ruleDoc(t *testing.T, skip string) tree {
 		r := rules[path]
 		if rest, ok := strings.CutPrefix(path, "api-keys."); ok {
 			section, field, _ := strings.Cut(rest, "[].")
-			if field == "" { // a whole section: api-keys.meta
+			if field == "" {
 				continue
 			}
 			v, typed := groupSample[strings.TrimSuffix(field, "[].name")]
@@ -125,7 +118,7 @@ func ruleDoc(t *testing.T, skip string) tree {
 		case r.status == supported && !rulesBelow(path):
 			t.Fatalf("no sample value for the supported setting %s: add one", path)
 		case rulesBelow(path):
-			v = tree{"zz-not-a-key": "x"} // its own rules set the rest
+			v = tree{"zz-not-a-key": "x"}
 		default:
 			v = "x"
 		}
@@ -144,7 +137,6 @@ func ruleDoc(t *testing.T, skip string) tree {
 			keys[s] = []any{tree{"api-key": "fake-meta-key"}}
 			continue
 		}
-		// A key's api-key and weight are the group's, unless the rule that sets them was left out.
 		key := tree{}
 		for _, field := range []string{"api-key", "weight"} {
 			if v, ok := g[field]; ok {
@@ -159,9 +151,6 @@ func ruleDoc(t *testing.T, skip string) tree {
 	return doc
 }
 
-// noConfigEffect are the supported settings whose sample value asks nothing of core's config: the
-// value is carried elsewhere, or is the default core already has. Each says why, so a setting
-// added here without a reason is caught by TestImportReportCoversEveryRule.
 var noConfigEffect = map[string]string{
 	"oauth.auth-dir": "it names the folder of accounts to read: the folder's accounts are imported, and core keeps no folder",
 	"oauth.providers.codex.signin-with-chatgpt-identifier": "it applies to accounts added by a sign-in: the import's account options carry it, not core's config",
@@ -171,7 +160,6 @@ var noConfigEffect = map[string]string{
 	"api-keys.openai-compatibility[].disabled":             "false is the default: the group's keys are imported either way",
 }
 
-// importDoc imports the config.yaml that doc makes, and returns the import's result.
 func importDoc(t *testing.T, dir string, doc tree) *Result {
 	t.Helper()
 	b, err := yaml.Marshal(doc)
@@ -185,11 +173,6 @@ func importDoc(t *testing.T, dir string, doc tree) *Result {
 	return res
 }
 
-// Every setting of the rule table, set to something that asks for it, lands in exactly one of
-// the report's lists: ImportConfig fails otherwise, naming the setting. Each brought or changed
-// setting's value reaches core's config, so removing its writer fails the test: leaving the
-// setting out of the file changes what the import writes. A setting whose value goes elsewhere is
-// in noConfigEffect, with why.
 func TestImportReportCoversEveryRule(t *testing.T) {
 	dir := t.TempDir()
 	base := importDoc(t, dir, ruleDoc(t, ""))
@@ -203,7 +186,6 @@ func TestImportReportCoversEveryRule(t *testing.T) {
 			whats = append(whats, r.What)
 		}
 	}
-	// Each rule outside the provider sections is named by a row of its own or of a key below it.
 	for path := range rules {
 		if strings.HasPrefix(path, "api-keys.") {
 			continue
@@ -212,14 +194,11 @@ func TestImportReportCoversEveryRule(t *testing.T) {
 			t.Errorf("no row names %s", path)
 		}
 	}
-	// Each provider section, a whole section too, has a row for its entry; the tests below check
-	// what each of its fields did.
 	for _, f := range families {
 		if !slices.Contains(whats, "api-keys."+f.v8+"[0]") {
 			t.Errorf("no row names api-keys.%s[0]", f.v8)
 		}
 	}
-	// A provider field that is not brought is named in its group's row.
 	var whys string
 	for _, rows := range [][]Row{lists.Brought, lists.Changed, lists.NotBrought} {
 		for _, r := range rows {
@@ -235,7 +214,6 @@ func TestImportReportCoversEveryRule(t *testing.T) {
 			t.Errorf("no row says %s is not brought", path)
 		}
 	}
-	// A whole-section rule that is not brought says why in its entries' rows.
 	for path, r := range rules {
 		if r.status == supported || r.note == "" || !strings.HasPrefix(path, "api-keys.") || strings.Contains(path, "[].") {
 			continue
@@ -249,8 +227,6 @@ func TestImportReportCoversEveryRule(t *testing.T) {
 		if rules[path].status != supported {
 			continue
 		}
-		// A provider rule's value is part of its group's row: every entry of ruleDoc's sections
-		// becomes an account, whose brought or changed row names the group.
 		if !strings.HasPrefix(path, "api-keys.") {
 			named := func(rows []Row) bool {
 				return slices.ContainsFunc(rows, func(r Row) bool { return r.What == path || strings.HasPrefix(r.What, path+".") })
@@ -271,7 +247,6 @@ func TestImportReportCoversEveryRule(t *testing.T) {
 	}
 }
 
-// Each older spelling of a setting is accounted for under its own name in the file.
 func TestImportReportCoversOlderSpellings(t *testing.T) {
 	for _, m := range moves {
 		v, ok := sample[m[1]]
@@ -302,8 +277,6 @@ func TestImportReportCoversOlderSpellings(t *testing.T) {
 	}
 }
 
-// The older and the v8 spelling of one setting: the v8 one is brought, the older one named as
-// not brought.
 func TestImportBothSpellings(t *testing.T) {
 	res := importYAML(t, "port: 8000\nserver: {port: 8001}\n")
 	if row, list := rowOf(t, res, "port"); list != NotBrought || !strings.Contains(row.Why, "server.port") {
@@ -317,7 +290,6 @@ func TestImportBothSpellings(t *testing.T) {
 	}
 }
 
-// An item with no row, or with two, fails the report, naming the item.
 func TestLedgerCheck(t *testing.T) {
 	l := &Ledger{}
 	l.Expect(ConfigItem("a"))
@@ -336,8 +308,6 @@ func TestLedgerCheck(t *testing.T) {
 	}
 }
 
-// A setting that writes nothing is named as not brought, with why: TLS files with TLS off, an
-// empty client-key list, and a provider group with no keys.
 func TestImportRowsThatWriteNothing(t *testing.T) {
 	res := importYAML(t, "server: {tls: {cert: c.pem, key: k.pem}}\n")
 	for _, k := range []string{"server.tls.cert", "server.tls.key"} {
@@ -370,7 +340,6 @@ func importYAML(t *testing.T, doc string) *Result {
 	return res
 }
 
-// rowOf returns the row of the key at path in the file, and its list.
 func rowOf(t *testing.T, res *Result, path string) (Row, int) {
 	t.Helper()
 	for _, e := range res.Ledger.entries {
@@ -382,8 +351,6 @@ func rowOf(t *testing.T, res *Result, path string) (Row, int) {
 	return Row{}, -1
 }
 
-// T6: a config with no host, on which today's core listened on every interface, imports as
-// 127.0.0.1, with a changed row that says how to keep the old reach.
 func TestImportNoHostIsLoopback(t *testing.T) {
 	for _, doc := range []string{"port: 8317\n", "server: {host: \"\", port: 8317}\n"} {
 		res := importYAML(t, doc)
@@ -396,7 +363,6 @@ func TestImportNoHostIsLoopback(t *testing.T) {
 			t.Errorf("%q: server.host row %d %+v", doc, list, row)
 		}
 	}
-	// A host is kept, and Translate (a config.yaml core runs on) keeps today's reach.
 	if res := importYAML(t, "host: 0.0.0.0\nport: 9000\n"); res.Config["listen"] != "0.0.0.0:9000" {
 		t.Errorf("listen %v", res.Config["listen"])
 	}
@@ -405,8 +371,6 @@ func TestImportNoHostIsLoopback(t *testing.T) {
 	}
 }
 
-// yes, on, no and off are true and false, as today's core's YAML decoder reads them into a
-// true-or-false setting.
 func TestYAML11Booleans(t *testing.T) {
 	r, err := Translate([]byte(`
 management: {secret-key: fake-management-key, allow-remote: yes}
@@ -435,9 +399,6 @@ server: {tls: {enable: off, cert: c.pem}}
 	}
 }
 
-// A management key is never brought, plain or bcrypt: the import keeps core's own key, which
-// guards every client of core, and says so with the way to change it. A config.yaml core runs
-// on keeps today's reading: a plain key exactly as written, a bcrypt hash noted and left out.
 func TestImportKeepsManagementKey(t *testing.T) {
 	const hashed = "remote-management: {secret-key: \"$2a$10$abcdefghijklmnopqrstuuAbCdEfGhIjKlMnOpQrStUvWxYz01234\"}\n"
 	const plain = "management: {secret-key: fake-management-key}\n"
@@ -482,8 +443,6 @@ func TestImportDisableControlPanelReason(t *testing.T) {
 	}
 }
 
-// A provider group is one row: brought with its accounts, changed with what was left out, or not
-// brought.
 func TestImportGroupRows(t *testing.T) {
 	res := importYAML(t, `
 claude-api-key:
@@ -511,8 +470,6 @@ openai-compatibility:
 	}
 }
 
-// Every entry of the auth folder is one row: each file type the import knows, a file it cannot
-// read, a file that is not JSON and a folder.
 func TestAuthFolderRows(t *testing.T) {
 	expired := time.Now().Add(240 * time.Hour).UTC().Format(time.RFC3339)
 	dir := writeFiles(t, map[string]any{
@@ -543,8 +500,6 @@ func TestAuthFolderRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The report is of what Import does with the folder, not of the files read: Import adds an
-	// account per file and says which it took.
 	imported, taken, err := Import(fakeStore{}, a.Files, func(string) bool { return false })
 	if err != nil {
 		t.Fatal(err)
@@ -592,7 +547,6 @@ func TestAuthFolderRows(t *testing.T) {
 	if len(got) != len(a.Entries) || len(a.Entries) != 17 {
 		t.Errorf("%d rows for %d entries", len(got), len(a.Entries))
 	}
-	// An account the store already has is named as not brought.
 	imported, taken, err = Import(fakeStore{}, a.Files, func(id string) bool { return id == "xai-a" })
 	if err != nil {
 		t.Fatal(err)
@@ -608,7 +562,6 @@ func TestAuthFolderRows(t *testing.T) {
 	}
 }
 
-// fakeStore takes every account.
 type fakeStore struct{}
 
 func (fakeStore) Create(r cred.Record) (cred.Record, error) { return r, nil }

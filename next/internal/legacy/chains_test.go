@@ -14,10 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
 
-// A pool whose models cannot become valid chains fails the import, naming the pool and the
-// reason, so nothing is written: the models are not left cut with a row naming a chain that is
-// not there. A config.yaml core runs on keeps what it can, as before: the chains are left out and
-// a notice says why.
 func TestImportPoolThatCannotBecomeChains(t *testing.T) {
 	const doc = `
 openai-compatibility:
@@ -48,11 +44,6 @@ openai-compatibility:
 	}
 }
 
-// A pooled alias (one openai-compatibility key over several models) and a name served by two
-// providers become fallback chains that the router accepts: each step is served by an account
-// of the imported config, as a management call that sets a chain checks it (CheckSteps). A name
-// one provider serves gets no chain, and the steps come in the order the file lists a group's
-// models, then the order core reads the provider sections.
 func TestPoolsBecomeChainsTheRouterAccepts(t *testing.T) {
 	res, err := legacy.ImportConfig([]byte(`
 access: {api-keys: [fake-client-key]}
@@ -71,8 +62,6 @@ claude-api-key:
 	if err != nil {
 		t.Fatal(err)
 	}
-	// An import writes into core's config, which always has a management key: the import does
-	// not bring one, so the test's config carries core's own.
 	res.Config["management_key"] = "fake-management-key"
 	b, err := json.Marshal(res.Config)
 	if err != nil {
@@ -83,9 +72,6 @@ claude-api-key:
 		t.Fatalf("the imported config is refused: %v\n%s", err, b)
 	}
 	chains := cfg.Routing.Chains
-	// The alias's models in the order the group lists them, then the providers a name is served
-	// by in the order core reads the sections: pluxy/claude before pluxy/openai-compatible, which
-	// is not the file's order.
 	want := map[string][]route.Step{
 		"fast": {{Model: "deepseek-v3.1", Provider: legacy.OpenAICompatible},
 			{Model: "glm-5", Provider: legacy.OpenAICompatible}},
@@ -109,8 +95,6 @@ claude-api-key:
 			if steps[i].Model != w.Model || steps[i].Provider != w.Provider {
 				t.Errorf("chain %s step %d = %+v, want %s@%s", name, i+1, steps[i], w.Model, w.Provider)
 			}
-			// A pool's steps name the group's accounts; a name two providers serve is left to each
-			// provider's own accounts.
 			var accounts []string
 			if name == "fast" {
 				accounts = []string{"compat-1", "compat-2"}
@@ -120,8 +104,6 @@ claude-api-key:
 			}
 		}
 	}
-	// The only chains are a pool's and a name two providers serve: one provider's name, however
-	// many accounts it has, is served without one.
 	if steps, ok := chains["claude-only"]; ok {
 		t.Errorf("a name one provider serves has the chain %+v", steps)
 	}

@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// The profiling pages' switch and address are read from observability.pprof and kept as the
-// JSON pprof section, with no notice: both are supported.
 func TestPprofSettings(t *testing.T) {
 	r := translate(t, "observability:\n  pprof:\n    enable: true\n    addr: \"127.0.0.1:9000\"\n")
 	if got := asJSON(t, r.Config["pprof"]); !reflect.DeepEqual(got, map[string]any{"enable": true, "addr": "127.0.0.1:9000"}) {

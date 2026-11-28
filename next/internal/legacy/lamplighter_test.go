@@ -9,9 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/ignite"
 )
 
-// lampConfig is a config.yaml with the Lamplighter plugin set up as in a real CPA setup:
-// ignition on for Claude, Codex and two Antigravity groups (one with its own model), the
-// notifications off, and a few of the plugin's other keys.
 const lampConfig = `
 access:
   api-keys: ["sk-client-1"]
@@ -131,7 +128,6 @@ func TestImportLamplighterIgnition(t *testing.T) {
 	if r := rows["plugins.configs.lamplighter.providers.antigravity.ignite"][1]; !strings.Contains(r, "archived") {
 		t.Errorf("antigravity row: %s", r)
 	}
-	// The plugin's key reaches no row and no config.
 	all, _ := json.Marshal(res)
 	if strings.Contains(string(all), "sk-lamp-secret-value") {
 		t.Error("the plugin's API key is in the import's result")
@@ -139,7 +135,6 @@ func TestImportLamplighterIgnition(t *testing.T) {
 }
 
 func TestImportLamplighterDefaultsAndOff(t *testing.T) {
-	// The plugin on with no ignition or providers block: its defaults, Claude and Codex.
 	res, err := ImportConfig([]byte("access:\n  api-keys: [k]\nplugins:\n  enabled: true\n  configs:\n    lamplighter:\n      enabled: true\n"), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +143,6 @@ func TestImportLamplighterDefaultsAndOff(t *testing.T) {
 	if string(b) != `{"enabled":true,"extensions":{"pluxy/claude":{"enabled":true},"pluxy/codex":{"enabled":true}}}` {
 		t.Fatalf("defaults: routing.ignition = %s", b)
 	}
-	// Values out of the plugin's ranges are held to them, as the plugin holds them.
 	res, err = ImportConfig([]byte("access:\n  api-keys: [k]\nplugins:\n  enabled: true\n  configs:\n    lamplighter:\n      enabled: true\n      ignition:\n        failure_retry_seconds: 10\n        post_success_hold_seconds: 5\n      providers:\n        codex:\n          monitor: false\n"), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +158,6 @@ func TestImportLamplighterDefaultsAndOff(t *testing.T) {
 	if r := rows["plugins.configs.lamplighter.providers.codex.monitor"]; r[0] != "changed" {
 		t.Errorf("monitor row: %v", r)
 	}
-	// The plugin off, or every plugin off: nothing is brought.
 	for _, doc := range []string{
 		"access:\n  api-keys: [k]\nplugins:\n  enabled: true\n  configs:\n    lamplighter:\n      ignition:\n        start_hour: 6\n",
 		"access:\n  api-keys: [k]\nplugins:\n  enabled: false\n  configs:\n    lamplighter:\n      enabled: true\n      ignition:\n        start_hour: 6\n",
@@ -204,8 +197,6 @@ plugins:
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal(res.Config["routing"].(map[string]any)["ignition"])
-	// claude is the key the plugin reads; codex: false keeps codex's defaults (on); antigravity
-	// starts its default group only, so the model set for another group goes nowhere.
 	want := `{"enabled":true,"extensions":{"pluxy/antigravity":{"enabled":true,"windows":{"gemini_models_five_hour":""}},"pluxy/claude":{"enabled":true,"model":"claude-haiku-5-5"},"pluxy/codex":{"enabled":true}}}`
 	if string(b) != want {
 		t.Fatalf("routing.ignition = %s\nwant %s", b, want)
