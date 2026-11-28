@@ -348,10 +348,10 @@ single notice linking to **Turn it on in Config** (`#/config/logging`).
 - **Header action:** **Refresh** runs a fresh tool scan and reloads keys and 7-day key usage. If
   core has never scanned, opening the page starts one scan and polls every second while it runs.
 - **Coding tools:** lists coding tools detected on the computer core runs on, with a summary line
-  (`{installed} installed · {connected} connected · checked {when}`, plus
-  `Detected on the computer pluxy runs on.` when viewed from another computer). Connected tools
-  appear first, then other installed tools; uninstalled or unchecked tools sit under **Other tools
-  ({count})** (open automatically alongside **No coding tools found.** when no tool is installed).
+  (`{installed} installed · {connected} connected · checked {when}`, plus **Detected on the
+  computer pluxy runs on.** when viewed from another computer). Connected tools appear first, then
+  other installed tools; uninstalled or unchecked tools sit under **Other tools ({count})** (open
+  automatically alongside **No coding tools found.** when no tool is installed).
   - Each row shows the tool name (**Codex** for `codex`), version (when found), state badge
     (**Connected**, **Installed · not connected**, **Settings need update**, **Cannot change
     settings**, **Not installed**, or **Not checked**), settings file path, and action.
