@@ -16,11 +16,8 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// defaultImageModel is the model of an Images API request that names none, as in today's core.
 const defaultImageModel = "gpt-image-2"
 
-// imagesGenerationsEndpoint is OpenAI's Images API generation. A request without a prompt is
-// refused before it is routed, as today's core refuses it.
 var imagesGenerationsEndpoint = endpoint{
 	format:       llm.FormatOpenAIImagesGenerations,
 	headers:      openairesponses.Headers,
@@ -28,8 +25,6 @@ var imagesGenerationsEndpoint = endpoint{
 	check:        func(body map[string]json.RawMessage, _ bool) *llm.Error { return needPrompt(body) },
 }
 
-// imagesEditsEndpoint is OpenAI's Images API edit, in JSON or as multipart/form-data, which needs
-// a prompt and, as a form, an image file.
 var imagesEditsEndpoint = endpoint{
 	format:       llm.FormatOpenAIImagesEdits,
 	headers:      openairesponses.Headers,
@@ -63,24 +58,16 @@ func badImagesRequest(what string) *llm.Error {
 	return &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest, Message: "Invalid request: " + what}
 }
 
-// mediaType returns a Content-Type's media type in lower case, without parameters.
 func mediaType(contentType string) string {
 	mt, _, _ := strings.Cut(contentType, ";")
 	return strings.ToLower(strings.TrimSpace(mt))
 }
 
-// formJSON reads a multipart/form-data endpoint body into its JSON form. For an Images API edit,
-// as today's core sends it to Codex, each field is a member (n, output_compression and
-// partial_images as numbers, stream as a boolean, a repeated field as a list, mask[file_id] and
-// mask[image_url] inside mask), the image files (image[], else image) are appended to images as
-// data URLs, and the first mask file becomes mask.image_url. An audio file named file becomes
-// {filename, content_type, data}, where data is the file's bytes in base64.
 func formJSON(contentType string, body []byte) (json.RawMessage, *llm.Error) {
 	_, params, err := mime.ParseMediaType(contentType)
 	if err != nil || params["boundary"] == "" {
 		return nil, badImagesRequest("the multipart body has no boundary")
 	}
-	// The body is in memory already (at most MaxRequestBody), so the form is too.
 	form, err := multipart.NewReader(bytes.NewReader(body), params["boundary"]).ReadForm(MaxRequestBody)
 	if err != nil {
 		return nil, badImagesRequest(err.Error())
@@ -162,8 +149,6 @@ func formJSON(contentType string, body []byte) (json.RawMessage, *llm.Error) {
 	return b, nil
 }
 
-// formValue is a form field's value in JSON: a number for the fields that are numbers, a boolean
-// for stream, a string otherwise.
 func formValue(key, v string) any {
 	v = strings.TrimSpace(v)
 	switch key {
@@ -179,7 +164,6 @@ func formValue(key, v string) any {
 	return v
 }
 
-// dataURL returns an uploaded file as a data URL.
 func dataURL(fh *multipart.FileHeader) (string, error) {
 	data, mt, err := upload(fh)
 	if err != nil {
@@ -188,14 +172,12 @@ func dataURL(fh *multipart.FileHeader) (string, error) {
 	return "data:" + mt + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
-// formFile is an uploaded file in a form's JSON form.
 type formFile struct {
 	Filename    string `json:"filename,omitempty"`
 	ContentType string `json:"content_type,omitempty"`
 	Data        string `json:"data"`
 }
 
-// formFileValue returns an uploaded file in the JSON form of an audio request.
 func formFileValue(fh *multipart.FileHeader) (formFile, error) {
 	data, mt, err := upload(fh)
 	if err != nil {
@@ -204,7 +186,6 @@ func formFileValue(fh *multipart.FileHeader) (formFile, error) {
 	return formFile{Filename: fh.Filename, ContentType: mt, Data: base64.StdEncoding.EncodeToString(data)}, nil
 }
 
-// upload reads an uploaded file and returns its bytes and media type.
 func upload(fh *multipart.FileHeader) ([]byte, string, error) {
 	f, err := fh.Open()
 	if err != nil {

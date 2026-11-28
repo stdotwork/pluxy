@@ -10,7 +10,6 @@ import (
 	pt "github.com/stdotwork/pluxy/next/internal/private/privatetest"
 )
 
-// writeOne writes one request's log, and an error log, to dir, and returns the folder's files.
 func writeOne(t *testing.T, dir string) []string {
 	t.Helper()
 	entry := func(status int) *requestEntry {
@@ -22,9 +21,6 @@ func writeOne(t *testing.T, dir string) []string {
 	return pt.Names(t, dir)
 }
 
-// The logs folder and each request log written in it have a protected access list that lets in
-// only this user and SYSTEM. A logs folder that already exists, open to Everyone, is made private
-// before a request log is written in it.
 func TestRequestLogWindowsAccessList(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "logs")
 	files := writeOne(t, dir)
@@ -53,7 +49,6 @@ func TestRequestLogWindowsAccessList(t *testing.T) {
 	}
 }
 
-// A logs folder another account owns is refused: no request log is written in it.
 func TestRequestLogWindowsRefusesAFolderAnotherAccountOwns(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "logs")
 	if err := os.Mkdir(dir, 0o700); err != nil {

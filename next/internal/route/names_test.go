@@ -12,11 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// The naming rules follow what today's core does, as observed by running it: a config model's
-// alias replaces its name, exclusions match the names before any alias (case and wildcards
-// aside), an alias without fork hides the model's name, and a prefix adds "<prefix>/<name>",
-// keeping the bare name unless prefixes are forced.
-
 func TestModelEntryJSON(t *testing.T) {
 	var got []ModelEntry
 	if err := json.Unmarshal([]byte(`["a", {"name": "b", "alias": "c"}, {"name": "d"}]`), &got); err != nil {
@@ -42,7 +37,6 @@ func TestResolveConfigModels(t *testing.T) {
 			t.Errorf("resolve(%q) = %q, %v; want %q", model, got, ok, want)
 		}
 	}
-	// The upstream name of an aliased model, another case, an excluded name: not served.
 	for _, model := range []string{"up-a", "PUB-A", "Up-C", "nope"} {
 		if got, ok := a.resolve(model, false, nil); ok {
 			t.Errorf("resolve(%q) = %q; want not served", model, got)
@@ -53,14 +47,11 @@ func TestResolveConfigModels(t *testing.T) {
 func TestResolveAnyModel(t *testing.T) {
 	a := &Account{ID: "a", ExcludedModels: []string{"gpt-6.1-sol", "astra", "*mini*"},
 		ModelAlias: []ModelAlias{{Name: "gpt-6.1-sol", Alias: "sol"}, {Name: "GPT-6-ASTRA", Alias: "astra", Fork: true}, {Name: "gpt-6-luna", Alias: "luna"}}}
-	// An alias matches only as written, as in today's core, whose model registry refuses "LUNA"
-	// before any alias applies; an account that serves any model passes it on as a name of its own.
 	for model, want := range map[string]string{"astra": "GPT-6-ASTRA", "gpt-6-astra": "gpt-6-astra", "luna": "gpt-6-luna", "LUNA": "LUNA", "anything": "anything"} {
 		if got, ok := a.resolve(model, false, nil); !ok || got != want {
 			t.Errorf("resolve(%q) = %q, %v; want %q", model, got, ok, want)
 		}
 	}
-	// sol's model is excluded; luna's name is renamed away; mini models are excluded.
 	for _, model := range []string{"sol", "gpt-6.1-sol", "gpt-6-luna", "GPT-6-Luna", "gpt-5-MINI-x"} {
 		if got, ok := a.resolve(model, false, nil); ok {
 			t.Errorf("resolve(%q) = %q; want not served", model, got)
@@ -73,11 +64,10 @@ func TestResolvePrefix(t *testing.T) {
 	cases := []struct {
 		model string
 		force bool
-		want  string // empty: not served
+		want  string
 	}{
 		{"team/pub-a", false, "up-a"}, {"pub-a", false, "up-a"}, {"Team/pub-a", false, ""},
 		{"team/pub-a", true, "up-a"}, {"pub-a", true, ""},
-		// A model named as the prefix is served bare even when prefixes are forced.
 		{"team", true, "team"}, {"team/team", true, "team"},
 	}
 	for _, c := range cases {
@@ -86,7 +76,7 @@ func TestResolvePrefix(t *testing.T) {
 			t.Errorf("resolve(%q, force %v) = %q, %v; want %q", c.model, c.force, got, ok, c.want)
 		}
 	}
-	b := &Account{ID: "b"} // no prefix, serves any model: a name with a slash is just a name
+	b := &Account{ID: "b"}
 	if got, ok := b.resolve("team/pub-a", true, nil); !ok || got != "team/pub-a" {
 		t.Errorf("resolve on an account without a prefix = %q, %v", got, ok)
 	}
@@ -132,8 +122,6 @@ func TestRenamed(t *testing.T) {
 	}
 }
 
-// A request for an alias goes to the extension under the upstream name, and a model-scoped block
-// is kept under it: asking by another name for the same model does not get around the block.
 func TestRoutingUsesUpstreamNames(t *testing.T) {
 	var sent []string
 	h := newHarness(t, Config{}, Account{ID: "a", ModelAlias: []ModelAlias{{Name: "up", Alias: "pub", Fork: true}}})
@@ -186,16 +174,12 @@ func TestRouterModels(t *testing.T) {
 		gb, _ := json.MarshalIndent(got, "", " ")
 		t.Errorf("models:\n%s", gb)
 	}
-	// Without a catalog, accounts list the models their config names, owned by the extension.
 	h.r.UseCatalog(nil)
 	if got := h.r.Models(context.Background()); len(got) != 2 || got[0].OwnedBy != "pluxy/test" {
 		t.Errorf("models without a catalog: %+v", got)
 	}
 }
 
-// An account without models of its own serves only the models its extension lists, under the
-// account's names for them; it serves any model while its list is empty or cannot be read. An
-// account whose config lists models keeps to them whatever its extension lists.
 func TestRoutingRefusesModelsOutsideTheList(t *testing.T) {
 	h := newHarness(t, Config{},
 		Account{ID: "cat", ModelAlias: []ModelAlias{{Name: "m1", Alias: "one"}}, ExcludedModels: []string{"m3"}},
@@ -232,8 +216,6 @@ func TestRoutingRefusesModelsOutsideTheList(t *testing.T) {
 	}
 }
 
-// An account's list is read once and kept until the accounts are set again; a list that could
-// not be read is asked for again after a while, and meanwhile the account serves any model.
 func TestModelListsAreKept(t *testing.T) {
 	h := newHarness(t, Config{}, Account{ID: "a"})
 	calls, fail := 0, true
@@ -268,8 +250,6 @@ func TestModelListsAreKept(t *testing.T) {
 	}
 }
 
-// A model list read that never ends is given up after catalogTimeout: the request goes on with
-// the list unknown (any model) instead of waiting with it.
 func TestModelListReadHasATimeLimit(t *testing.T) {
 	old := catalogTimeout
 	catalogTimeout = 50 * time.Millisecond
@@ -291,8 +271,6 @@ func TestModelListReadHasATimeLimit(t *testing.T) {
 	}
 }
 
-// A request still routing over the accounts set before a change cannot leave its account's list
-// for the account that replaced it under the same ID.
 func TestOldAccountsLeaveNoModelList(t *testing.T) {
 	h := newHarness(t, Config{}, Account{ID: "a", Settings: json.RawMessage(`{"v":1}`)})
 	h.r.UseCatalog(func(_ context.Context, a Account, _ *protocol.Credential) (*protocol.ModelList, *llm.Error) {
@@ -302,7 +280,6 @@ func TestOldAccountsLeaveNoModelList(t *testing.T) {
 	if err := h.r.SetAccounts([]Account{{ID: "a", Settings: json.RawMessage(`{"v":2}`)}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	// The old account's list is read after the change, as by a request that started before it.
 	if l := h.r.listOf(context.Background(), accounts[0], creds, h.r.catalogFunc(), h.now); l == nil || l.Models[0].ID != "m1" {
 		t.Fatalf("old account's list = %+v, want m1", l)
 	}
@@ -315,8 +292,6 @@ func TestOldAccountsLeaveNoModelList(t *testing.T) {
 	}
 }
 
-// Catalog endpoint names retain upstream IDs and use the same cache, naming rules and provider
-// choice as ordinary lists.
 func TestModelNames(t *testing.T) {
 	h := newHarness(t, Config{ForceModelPrefix: true},
 		Account{ID: "other", Extension: "other", Models: []ModelEntry{{Name: "wrong", Alias: "one"}}},
@@ -328,8 +303,6 @@ func TestModelNames(t *testing.T) {
 		reads++
 		return &protocol.ModelList{Models: []protocol.Model{{ID: "up"}, {ID: "excluded"}}}, nil
 	})
-	// "one" is also listed on another extension, and that extension comes first, so routing
-	// chooses it for the name and the Codex catalogue leaves the name out.
 	want := []Name{{Public: "team/coding", Upstream: "up", Base: "up", DisplayName: "Coding"}}
 	for range 2 {
 		if got := h.r.ModelNames(t.Context(), "codex"); !reflect.DeepEqual(got, want) {

@@ -15,8 +15,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
-// An extension timing too large for a time.Duration is refused, not wrapped into a negative
-// duration.
 func TestConfigRefusesHugeTimings(t *testing.T) {
 	cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","extension":{"manifest":"m.json","accounts":[{"id":"a"}],"restart":{"stable_ms":9223372036855}}}`
 	if _, err := ParseConfig([]byte(cfg), "/tmp/config.json"); err == nil || !strings.Contains(err.Error(), "timings") {
@@ -24,9 +22,6 @@ func TestConfigRefusesHugeTimings(t *testing.T) {
 	}
 }
 
-// An account that lists two upstream models under one name is refused, naming the alias and the
-// account, where it was used to serve the first and ignore the rest. The same model listed
-// twice, and one name per model, still load.
 func TestConfigRefusesRepeatedModelAlias(t *testing.T) {
 	cfg := func(models string) string {
 		return `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","extension":{"manifest":"m.json","accounts":[{"id":"pool","models":` + models + `}]}}`
@@ -45,8 +40,6 @@ func TestConfigRefusesRepeatedModelAlias(t *testing.T) {
 	}
 }
 
-// token_count_estimate is on unless the config turns it off, in a JSON config and, under the same
-// name, in a config.yaml. A value that is not a boolean is refused.
 func TestConfigTokenCountEstimate(t *testing.T) {
 	const base = `"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","extension":{"manifest":"m.json","accounts":[{"id":"a"}]}`
 	for _, c := range []struct {
@@ -78,7 +71,6 @@ func TestConfigTokenCountEstimate(t *testing.T) {
 	}
 }
 
-// A registry is an https:// URL or a path; any other URL is refused, never read as a path.
 func TestConfigRegistryLocations(t *testing.T) {
 	for url, ok := range map[string]bool{
 		"https://example.com/index.json": true,
@@ -93,8 +85,6 @@ func TestConfigRegistryLocations(t *testing.T) {
 	}
 }
 
-// A registry path is relative to the config file even when the config file's own path is
-// relative, as the default "config.json" is.
 func TestConfigRegistryPathRelativeToRelativeConfig(t *testing.T) {
 	cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"k","packages":{"registries":[{"name":"r","url":"registry/index.json"}]}}`
 	c, err := ParseConfig([]byte(cfg), "config.json")
@@ -107,7 +97,6 @@ func TestConfigRegistryPathRelativeToRelativeConfig(t *testing.T) {
 	}
 }
 
-// A config.yaml is read with today's core's key names and then checked as the JSON config is.
 func TestConfigYAMLWithTodaysNames(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -138,13 +127,10 @@ claude-api-key:
 	if len(a) != 1 || a[0].ID != "claude-api-key-1" || a[0].Priority != 1 || a[0].Credential.APIKey != "k" || string(a[0].Settings) != `{"base_url":"http://127.0.0.1:1"}` {
 		t.Errorf("claude accounts: %+v", a)
 	}
-	// Today's core runs no extra rounds and never waits unless request-retry and
-	// max-retry-interval say otherwise.
 	if r := c.Routing; r.MaxWaitMS != 0 || r.RequestRetry == nil || *r.RequestRetry != 0 {
 		t.Errorf("routing %+v, want today's defaults: request_retry 0, max_wait_ms 0", r)
 	}
 
-	// A relative auth-dir is relative to the config file.
 	c, err = ParseConfig([]byte("auth-dir: auths\napi-keys: [k]\nremote-management: {secret-key: m}\n"), "/srv/pluxy/config.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -152,23 +138,17 @@ claude-api-key:
 	if c.AuthDir != "/srv/pluxy/auths" {
 		t.Errorf("auth dir %q", c.AuthDir)
 	}
-	// A config needs a management key, and no account: accounts can be added by login.
 	if _, err := ParseConfig([]byte("auth-dir: auths\napi-keys: [k]\n"), "/srv/pluxy/config.yaml"); err == nil || !strings.Contains(err.Error(), "remote-management: {secret-key:") {
 		t.Errorf("a config.yaml with no management key: %v, want a refusal saying how to add one", err)
 	}
 	if _, err := ParseConfig([]byte("port: 9100\napi-keys: [k]\nremote-management: {secret-key: m}\n"), "/srv/pluxy/config.yaml"); err != nil {
 		t.Errorf("a config.yaml with a management key and no account: %v", err)
 	}
-	// A JSON config is not read as YAML.
 	if _, err := ParseConfig([]byte("port: 9100\n"), "/srv/pluxy/config.json"); err == nil {
 		t.Error("a config.json in YAML was accepted")
 	}
 }
 
-// A config.yaml's payload rules load as today's core reads them: the fields it reads as text
-// (a model's name, protocol, from-protocol, headers, exist and not-exist, a filter's params)
-// keep the text as written, however YAML would read it; a rule's params and a model's match
-// keep their values.
 func TestConfigYAMLPayloadText(t *testing.T) {
 	cfg := `
 api-keys: [k]
@@ -211,11 +191,6 @@ payload:
 	}
 }
 
-// A config.yaml's payload rules change a request as they did in today's core. The want of each
-// case is the body today's core sent upstream for the same file (its loader, then its payload
-// code): a key in another letter case was never read, so it changes nothing; a -raw param that
-// is a date is sent as the JSON string of its date; a -raw param that is .inf, .nan or null is
-// skipped, with the rule's other params applied.
 func TestConfigYAMLPayloadLikeOldCore(t *testing.T) {
 	for _, c := range []struct{ name, rules, want, notice string }{
 		{"exact keys", "override:\n    - models: [{name: m}]\n      params: {p: 1}\n", `{"p":1}`, ""},
@@ -246,11 +221,7 @@ func TestConfigYAMLPayloadLikeOldCore(t *testing.T) {
 	}
 }
 
-// A -raw rule with a string param that is not JSON, and a .inf or .nan outside a -raw rule, load
-// and change a request as they did in today's core. The want of each case is the body today's
-// core sent upstream for the same file (its loader, then ApplyPayloadConfigWithRequest), except
-// the two marked: there today's core wrote the invalid JSON text +Inf or -Inf into the body, which
-// no upstream accepts, and this core leaves the field out.
+// The invalid JSON text +Inf or -Inf, which no upstream accepts: this core leaves the field out.
 func TestConfigYAMLPayloadNonJSONLikeOldCore(t *testing.T) {
 	const m = "- models: [{name: m}]\n      params: "
 	model := func(list, one string) string {
@@ -267,7 +238,6 @@ func TestConfigYAMLPayloadNonJSONLikeOldCore(t *testing.T) {
 		{"override .inf in a list is skipped", "override:\n    " + m + "{p: [.inf, 1], q: 1}\n", `{}`, `{"q":1}`, `requests.payload.override[0].params["p"]`},
 		{"override .inf in a mapping is skipped", "override:\n    " + m + "{p: {a: .inf}, q: 1}\n", `{}`, `{"q":1}`, `requests.payload.override[0].params["p"]`},
 		{"default .inf in a list is skipped", "default:\n    " + m + "{p: [.inf], q: 1}\n", `{}`, `{"q":1}`, `requests.payload.default[0].params["p"]`},
-		// Today's core wrote {"p":-Inf,"q":1} and {"p":+Inf,"q":1}.
 		{"override -.inf", "override:\n    " + m + "{p: -.inf, q: 1}\n", `{}`, `{"q":1}`, `requests.payload.override[0].params["p"]`},
 		{"default .inf", "default:\n    " + m + "{p: .inf, q: 1}\n", `{}`, `{"q":1}`, `requests.payload.default[0].params["p"]`},
 		{"a match with .inf never matches", model("override", "{name: m, match: [{a: .inf}]}"), `{"a":1}`, `{"a":1}`, `requests.payload.override[0].models[0]`},
@@ -296,10 +266,6 @@ func TestConfigYAMLPayloadNonJSONLikeOldCore(t *testing.T) {
 	}
 }
 
-// An extension's model_alias and excluded_models apply to its accounts added by login as today's
-// oauth-model-alias and oauth-excluded-models apply to auth files: the account's own aliases
-// come first and an alias it has is not added again; its own exclusions replace the extension's.
-// An account added with an API key gets neither, as today's skip API-key auth files.
 func TestLoginDefaults(t *testing.T) {
 	x := ExtensionConfig{
 		ModelAlias:     []route.ModelAlias{{Name: "m1", Alias: "one"}, {Name: "m2", Alias: "TWO"}},
@@ -325,7 +291,6 @@ func TestLoginDefaults(t *testing.T) {
 	}
 }
 
-// Core refuses a config without client keys, in both layouts: today's core serves anyone then.
 func TestConfigNeedsAClientKey(t *testing.T) {
 	for _, c := range []struct{ name, path, cfg string }{
 		{"json without client_keys", "config.json", `{"listen":"127.0.0.1:0","management_key":"k"}`},
@@ -339,8 +304,6 @@ func TestConfigNeedsAClientKey(t *testing.T) {
 	}
 }
 
-// routing.timeouts and per-account timeouts accept 0 and positive durations up to 30 days, and
-// refuse negative or out-of-range values.
 func TestConfigRoutingTimeouts(t *testing.T) {
 	okCfg := `{
 		"listen":"127.0.0.1:0",
@@ -404,10 +367,6 @@ func TestConfigUsageKeepDays(t *testing.T) {
 	}
 }
 
-// A key a JSON config has that core does not read is warned about once, by its path in the file,
-// and the config still loads: a typo is not an outage, and a file from a newer core still runs.
-// Keys the user chooses (extension IDs, header names, chain names, the settings an extension
-// reads) are never reported, and no value is logged.
 func TestConfigWarnsAboutUnknownKeys(t *testing.T) {
 	const secret = "sk-very-secret-value-1234"
 	cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","bogus_setting":"` + secret + `","two\nlines":1,
@@ -446,8 +405,6 @@ func TestConfigWarnsAboutUnknownKeys(t *testing.T) {
 	}
 }
 
-// A JSON config with only keys core knows (in any letter case, as encoding/json reads them)
-// gets no warning.
 func TestConfigKnownKeysGetNoWarning(t *testing.T) {
 	cfg := `{"Listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","extension":{"manifest":"m.json","accounts":[{"id":"a","models":["x",{"name":"y","alias":"z"}]}]}}`
 	c, err := ParseConfig([]byte(cfg), "/tmp/config.json")
@@ -459,8 +416,6 @@ func TestConfigKnownKeysGetNoWarning(t *testing.T) {
 	}
 }
 
-// A value of the wrong type is refused naming the file, the key path as written, what was
-// expected and what was found, with no Go type names; a syntax error names its line and column.
 func TestConfigJSONErrorsInTheFilesTerms(t *testing.T) {
 	for _, c := range []struct {
 		name, cfg string
@@ -495,8 +450,6 @@ func TestConfigJSONErrorsInTheFilesTerms(t *testing.T) {
 	}
 }
 
-// A client key's label that is a client key or the management key is refused when the file loads, in
-// both layouts: a label is listed and recorded in usage events.
 func TestParseConfigRefusesKeyAsLabel(t *testing.T) {
 	for _, secret := range []string{"key-a", "key-m", "  key-b "} {
 		json := `{"listen": ":1", "management_key": "key-m", "client_keys": ["key-a", "key-b"], "client_key_labels": {"id-a": "` + secret + `"}}`
@@ -512,9 +465,6 @@ func TestParseConfigRefusesKeyAsLabel(t *testing.T) {
 	}
 }
 
-// Client keys can have names, kept apart from the keys in client_key_labels, in both layouts; a
-// config without them loads as before, and a label that is not one line of at most 64 characters
-// is refused.
 func TestParseConfigClientKeyLabels(t *testing.T) {
 	json := `{"listen": ":1", "management_key": "m", "client_keys": ["a", "b"], "client_key_labels": {"id-a": "  Claude Code ", "id-b": "  "}}`
 	yaml := "server: {host: 127.0.0.1, port: 9100}\naccess:\n  api-keys: [a, b]\nmanagement: {secret-key: m}\nclient_key_labels: {id-a: '  Claude Code ', id-b: ''}\n"
@@ -542,9 +492,6 @@ func TestParseConfigClientKeyLabels(t *testing.T) {
 	}
 }
 
-// LocalURL turns any unspecified listen host (0.0.0.0, ::, or empty) into 127.0.0.1, which a
-// newcomer recognises and Go's dual-stack tcp listener answers on, while leaving specific
-// addresses (including [::1]) unchanged.
 func TestLocalURL(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

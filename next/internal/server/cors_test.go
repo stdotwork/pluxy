@@ -13,12 +13,10 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// fixedSource always hands out one generation.
 type fixedSource struct{ g *Generation }
 
 func (s fixedSource) Acquire() (*Generation, func()) { return s.g, func() {} }
 
-// events is a Stream that returns its events in turn, then keeps returning the last.
 type events struct{ evs []llm.Event }
 
 func (s *events) Next() llm.Event {
@@ -30,8 +28,6 @@ func (s *events) Next() llm.Event {
 }
 func (s *events) Close() {}
 
-// testHandler returns the client API handler for cfg with one account, "work", whose attempts
-// return the events reply returns for each request.
 func testHandler(t *testing.T, cfg *Config, reply func(req llm.Request) []llm.Event) http.Handler {
 	t.Helper()
 	if err := cfg.CORS.prepare(); err != nil {
@@ -47,7 +43,6 @@ func testHandler(t *testing.T, cfg *Config, reply func(req llm.Request) []llm.Ev
 	return NewHandler(fixedSource{&Generation{Config: cfg, Router: router, Attempt: attempt}})
 }
 
-// hello is a short Chat reply.
 func hello(llm.Request) []llm.Event {
 	return []llm.Event{
 		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r1", Model: "m"}},
@@ -68,8 +63,6 @@ func preflight(origin string) *http.Request {
 	return r
 }
 
-// Without allowed origins core sends no CORS headers and does not answer preflight requests:
-// today's core allowed every origin, which this core does not carry over.
 func TestCORSOffByDefault(t *testing.T) {
 	h := testHandler(t, &Config{ClientKeys: []string{"k"}}, hello)
 	w := httptest.NewRecorder()
@@ -87,9 +80,6 @@ func TestCORSOffByDefault(t *testing.T) {
 	}
 }
 
-// A listed origin gets its preflight answered before the client key is checked, and its own
-// origin back (not "*"); an origin not listed, or no origin, gets no CORS headers. Every reply
-// says it varies with Origin.
 func TestCORSListedOrigin(t *testing.T) {
 	h := testHandler(t, &Config{ClientKeys: []string{"k"}, CORS: CORSConfig{AllowedOrigins: []string{"HTTPS://App.Example.test"}}}, hello)
 	w := httptest.NewRecorder()
@@ -120,7 +110,6 @@ func TestCORSListedOrigin(t *testing.T) {
 		t.Errorf("a request without an origin got %v, want no CORS headers but Vary: Origin", w.Header())
 	}
 
-	// A request from the listed origin still needs the client key.
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody))
 	r.Header.Set("Origin", "https://app.example.test")
 	w = httptest.NewRecorder()
@@ -130,7 +119,6 @@ func TestCORSListedOrigin(t *testing.T) {
 	}
 }
 
-// "*" allows every origin, as today's core does, and the headers go on every reply.
 func TestCORSEveryOrigin(t *testing.T) {
 	h := testHandler(t, &Config{ClientKeys: []string{"k"}, CORS: CORSConfig{AllowedOrigins: []string{"*"}}}, hello)
 	w := httptest.NewRecorder()
@@ -155,8 +143,6 @@ func TestCORSConfigChecksOrigins(t *testing.T) {
 	}
 }
 
-// A request that reached an account gets a trace ID, which the log lines about it carry with
-// the account; one refused before that gets none.
 func TestTraceHeader(t *testing.T) {
 	out := captureLog(t)
 	fail := func(llm.Request) []llm.Event {
@@ -182,8 +168,6 @@ func TestTraceHeader(t *testing.T) {
 	}
 }
 
-// A config with no client keys never gets this far (ParseConfig refuses it); if one did, no
-// request would be served.
 func TestNoClientKeysAuthorizesNothing(t *testing.T) {
 	h := testHandler(t, &Config{}, hello)
 	for _, key := range []string{"", "anything"} {

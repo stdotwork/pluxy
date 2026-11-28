@@ -28,16 +28,12 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// ManagementPrefix is where the management API is served. The 0 is its version.
 const ManagementPrefix = management.Prefix
 
-// maxManagementBody limits a management request body.
 const maxManagementBody = 1 << 20
 
-// AccountView is an account as the management API lists it (management.Account).
 type AccountView = management.Account
 
-// Account check states (AccountCheck.State).
 const (
 	CheckRunning    = management.CheckRunning
 	CheckOK         = management.CheckOK
@@ -45,11 +41,8 @@ const (
 	CheckNotChecked = management.CheckNotChecked
 )
 
-// AccountCheck is the result of core's check of an account (management.AccountCheck).
 type AccountCheck = management.AccountCheck
 
-// setFields sets v's routing fields from a, with its secret header values replaced by red's
-// placeholders, and its runtime state and health from state and hold.
 func setFields(v *AccountView, a route.Account, state *route.State, hold route.Hold, red AccountRedactor) {
 	v.Priority, v.Weight, v.MaxConcurrency, v.Prefix = a.Priority, a.Weight, a.MaxConcurrency, a.Prefix
 	v.DisableCooling, v.RequestRetry = a.DisableCooling, a.RequestRetry
@@ -90,55 +83,29 @@ func setFields(v *AccountView, a route.Account, state *route.State, hold route.H
 	}
 }
 
-// Management is the management API, version 0. Every call needs the management key of the
-// config active when it arrives, as a bearer token.
 type Management struct {
-	mux   *http.ServeMux
-	cfg   func() *Config
-	creds *cred.Manager
-	// Check, when set, returns the result of core's check of account id, or nil.
-	Check func(id string) *AccountCheck
-	// Ignition, when set, returns account id's window ignition (routing.ignition), or nil when
-	// ignition does not run for it.
+	mux      *http.ServeMux
+	cfg      func() *Config
+	creds    *cred.Manager
+	Check    func(id string) *AccountCheck
 	Ignition func(id string) *management.AccountIgnition
 	state    *route.State
-	// lockout blocks a client that keeps sending a wrong key.
-	lockout *lockout
-	// routes are the patterns added with Handle, in order.
-	routes []string
-	// Redactor hides the secrets in accounts' headers and settings and puts them back from the
-	// placeholders a PATCH sends; core sets the one its config reads use, so an account shows
-	// the same placeholders in both. Nil: secret header values show as protocol.Redacted,
-	// settings are not shown, and PATCH changes neither.
+	lockout  *lockout
+	routes   []string
 	Redactor AccountRedactor
 }
 
-// AccountRedactor hides the secrets in accounts' headers and settings and puts them back: core's
-// config redactor (configdoc.Redactor), which this package cannot import.
 type AccountRedactor interface {
-	// Headers returns h with a placeholder in place of each secret value.
 	Headers(h map[string]string) map[string]string
-	// RestoreHeaders returns sent with each placeholder Headers showed for a value of cur put
-	// back; a placeholder that stands for none is an error.
 	RestoreHeaders(sent, cur map[string]string) (map[string]string, error)
-	// RedactSettings returns settings, a JSON object, with a placeholder in place of each secret.
 	RedactSettings(settings []byte) ([]byte, error)
-	// RestoreSettings returns sent with each placeholder replaced by the secret it stands for in
-	// current. A placeholder that matches no secret in current is an ErrStaleSecret; a copy of
-	// a secret's placeholder whose secret sent no longer holds as it was is an ErrSecretCopy; any
-	// other error means a placeholder is where no secret goes.
 	RestoreSettings(sent, current []byte) ([]byte, error)
 }
 
-// ErrStaleSecret marks a placeholder that matches no secret the account's settings hold now.
 var ErrStaleSecret = errors.New("a redacted value matches no secret the account's settings hold now")
 
-// ErrSecretCopy marks settings holding a copy of a secret's placeholder whose secret they no
-// longer hold as it was; the error's text after it names the copy's line and says what to do.
 var ErrSecretCopy = errors.New("settings")
 
-// NewManagement returns the management API with its account and login calls. cfg returns the
-// active config; state is the routing state accounts' cooldowns are read from (nil: none).
 func NewManagement(cfg func() *Config, creds *cred.Manager, state *route.State) *Management {
 	m := &Management{mux: http.NewServeMux(), cfg: cfg, creds: creds, state: state, lockout: newLockout()}
 	m.Handle("GET /accounts", m.list)
@@ -155,11 +122,8 @@ func NewManagement(cfg func() *Config, creds *cred.Manager, state *route.State) 
 	return m
 }
 
-// Routes returns the calls added with Handle, as their patterns, such as "GET /accounts".
 func (m *Management) Routes() []string { return slices.Clone(m.routes) }
 
-// Handle adds a call: pattern is a method and a path under ManagementPrefix, such as
-// "GET /accounts".
 func (m *Management) Handle(pattern string, h http.HandlerFunc) {
 	m.routes = append(m.routes, pattern)
 	method, path, _ := strings.Cut(pattern, " ")
@@ -168,7 +132,6 @@ func (m *Management) Handle(pattern string, h http.HandlerFunc) {
 
 func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cfg := m.cfg()
-	// The gate comes first, so calls it refuses are not counted for the lockout.
 	if !cfg.ManagementAllowRemote && !FromThisMachine(r) {
 		writeManagementError(w, http.StatusForbidden, "remote_disabled",
 			"remote management is off: the management API answers only this machine (management_allow_remote turns on other machines)")
@@ -176,14 +139,10 @@ func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || token == "" {
-		// No key at all is not a guess, so it does not count toward the lockout: a proxy or a
-		// page that forgets the key must not lock out everyone behind its address.
 		writeManagementError(w, http.StatusUnauthorized, "unauthorized", "missing management key")
 		return
 	}
 	right := sameKey(token, cfg.managementKeyDigest())
-	// A caller on this machine is never blocked, so the person at the keyboard can always get
-	// back in; anyone who can call from here can read the config file anyway.
 	if FromThisMachine(r) {
 		if !right {
 			writeManagementError(w, http.StatusUnauthorized, "unauthorized", "invalid management key")
@@ -213,9 +172,6 @@ func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mux.ServeHTTP(w, r)
 }
 
-// sameKey compares a sent key with the management key's digest (Config.managementKeyDigest) in
-// constant time, length included: it compares their SHA-256 digests, the key's made once, when
-// the config was loaded, so the time of the check does not grow with the key's length.
 func sameKey(sent string, key [sha256.Size]byte) bool {
 	a := sha256.Sum256([]byte(sent))
 	return subtle.ConstantTimeCompare(a[:], key[:]) == 1
@@ -246,7 +202,6 @@ func (m *Management) view(r cred.Record) AccountView {
 	if len(a.Settings) > 0 && m.Redactor != nil {
 		s, err := m.Redactor.RedactSettings(a.Settings)
 		if err != nil {
-			// Never shown unredacted; the settings are then left out of the view.
 			log.Printf("management: account %q: its settings cannot be shown with their secrets hidden", r.ID)
 		} else {
 			v.Settings, v.SettingsInexact = s, inexact(s)
@@ -257,9 +212,6 @@ func (m *Management) view(r cred.Record) AccountView {
 	return v
 }
 
-// brokenView returns the account a record file the store could not read stands for: its ID is
-// the file's name, its health says broken with the file and the error, and nothing core cannot
-// know is filled in.
 func (m *Management) brokenView(b cred.Broken) AccountView {
 	v := AccountView{ID: b.ID, Source: "login", Health: route.Health{State: route.HealthBroken, Why: b.Why()}}
 	if m.state != nil {
@@ -268,10 +220,6 @@ func (m *Management) brokenView(b cred.Broken) AccountView {
 	return v
 }
 
-// inexact reports whether a JSON text holds a number that a client reading it as a float64 and
-// writing it back as the shortest decimal that reads as the same float64, as a browser does,
-// would change. Values are compared, not text: 1.0 and 2e3 come back as 1 and 2000, unchanged.
-// It takes time in proportion to the text's length, however long a number is.
 func inexact(b []byte) bool {
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.UseNumber()
@@ -286,10 +234,8 @@ func inexact(b []byte) bool {
 		}
 		sent := decimalOf(n.String())
 		if sent.digits == "" {
-			continue // zero, which a browser writes back as 0
+			continue
 		}
-		// The order of magnitude: the value is 0.digits × 10^mag. Past these bounds a float64
-		// holds only infinity or zero, which changes the value.
 		mag := sent.exp + int64(len(sent.digits))
 		if mag > 400 || mag < -400 {
 			return true
@@ -305,16 +251,12 @@ func inexact(b []byte) bool {
 	}
 }
 
-// decimal is a number's value as its sign, its significant digits (no leading or trailing
-// zeros; empty for zero, whose sign is dropped) and an exponent: digits × 10^exp.
 type decimal struct {
 	neg    bool
 	digits string
 	exp    int64
 }
 
-// decimalOf returns a JSON number's value as a decimal, in time in proportion to its length. An
-// exponent too large to matter is cut to ±2^40, so its value still reads as out of range.
 func decimalOf(s string) decimal {
 	var d decimal
 	s, d.neg = strings.CutPrefix(s, "-")
@@ -342,7 +284,6 @@ func decimalOf(s string) decimal {
 	return d
 }
 
-// check returns the result of core's check of account id, or nil.
 func (m *Management) check(id string) *AccountCheck {
 	if m.Check == nil {
 		return nil
@@ -350,7 +291,6 @@ func (m *Management) check(id string) *AccountCheck {
 	return m.Check(id)
 }
 
-// ignition returns account id's window ignition, or nil.
 func (m *Management) ignition(id string) *management.AccountIgnition {
 	if m.Ignition == nil {
 		return nil
@@ -358,7 +298,6 @@ func (m *Management) ignition(id string) *management.AccountIgnition {
 	return m.Ignition(id)
 }
 
-// configView returns config account a as the management API lists it.
 func (m *Management) configView(a route.Account) AccountView {
 	v := AccountView{ID: a.ID, Source: "config", Extension: a.Extension, State: cred.StateActive}
 	if a.Credential != nil {
@@ -370,8 +309,6 @@ func (m *Management) configView(a route.Account) AccountView {
 	return v
 }
 
-// View returns account id as the management API lists it: the config's account of that ID,
-// else the one added by login.
 func (m *Management) View(id string) (AccountView, bool) {
 	if a, ok := m.configured(id); ok {
 		return m.configView(a), true
@@ -408,13 +345,9 @@ func (m *Management) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, management.AccountsReply{Accounts: views})
 }
 
-// addRequest is the body of POST /accounts: the account's fields (as in the config, without a
-// credential; without an ID, core makes one), a label and how to log in.
 type addRequest struct {
 	route.Account
-	// Label is the label the person gives the account (CheckLabel); it wins over the provider's.
-	Label string `json:"label"`
-	// Extension names the extension that signs in; empty while only one runs.
+	Label     string            `json:"label"`
 	Extension string            `json:"extension"`
 	Method    string            `json:"method"`
 	Input     map[string]string `json:"input,omitempty"`
@@ -464,12 +397,8 @@ func (m *Management) add(w http.ResponseWriter, r *http.Request) {
 	m.startLogin(w, r, cred.LoginRequest{Account: req.Account, Extension: req.Extension, Method: req.Method, Input: req.Input, Label: label})
 }
 
-// maxLabel is the most characters a label a person gives an account may have.
 const maxLabel = 64
 
-// CheckLabel returns a label a person gives an account or a client key without its surrounding spaces, or an
-// error when it is not one line (it holds a control character or a line or paragraph separator)
-// or is longer than maxLabel characters. "" is no label.
 func CheckLabel(label string) (string, error) {
 	label = strings.TrimSpace(label)
 	notOneLine := strings.ContainsFunc(label, func(r rune) bool { return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' })
@@ -496,8 +425,6 @@ func (m *Management) startLogin(w http.ResponseWriter, r *http.Request, req cred
 		writeManagementError(w, http.StatusConflict, "conflict", fmt.Sprintf("account %q is set in core's config", req.Account.ID))
 		return
 	}
-	// Wait a little for the provider's first prompt, so the reply usually carries it; the
-	// login goes on either way.
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	l, err := m.creds.StartLogin(ctx, req)
@@ -539,7 +466,6 @@ func (m *Management) cancel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// stored refuses changes to config accounts, which only the config changes.
 func (m *Management) stored(w http.ResponseWriter, id string) bool {
 	if _, ok := m.configured(id); ok {
 		writeManagementError(w, http.StatusConflict, "conflict", fmt.Sprintf("account %q is set in core's config; change it there", id))
@@ -548,8 +474,6 @@ func (m *Management) stored(w http.ResponseWriter, id string) bool {
 	return true
 }
 
-// patchFields are the fields PATCH /accounts/{id} changes besides disabled: an account's routing
-// fields (route.Account), by their JSON names. null sets a field back to its default.
 var patchFields = map[string]func(a *route.Account, raw json.RawMessage) error{
 	"priority": func(a *route.Account, raw json.RawMessage) error {
 		a.Priority = 0
@@ -584,13 +508,11 @@ var patchFields = map[string]func(a *route.Account, raw json.RawMessage) error{
 		if err := unmarshalSet(raw, &a.ProxyURL); err != nil {
 			return err
 		}
-		// The proxy as GET /accounts shows it, sent back unchanged, keeps the password it hides.
 		if len(proxyurl.Password(cur)) > 0 && strings.TrimSpace(a.ProxyURL) == proxyurl.Redact(cur) {
 			a.ProxyURL = cur
 		}
 		return proxyurl.Check("value", a.ProxyURL)
 	},
-	// headers is set by Management.patchHeaders, which needs the management API's redactor.
 	"headers": nil,
 	"timeouts": func(a *route.Account, raw json.RawMessage) error {
 		a.Timeouts = nil
@@ -601,8 +523,6 @@ var patchFields = map[string]func(a *route.Account, raw json.RawMessage) error{
 	},
 }
 
-// patchHeaders sets a.Headers to raw. A placeholder GET /accounts shows for a secret value,
-// sent back, keeps that value; one that stands for no value the account has is refused.
 func (m *Management) patchHeaders(a *route.Account, raw json.RawMessage) error {
 	var sent map[string]string
 	if err := unmarshalSet(raw, &sent); err != nil {
@@ -622,7 +542,6 @@ func (m *Management) patchHeaders(a *route.Account, raw json.RawMessage) error {
 	return nil
 }
 
-// unmarshalSet decodes raw into v, leaving v as it is for null.
 func unmarshalSet(raw json.RawMessage, v any) error {
 	if string(raw) == "null" {
 		return nil
@@ -712,9 +631,6 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", "nothing to change: send disabled, label, settings or a routing field")
 		return
 	}
-	// Decode every field before changing anything, so a bad one changes nothing. The probe is
-	// the account as it is, so a field that keeps a stored value (a redacted header sent back)
-	// is checked against it.
 	var probe route.Account
 	recs := m.creds.Records()
 	if i := slices.IndexFunc(recs, func(r cred.Record) bool { return r.ID == id }); i >= 0 {
@@ -730,7 +646,7 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 	if len(changes) > 0 || settings != nil {
 		change = func(a *route.Account) error {
 			for _, c := range changes {
-				_ = c(a) // each decoded above
+				_ = c(a)
 			}
 			if settings == nil {
 				return nil
@@ -749,8 +665,6 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, management.AccountReply{Account: m.view(rec)})
 }
 
-// restoreSettings sets a's settings to sent, with each placeholder replaced by the secret it
-// stands for in a's settings as they are now; null removes them.
 func (m *Management) restoreSettings(a *route.Account, sent json.RawMessage) error {
 	if string(sent) == "null" {
 		a.Settings = nil
@@ -794,9 +708,6 @@ func (m *Management) refresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, management.AccountReply{Account: m.view(rec)})
 }
 
-// readBody reads a management request body, up to limit bytes. It writes the error reply and
-// returns false when it cannot: 413 invalid_request for a body larger than core reads, 400
-// invalid_request for one it cannot read otherwise.
 func readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
 	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err == nil {
@@ -833,8 +744,6 @@ func writeManagementError(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, management.ErrorBody{Error: management.ErrorDetail{Code: code, Message: msg}})
 }
 
-// writeCredError writes an error from the credential manager. A provider's failure is a 502
-// carrying the provider's error code.
 func writeCredError(w http.ResponseWriter, err error) {
 	var le *llm.Error
 	switch {

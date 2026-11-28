@@ -12,70 +12,48 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// TraceHeader carries a request's trace ID in the reply, under today's core's name. The same ID
-// is in every log line core writes about the request, with the account it went to, so a reply
-// can be matched with what core logged about it.
 const TraceHeader = "X-CPA-TRACE-ID"
 
-// Headers a client reply names its account by (routing.explain turns them off). PinHeader, the
-// header a request names an account by, is also the first of them: the ID a reply gives can be
-// sent back.
 const (
 	ProviderHeader = "X-Pluxy-Provider"
 	ModelHeader    = "X-Pluxy-Model"
 	AttemptsHeader = "X-Pluxy-Attempts"
 )
 
-// trace is one client request's trace ID and the account its last attempt went to.
 type trace struct {
-	id      string
-	account string
-	// public, provider and model are the last attempt's account (by its public ID), its provider
-	// and the model sent upstream; attempts counts the attempts.
+	id                      string
+	account                 string
 	public, provider, model string
 	attempts                int
-	failed                  bool   // a failure was logged: the request counts as failed for its request log
-	body                    []byte // the request's body, once read, for its request log
-	// upstream holds what the request's extensions sent upstream and got back, while every
-	// request is logged; nil otherwise.
-	upstream *upstreamLog
-	// running is the request's entry in the registry of requests being served (Requests); nil
-	// when it has none.
-	running *running
+	failed                  bool
+	body                    []byte
+	upstream                *upstreamLog
+	running                 *running
 }
 
 type traceKey struct{}
 
-// newTrace returns a trace with a new ID: the time in UTC (YYYYMMDDhhmmss, as today's core
-// writes it) and 16 random hex digits.
 func newTrace() *trace {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return &trace{id: time.Now().UTC().Format("20060102150405") + "-" + hex.EncodeToString(b[:])}
 }
 
-// withTrace returns r carrying t, for the log lines written about it.
 func withTrace(r *http.Request, t *trace) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), traceKey{}, t))
 }
 
-// traceOf returns the trace r carries, or nil.
 func traceOf(r *http.Request) *trace {
 	t, _ := r.Context().Value(traceKey{}).(*trace)
 	return t
 }
 
-// attempt notes that an attempt went to the account a names.
 func (t *trace) attempt(a route.Attempt) {
 	t.account, t.public, t.provider, t.model = a.Account, a.Public, a.Extension, a.Model
 	t.attempts++
 	t.running.attempt(a)
 }
 
-// setHeaders sets the reply's headers once the request has gone to its account, if it did: the
-// trace ID, and with explain the account's public ID, its provider, the model sent upstream and
-// the number of attempts. The reply names the last account the request went to, which is the
-// one that answered it.
 func (t *trace) setHeaders(w http.ResponseWriter, explain bool) {
 	if t == nil {
 		return
@@ -86,13 +64,12 @@ func (t *trace) setHeaders(w http.ResponseWriter, explain bool) {
 		h.Set(PinHeader, t.public)
 		h.Set(ProviderHeader, t.provider)
 		if t.model != "" {
-			h.Set(ModelHeader, t.model) // an endpoint that takes no model names none
+			h.Set(ModelHeader, t.model)
 		}
 		h.Set(AttemptsHeader, strconv.Itoa(t.attempts))
 	}
 }
 
-// explained puts the trace ID in the pluxy member of e, when it has one.
 func (t *trace) explained(e *llm.Error) *llm.Error {
 	if t != nil && e != nil && e.Explain != nil {
 		e.Explain.Trace = t.id
@@ -100,8 +77,6 @@ func (t *trace) explained(e *llm.Error) *llm.Error {
 	return e
 }
 
-// logPrefix returns what a log line about r starts with: its method and path, where it came
-// from (ClientIP), and its trace ID and account when it has them.
 func logPrefix(r *http.Request) string {
 	p := r.Method + " " + logField(r.URL.Path)
 	if a := ClientIP(r); a.IsValid() {

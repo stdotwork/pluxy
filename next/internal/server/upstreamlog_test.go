@@ -8,12 +8,10 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// The secrets below are not any account's credential or proxy password, so nothing but
-// upstreamURL can remove them.
 func TestUpstreamURL(t *testing.T) {
 	for _, tc := range []struct {
 		name, raw string
-		want      string // exact; empty when only notWant is checked
+		want      string
 		notWant   []string
 	}{
 		{name: "plain", raw: "https://api.example.test/v1/chat?model=m", want: "https://api.example.test/v1/chat?model=m"},
@@ -52,14 +50,8 @@ func TestWriteUpstreamHeadersCountsLeftOut(t *testing.T) {
 	}
 }
 
-// A captured body not read to its end (BodyStopped) is written with a line saying so after it,
-// without what at its end could be the start of a config secret cut off there; up to the last
-// line break before the stop, so that a stream stopped after or inside an event keeps its whole
-// events. An unmarked body is written as it came, with no line.
 func TestWriteBodyStopped(t *testing.T) {
 	const stopLine = "\n[... the body was not read past here ...]"
-	// A secret with characters other than a key's, which the log removes beside a window, and one
-	// made only of a key's characters, which needs none.
 	const odd = "(q) [z] {x} !v? @j; #k: *9^ ~7|"
 	const keyOnly = "sk-Stop/Key+0123456789abcdef"
 	oddLog := protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: odd})
@@ -90,7 +82,6 @@ func TestWriteBodyStopped(t *testing.T) {
 		}
 	})
 	t.Run("config secret's start in escapes outside its forms", func(t *testing.T) {
-		// JSON's \u escape for a character that is not ASCII: the forms keep it as it is.
 		const umlaut = "pässwort!Geheim-2024-xyz"
 		const spelled = `p\u00e4sswort!Geheim-2024-xyz`
 		r := protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: umlaut})
@@ -101,7 +92,6 @@ func TestWriteBodyStopped(t *testing.T) {
 		}
 	})
 	t.Run("key-character secret's start spelled outside its forms", func(t *testing.T) {
-		// Lowercase percent escapes: the URL escape among the forms has them in capitals.
 		spelled := "sk-Stop%2fKey%2b0123456789abcdef"
 		for _, body := range []string{`{"echo": "` + spelled[:20], `{"echo": "` + strings.ReplaceAll(spelled, "%2f", `\u002f`)[:22]} {
 			got := write(keyLog, stopped(body))

@@ -20,8 +20,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// writeSpyListener hands out connections whose writes onWrite sees before they go out; an error
-// from onWrite fails the write, as a client that went away does.
 type writeSpyListener struct {
 	net.Listener
 	onWrite func(p []byte) error
@@ -47,8 +45,6 @@ func (c writeSpyConn) Write(p []byte) (int, error) {
 	return c.Conn.Write(p)
 }
 
-// turnEndSource hands out g. Once armed, a release tells ended: on a socket whose upgrade is
-// done, only a turn takes the generation, and it releases it when the turn is over.
 type turnEndSource struct {
 	g     *Generation
 	armed *atomic.Bool
@@ -63,7 +59,6 @@ func (s turnEndSource) Acquire() (*Generation, func()) {
 	}
 }
 
-// decoded is what the Responses stream decoder makes of the upstream events in frames.
 func decoded(t *testing.T, frames ...string) []llm.Event {
 	t.Helper()
 	d := openairesponses.NewStreamDecoder()
@@ -78,8 +73,6 @@ func decoded(t *testing.T, frames ...string) []llm.Event {
 	return out
 }
 
-// A WebSocket turn is in the usage record by the time its last message is written, so a client
-// that reads the record as soon as it has that message finds the turn; a warmup is never in it.
 func TestWebSocketTurnRecordedBeforeLastMessage(t *testing.T) {
 	const (
 		created   = `{"type":"response.created","response":{"id":"resp_1","status":"in_progress","output":[]}}`
@@ -96,10 +89,10 @@ func TestWebSocketTurnRecordedBeforeLastMessage(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name   string
-		reply  func(t *testing.T) []llm.Event // nil: a warmup, answered without an attempt
-		last   string                         // the type of the turn's last message
-		leave  string                         // the client goes away while a message of this type is written
-		events int                            // the turn's usage events, when its last message is written and after
+		reply  func(t *testing.T) []llm.Event
+		last   string
+		leave  string
+		events int
 	}{
 		{name: "native stream", reply: func(t *testing.T) []llm.Event { return decoded(t, created, completed) }, last: "response.completed", events: 1},
 		{name: "translated stream", reply: func(*testing.T) []llm.Event { return translated }, last: "response.completed", events: 1},
@@ -129,7 +122,7 @@ func TestWebSocketTurnRecordedBeforeLastMessage(t *testing.T) {
 			src := turnEndSource{g: &Generation{Config: cfg, Router: router, Attempt: attempt, Usage: store}, armed: &atomic.Bool{}, ended: make(chan struct{}, 1)}
 
 			var mu sync.Mutex
-			atLast := -1 // the usage events when the last message was written; -1 before
+			atLast := -1
 			ln, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)

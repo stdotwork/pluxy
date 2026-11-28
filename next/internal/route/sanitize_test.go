@@ -8,9 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// The cases of today's core's TestExtractUpstreamErrorSummary_SanitizationAndTruncation and
-// TestExtractUpstreamErrorSummary_AuthPackageDirectSanitization, on the summary that today's
-// extraction hands the sanitizer ("code: message" for the JSON ones).
 func TestSanitizeSummary(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -428,8 +425,6 @@ func TestSanitizeSummary(t *testing.T) {
 	}
 }
 
-// errorSummary sanitizes what it extracts: a secret echoed in the upstream's error body, or in
-// the error's own message, does not reach the usage-limit reply.
 func TestErrorSummarySanitizes(t *testing.T) {
 	for _, tc := range []struct {
 		name string

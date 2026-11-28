@@ -36,9 +36,6 @@ func onlyEvent(t *testing.T, s *usage.Store) usage.Event {
 	return ev[0]
 }
 
-// A failed request records the accounts its error says routing left out, by public ID, state and
-// until, at most 8 of them and never by config ID, whether or not the client's error shows them;
-// with no attempt, it names no account.
 func TestMeterRecordsLeftOut(t *testing.T) {
 	m, s := meterFor(t)
 	until := time.Unix(1_800_000_000, 0).UTC()
@@ -61,7 +58,6 @@ func TestMeterRecordsLeftOut(t *testing.T) {
 		t.Errorf("event %s, want left_out with account, state and until", b)
 	}
 
-	// A request that left none out records no list.
 	m, s = meterFor(t)
 	attemptOn(m, 1)
 	m.fail(&llm.Error{Code: llm.CodeRateLimit, Routed: &llm.Explain{Tried: []llm.Tried{}, LeftOut: []llm.LeftOut{}}}, 429)
@@ -118,8 +114,6 @@ func TestMeterStreamBrokenAfterItBeganEndsWithTheErrorCode(t *testing.T) {
 	}
 }
 
-// An error's code can be one an extension chose, so an attempt's result takes it only when it is
-// one of core's own, as the error body's tried does.
 func TestMeterResultIsNeverAnExtensionsText(t *testing.T) {
 	m, s := meterFor(t)
 	attemptOn(m, 1)

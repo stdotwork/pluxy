@@ -16,8 +16,6 @@ func shortKeepAlive(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { keepAliveAfter = old })
 }
 
-// A quiet stream gets a keep-alive comment each interval; a write puts the next one off; none
-// goes in the middle of an event; none after stop.
 func TestKeepAliveComments(t *testing.T) {
 	shortKeepAlive(t, 50*time.Millisecond)
 	rec := httptest.NewRecorder()
@@ -38,7 +36,6 @@ func TestKeepAliveComments(t *testing.T) {
 		t.Error("the comment was not flushed")
 	}
 
-	// Half an event, then quiet: no comment may split it.
 	if _, err := k.Write([]byte("event: x\r\ndata: {\"a\"")); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +44,6 @@ func TestKeepAliveComments(t *testing.T) {
 	if n := strings.Count(body(), keepAliveComment); n != before {
 		t.Fatalf("a comment went inside an event: %q", body())
 	}
-	// The event ends (with CRLF line ends); comments come again.
 	if _, err := k.Write([]byte("}\r\n\r\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -68,8 +64,6 @@ func TestKeepAliveComments(t *testing.T) {
 	}
 }
 
-// Writes more often than the interval keep the comments away. The writes span three intervals,
-// so a write that did not put the comment off would let one through.
 func TestKeepAliveNotWhileWriting(t *testing.T) {
 	shortKeepAlive(t, 200*time.Millisecond)
 	rec := httptest.NewRecorder()
@@ -86,8 +80,6 @@ func TestKeepAliveNotWhileWriting(t *testing.T) {
 	}
 }
 
-// blockingWriter stops the first write until the test releases it, so a timer callback can queue
-// behind the keep-alive mutex while that write is still in progress.
 type blockingWriter struct {
 	mu      sync.Mutex
 	body    strings.Builder
@@ -112,8 +104,6 @@ func (w *blockingWriter) String() string {
 	return w.body.String()
 }
 
-// A timer callback that fired while a write held the lock must not comment as soon as that write
-// ends: the write put the next comment off by a full interval.
 func TestKeepAliveStaleFireWaits(t *testing.T) {
 	shortKeepAlive(t, 200*time.Millisecond)
 	w := &blockingWriter{entered: make(chan struct{}), release: make(chan struct{})}
@@ -126,7 +116,6 @@ func TestKeepAliveStaleFireWaits(t *testing.T) {
 	}()
 	<-w.entered
 
-	// The timer fires while Write holds k.mu and waits there.
 	time.Sleep(2 * keepAliveAfter)
 	close(w.release)
 	if err := <-written; err != nil {
@@ -139,7 +128,6 @@ func TestKeepAliveStaleFireWaits(t *testing.T) {
 	k.stop()
 }
 
-// A terminal event stops future comments, including one whose timer was already due.
 func TestKeepAliveStopsAtFinish(t *testing.T) {
 	shortKeepAlive(t, 40*time.Millisecond)
 	rec := httptest.NewRecorder()

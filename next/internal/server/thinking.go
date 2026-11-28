@@ -6,13 +6,7 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// takeThinkingSuffix takes a thinking suffix, as in gpt-5(high), off the request's model name and
-// passes it in Options.ThinkingSuffix, as today's core reads it: the request is routed by the
-// model's own name, and each extension applies the suffix to its upstream request. The effort the
-// suffix comes to also replaces Options.ReasoningEffort, so an extension that reads only the
-// effort (or was written before the suffix) still applies it. The model in
-// a native body is renamed too, so a body sent unchanged names the model without the suffix.
-// (Gemini's model is in the path, not the body.)
+// Gemini's model is in the path, not the body.
 func takeThinkingSuffix(req *llm.Request) {
 	model, suffix := llm.SplitThinkingSuffix(req.Model)
 	if suffix == "" {

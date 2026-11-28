@@ -14,8 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// probe is a reply that, once its first event has gone to the client, collects garbage and
-// reports whether a part of the request parsed from the body is still alive.
 type probe struct {
 	part  weak.Pointer[llm.Part]
 	n     int
@@ -43,8 +41,6 @@ func (p *probe) Next() llm.Event {
 
 func (p *probe) Close() {}
 
-// Once a reply has begun, the routed call keeps only the request's model, so the rest of its
-// parsed form can go while the reply streams, whether the client asked for a stream or not.
 func TestStreamingReplyLetsTheParsedRequestGo(t *testing.T) {
 	big := strings.Repeat("x", 200<<10)
 	for _, stream := range []bool{true, false} {

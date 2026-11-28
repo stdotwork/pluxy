@@ -13,14 +13,11 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// countHandler returns the client API handler with one account whose count attempts answer with
-// count; generate attempts fail the test.
 func countHandler(t *testing.T, count func(req llm.Request) []llm.Event) (http.Handler, *[]llm.Request) {
 	t.Helper()
 	return countHandlerWith(t, &Config{ClientKeys: []string{"k"}}, count)
 }
 
-// countHandlerWith is countHandler with the given config.
 func countHandlerWith(t *testing.T, cfg *Config, count func(req llm.Request) []llm.Event) (http.Handler, *[]llm.Request) {
 	t.Helper()
 	var seen []llm.Request
@@ -56,8 +53,6 @@ func postCount(h http.Handler, path, body string) *httptest.ResponseRecorder {
 	return w
 }
 
-// A count from an upstream in the client's format answers with the upstream's reply as it came;
-// one from another format answers with the count in the client's shape.
 func TestCountTokens(t *testing.T) {
 	for _, c := range []struct {
 		name, path, body string
@@ -94,8 +89,6 @@ func mustCompact(s string) string {
 	return string(b)
 }
 
-// A Gemini count of a whole GenerateContent request (generateContentRequest) is read from that
-// request, and the client's body goes on as it came; the model's thinking suffix is taken off.
 func TestCountTokensRequest(t *testing.T) {
 	h, seen := countHandler(t, counted(llm.FormatGeminiGenerate, 1, `{"totalTokens":1}`))
 	body := `{"generateContentRequest":{"model":"models/gemini-x","contents":[{"role":"user","parts":[{"text":"hello"}]}]}}`
@@ -108,23 +101,19 @@ func TestCountTokensRequest(t *testing.T) {
 	}
 }
 
-// cannotCount is what an extension without a count endpoint answers.
 func cannotCount(llm.Request) []llm.Event {
 	return []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Message: "extension x does not count tokens"}}}
 }
 
 const countBody = `{"model":"m","system":"Be brief.","messages":[{"role":"user","content":"Say hello"}],"tools":[{"name":"get_weather","description":"Weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}]}`
 
-// When no account can count, core answers with its own estimate in the client's shape, unless
-// token_count_estimate is off: then the client gets the error. The estimate follows the request:
-// 27 is what today's core counts for countBody.
 func TestCountTokensEstimate(t *testing.T) {
 	off := false
 	for _, c := range []struct {
 		name       string
 		cfg        Config
 		path, body string
-		want       string // "" when the client gets the error
+		want       string
 	}{
 		{"messages, on by default", Config{}, "/v1/messages/count_tokens", countBody, `{"input_tokens":27}`},
 		{"messages, on", Config{TokenCountEstimate: new(true)}, "/v1/messages/count_tokens", countBody, `{"input_tokens":27}`},
@@ -154,8 +143,6 @@ func TestCountTokensEstimate(t *testing.T) {
 	}
 }
 
-// Only an account that cannot count lets core estimate. An upstream that counts and fails keeps
-// its error, and so does a request an extension refuses, whatever the setting.
 func TestCountTokensEstimateKeepsRealErrors(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -180,10 +167,6 @@ func TestCountTokensEstimateKeepsRealErrors(t *testing.T) {
 	}
 }
 
-// A refusal under the reject drop policy is the account's (another account's format may carry the
-// request) but it is not an account that cannot count: with the estimate on by default, a Gemini
-// or Messages count gets the refusal, never an estimate. The refusal is the one the Claude
-// extension gives a Gemini request asking for JSON output, which Messages has no field for.
 func TestCountTokensDropRefusalIsNotEstimated(t *testing.T) {
 	refused := func(llm.Request) []llm.Event {
 		return []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
@@ -202,8 +185,6 @@ func TestCountTokensDropRefusalIsNotEstimated(t *testing.T) {
 	}
 }
 
-// With the estimate off, the client gets the error; an extension's count reply without a count
-// is a protocol error.
 func TestCountTokensFails(t *testing.T) {
 	off := false
 	h, _ := countHandlerWith(t, &Config{ClientKeys: []string{"k"}, TokenCountEstimate: &off}, cannotCount)
@@ -220,9 +201,6 @@ func TestCountTokensFails(t *testing.T) {
 	}
 }
 
-// In a pool where one account cannot count and another refuses the count, core estimates
-// whichever is tried first, as today's core counts the first kind of account itself; with the
-// estimate off the client gets an error.
 func TestCountTokensEstimateInAMixedPool(t *testing.T) {
 	off := false
 	for _, c := range []struct {

@@ -13,16 +13,11 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Defaults an Anthropic model list shows for a model whose limits are not known, as today's core
-// shows them.
 const (
 	defaultMaxInputTokens  = 200000
 	defaultMaxOutputTokens = 64000
 )
 
-// serveModels adds the model lists to mux: GET /v1/models and /v1/models/{id} in OpenAI's shape,
-// or Anthropic's for an Anthropic client; GET /v1beta/models and /v1beta/models/{name} in
-// Gemini's. Each lists the models the accounts serve now, under every name a client can use.
 func serveModels(mux *http.ServeMux, src Source) {
 	list := func(google bool, write func(w http.ResponseWriter, r *http.Request, models []route.ServedModel)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -88,8 +83,6 @@ func serveModels(mux *http.ServeMux, src Source) {
 		writeList(w, http.StatusOK, map[string]any{"models": out})
 	})))
 	mux.HandleFunc("GET /v1beta/models/{name...}", accessLog(list(true, func(w http.ResponseWriter, r *http.Request, models []route.ServedModel) {
-		// As in today's core: the name matches with or without "models/" before it, against
-		// the model's resource name as it is held.
 		name := r.PathValue("name")
 		for _, m := range models {
 			if n := cmp.Or(m.Name, m.ID); n == name || n == "models/"+name {
@@ -101,9 +94,7 @@ func serveModels(mux *http.ServeMux, src Source) {
 	})))
 }
 
-// serveCodexModels sends names and the client version to the extension that holds the catalog.
 func serveCodexModels(w http.ResponseWriter, r *http.Request, g *Generation) {
-	// Router.Accounts contains only enabled, usable accounts, in their configured order.
 	var account *protocol.Account
 	for _, a := range g.Router.Accounts() {
 		if a.Extension == "pluxy/codex" {
@@ -132,13 +123,10 @@ func serveCodexModels(w http.ResponseWriter, r *http.Request, g *Generation) {
 	}
 	body, _ := json.Marshal(map[string]any{"client_version": r.URL.Query().Get("client_version"), "models": models})
 	req := llm.Request{Native: &llm.Native{Format: "codex.models", Body: body}}
-	// The catalog uses no credential and bypasses routing, reservations, renewal and usage.
 	stream := g.Endpoint(r.Context(), "pluxy/codex", *account, req)
 	writeEndpointReply(w, r, stream, "codex.models", chatFormat, nil, false)
 }
 
-// anthropicClient reports whether a model list request comes from an Anthropic client: it sends
-// anthropic-version, or Claude Code's user agent.
 func anthropicClient(r *http.Request) bool {
 	return r.Header.Get("Anthropic-Version") != "" || strings.HasPrefix(r.Header.Get("User-Agent"), "claude-cli")
 }
@@ -163,7 +151,6 @@ func openAIModel(m route.ServedModel) map[string]any {
 	return out
 }
 
-// anthropicList is Anthropic's model list: sorted by display name, then ID.
 func anthropicList(models []protocol.Model) map[string]any {
 	data := make([]map[string]any, 0, len(models))
 	for _, m := range models {
@@ -186,9 +173,6 @@ func anthropicList(models []protocol.Model) map[string]any {
 	return map[string]any{"data": data, "has_more": false, "first_id": first, "last_id": last}
 }
 
-// geminiModel is a model in Gemini's shape. A list fills in a display name, a description and
-// the generation methods where the model has none, as today's core's list does; one model alone
-// is shown as it is held.
 func geminiModel(m protocol.Model, inList bool) map[string]any {
 	name := cmp.Or(m.Name, m.ID)
 	out := map[string]any{"name": name}
@@ -229,7 +213,6 @@ func geminiModel(m protocol.Model, inList bool) map[string]any {
 	return out
 }
 
-// writeList writes a model list reply, with the content type today's core gives it.
 func writeList(w http.ResponseWriter, status int, v any) {
 	b, err := json.Marshal(v)
 	if err != nil {

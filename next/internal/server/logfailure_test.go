@@ -15,8 +15,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// failingHandler returns the client API handler for accounts whose attempts fail as reply says,
-// by account ID, and the public ID of each account.
 func failingHandler(t *testing.T, cfg route.Config, accounts []route.Account, reply map[string]llm.Error) (http.Handler, func(id string) string) {
 	t.Helper()
 	attempt := func(_ context.Context, _ string, a protocol.Account, _ llm.Request) route.Stream {
@@ -32,7 +30,6 @@ func failingHandler(t *testing.T, cfg route.Config, accounts []route.Account, re
 	return h, state.PublicID
 }
 
-// post sends a chat request for model and returns the reply's status and body.
 func postChat(h http.Handler, model string) (int, string) {
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"`+model+`","messages":[{"role":"user","content":"hi"}]}`))
 	r.Header.Set("Authorization", "Bearer k")
@@ -41,7 +38,6 @@ func postChat(h http.Handler, model string) (int, string) {
 	return w.Code, w.Body.String()
 }
 
-// failureLines returns the log lines out holds that carry a failure for the request path.
 func failureLines(out string) []string {
 	var lines []string
 	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
@@ -56,9 +52,6 @@ var failureAccounts = func() []route.Account {
 	return []route.Account{{ID: "alpha", Extension: "openai"}, {ID: "beta", Extension: "openai"}, {ID: "work laptop", Extension: "openai"}}
 }
 
-// A failed request logs one line that, after the message it always had, says the model asked for,
-// each account tried with how it ended, and each account left out with why. It does so whether
-// or not routing.explain shows the same to the client, and holds none of the upstream's words.
 func TestFailureLineSaysWhatRoutingDid(t *testing.T) {
 	for _, explain := range []bool{true, false} {
 		t.Run(fmt.Sprintf("explain=%v", explain), func(t *testing.T) {
@@ -76,7 +69,6 @@ func TestFailureLineSaysWhatRoutingDid(t *testing.T) {
 			if got := strings.Contains(body, `"pluxy"`); got != explain {
 				t.Errorf("client body has the pluxy member = %v with routing.explain %v: %s", got, explain, body)
 			}
-			// The client sees public IDs, never the IDs the config and the log name accounts by.
 			if explain {
 				for _, id := range []string{"alpha", "beta"} {
 					if !strings.Contains(body, `"account":"`+pub(id)+`"`) {
@@ -103,12 +95,10 @@ func TestFailureLineSaysWhatRoutingDid(t *testing.T) {
 					t.Errorf("log line does not contain %q:\n%s", want, line)
 				}
 			}
-			// The prefix and message are what the line always had; the summary comes after them.
 			if !strings.HasPrefix(line[strings.Index(line, "POST"):], "POST /v1/chat/completions") ||
 				!strings.Contains(line, "]: auth: SECRET-UPSTREAM auth words model=gpt-x tried=[") {
 				t.Errorf("log line does not keep its prefix and message before the summary:\n%s", line)
 			}
-			// The other account's message and the raw body are not in the log at all.
 			if strings.Contains(out.String(), "rate words") || strings.Contains(out.String(), "SECRET-RAW") {
 				t.Errorf("log holds upstream words the line did not carry before:\n%s", out)
 			}
@@ -116,7 +106,6 @@ func TestFailureLineSaysWhatRoutingDid(t *testing.T) {
 	}
 }
 
-// An account cooling down is left out with the time its block ends.
 func TestFailureLineSaysUntilWhen(t *testing.T) {
 	out := captureLog(t)
 	cfg := route.Config{Strategy: route.StrategyFillFirst}
@@ -124,7 +113,7 @@ func TestFailureLineSaysUntilWhen(t *testing.T) {
 	h, _ := failingHandler(t, cfg, []route.Account{{ID: "alpha", Extension: "openai"}}, reply)
 	postChat(h, "gpt-x")
 	out.Reset()
-	postChat(h, "gpt-x") // a is cooling now: nothing is tried
+	postChat(h, "gpt-x")
 	line := strings.Join(failureLines(out.String()), "\n")
 	re := regexp.MustCompile(` model=gpt-x tried=\[\] left_out=\[alpha: cooling until (\S+)\]`)
 	m := re.FindStringSubmatch(line)
@@ -137,7 +126,6 @@ func TestFailureLineSaysUntilWhen(t *testing.T) {
 	}
 }
 
-// A long list is cut: the first eight accounts of each list, then a count of the rest.
 func TestFailureLineCapsTheLists(t *testing.T) {
 	out := captureLog(t)
 	var accounts []route.Account
@@ -163,7 +151,6 @@ func TestFailureLineCapsTheLists(t *testing.T) {
 	}
 }
 
-// An error routing did not end, or one no model is asked for in, is logged as it always was.
 func TestFailureLineWithoutRoutingIsUnchanged(t *testing.T) {
 	out := captureLog(t)
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
@@ -174,8 +161,6 @@ func TestFailureLineWithoutRoutingIsUnchanged(t *testing.T) {
 	}
 }
 
-// What a failure line holds of a model or account is one token: a model name with a space,
-// a quote or a newline is quoted and cut, so it cannot pass for another field or another line.
 func TestFailureLineQuotesWhatItDoesNotControl(t *testing.T) {
 	out := captureLog(t)
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)

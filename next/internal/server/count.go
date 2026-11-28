@@ -16,15 +16,10 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// countFormat is a client API's token count: Anthropic's /v1/messages/count_tokens or Gemini's
-// countTokens. The request goes to an account's extension as a count_tokens call, routed as a
-// generate request is.
 type countFormat struct {
 	clientFormat
-	// format is the client's format: an upstream count reply in it is passed on as it came.
 	format string
-	// reply is the client's count reply for a count from an upstream in another format.
-	reply func(tokens int64) []byte
+	reply  func(tokens int64) []byte
 }
 
 var messagesCount = countFormat{
@@ -41,8 +36,6 @@ var messagesCount = countFormat{
 	},
 }
 
-// geminiCount reads a countTokens body: contents, or a whole GenerateContent request under
-// generateContentRequest. The body as the client sent it is the native body.
 var geminiCount = countFormat{
 	clientFormat: clientFormat{
 		parse: func(r *http.Request, body []byte) (llm.Request, error) {
@@ -71,9 +64,6 @@ var geminiCount = countFormat{
 	},
 }
 
-// serveCount answers a token count: the upstream's own count reply when it is in the client's
-// format, otherwise the count in the client's shape. When no account can count, core's estimate
-// in the client's shape (token_count_estimate).
 func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFormat) {
 	if g.Count == nil {
 		f.writeError(w, &llm.Error{Code: llm.CodeNotFound, Status: http.StatusNotFound, Message: "token counting is not served"})
@@ -81,7 +71,7 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 	}
 	body, e, ok := readRequestBody(w, r)
 	if !ok {
-		g.cancelledUnread(w, r, f.clientFormat, time.Time{}, false) // a count has no usage event
+		g.cancelledUnread(w, r, f.clientFormat, time.Time{}, false)
 		return
 	}
 	if e != nil {
@@ -104,8 +94,6 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 		return
 	}
 	rr := routeRequest(r, req, body)
-	// Whether an attempt reached an account that cannot count: today's core counts such an
-	// account itself, so the request then gets an estimate whatever the other accounts answered.
 	var cannot atomic.Bool
 	rr.Attempt = func(ctx context.Context, ext string, a protocol.Account, req llm.Request) route.Stream {
 		return &countWatch{Stream: g.Count(ctx, ext, a, req), cannot: &cannot}
@@ -124,10 +112,6 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 		}
 	}
 	if ev.Type == llm.EventError {
-		// An account that cannot count was reached (its upstream has no count endpoint): core
-		// estimates, as today's core counts such an account itself, unless that is turned off.
-		// Without one, an upstream that counts and refuses, or a request an extension refuses,
-		// stays an error.
 		if (cannot.Load() || isCannotCount(ev.Error)) && g.Config.TokenCountEstimateOn() {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(f.reply(estimateInputTokens(req)))
@@ -153,8 +137,6 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 	_, _ = w.Write(out)
 }
 
-// nativeHeaders copies the client's headers that belong to the format's body into the native
-// body's headers.
 func (f clientFormat) nativeHeaders(r *http.Request, req *llm.Request) {
 	if req.Native == nil {
 		return
@@ -169,15 +151,12 @@ func (f clientFormat) nativeHeaders(r *http.Request, req *llm.Request) {
 	}
 }
 
-// Gemini action methods served apart from GenerateContent.
 const (
 	countMethod              = "countTokens"
 	embedContentMethod       = "embedContent"
 	batchEmbedContentsMethod = "batchEmbedContents"
 )
 
-// geminiAction serves /v1beta/models/{model}:{method}: countTokens counts, embedContent and
-// batchEmbedContents route as embedding endpoint calls, and the other methods generate.
 func geminiAction(w http.ResponseWriter, r *http.Request, g *Generation) {
 	model, method, _ := strings.Cut(r.PathValue("action"), ":")
 	switch method {
@@ -200,14 +179,10 @@ func geminiAction(w http.ResponseWriter, r *http.Request, g *Generation) {
 	serve(w, r, g, geminiFormat)
 }
 
-// isCannotCount reports whether e is an account's answer that its upstream cannot count tokens. A
-// refusal under the reject drop policy (one that names what it dropped) is not: the account could
-// count, but the request cannot be carried whole.
 func isCannotCount(e *llm.Error) bool {
 	return e != nil && e.Code == llm.CodeUnsupported && e.Scope != llm.ScopeRequest && len(e.Dropped) == 0
 }
 
-// countWatch is a count attempt's stream that notes when the account answers it cannot count.
 type countWatch struct {
 	route.Stream
 	cannot *atomic.Bool

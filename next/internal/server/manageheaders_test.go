@@ -8,8 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/route"
 )
 
-// A PATCH that sets an account's headers to null or to an empty object removes all of them; an
-// object replaces them, so a header it leaves out is removed.
 func TestPatchHeadersClear(t *testing.T) {
 	m := &Management{Redactor: configdoc.NewRedactor()}
 	stored := func() route.Account {

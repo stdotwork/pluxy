@@ -9,19 +9,10 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// estimateInputTokens estimates the input tokens of req, for a token count no account can give.
-// It counts the same text today's core's local counter counts: the system text; for each message
-// its role and text; reasoning text; each tool call's ID, name and arguments; each tool result's
-// call ID and output; each tool's name, description and parameters; and the tool choice. Images
-// and files add nothing. Every piece is trimmed, empty ones are dropped and the rest are joined
-// with line breaks, then estimated as one text. One estimate serves every provider: it follows
-// o200k_base, which today's core uses for Claude, xAI and Meta, and not the other tokenizers its
-// OpenAI-compatible and Codex counts use.
 func estimateInputTokens(req llm.Request) int64 {
 	return tokenest.Estimate(estimateText(req))
 }
 
-// estimateText returns the text estimateInputTokens estimates.
 func estimateText(req llm.Request) string {
 	var segs []string
 	add := func(s ...string) {
@@ -31,8 +22,6 @@ func estimateText(req llm.Request) string {
 			}
 		}
 	}
-	// A message's role is counted once, also when the message was split into several items:
-	// an assistant message's reasoning, text and calls, or the results in a user message.
 	var turn, prev string
 	for _, it := range req.Items {
 		role := ""
@@ -75,7 +64,6 @@ func estimateText(req llm.Request) string {
 	return strings.Join(segs, "\n")
 }
 
-// compactJSON returns s without insignificant whitespace when it is JSON, otherwise s.
 func compactJSON(s string) string {
 	var b bytes.Buffer
 	if json.Compact(&b, []byte(s)) != nil {

@@ -9,9 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Each attempt carries a caller value for the request's tenant: the same for one tenant on one
-// extension, different for another tenant or extension, absent without a tenant, and never the
-// tenant itself.
 func TestAttemptCarriesCaller(t *testing.T) {
 	var got []string
 	attempt := func(_ context.Context, ext string, _ protocol.Account, req llm.Request) Stream {
@@ -29,7 +26,6 @@ func TestAttemptCarriesCaller(t *testing.T) {
 		s.Close()
 		return got[len(got)-1]
 	}
-	// The tenants hold letters outside hex, so the hex caller cannot contain one by chance.
 	a1, a2, b, other, none := run("m", "tenant-q"), run("m", "tenant-q"), run("m", "tenant-z"), run("n", "tenant-q"), run("m", "")
 	switch {
 	case a1 == "" || a1 != a2:

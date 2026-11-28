@@ -9,8 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A multipart edit reaches the extension in its JSON form: fields as members, numbers and stream
-// typed, mask fields nested, image files appended to images and the mask file as a data URL.
 func TestImagesEditFormToJSON(t *testing.T) {
 	h, _, seen := endpointHandler(t, imagesReply)
 	b := "--x\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\nadd a hat\r\n" +
@@ -38,8 +36,6 @@ func TestImagesEditFormToJSON(t *testing.T) {
 	}
 }
 
-// Images requests without a prompt, a form edit without an image file, and an edit in another
-// content type are refused before routing; JSON edits need no image file.
 func TestImagesRefusals(t *testing.T) {
 	h, accounts, _ := endpointHandler(t, imagesReply)
 	for _, tc := range []struct{ path, ct, body, want string }{
@@ -63,7 +59,6 @@ func TestImagesRefusals(t *testing.T) {
 	}
 }
 
-// imagesReply answers an images request with an empty JSON body in the request's own format.
 func imagesReply(_ string, req llm.Request) []llm.Event {
 	evs := bodyReply("application/json", `{}`)
 	evs[0].Response.Format = req.Native.Format

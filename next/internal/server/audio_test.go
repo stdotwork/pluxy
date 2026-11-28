@@ -11,8 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A transcription's multipart body reaches the extension as a JSON form with its fields and
-// uploaded file, and a binary speech reply is base64-decoded on the way to the client.
 func TestAudioEndpoints(t *testing.T) {
 	h, _, seen := endpointHandler(t, func(_ string, req llm.Request) []llm.Event {
 		if req.Native.Format == llm.FormatOpenAIAudioSpeech {
@@ -67,7 +65,6 @@ func TestAudioEndpoints(t *testing.T) {
 	}
 }
 
-// A transcription without its file is refused before routing.
 func TestAudioTranscriptionNeedsFile(t *testing.T) {
 	h, accounts, _ := endpointHandler(t, func(string, llm.Request) []llm.Event { return nil })
 	b := "--x\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--x--\r\n"
