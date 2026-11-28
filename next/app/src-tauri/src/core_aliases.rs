@@ -152,7 +152,8 @@ fn shown(ids: &[String]) -> String {
         .join(", ")
 }
 
-/// The native confirmation's text: what core gets, where, and what stays.
+/// The native confirmation's text: what core gets, where, and what stays, in the words a person
+/// reads (pluxy, not core).
 fn summary(origin: &str, model: &str, alias: &str, p: &Plan) -> String {
     let which = if p.accounts.len() == 1 {
         "its account"
@@ -161,15 +162,15 @@ fn summary(origin: &str, model: &str, alias: &str, p: &Plan) -> String {
     };
     let list = shown(&p.ids());
     let mut s = format!(
-        "Add the model alias {alias} on the core at {origin}: requests for {alias} go to {model} on {which} {list}, added by login. {model} keeps its own name."
+        "Add the model alias {alias} on the pluxy at {origin}: requests for {alias} go to {model} on {which} {list}, added by login. {model} keeps its own name."
     );
     if !p.config.is_empty() {
         s.push_str(&format!(
-            " The accounts set in core's config that serve {model} ({}) are not changed: add the alias there.",
+            " The accounts set in pluxy's config file that serve {model} ({}) are not changed: add the alias there.",
             shown(&p.config)
         ));
     }
-    s.push_str(" Clear and Restore backup leave this alias in core; remove it on the account's settings in core's panel.");
+    s.push_str(" Clear and Restore backup leave this alias in pluxy; remove it in the account's settings on pluxy's Accounts page.");
     s
 }
 

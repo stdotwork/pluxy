@@ -3,7 +3,7 @@
     margin-block: calc(var(--s) * 3);
     padding: calc(var(--s) * 3);
     border: var(--px-shape-border) solid var(--px-color-border);
-    border-radius: var(--px-shape-radius);
+    border-radius: var(--r-card);
     background: var(--px-color-surface-raised);
   }
   [data-part="key-value"] {
@@ -26,7 +26,7 @@
   }
   .config-rows > .config-key-said > .notice,
   .config-rows > .config-key-notice {
-    margin: calc(var(--s) * 2) calc(var(--s) * 2) 0;
+    margin: calc(var(--s) * 2) 0 0;
   }
   /* A fixed width: the row's control column fits its content, so a share of it would be no width. */
   .setting-control input.config-text {
@@ -67,10 +67,10 @@
     overflow: auto;
     padding: calc(var(--s) * 5);
     border: var(--px-shape-border) solid var(--px-color-border);
-    border-radius: var(--px-shape-radius);
+    border-radius: var(--r-dialog);
     color: var(--px-color-text);
     background: var(--px-color-overlay);
-    box-shadow: var(--px-shadow-raised);
+    box-shadow: var(--px-shadow-dialog);
   }
   .config-dialog::backdrop {
     background: color-mix(in srgb, var(--px-color-bg) 70%, transparent);
@@ -99,6 +99,7 @@
     font-family: var(--px-font-mono);
     line-height: var(--px-font-line-height);
     border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--r-card);
     padding: calc(var(--s) * 2);
     color: var(--px-color-code-text);
     background: var(--px-color-code-bg);

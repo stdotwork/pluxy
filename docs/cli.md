@@ -181,8 +181,8 @@ starts none exits 2.
 
 ### `pluxy status`
 
-Shows core's state: the config version it wants and the one serving, each extension's state, and the
-build.
+Shows core's state: its build, the config revision it serves (and a newer revision it refused, with
+the reason), whether first-run setup is still to do or safe mode is on, and each extension's state.
 
 ### `pluxy reload`
 
@@ -246,15 +246,16 @@ Marks first-run setup as done.
 
 ### `pluxy client show <tool>`
 
-Prints what to paste into a coding tool's config to point it at core: the files, the address and a
-client key placeholder ([clients.md](clients.md)). `<tool>` is `claude-code`, `codex`, `opencode`,
-`pi` or `omp`; other names for them (`claude`, `codex-cli`, `oh-my-pi`, and a setup package's ID such
-as `pluxy/pi-setup`) work too, in any letter case. The placeholder
-`<client-key>` stands for a client key of yours: pluxy never prints a stored key.
+Prints what to paste into a coding tool's config to point it at core: the files, the address, a
+client key placeholder and the model the tool starts with ([clients.md](clients.md)). `<tool>` is
+`claude-code`, `codex`, `opencode`, `pi` or `omp`; other names for them (`claude`, `codex-cli`,
+`oh-my-pi`, and a setup package's ID such as `pluxy/pi-setup`) work too, in any letter case. The
+placeholder `<client-key>` stands for a client key of yours: pluxy never prints a stored key.
 
 | Flag | What it does |
 | --- | --- |
 | `--key-id <id>` | A client key ID from `pluxy key list`: the placeholder then names that key. |
+| `--model <name>` | Model the tool starts with, one from `pluxy model list` (at most 240 characters, no control characters). Default: the best match among the models core serves (a Claude model for Claude Code, a `codex` or `gpt-` one for Codex, else the first chat model), or `<model-id>` when core serves none. |
 
 ```bash
 pluxy client show codex
@@ -363,8 +364,9 @@ amounts, and when it resets.
 
 ### `pluxy account models <id>`
 
-Lists the models the account serves, from the list routing keeps (not a fresh read): ID, the names
-clients use, owner, context length, longest output and whether it is excluded.
+Lists the models the account serves: the account's own `models` list when it has one, else the list
+routing keeps, else a list read from its extension. For each: ID, the names clients use, owner,
+context length, longest output and whether it is excluded.
 
 ### `pluxy account import <file>`
 
@@ -596,7 +598,7 @@ Stores a theme JSON file and prints its ID.
 
 | Flag | What it does |
 | --- | --- |
-| `--id <publisher/name>` | The theme's ID. Default: for a pluxy theme file, the `id` it holds; for any other theme file, `t3/` and its `id` or a name made from its `name`; failing both, `t3/` and a name made from the file's name. |
+| `--id <publisher/name>` | The theme's ID. Default: for a pluxy theme file, the `id` it holds when that is a valid `publisher/name`; for any other theme file, `t3/` and its `id` or a name made from its `name`; failing both, `t3/` and a name made from the file's name. |
 
 ### `pluxy theme remove <id>`
 

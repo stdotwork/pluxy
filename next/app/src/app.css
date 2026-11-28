@@ -265,7 +265,7 @@
   .where-details pre {
     margin: calc(var(--s) * 2) 0 0;
     padding: calc(var(--s) * 2);
-    border-radius: var(--px-shape-radius);
+    border-radius: var(--r-card);
     background: var(--px-color-code-bg);
     color: var(--px-color-code-text);
     white-space: pre-wrap;
@@ -309,8 +309,8 @@
   }
 
   .where-choice-head input[type="radio"]:checked {
-    border-color: var(--px-color-accent);
-    background: radial-gradient(circle, var(--px-color-accent) 0 38%, transparent 42%);
+    border-color: var(--px-color-message-action);
+    background: radial-gradient(circle, var(--px-color-message-action) 0 38%, transparent 42%);
   }
 
   .where-choice-head input[type="radio"]:focus-visible {
@@ -498,7 +498,7 @@
     width: 100%;
     max-width: 24rem;
     height: calc(var(--s) * 2);
-    accent-color: var(--px-color-accent);
+    accent-color: var(--px-color-message-action);
   }
 
   .version-facts {
@@ -645,15 +645,10 @@
     width: min(30rem, calc(100% - var(--s) * 8));
     padding: calc(var(--s) * 4);
     border: var(--px-shape-border) solid var(--px-color-border);
-    border-radius: var(--px-shape-radius);
+    border-radius: var(--r-dialog);
     background: var(--px-color-overlay);
     color: var(--px-color-text);
-  }
-
-  /* The page behind is veiled in its own background colour, so the prompt stands out in either scheme. */
-  dialog[data-part="close-prompt"] {
-    box-shadow: 0 calc(var(--s) * 2) calc(var(--s) * 8)
-      color-mix(in srgb, var(--px-color-text) 22%, transparent);
+    box-shadow: var(--px-shadow-dialog);
   }
 
   dialog[data-part="close-prompt"]::backdrop {
@@ -666,6 +661,7 @@
     padding: 0;
     border: 0;
     background: none;
+    box-shadow: none;
   }
 
   /* 640 wide: the two choices stack, and the rows' controls sit under their names (SettingRow). */

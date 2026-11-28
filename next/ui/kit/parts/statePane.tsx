@@ -48,7 +48,7 @@ function PaneButton(props: { action: PaneAction; variant: "primary" | "quiet" })
 }
 
 /** True once ms have passed since the part showed, so a fast load never flashes a placeholder. */
-function useShownAfter(ms: number) {
+export function useShownAfter(ms: number) {
   const [shown, setShown] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => setShown(true), ms);

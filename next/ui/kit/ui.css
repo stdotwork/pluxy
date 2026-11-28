@@ -6,10 +6,23 @@
     /* The room the frame takes above the pane (shell.css sets it): a part that fills the rest of
        the window's height leaves this much out. */
     --stick: calc(var(--s) * 4);
+    /* Corners that follow the theme's radius: chips and tags, small buttons, cards and notices, the
+       content panel, dialogs. Controls (buttons, inputs, selects, segments) use shape.radius as it
+       is; pills use 999px. */
+    --r-chip: calc(var(--px-shape-radius) * 0.5);
+    --r-small: calc(var(--px-shape-radius) * 0.75);
+    --r-card: calc(var(--px-shape-radius) * 1.5);
+    --r-panel: calc(var(--px-shape-radius) * 1.75);
+    --r-dialog: calc(var(--px-shape-radius) * 2);
     /* What lies under content outside a card: nothing over the page (cards set their fill). */
     --under-card: transparent;
-    /* Digits of one width everywhere, so numbers in table cells, counters and meter labels line
-       up and do not shift as they change. */
+  }
+
+  /* Digits of one width where numbers line up or change in place: numeric table columns, the
+     page's title, limits and their gauges' labels, times and code (pages add their own counters).
+     Not on all text: Inter's tabular figures also widen its spaces, hyphens and punctuation. */
+  :is(time, code, kbd, .num, .mono, .limits),
+  [data-part="page-title"] {
     font-variant-numeric: tabular-nums;
   }
 
@@ -51,6 +64,67 @@
 
   a {
     color: var(--px-color-accent);
+  }
+
+  /* Selected text, in the accent. */
+  ::selection {
+    background: var(--px-color-accent);
+    color: var(--px-color-accent-text);
+  }
+
+  /* A search match inside text. */
+  mark {
+    background: var(--px-color-search-match-background);
+    color: var(--px-color-search-match-foreground);
+    border-radius: var(--r-chip);
+    padding: 0 1px;
+  }
+
+  /* The theme's stroke weight beats the icon's own attribute. */
+  [data-part="icon"] {
+    stroke-width: var(--px-shape-icon-stroke);
+  }
+
+  /* A theme switch repaints at once: no colour fades across the whole page. */
+  html[data-theme-switching] *,
+  html[data-theme-switching] *::before,
+  html[data-theme-switching] *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: it must beat every rule's own transition */
+    transition: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: it must beat every rule's own animation */
+    animation-duration: 0s !important;
+  }
+
+  /* A chart's series: the theme's six colours, for a bar or a line (fill) and a legend key
+     (background). */
+  [data-series="1"] {
+    fill: var(--px-color-chart-1);
+    background-color: var(--px-color-chart-1);
+  }
+
+  [data-series="2"] {
+    fill: var(--px-color-chart-2);
+    background-color: var(--px-color-chart-2);
+  }
+
+  [data-series="3"] {
+    fill: var(--px-color-chart-3);
+    background-color: var(--px-color-chart-3);
+  }
+
+  [data-series="4"] {
+    fill: var(--px-color-chart-4);
+    background-color: var(--px-color-chart-4);
+  }
+
+  [data-series="5"] {
+    fill: var(--px-color-chart-5);
+    background-color: var(--px-color-chart-5);
+  }
+
+  [data-series="6"] {
+    fill: var(--px-color-chart-6);
+    background-color: var(--px-color-chart-6);
   }
 
   :focus-visible {
@@ -119,7 +193,7 @@
     --under-card: var(--px-color-card);
     background: var(--px-color-card);
     border: var(--px-shape-border) solid var(--px-color-card-border);
-    border-radius: var(--px-shape-radius);
+    border-radius: var(--r-card);
     box-shadow: var(--px-shadow-raised);
     padding: var(--px-size-card-padding);
     display: grid;
@@ -158,13 +232,15 @@
     margin-top: calc(var(--s) * 3);
   }
 
-  /* A notice is a line of text with a bar in its state's colour at its start. */
+  /* A notice is a line of text with a bar at its start. A notice with a state has the state's solid
+     colour in the bar and its surface behind the text; a plain one is the text and a muted bar. */
   .notice {
     --tone: var(--px-color-text-muted);
     margin: 0 0 calc(var(--s) * 3);
     padding: calc(var(--s) * 1) 0 calc(var(--s) * 1) calc(var(--s) * 3);
     border: 0;
     border-inline-start: 3px solid var(--tone);
+    border-radius: var(--r-card);
     color: var(--px-color-text);
   }
 
@@ -173,17 +249,39 @@
   }
 
   .notice[data-tone="danger"] {
-    --tone: var(--px-color-danger);
+    --tone: var(--px-color-error);
     background: var(--px-color-danger-surface);
   }
 
   .notice[data-tone="warn"] {
-    --tone: var(--px-color-warn);
+    --tone: var(--px-color-warning);
     background: var(--px-color-warn-surface);
   }
 
   .notice[data-tone="ok"] {
-    --tone: var(--px-color-ok);
+    --tone: var(--px-color-success);
+    background: var(--px-color-success-surface);
+  }
+
+  .notice[data-tone="info"] {
+    --tone: var(--px-color-info);
+    background: var(--px-color-info-surface);
+  }
+
+  .notice[data-tone="update"] {
+    --tone: var(--px-color-update);
+    background: var(--px-color-update-surface);
+  }
+
+  /* On a surface, the text keeps room from the edge it ends at. */
+  .notice:is(
+    [data-tone="danger"],
+    [data-tone="warn"],
+    [data-tone="ok"],
+    [data-tone="info"],
+    [data-tone="update"]
+  ) {
+    padding-inline-end: calc(var(--s) * 3);
   }
 
   .empty {
@@ -223,11 +321,13 @@
 
   /* Buttons and badges */
 
-  /* Three weights: main (primary: ink on the page, one per view), plain (quiet, the default: an
-     outline) and ghost (no border until hovered). Danger is a plain button in the danger colour.
-     All are size.control high; a page's main action in the header strip is size.control-main. */
+  /* Three weights: main (primary: filled in the message-action colour, one per view), plain (quiet,
+     the default: an outline) and ghost (no border until hovered). Danger is a plain button in the
+     danger colour. All are size.control high; a page's main action in the header strip is
+     size.control-main. */
   .btn {
     font: inherit;
+    font-weight: var(--px-font-weight-medium);
     line-height: 1.2;
     display: inline-flex;
     align-items: center;
@@ -243,7 +343,8 @@
     transition:
       background var(--t),
       border-color var(--t),
-      color var(--t);
+      color var(--t),
+      transform var(--t);
     white-space: nowrap;
     text-decoration: none;
   }
@@ -252,6 +353,7 @@
     font-size: var(--px-font-size-small);
     padding: 0 calc(var(--s) * 2);
     min-height: 24px;
+    border-radius: var(--r-small);
   }
 
   /* A working button: its label and width stay, and a small ring shows in its end padding. The
@@ -296,14 +398,20 @@
     background: var(--px-color-surface-raised);
   }
 
+  .btn:active:not(:disabled) {
+    transform: scale(var(--px-motion-press-scale));
+  }
+
   .btn[data-variant="primary"] {
-    background: var(--px-color-accent);
-    border-color: var(--px-color-accent);
-    color: var(--px-color-accent-text);
+    background: var(--px-color-message-action);
+    border-color: var(--px-color-message-action);
+    color: var(--px-color-message-action-foreground);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--px-color-message-action-foreground) 16%, transparent);
   }
 
   .btn[data-variant="primary"]:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--px-color-accent) 85%, var(--px-color-bg));
+    background: var(--px-color-message-action-hover);
+    border-color: var(--px-color-message-action-hover);
   }
 
   .btn[data-variant="ghost"] {
@@ -324,6 +432,7 @@
   .btn:disabled:not([aria-busy="true"]) {
     background: transparent;
     border-color: var(--px-color-border);
+    box-shadow: none;
     color: var(--px-color-text-muted);
     cursor: not-allowed;
   }
@@ -344,8 +453,9 @@
     color: var(--px-color-text);
   }
 
-  /* A state as a word with a dot in the state's colour before it. The word is mixed towards the
-     text colour, so it reads at 4.5:1 or more on every surface in each built-in theme. */
+  /* A state as a word with a dot before it. The dot is the state's solid colour (--tone); the word
+     is its foreground colour (--word), mixed towards the text colour where the state's foreground
+     is a plain text colour, so it reads at 4.5:1 or more on every surface in each built-in theme. */
   .badge {
     display: inline-flex;
     align-items: center;
@@ -354,7 +464,8 @@
     line-height: 1.5;
     white-space: nowrap;
     --tone: var(--px-color-text-muted);
-    color: color-mix(in srgb, var(--tone) 75%, var(--px-color-text));
+    --word: color-mix(in srgb, var(--px-color-text-muted) 75%, var(--px-color-text));
+    color: var(--word);
   }
 
   .badge::before {
@@ -373,15 +484,28 @@
   }
 
   .badge[data-tone="ok"] {
-    --tone: var(--px-color-ok);
+    --tone: var(--px-color-success);
+    --word: color-mix(in srgb, var(--px-color-ok) 75%, var(--px-color-text));
   }
 
   .badge[data-tone="warn"] {
-    --tone: var(--px-color-warn);
+    --tone: var(--px-color-warning);
+    --word: color-mix(in srgb, var(--px-color-warn) 75%, var(--px-color-text));
   }
 
   .badge[data-tone="danger"] {
-    --tone: var(--px-color-danger);
+    --tone: var(--px-color-error);
+    --word: color-mix(in srgb, var(--px-color-danger) 75%, var(--px-color-text));
+  }
+
+  .badge[data-tone="info"] {
+    --tone: var(--px-color-info);
+    --word: var(--px-color-info-foreground);
+  }
+
+  .badge[data-tone="update"] {
+    --tone: var(--px-color-update);
+    --word: var(--px-color-update-foreground);
   }
 
   /* Hit areas: a control drawn smaller than 24 by 24 pixels keeps its drawn size, and an invisible
@@ -505,7 +629,7 @@
     padding-block: calc(var(--s) * 2);
     font-size: var(--px-font-size-small);
     font-weight: var(--px-font-weight-strong);
-    color: var(--px-color-text-muted);
+    color: var(--px-color-secondary-label);
     white-space: nowrap;
   }
 
@@ -559,7 +683,7 @@
   .cards .item {
     background: var(--px-color-surface);
     border: var(--px-shape-border) solid var(--px-color-border);
-    border-radius: var(--px-shape-radius);
+    border-radius: var(--r-card);
     box-shadow: var(--px-shadow-raised);
     padding: calc(var(--s) * 3.5);
     display: grid;
@@ -599,7 +723,7 @@
   }
 
   .detail {
-    animation: px-in var(--t);
+    animation: px-in var(--px-motion-duration-slow, 240ms) var(--px-motion-easing-drawer, ease-out);
   }
 
   @keyframes px-in {
@@ -724,7 +848,7 @@
     gap: calc(var(--s) * 1.5);
     min-height: max(24px, calc(var(--px-size-control) - 2px - var(--px-shape-border) * 2));
     padding: 0 calc(var(--s) * 3);
-    border-radius: calc(var(--px-shape-radius) - 1px);
+    border-radius: calc(var(--px-shape-radius) - 2px);
     color: var(--px-color-text-muted);
     white-space: nowrap;
     transition:
@@ -785,7 +909,9 @@
     /* Centred on the label's first line. */
     margin-block-start: calc((var(--px-font-size) * var(--px-font-line-height) - 16px) / 2);
     border-radius: 999px;
-    background: var(--px-color-input-border);
+    /* Off: the text colour halfway into the page, so the track (the control's only shape) and the
+       knob on it each reach 3:1 in the default theme, light and dark. */
+    background: color-mix(in srgb, var(--px-color-text) 50%, var(--px-color-bg));
     position: relative;
     transition: background var(--t);
   }
@@ -803,11 +929,11 @@
   }
 
   .switch input:checked + .track {
-    background: var(--px-color-accent);
+    background: var(--px-color-message-action);
   }
 
   .switch input:checked + .track::after {
-    background: var(--px-color-accent-text);
+    background: var(--px-color-message-action-foreground);
     transform: translateX(12px);
   }
 

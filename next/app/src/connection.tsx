@@ -6,7 +6,8 @@
 // - managed ("On this computer"): the app runs a pluxy of its own, one of the versions it installed,
 //   adopted or copied in from the one that came with the app, and stops it when the app quits;
 // - local: a pluxy already running on this computer, which the app only connects to;
-// - remote: a pluxy on another computer, over https.
+// - remote: a pluxy on another computer, over https, Tailscale, or plain http on a network the
+//   person said they trust.
 // The address typed decides between local and remote (addressKind). Every word is in
 // connectionCopy.ts, apart from the settings rows' (startup.tsx, window.tsx) and the versions'.
 
@@ -66,7 +67,7 @@ const VERSIONS = {
   keyKept: "Kept on this computer, so the app signs in by itself.",
   keySession: "Kept until the app quits.",
   enterAgain: "Enter it again",
-  certificate: "Certificate file",
+  certificate: "Certificate authority file",
   address: "Address",
   version: "Version",
 };

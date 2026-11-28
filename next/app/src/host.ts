@@ -36,6 +36,11 @@ export interface Connection {
   };
   /** Why the app is not connected, when it is not. */
   error?: string;
+  /** How what the app sends reaches the core it is connected to: over https, to this computer,
+   * only over Tailscale (which this computer carries; nothing is sent when it does not), only
+   * over Tailscale but not known to carry it now (nothing is sent until it does), or over plain
+   * http on a network the person said in the key window that they trust. */
+  link?: "https" | "here" | "tailscale" | "tailscale_off" | "plain";
 }
 
 /** What the person sets on the Connection page. */
@@ -90,6 +95,15 @@ export interface KeyEntryResult {
 }
 export const keyEntry = (change?: ConnectionChange) =>
   invoke<KeyEntryResult>("key_entry", { change: change ?? null });
+/** Asks for a certificate authority file in the native file chooser: its path, or null when the
+ * person cancelled. Only where canChooseFiles says the app has one. */
+export const certificateChoose = () => invoke<string | null>("certificate_choose");
+/** Whether the app has a native chooser for opening a file here: Linux only, as the native side's
+ * other choosers. The window learns its system from its webview. */
+export const canChooseFiles = () =>
+  typeof navigator !== "undefined" &&
+  /\bLinux\b/.test(navigator.userAgent) &&
+  !/Android/.test(navigator.userAgent);
 export const coreRestart = () => invoke<Connection>("core_restart");
 export const coreVersions = () => invoke<Versions>("core_versions");
 /** Each opens the native confirmation and returns; the app sends pluxy-connection when done. */

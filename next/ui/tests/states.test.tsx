@@ -115,8 +115,9 @@ test("an account's condition word: turned off first, then what keeps requests aw
     renderToString(<GroupMark c={accountCondition(account(fields), running)} />);
   expect(mark({}, new Set(["test/other"]))).toContain('data-group="needs"');
   expect(mark({}, new Set(["test/other"]))).toContain('aria-label="Provider stopped"');
+  // A model cooldown still serves other models: the mark keeps the serving colour while the reason names the model.
   expect(mark({ cooldowns: [{ scope: "model", model: "m", kind: "rate_limit", until: later }] })).toContain(
-    'data-group="waiting"',
+    'data-group="serving"',
   );
 });
 

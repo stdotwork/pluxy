@@ -109,8 +109,8 @@ JSON object named in its row; `204` means an empty reply.
 
 ## Changing the config
 
-These calls read and change the config file core runs on, whether it is the JSON config or a
-`config.yaml` ([`docs/config.md`](config.md)). A change goes through the same steps as a reload: core
+These calls read and change the config file core runs on, whether it is the JSON config
+([`docs/config.md`](config.md)) or a `config.yaml` ([`docs/config-yaml.md`](config-yaml.md)). A change goes through the same steps as a reload: core
 checks and prepares the new contents, and only when they are ready to serve does it write the file
 and switch to them. The file is replaced in one step (a new file renamed over it, through a symbolic
 link if the path is one), so nothing reads half of it. The new file keeps the old one's permissions:
@@ -330,8 +330,13 @@ by the config file's path.
 ]
 ```
 
-`suggested` is true only for a pick that something found on the machine points to. A machine where
-nothing was found gets the same list with nothing suggested.
+`suggested` is true only for a pick that something found on the machine points to. A provider pick (an
+account kind such as Claude or Codex) is pointed to by its tool being installed or by a sign-in found
+there (`~/.claude/.credentials.json` or `~/.codex/auth.json`); `because` says which ("Claude Code is
+installed and signed in on this computer", "Claude Code is installed on this computer" or "Claude Code
+is signed in on this computer"). A pick that sets up a tool is pointed to by the tool being installed
+(unless that tool's config is in state `refused`). A machine where nothing was found gets the same list
+with nothing suggested.
 
 ### Client paste text
 
@@ -345,11 +350,29 @@ nothing was found gets the same list with nothing suggested.
 | `key` | `<client-key>`, or with `key_id` `<client-key:ID (MASKED)>`: never a key's value |
 | `files` | Each file to write: `path` (from the home folder) and `content` |
 | `note` | What the files need besides themselves; left out when empty |
+| `model` | The model the files name for the tool to start with; left out when no model was asked for and core serves none (the files then hold `<model-id>`) |
+| `models` | The model names core serves now, for a person to choose `model` from |
 
 `{tool}` is the tool's ID (`claude-code`, `codex`, `opencode`, `pi`, `omp`) or another name for it
 (`claude`, `oh-my-pi`, `codex-cli`, or a setup package's ID such as `pluxy/pi-setup`, with the `/`
-written `%2F`), in any letter case. A caller on another machine whose `Host` header core cannot use gets 400 `invalid_request`. The optional query parameter `key_id` names a client key from `GET /client-keys`. 404
-`not_found` for a tool core has no text for, and for a `key_id` core does not hold.
+written `%2F`), in any letter case. A caller on another machine whose `Host` header core cannot use
+gets 400 `invalid_request`. Optional query parameters:
+
+- `key_id`: a client key ID from `GET /client-keys`; the placeholder then names that key.
+- `model`: the model the tool starts with (trimmed, at most 240 characters of valid UTF-8, no control
+  characters, else 400 `invalid_request`). Without `model`, core chooses the best match among the
+  models it serves: a model made for the tool (for Claude Code, one whose name holds `claude-opus`,
+  `claude-sonnet`, `claude`, `opus` or `sonnet`; for Codex, `codex` or `gpt-`), else the first chat
+  model (not an embedding, image, audio, speech, moderation or realtime model). When core serves no
+  chat model, `model` is left out and the files hold `<model-id>`.
+
+A coding tool asks for a model of its own unless told which one, and an account of another service
+serves none of those, so every tool's text names one: Claude Code's `model` and its three
+`ANTHROPIC_DEFAULT_*_MODEL` settings (`ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`
+and `ANTHROPIC_DEFAULT_HAIKU_MODEL`), Codex's `model`, and the default model of OpenCode, Pi and
+Oh My Pi.
+
+404 `not_found` for a tool core has no text for, and for a `key_id` core does not hold.
 
 ### Import
 
@@ -464,7 +487,7 @@ An account's credential goes only to the extension the account belongs to, the o
 | Member | Meaning |
 | --- | --- |
 | `disabled` | `true` or `false` |
-| `label` | The account's name for people: trimmed, one line, at most 64 characters (400 otherwise). `""` or `null` takes it away, which leaves the last label the provider gave the account (an imported credential file's e-mail address, for example), or none when it never gave one. An account stored before core kept the two apart keeps its old label as the provider's |
+| `label` | The account's name for people: trimmed, one line, at most 64 characters (400 otherwise). `""` or `null` takes it away, which leaves the last label the provider gave the account (an imported credential file's e-mail address, for example), or none when it never gave one. An account with no provider's label on record treats its label as the provider's |
 | `settings` | The extension's settings for the account, an object that replaces all of its settings (core passes them to the extension as they are); `null` removes them. A placeholder as `GET /accounts` shows it is accepted only where that secret is now: a list item may move within its list, a placeholder anywhere else is 400 `invalid_request`, and one that matches no secret the account's settings hold now (or that was made before core restarted) is 409 `conflict` |
 | `priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `proxy_url`, `headers`, `timeouts` | The account's routing fields, by their config names; `null` sets one back to its default |
 

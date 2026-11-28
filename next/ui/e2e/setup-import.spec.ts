@@ -44,8 +44,27 @@ test("a found CLIProxyAPI setup is previewed, imported, and the kind its account
   page,
 }) => {
   await openPanel(page, core);
+  // Setup starts a background scan on open (POST /setup/scan, or polls one already running) and
+  // reloads GET /setup until scanning is false; a later scan clears an open preview, so wait for
+  // that opening scan to settle before Preview import.
+  let scanStarted = false;
+  const openingScanDone = page.waitForResponse(async (r) => {
+    const url = r.url();
+    if (r.request().method() === "POST" && url.endsWith("/v0/management/setup/scan")) {
+      scanStarted = true;
+      return false;
+    }
+    if (r.request().method() !== "GET" || !url.endsWith("/v0/management/setup")) return false;
+    const body = (await r.json().catch(() => null)) as { scanning?: boolean } | null;
+    if (body?.scanning === true) {
+      scanStarted = true;
+      return false;
+    }
+    return scanStarted && body?.scanning === false;
+  });
   await signIn(page, core);
   await expect(page.getByRole("heading", { level: 1, name: "Set up pluxy" })).toBeVisible();
+  await openingScanDone;
 
   const line = page.locator('[data-part="setup-import"]');
   await expect(line).toContainText("Found a CLIProxyAPI setup with 3 account files.");

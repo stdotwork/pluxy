@@ -1,12 +1,12 @@
-// AccountRow: one account on one line, the same on every page. Its group's mark and condition
-// word, its name, its provider and plan, then its limits; a row that needs the person, waits, or
-// cools down on a model says why under the name and has its one fix at the end.
+// AccountRow: one account, the same on every page. Its provider's mark with a dot for its condition
+// on the corner, its name, and under the name its condition word and why (or, when it simply
+// serves, its provider); then its plan, its limits and its one fix.
 
 import { useEffect, useState } from "preact/hooks";
 import type { Account } from "../api/accounts";
 import type { QuotaLimit } from "../api/quota";
 import { Icon, type IconName } from "../icons";
-import { Meter } from "../meter";
+import { Meter, meterTone, useThresholds } from "../meter";
 import { accountIdentities, usePrivacy } from "../privacy";
 import { strings } from "../strings";
 import { shortDuration } from "../time";
@@ -26,11 +26,13 @@ import {
   providerName,
   resetsIn,
   rowWindows,
+  uncheckedReason,
   uncheckedWord,
   windowName,
   windowShort,
 } from "./account";
 import { type Outcome, useNaming, useOutcome, type Windows } from "./hooks";
+import { ProviderMark } from "./providerMark";
 
 const t = strings("parts.accountRow", {
   left: "{percent}% left",
@@ -38,6 +40,7 @@ const t = strings("parts.accountRow", {
   noLimit: "No limit",
   reading: "Reading limits…",
   none: "No limits reported",
+  notReported: "Not reported by {provider}",
   unavailable: "Limits unavailable",
   notRead: "Limits not read",
   notReadTitle: "Open the account to see its limits.",
@@ -56,31 +59,52 @@ const MARK: Record<Group, IconName> = {
   off: "off",
 };
 
-/** A group's mark: its shape, in its state colour, with the condition word as its name. */
-export function GroupMark(props: { c: Condition; unchecked?: boolean }) {
+/** A dot in a state's colour, named by its word for assistive technology. */
+function Dot(props: { label: string }) {
+  return (
+    <svg class="state-dot" viewBox="0 0 10 10" role="img" aria-label={props.label} focusable="false">
+      <circle cx="5" cy="5" r="4" />
+    </svg>
+  );
+}
+
+/**
+ * A group's mark: its shape, in its state colour, with the condition word as its name. dot draws
+ * it as a dot instead, for the corner of a provider's mark (AccountRow), where the word is beside it.
+ */
+export function GroupMark(props: { c: Condition; unchecked?: boolean; dot?: boolean }) {
   // A condition that waits on a status pluxy could not read: a muted mark, named Not checked.
   if (props.unchecked) {
     return (
-      <span class="group-mark" data-group="unchecked">
-        <Icon name="waiting" label={uncheckedWord()} />
+      <span class="group-mark" data-group="unchecked" data-dot={props.dot ? "" : undefined}>
+        {props.dot ? <Dot label={uncheckedWord()} /> : <Icon name="waiting" label={uncheckedWord()} />}
       </span>
     );
   }
-  // An account that serves but cools down on a model is marked as waiting: something is held back.
-  const group = props.c.kind === "serving" && props.c.resting.length > 0 ? "waiting" : props.c.group;
+  // An account cooling on one model still serves other models: its mark stays serving while the
+  // reason sentence names the model that cools down.
+  const group = props.c.group;
   return (
-    <span class="group-mark" data-group={group}>
-      <Icon name={MARK[group]} label={conditionWord(props.c)} />
+    <span class="group-mark" data-group={group} data-dot={props.dot ? "" : undefined}>
+      {props.dot ? (
+        <Dot label={conditionWord(props.c)} />
+      ) : (
+        <Icon name={MARK[group]} label={conditionWord(props.c)} />
+      )}
     </span>
   );
 }
 
-/** The plan word, by ink weight: data-plan-tier is top, mid or free. */
-export function PlanPill(props: { plan: string }) {
+/**
+ * The plan word as a pill in one of four finishes by its tier at its provider (planTier):
+ * data-plan-tier is top (a warm metal), high (a cool metal), mid (an outline) or free (plain text).
+ * provider is the account's extension ID; without it the tier comes from the word alone.
+ */
+export function PlanPill(props: { plan: string; provider?: string }) {
   const plan = props.plan.trim();
   if (!plan) return null;
   return (
-    <span class="plan-pill" data-part="plan-pill" data-plan-tier={planTier(plan)}>
+    <span class="plan-pill" data-part="plan-pill" data-plan-tier={planTier(plan, props.provider)}>
       {plan}
     </span>
   );
@@ -108,6 +132,8 @@ export function Limits(props: {
   account: string;
   identities?: readonly string[];
   now?: number;
+  /** The provider's name, for "Not reported by Claude" when it reports no limits. */
+  provider?: string;
 }) {
   const p = usePrivacy();
   const w = props.windows;
@@ -120,7 +146,14 @@ export function Limits(props: {
     );
   }
   if (w.state !== "read" || rowWindows(w.limits).length === 0) {
-    const word = w.state === "reading" ? t("reading") : w.state === "failed" ? t("unavailable") : t("none");
+    const word =
+      w.state === "reading"
+        ? t("reading")
+        : w.state === "failed"
+          ? t("unavailable")
+          : props.provider
+            ? t("notReported", { provider: props.provider })
+            : t("none");
     return (
       <span
         class="limits"
@@ -148,6 +181,7 @@ export function Limits(props: {
 export function LimitLine(props: { limit: QuotaLimit; account: string; now?: number; long?: boolean }) {
   const l = props.limit;
   const now = props.now ?? Date.now();
+  const thresholds = useThresholds();
   const name = windowName(l);
   const left = leftPercent(l);
   const reset = resetsIn(l, now);
@@ -168,7 +202,12 @@ export function LimitLine(props: { limit: QuotaLimit; account: string; now?: num
         ? t("usedUp")
         : t("left", { percent: left });
   return (
-    <span class="limit" title={title}>
+    // The share left stays in text ink until its gauge turns amber or red (data-tone).
+    <span
+      class="limit"
+      title={title}
+      data-tone={left === undefined ? undefined : meterTone(left, thresholds)}
+    >
       <span class="limit-name">{props.long ? windowName(l) : windowShort(l)}</span>
       {left !== undefined ? (
         <Meter
@@ -192,6 +231,8 @@ function FixButton(props: {
   c: Condition;
   name: string;
   identities: readonly string[];
+  /** Draw a filled fix outlined: a view has one filled button, and another row has it. */
+  quiet?: boolean;
   onTurnOn: (id: string) => Promise<Outcome> | Outcome;
   onClearCooldown: (id: string) => Promise<Outcome> | Outcome;
 }) {
@@ -200,14 +241,15 @@ function FixButton(props: {
   const [error, setError] = useState<string>();
   const fix = accountFix(props.account, props.c);
   if (!fix) return null;
+  const variant = props.quiet && fix.variant === "primary" ? "quiet" : fix.variant;
   const label = `${fix.label}: ${props.name}`;
   const button = fix.href ? (
-    <a class="btn" data-part="button" data-variant={fix.variant} href={fix.href} aria-label={label}>
+    <a class="btn" data-part="button" data-variant={variant} href={fix.href} aria-label={label}>
       {fix.label}
     </a>
   ) : (
     <Button
-      variant={fix.variant}
+      variant={variant}
       label={label}
       onClick={async () => {
         setError(undefined);
@@ -243,6 +285,9 @@ function FixButton(props: {
  * builds its own links, so every page sends a fix to the same place. running is the extensions
  * core runs, for Provider stopped. unchecked marks a row whose condition waits on a status the
  * page could not read (conditionUnchecked). requests is the week's count once read: 0 shows.
+ * grouped leaves the provider's name out of the line under the name, for a list already headed by
+ * its provider. quietFix draws the fix outlined even when it repairs something (another row on the
+ * view has the filled one).
  */
 export function AccountRow(props: {
   account: Account;
@@ -251,6 +296,8 @@ export function AccountRow(props: {
   requests?: number;
   running?: ReadonlySet<string>;
   unchecked?: boolean;
+  grouped?: boolean;
+  quietFix?: boolean;
   onTurnOn: (id: string) => Promise<Outcome> | Outcome;
   onClearCooldown: (id: string) => Promise<Outcome> | Outcome;
 }) {
@@ -265,7 +312,7 @@ export function AccountRow(props: {
   const ids = [...accountIdentities(a), a.id];
   const href = accountHref(a.id);
   const tall = conditionTall(c);
-  const reason = tall ? accountReason(a, c, now) : undefined;
+  const reason = props.unchecked ? uncheckedReason(a) : tall ? accountReason(a, c, now) : undefined;
   // An account that needs the person or is turned off takes no requests: its limits are not read.
   const limited = c.group === "serving" || c.group === "waiting";
   const fix = (
@@ -274,11 +321,16 @@ export function AccountRow(props: {
       c={c}
       name={name}
       identities={ids}
+      quiet={props.quietFix}
       onTurnOn={props.onTurnOn}
       onClearCooldown={props.onClearCooldown}
     />
   );
-  const plan = limited ? props.windows?.plan : undefined;
+  const plan = props.windows?.plan ?? (a.quota?.quota?.plan?.trim() || undefined);
+  const provider = a.extension ? providerName(a.extension) : undefined;
+  // The condition in words beside its dot, so the colour never says it alone. The dot's name says
+  // it to assistive technology, so the word is hidden from it.
+  const word = props.unchecked ? uncheckedWord() : conditionWord(c);
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents: a pointer shortcut only; the name's link is the way to the page by keyboard
     // biome-ignore lint/a11y/noStaticElementInteractions: the same shortcut; the row is not a control of its own
@@ -296,32 +348,42 @@ export function AccountRow(props: {
       }}
     >
       <div class="account-grid">
-        <GroupMark c={c} unchecked={props.unchecked} />
+        <span class="account-mark">
+          {/* Named when the line under the name does not say the provider. */}
+          <ProviderMark extension={a.extension} named={!!reason && !props.grouped} />
+          <GroupMark c={c} unchecked={props.unchecked} dot />
+        </span>
         <span class="account-who">
           <span class="account-line">
             <a class="account-name" href={href} title={name}>
               {name}
             </a>
-            <span class="account-meta">
-              {/* An account pluxy cannot read names no provider: nothing to say here. */}
-              {a.extension && <span class="account-provider">{providerName(a.extension)}</span>}
-              {address && (
-                <span class="account-address" title={address}>
-                  {address}
-                </span>
-              )}
-              {plan && <PlanPill plan={plan} />}
-            </span>
           </span>
-          {reason && (
-            <span class="account-reason" title={p.text(reason, ids)}>
-              {p.text(reason, ids)}
+          <span class="account-sub">
+            <span class="account-word" aria-hidden="true">
+              {word}
             </span>
-          )}
+            {reason ? (
+              <span class="account-reason" title={p.text(reason, ids)}>
+                {p.text(reason, ids)}
+              </span>
+            ) : (
+              <span class="account-meta">
+                {/* An account pluxy cannot read names no provider: nothing to say here. */}
+                {provider && !props.grouped && <span class="account-provider">{provider}</span>}
+                {address && (
+                  <span class="account-address" title={address}>
+                    {address}
+                  </span>
+                )}
+              </span>
+            )}
+          </span>
         </span>
+        <span class="account-plan">{plan && <PlanPill plan={plan} provider={a.extension} />}</span>
         <span class="account-side">
           {limited ? (
-            <Limits windows={props.windows} account={name} identities={ids} now={now} />
+            <Limits windows={props.windows} account={name} identities={ids} now={now} provider={provider} />
           ) : (
             !props.wide && fix
           )}

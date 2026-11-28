@@ -13,6 +13,17 @@ async function openAddAccount(page: Page) {
   await goTo(page, "Add an account");
 }
 
+/** A provider's tile, as a person picks it before its ways show. */
+const tile = (page: Page, extension: string) =>
+  page.locator(`[data-part="provider-tile"][data-extension="${extension}"]`);
+
+/** Add an account with the test provider picked, so its ways show. */
+async function openAlpha(page: Page) {
+  await openAddAccount(page);
+  await tile(page, "test/alpha").click();
+  await expect(page.getByText("Choose how to add it.")).toBeVisible();
+}
+
 /** One of the test provider's ways to sign in, by its own label. */
 const way = (page: Page, label: string) =>
   page.locator('[data-extension="test/alpha"] [data-part="method"]').filter({ hasText: label });
@@ -20,7 +31,7 @@ const way = (page: Page, label: string) =>
 const start = (page: Page, label: string) => way(page, label).getByRole("button", { name: "Start" });
 
 async function startBrowser(page: Page) {
-  await openAddAccount(page);
+  await openAlpha(page);
   await start(page, "Test browser").click();
   await expect(page.getByLabel("Address the browser ended on")).toBeVisible();
 }
@@ -35,28 +46,65 @@ const loginRequests = (page: Page) => {
   return seen;
 };
 
-test("Add an account asks for no ID: each way to sign in is a row under its provider, with how it signs in", async ({
+test("Add an account asks for no ID: the providers are tiles, then a provider's ways are rows with a sentence", async ({
   page,
 }) => {
   await openAddAccount(page);
   await expect(page.getByRole("heading", { level: 1, name: "Add an account" })).toBeVisible();
-  await expect(page.getByText("Choose how to add it.")).toBeVisible();
+  await expect(page.getByText("Which account do you want to add?")).toBeVisible();
+  await expect(page.getByText("Choose how to add it.")).toHaveCount(0);
   await expect(page.getByLabel("Account ID")).toHaveCount(0);
   await expect(page.getByRole("main").locator("input:not([type=file])")).toHaveCount(0);
+  // The test providers are not main kinds, so the first four core lists are the tiles and the rest sit under More.
+  const listed = (
+    await core.mgmt<{ extensions: { methods: unknown[] }[] }>("GET", "/login-methods")
+  ).body.extensions.filter((extension) => extension.methods.length > 0).length;
+  const tiles = page.locator('[data-part="provider-tile"]');
+  await expect(tiles).toHaveCount(Math.min(listed, 4));
+  await expect(tile(page, "test/alpha")).toContainText("Alpha");
+  await expect(tile(page, "test/alpha")).toContainText("Browser sign-in, device code or API key");
+  await expect(page.locator('[data-part="method"]')).toHaveCount(0);
+  const more = page.getByRole("button", { name: /More providers/ });
+  await expect(more).toHaveCount(listed > 4 ? 1 : 0);
+  if (listed > 4) {
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+    await expect(tiles).toHaveCount(listed);
+  }
+  await expect(page.getByRole("main")).not.toContainText("test/alpha");
+  await expect(page.getByText("Have auth files from CLIProxyAPI?")).toBeVisible();
+  await expect(page.getByText("Or bring them from CLIProxyAPI")).toBeVisible();
+
+  // The ways of the picked provider only; picking from the keyboard moves focus to the new step.
+  await tile(page, "test/alpha").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Choose how to add it.")).toBeVisible();
+  await expect(start(page, "Test browser")).toBeFocused();
+  await expect(page.locator('[data-part="method-group"]')).toHaveCount(1);
   await expect(
     page.locator('[data-extension="test/alpha"]').getByRole("heading", { name: "Alpha" }),
   ).toBeVisible();
-  await expect(way(page, "Test browser")).toContainText("Opens your browser");
-  await expect(way(page, "Test device")).toContainText("Shows a code to enter");
-  await expect(way(page, "Test API key")).toContainText("Uses an API key");
-  await expect(page.getByRole("main")).not.toContainText("test/alpha");
+  await expect(way(page, "Test browser")).toContainText("Sign in with your account in your browser.");
+  await expect(way(page, "Test browser")).toContainText("Recommended");
+  await expect(way(page, "Test device")).toContainText("Get a code to enter on another device");
+  await expect(way(page, "Test API key")).toContainText("Paste an API key from the service.");
+  await expect(start(page, "Test browser")).toHaveAttribute("data-variant", "primary");
+  await expect(start(page, "Test browser")).toHaveAccessibleName("Start: Test browser (Recommended)");
+  await expect(start(page, "Test device")).not.toHaveAttribute("data-variant", "primary");
+  await expect(start(page, "Test device")).toHaveAccessibleName("Start: Test device");
   await expect(page.getByText("Have auth files from CLIProxyAPI?")).toBeVisible();
+
+  // Back to the providers, with the tile just left in focus.
+  await page.getByRole("button", { name: "All providers" }).click();
+  await expect(page.getByText("Which account do you want to add?")).toBeVisible();
+  await expect(tile(page, "test/alpha")).toBeFocused();
 });
 
 test("an API-key account is added with no ID, named with Save name, and the name shows on the list", async ({
   page,
 }) => {
-  await openAddAccount(page);
+  await openAlpha(page);
   const started = page.waitForRequest(
     (r) => r.method() === "POST" && r.url().endsWith("/v0/management/accounts"),
   );
@@ -78,8 +126,10 @@ test("an API-key account is added with no ID, named with Save name, and the name
   expect(body).toEqual({ extension: "test/alpha", method: "api_key", input: { api_key: "test-good-key" } });
   expect(body).not.toHaveProperty("id");
 
-  // Added, under the name the provider gave it, ready to be renamed.
-  await expect(page.getByRole("status").filter({ hasText: "Added Test account." })).toBeVisible();
+  // Added, under the name and plan the provider gave it, ready to be renamed.
+  const addedStatus = page.getByRole("status").filter({ hasText: "Added Test account (Alpha, Test plan)" });
+  await expect(addedStatus).toBeVisible();
+  await expect(addedStatus.locator('[data-part="plan-pill"]')).toHaveText("Test plan");
   const name = page.getByLabel("Name", { exact: true });
   await expect(name).toHaveValue("Test account");
   await expect(page.getByRole("button", { name: "Save name" })).toBeDisabled();
@@ -109,7 +159,7 @@ test("an API-key account is added with no ID, named with Save name, and the name
 });
 
 test("a key the provider refuses is said, and Try again goes back to the ways", async ({ page }) => {
-  await openAddAccount(page);
+  await openAlpha(page);
   await start(page, "Test API key").click();
   await page.getByLabel("API key", { exact: true }).fill("bad");
   await page.getByRole("button", { name: "Continue", exact: true }).click();
@@ -145,7 +195,7 @@ test("a browser sign-in takes the address and says why the provider refused it",
 });
 
 test("Cancel stops a browser sign-in and goes back to the ways to sign in", async ({ page }) => {
-  await openAddAccount(page);
+  await openAlpha(page);
   const started = page.waitForResponse(
     (r) => r.url().includes("/v0/management/accounts") && r.request().method() === "POST",
   );
@@ -241,7 +291,7 @@ test("closing the page cancels a pending login once", async ({ page }) => {
 test("a device sign-in shows its code, adds the account, and is not cancelled when the page is left", async ({
   page,
 }) => {
-  await openAddAccount(page);
+  await openAlpha(page);
   await start(page, "Test device").click();
   await expect(page.locator('[data-part="device-code"]')).toHaveText("TEST-1234");
   await expect(page.locator('[data-part="device-code"]')).toHaveAttribute("aria-live", "polite");
@@ -250,7 +300,9 @@ test("a device sign-in shows its code, adds the account, and is not cancelled wh
   await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
   await expect(page.getByText(/^Time left: \d+:\d{2}$/)).toBeVisible();
   await expect(page.getByText("Waiting for sign-in…", { exact: true })).toBeVisible();
-  await expect(page.getByRole("status").filter({ hasText: "Added Test account." })).toBeVisible({
+  await expect(
+    page.getByRole("status").filter({ hasText: "Added Test account (Alpha, Test plan)" }),
+  ).toBeVisible({
     timeout: 15_000,
   });
   const cancels: string[] = [];
@@ -264,7 +316,7 @@ test("a device sign-in shows its code, adds the account, and is not cancelled wh
 });
 
 test("a second tap on a way starts one login, and a good address is cleared once sent", async ({ page }) => {
-  await openAddAccount(page);
+  await openAlpha(page);
   let starts = 0;
   page.on("request", (r) => {
     if (r.method() === "POST" && r.url().endsWith("/management/accounts")) starts++;
@@ -325,7 +377,7 @@ test("an optional input sits under More options, and what is typed there is sent
     method.inputs = [...(method.inputs ?? []), { name: "region", label: "Region", optional: true }];
     await route.fulfill({ response, json: body });
   });
-  await openAddAccount(page);
+  await openAlpha(page);
   await start(page, "Test API key").click();
   const more = page.locator('[data-part="more-options"]');
   await expect(more.locator("summary")).toHaveText("More options");
@@ -347,7 +399,7 @@ test("an optional input sits under More options, and what is typed there is sent
 });
 
 test("a secret file clears the file control and a file over one MiB is refused", async ({ page }) => {
-  await openAddAccount(page);
+  await openAlpha(page);
   await start(page, "Test API key").click();
   const secret = page.getByLabel("API key", { exact: true });
   await expect(secret).toBeFocused();
@@ -377,7 +429,7 @@ test("a secret file clears the file control and a file over one MiB is refused",
 test("a pending login is polled every two seconds only while visible, and not after Cancel", async ({
   page,
 }) => {
-  await openAddAccount(page);
+  await openAlpha(page);
   await page.clock.install();
   const reads: string[] = [];
   page.on("request", (request) => {
@@ -426,7 +478,9 @@ test("a pending login is polled every two seconds only while visible, and not af
   expect(reads).toHaveLength(count);
 });
 
-test("two providers' ways to sign in sit under each provider's own name", async ({ page }) => {
+test("two providers are two tiles named for people, and each one's ways sit under its own name", async ({
+  page,
+}) => {
   const apiKey = { method: "api_key", kind: "api_key", label: "API key", inputs: [] };
   await page.route("**/v0/management/login-methods", (route) =>
     route.fulfill({
@@ -436,18 +490,28 @@ test("two providers' ways to sign in sit under each provider's own name", async 
             extension: "pluxy/claude",
             methods: [{ method: "browser", kind: "browser", label: "Claude subscription" }, apiKey],
           },
+          { extension: "pluxy/codex", methods: [apiKey] },
           { extension: "pluxy/gemini", methods: [apiKey] },
         ],
       },
     }),
   );
   await openAddAccount(page);
+  const tiles = page.locator('[data-part="provider-tile"]');
+  await expect(tiles).toHaveCount(3);
+  await expect(tiles.nth(0)).toContainText("Claude");
+  await expect(tiles.nth(1)).toContainText("ChatGPT (Codex)");
+  await expect(tiles.nth(2)).toContainText("Gemini");
+  await expect(page.getByRole("button", { name: /More providers/ })).toHaveCount(0);
+  await tiles.nth(0).click();
   const groups = page.locator('[data-part="method-group"]');
-  await expect(groups).toHaveCount(2);
-  await expect(groups.nth(0).getByRole("heading", { name: "Claude" })).toBeVisible();
-  await expect(groups.nth(1).getByRole("heading", { name: "Gemini" })).toBeVisible();
-  await expect(groups.nth(0).locator("strong")).toHaveText(["Claude subscription", "API key"]);
-  await expect(groups.nth(1).locator("strong")).toHaveText(["API key"]);
+  await expect(groups).toHaveCount(1);
+  await expect(groups.getByRole("heading", { name: "Claude" })).toBeVisible();
+  await expect(groups.locator("strong")).toHaveText(["Claude subscription Recommended", "API key"]);
+  await page.getByRole("button", { name: "All providers" }).click();
+  await tiles.nth(2).click();
+  await expect(groups.getByRole("heading", { name: "Gemini" })).toBeVisible();
+  await expect(groups.locator("strong")).toHaveText(["API key"]);
   await expect(page.getByRole("main")).not.toContainText("pluxy/");
 });
 

@@ -65,7 +65,7 @@
 
   .order-provider-name {
     margin: 0 0 var(--s);
-    font-size: var(--px-font-size-body);
+    font-size: var(--px-font-size);
     font-weight: var(--px-font-weight-strong);
   }
 
@@ -235,7 +235,7 @@
     margin-top: calc(var(--s) * 4);
     padding: calc(var(--s) * 3);
     border: var(--px-shape-border) solid var(--px-color-border);
-    border-radius: var(--px-shape-radius);
+    border-radius: var(--r-card);
   }
 
   .fallback-steps-label {
