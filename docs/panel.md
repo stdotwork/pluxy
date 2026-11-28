@@ -278,9 +278,9 @@ single notice linking to **Turn it on in Config** (`#/config/logging`).
     alias on {account}** links (opening `#/accounts/<id>?alias=<model>`) or **Open {account}** for
     config-file accounts, plus a link to **Tools**.
   - **Attempts** list when more than one attempt ran.
-  - The request's facts: **Time**, **Account**, **Provider**, **Model used** (when different from requested),
-    **Key**, **Path**, **Tokens** (`in`, `out`, `cached`), and **Trace** (links to `#/logs/<trace>`
-    for failed requests or when `logs.request_log` is on; otherwise copyable text).
+  - The request's facts: **Time**, **Account**, **Provider**, **Model used** (when different from
+    requested), **Key**, **Path**, **Tokens** (`in`, `out`, `cached`), and **Trace** (links to
+    `#/logs/<trace>` for failed requests or when `logs.request_log` is on; otherwise copyable text).
   - Next-step button: **Open {account}** or **Open its log**.
 - **Spends or deletes:** nothing.
 - **Settings read:** `usage.enabled`, `usage.max_events`, `usage.max_age_ms`
