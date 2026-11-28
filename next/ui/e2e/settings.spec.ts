@@ -232,3 +232,44 @@ test("the topics are a select in a small window, on the current topic", async ({
   await select.selectOption({ label: "Themes" });
   await expect(pageTitle(page)).toHaveText("Themes");
 });
+
+test("Themes search narrows only setting rows, keeping the gallery, Save/Remove and file controls visible", async ({
+  page,
+}) => {
+  await open(page, "", "light", SIZES[0]);
+  await goTo(page, "Themes");
+  await page
+    .getByLabel("Theme file", { exact: true })
+    .setInputFiles(join(fixtures, "t3-docs-nightfall.json"));
+  await expect(page.getByText("Added and turned on Nightfall.")).toBeVisible();
+  try {
+    const search = page.getByRole("searchbox", { name: "Search settings", exact: true });
+    // A query matching one layout row narrows Layout without hiding non-row controls.
+    await search.fill("width");
+    await expect(page.getByRole("region", { name: "Layout", exact: true })).toBeVisible();
+    await expect(page.locator(".setting-name", { hasText: /^Width$/ })).toBeVisible();
+    await expect(page.locator(".setting-name", { hasText: /^Navigation$/ })).toHaveCount(0);
+    await expect(page.getByRole("radiogroup", { name: "Theme" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save theme file", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Remove Nightfall", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Theme file", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Or paste a theme file")).toBeVisible();
+    await expect(page.getByLabel("Your CSS")).toBeVisible();
+    await expect(page.getByText("No setting matches that.")).toBeHidden();
+
+    // A query matching no setting row hides Layout and shows the no-match line, while keeping the
+    // gallery, Save/Remove, file controls and Your CSS visible.
+    await search.fill("theme");
+    await expect(page.getByText("No setting matches that.")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Layout", exact: true })).toBeHidden();
+    await expect(page.getByRole("radiogroup", { name: "Theme" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save theme file", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Remove Nightfall", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Theme file", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Or paste a theme file")).toBeVisible();
+    await expect(page.getByLabel("Your CSS")).toBeVisible();
+  } finally {
+    await core.mgmt("PUT", "/theme", { id: "" });
+    await core.mgmt("DELETE", "/themes/t3/nightfall");
+  }
+});

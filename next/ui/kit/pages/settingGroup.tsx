@@ -30,7 +30,8 @@ export function SettingsColumn(props: { children: ComponentChildren; class?: str
 
 /**
  * A field above the groups it holds that narrows every setting row in them to the ones that match
- * what is typed (SettingRow), and says so when no row is left.
+ * what is typed (SettingRow), and says so when no row is left. Groups with controls that are not
+ * setting rows stay visible.
  */
 export function SettingsSearchScope(props: { children: ComponentChildren }) {
   const [query, setQuery] = useState("");
@@ -48,10 +49,10 @@ export function SettingsSearchScope(props: { children: ComponentChildren }) {
           onInput={(e) => setQuery(e.currentTarget.value)}
         />
       </label>
-      <SettingsSearchContext.Provider value={asked}>{props.children}</SettingsSearchContext.Provider>
       <p class="settings-none" role="status">
         {asked ? t("none") : ""}
       </p>
+      <SettingsSearchContext.Provider value={asked}>{props.children}</SettingsSearchContext.Provider>
     </div>
   );
 }

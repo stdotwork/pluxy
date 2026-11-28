@@ -166,9 +166,10 @@
     }
   }
 
-  /* Search: a field above the groups. While it holds words, a group with no matching row is gone
-     (the Themes gallery and its drop zone go with it), and a sentence says when no row is
-     left. */
+  /* Search: a field above the groups. It narrows only setting rows: a group with no matching row
+     and no other non-empty control is hidden, while groups holding non-row controls (the Themes
+     gallery, file controls, a new management key) stay visible. A sentence says when no setting
+     row is left. */
   .settings-search {
     display: flex;
     align-items: center;
@@ -195,7 +196,8 @@
     color: var(--px-color-text);
   }
 
-  .settings-groups[data-searching] .setting-group:not(:has(.setting-row)) {
+  .settings-groups[data-searching]
+    .setting-group:not(:has(> .setting-group-card > :not(:empty), > .setting-group-body > :not(:empty))) {
     display: none;
   }
 

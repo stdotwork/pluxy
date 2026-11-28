@@ -25,7 +25,8 @@
   .setting-group-card > .config-key-notice {
     margin: 0 calc(var(--s) * 4) calc(var(--s) * 3);
   }
-  .setting-group-card > .config-key-said > .notice:first-child {
+  .setting-group-card > .config-key-said > .notice:first-child,
+  .setting-group-card > .config-key-notice:first-child {
     margin-top: calc(var(--s) * 3);
   }
   /* A fixed width: the row's control column fits its content, so a share of it would be no width. */
