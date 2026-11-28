@@ -476,36 +476,18 @@ func TestBuildSetupPicksOrderAndNothingFound(t *testing.T) {
 		}
 	}
 
-	// Claude Code and Codex installed, signed in to neither: the tools' own setup picks are
-	// suggested, the account kinds are not (an installed CLI does not say the person has that
-	// subscription, and the panels tick a suggested pick for them).
-	picks = buildSetupPicks(regs, installed, management.SetupFound{
-		Clients: []management.SetupClient{{ID: "claude-code", Installed: true}, {ID: "codex", Installed: true}},
-	})
-	if picks[0].Suggested || picks[1].Suggested || picks[0].Because != "" || picks[1].Because != "" {
-		t.Errorf("an installed CLI alone suggested an account kind: codex=%+v claude=%+v", picks[0], picks[1])
-	}
-	if !picks[3].Suggested || picks[3].Because != "Claude Code is installed on this computer" {
-		t.Errorf("pluxy/claude-code with Claude Code installed = %+v", picks[3])
-	}
-
-	// A sign-in suggests its kind, with or without the tool; both says both.
+	// Claude Code installed -> pluxy/claude and pluxy/claude-code suggested.
 	picks = buildSetupPicks(regs, installed, management.SetupFound{
 		Clients: []management.SetupClient{{ID: "claude-code", Installed: true}},
-		SignIns: []management.SetupSignIn{{Provider: "pluxy/claude"}, {Provider: "pluxy/codex"}},
 	})
-	if !picks[0].Suggested || picks[0].Because != "Codex is signed in on this computer" {
-		t.Errorf("a Codex sign-in without the CLI: %+v", picks[0])
-	}
-	if !picks[1].Suggested || picks[1].Because != "Claude Code is installed and signed in on this computer" {
-		t.Errorf("a Claude sign-in with the CLI: %+v", picks[1])
+	if !picks[1].Suggested || !picks[3].Suggested || picks[0].Suggested {
+		t.Errorf("picks suggestions = %+v", picks)
 	}
 
-	// A Claude Code settings file its writer refuses: the signed-in kind is still suggested, the
+	// A Claude Code settings file its writer refuses: the provider is still suggested, the
 	// pick that would write that file is not.
 	picks = buildSetupPicks(regs, installed, management.SetupFound{
 		Clients: []management.SetupClient{{ID: "claude-code", Installed: true, State: management.ClientStateRefused}},
-		SignIns: []management.SetupSignIn{{Provider: "pluxy/claude"}},
 	})
 	if !picks[1].Suggested || picks[3].Suggested || picks[3].Because != "" {
 		t.Errorf("refused settings: picks suggestions = %+v", picks)

@@ -78,12 +78,16 @@ const t = strings("claudeCode", {
   ranges:
     "Opus, Sonnet and Haiku each need a model, the auto-compact window a whole number from 100000 to 1000000, and the percentage a whole number from 1 to 100.",
   folderWsl: "A folder in the distribution, such as {example}.",
+  firstRun:
+    "Claude Code has not run here yet. You can connect it now: Connect makes Claude Code's folder and puts pluxy's settings in it. When Claude Code first starts, it asks you to pick a text style and whether you trust your project folder, but not to sign in.",
 });
 
 const LABELS: Record<Role, string> = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable" };
 
 interface Preview extends ToolPreview {
   settings: ReadBack;
+  /** The folder Connect makes, `~/.claude`: Claude Code has not run here yet, so there is none. */
+  create_folder?: string;
 }
 
 export function ClaudeCodePage() {
@@ -149,7 +153,10 @@ export function ClaudeCodePage() {
             ? WINDOW_DEFAULT
             : form.window)(Object.values({ ...form.oneM, [role]: on }).some(Boolean)),
     });
+  // Claude Code has not run here yet: Connect makes its folder, which the confirmation names.
+  const unmade = s.preview?.create_folder;
   const input = () => ({
+    ...(unmade ? { create_folder: unmade } : {}),
     ...Object.fromEntries(
       ROLES.flatMap((r) => [
         [r, form.models[r].trim()],
@@ -180,7 +187,12 @@ export function ClaudeCodePage() {
         paths={[path]}
         held={held}
         form={input}
-        lines={<LinuxBuildOffer error={s.failed} pkg={PACKAGE} record={env.record} onInstalled={s.load} />}
+        lines={
+          <>
+            {unmade && !s.stale && <p>{t("firstRun")}</p>}
+            <LinuxBuildOffer error={s.failed} pkg={PACKAGE} record={env.record} onInstalled={s.load} />
+          </>
+        }
       />
       <EnvironmentBlock env={env} tool={t("title")} disabled={s.locked} />
       {s.addon === "on" && s.settings && !refused && (

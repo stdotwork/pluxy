@@ -1,5 +1,5 @@
 # pluxy
-
+(WIP)
 pluxy (plug + proxy) is a proxy that runs on your machine and serves the OpenAI, Anthropic, Gemini
 and Codex APIs from the accounts you already have: subscription sign-ins and API keys. Your coding
 tools talk to pluxy, and pluxy picks an account for each request.

@@ -22,6 +22,7 @@
     "allow-core-rollback",
     "allow-core-adopt",
     "allow-key-entry",
+    "allow-certificate-choose",
     "allow-management-key-rotate",
     "allow-sign-out",
     "allow-page-open",

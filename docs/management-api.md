@@ -326,16 +326,17 @@ by the config file's path.
 ```json
 [
   {"id": "pluxy/claude", "kind": "provider", "title": "Claude", "summary": "Claude subscriptions and API keys",
-   "installed": false, "suggested": true, "because": "Claude Code is installed and signed in on this computer"}
+   "installed": false, "suggested": true, "because": "Claude Code is installed on this computer"}
 ]
 ```
 
 `suggested` is true only for a pick that something found on the machine points to. A provider pick (an
-account kind such as Claude or Codex) is pointed to by a sign-in found there (`~/.claude/.credentials.json`
-or `~/.codex/auth.json`), not by its tool being installed: an installed tool does not say the person
-has that subscription. A pick that sets up a tool is pointed to by the tool being installed (unless
-that tool's config is in state `refused`). A machine where nothing was found gets the same list with
-nothing suggested.
+account kind such as Claude or Codex) is pointed to by its tool being installed or by a sign-in found
+there (`~/.claude/.credentials.json` or `~/.codex/auth.json`); `because` says which ("Claude Code is
+installed and signed in on this computer", "Claude Code is installed on this computer" or "Claude Code
+is signed in on this computer"). A pick that sets up a tool is pointed to by the tool being installed
+(unless that tool's config is in state `refused`). A machine where nothing was found gets the same list
+with nothing suggested.
 
 ### Client paste text
 
