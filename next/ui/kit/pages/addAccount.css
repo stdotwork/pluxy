@@ -7,45 +7,15 @@
     margin: 0;
   }
 
-  /* ---- a provider's mark: its first letter on a tile in the provider's own colour ---------- */
-  .provider-mark {
-    --hue: var(--px-color-chart-1);
-    flex: none;
-    display: inline-grid;
-    place-items: center;
+  /* ---- a provider's mark (the shared part), larger on a tile ----------------------------------- */
+  [data-part="provider-tile"] .provider-mark {
     width: 32px;
     height: 32px;
-    border: var(--px-shape-border) solid color-mix(in srgb, var(--hue) 40%, transparent);
-    border-radius: var(--r-small);
-    background: color-mix(in srgb, var(--hue) 16%, var(--px-color-card));
-    color: var(--px-color-text);
-    font-size: var(--px-font-size);
-    font-weight: var(--px-font-weight-strong);
-    line-height: 1;
   }
 
-  .provider-mark[data-hue="1"] {
-    --hue: var(--px-color-chart-1);
-  }
-
-  .provider-mark[data-hue="2"] {
-    --hue: var(--px-color-chart-2);
-  }
-
-  .provider-mark[data-hue="3"] {
-    --hue: var(--px-color-chart-3);
-  }
-
-  .provider-mark[data-hue="4"] {
-    --hue: var(--px-color-chart-4);
-  }
-
-  .provider-mark[data-hue="5"] {
-    --hue: var(--px-color-chart-5);
-  }
-
-  .provider-mark[data-hue="6"] {
-    --hue: var(--px-color-chart-6);
+  [data-part="provider-tile"] .provider-mark svg {
+    width: 18px;
+    height: 18px;
   }
 
   /* ---- step 1: the provider tiles ------------------------------------------------------------- */

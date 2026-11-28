@@ -2,13 +2,13 @@ import { useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { type Account, type LoginMethod, type LoginMethodsExtension, problem } from "../api";
 import { Icon } from "../icons";
 import { LoginFlow } from "../loginFlow";
-import { accountServer, Phases, PlanPill, providerName, StatePane, useWindows } from "../parts";
+import { accountServer, Phases, PlanPill, ProviderMark, providerName, StatePane, useWindows } from "../parts";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
 import { Button, Notice, PageHead, useKit, useLoad, usePoll } from "../ui";
 import { nameProblem } from "./accounts.helpers";
-import { monogram, recommendedWay, seriesOf, shortId, splitKinds } from "./addAccount.helpers";
+import { recommendedWay, shortId, splitKinds } from "./addAccount.helpers";
 import { AuthImport } from "./authImport";
 import { MAIN_KINDS } from "./setup.helpers";
 
@@ -159,27 +159,6 @@ function tileSummary(group: MethodGroup): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-/**
- * A provider's mark: a tile with its first letter in the provider's own colour (a key for another
- * service with an API key). Always next to the provider's name, so it is hidden from a screen reader.
- */
-function ProviderMark(props: { extension: string; title: string }) {
-  return (
-    <span
-      class="provider-mark"
-      data-part="provider-mark"
-      data-hue={seriesOf(props.extension)}
-      aria-hidden="true"
-    >
-      {shortId(props.extension) === "openai-compatible" ? (
-        <Icon name="key" size={14} />
-      ) : (
-        monogram(props.title, props.extension)
-      )}
-    </span>
-  );
-}
-
 /** One provider to pick: its mark, its name and what accounts it takes. compact: only mark and name. */
 function ProviderTile(props: { group: MethodGroup; compact?: boolean; onPick: () => void }) {
   const title = displayName(props.group);
@@ -192,7 +171,7 @@ function ProviderTile(props: { group: MethodGroup; compact?: boolean; onPick: ()
         data-compact={props.compact ? "" : undefined}
         onClick={props.onPick}
       >
-        <ProviderMark extension={props.group.extension} title={title} />
+        <ProviderMark extension={props.group.extension} />
         <span class="provider-text">
           <strong>{title}</strong>
           {!props.compact && <span class="muted">{tileSummary(props.group)}</span>}
@@ -279,7 +258,7 @@ function Added(props: { id: string; group: MethodGroup; embedded?: boolean; onAn
           <strong>{heading}</strong>
           {!plan && (
             <span class="added-provider">
-              <ProviderMark extension={props.group.extension} title={provider} />
+              <ProviderMark extension={props.group.extension} />
               <span class="muted">{provider}</span>
             </span>
           )}
@@ -519,7 +498,7 @@ export function AddAccountPage(
                         aria-label={title}
                       >
                         <div class="provider-head">
-                          <ProviderMark extension={group.extension} title={title} />
+                          <ProviderMark extension={group.extension} />
                           <h2>{title}</h2>
                         </div>
                         {!props.embedded && selected === undefined && <p>{t("choose")}</p>}

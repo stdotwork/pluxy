@@ -25,39 +25,6 @@ export function splitKinds<T extends { extension: string }>(groups: T[]): { tile
   return { tiles, more: groups.filter((g) => !tiles.includes(g)) };
 }
 
-/** The main kinds' marks keep one series colour each (the first is Claude's own orange). */
-const SERIES: Record<string, number> = {
-  claude: 1,
-  codex: 4,
-  gemini: 3,
-  "openai-compatible": 5,
-  xai: 4,
-  kimi: 2,
-  devin: 5,
-  meta: 3,
-};
-
-/** The series (1 to 6) a provider's mark is painted in: fixed for the known ones, else from its ID. */
-export function seriesOf(extension: string): number {
-  const id = shortId(extension);
-  if (Object.hasOwn(SERIES, id)) return SERIES[id] as number;
-  let sum = 0;
-  for (const ch of id) sum = (sum * 31 + ch.charCodeAt(0)) % 997;
-  return (sum % 6) + 1;
-}
-
-/** Letters for a mark where the first letter of the name would match another provider's: OpenAI's O. */
-const LETTERS: Record<string, string> = { codex: "O" };
-
-/**
- * The letter a monogram mark carries: the first letter or digit of the provider's name, but for
- * a provider whose name starts like another's (Claude and ChatGPT).
- */
-export function monogram(title: string, extension = ""): string {
-  const own = LETTERS[shortId(extension)];
-  return own ?? (title.match(/[\p{L}\p{N}]/u)?.[0] ?? "?").toUpperCase();
-}
-
 /**
  * The way to suggest when a provider has several: its first sign-in in the browser. A provider with
  * one way, or none that opens a browser, suggests none.
