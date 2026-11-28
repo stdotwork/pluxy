@@ -103,7 +103,7 @@ JSON object named in its row; `204` means an empty reply.
 | --- | --- |
 | `GET /status` | Core's live state: `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision`, `hash` and `at`; `extensions`, one entry per running generation with `id`, `version`, `generation`, `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `crashes_in_a_row`, `last_error` and `active_requests`; `safe_mode`; `first_run`; `version`, `commit` and `built` (the build, as `pluxy -version` prints it); and `management_api` |
 | `POST /reload` | Reloads the config file now. 200 with the status when the new revision is active; 422 with the status when it was refused (`desired.error` says why), and the active revision stays |
-| `GET /ui` | The pages of the running extensions and where they are served; see [extension pages](../next/ui/extension-pages/README.md#how-core-serves-pages) |
+| `GET /ui` | The pages of the running extensions and where they are served; see [extension pages](extension-pages.md#how-core-serves-pages) |
 | `GET /extensions/{id}/config` | An extension's settings: the schema its manifest declares and their values. 404 `not_found` when the extension declares none or is not running |
 | `PATCH /extensions/{id}/config` | `{"values": {...}}`: changes those settings and replies as `GET` does. 422 `invalid_config` when a value fails the schema |
 
@@ -287,6 +287,8 @@ on `POST /setup/scan`.
 | `POST /setup/done` | Ends first run: `{"first_run": false}`. The panel and the app stop opening on setup |
 | `POST /setup/import` | Brings a CLIProxyAPI setup on core's machine across; see [Import](#import) |
 | `GET /setup/clients/{tool}/paste` | What to paste into a coding tool's config to point it at this core; see [Client paste text](#client-paste-text) |
+| `POST /setup/clients/{tool}/connect` | Points Claude Code or Codex on core's machine at core, writing its settings with a key made for it and keeping the file as it was; see [Connect and disconnect a coding tool](#connect-and-disconnect-a-coding-tool) |
+| `POST /setup/clients/{tool}/disconnect` | Puts back what `connect` changed in the tool's settings and removes the key it made; see [Connect and disconnect a coding tool](#connect-and-disconnect-a-coding-tool) |
 
 `found`:
 
@@ -307,10 +309,17 @@ on `POST /setup/scan`.
 }
 ```
 
+`GET /setup` adds to each client `can_connect` (core can write its settings itself: `claude-code` and `codex`, unless `refused`) and `connected_by_pluxy` (core connected it and keeps the file as it was); both are left out when false.
+
 `clients` lists eight coding tools: `claude-code`, `codex`, `opencode`, `pi`, `omp`, `claude-desktop`,
 `grok-build` and `hermes`. A client's `state` is `not-configured`, `configured` (it points at this
-core), `needs-update`, `refused` (a file the desktop app's writer for that tool would refuse to
-change; the pick that would write that tool's config is not suggested) or `unchecked`. `claude-desktop`, `grok-build` and `hermes` are
+core: at core's address with its scheme and port, or, for a core listening on every interface such as
+`0.0.0.0`, at a loopback address or an address of core's machine on that port, such as the one the
+panel was reached by, of the listener's family (IPv4 for `0.0.0.0`, IPv6 for `::`) or of either family
+when the listener takes both, as Go's does where the system allows it; `localhost` counts only then;
+when core's own address is not known, no address counts), `needs-update`, `refused` (a file the
+desktop app's writer for that tool would refuse to change; the pick that would write that tool's config
+is not suggested) or `unchecked`. `claude-desktop`, `grok-build` and `hermes` are
 always `unchecked`: core does not read their settings, so it cannot say whether they point at this
 core, and it has no paste text for them. `sign_ins` only says a sign-in exists; core reads no token
 from it.
@@ -373,6 +382,45 @@ and `ANTHROPIC_DEFAULT_HAIKU_MODEL`), Codex's `model`, and the default model of 
 Oh My Pi.
 
 404 `not_found` for a tool core has no text for, and for a `key_id` core does not hold.
+
+### Connect and disconnect a coding tool
+
+`POST /setup/clients/{tool}/connect` points the tool, on core's machine, at core: core writes into the
+tool's settings file the settings `GET /setup/clients/{tool}/paste` shows, with core's own address, a
+client key made for the tool, and the model the tool starts with (the model settings left out when
+there is no model to name, below), and keeps the file as it was.
+
+- An optional JSON body takes `label` (names the key made for the tool, as `POST /client-keys` does;
+  default: the tool's name) and `model` (checked like `paste`'s: trimmed, at most 240 characters of
+  valid UTF-8, no control characters, else 400 `invalid_request`). Without `model`, core picks the
+  best match among the models it serves; when core serves no chat model, it writes no placeholder
+  and leaves any existing model setting alone.
+- Only `claude-code` (`~/.claude/settings.json`) and `codex` (`~/.codex/config.toml`), in the home
+  folder of the user core runs as. Every other setting in the file stays as written; Claude Code's
+  `ANTHROPIC_API_KEY` and the pluxy provider's `env_key` and `requires_openai_auth` in Codex's config
+  are taken out, since they would send another credential.
+- A missing folder is made `0700` and a missing file `0600`; a file that holds a key afterwards is
+  readable by its owner alone. When the file already holds a client key core holds, that key stays and
+  none is made.
+- 404 `not_found` for a tool core does not connect; 422 `refused` for a file the tool's writer in the
+  desktop app would refuse, a link where the folder or the file is, anything but a file, a folder or
+  file another user owns, or a file over 2 MiB, and then nothing is written and no key made.
+
+`POST /setup/clients/{tool}/disconnect` puts back what `connect` changed: the file as it was before
+the first connect when it still holds what the connect wrote, else (it changed since) each setting the
+connect changed and nobody changed since (including `model` and Claude Code's `ANTHROPIC_DEFAULT_*`
+settings); a file or folder the connect made goes. The client key the connect made goes too, unless
+another connected tool sends it or it is the last client key. 409 `conflict` when core did not connect
+the tool, so it keeps nothing to put back.
+
+The reply to connect and disconnect: `client` (the tool as `found.clients` lists it, read again),
+`files` (`path` from the home folder, and `change`: `created`, `changed` or `unchanged` for a connect;
+`restored`, `merged`, `removed` or `unchanged` for a disconnect), `key` (a connect's: the client key
+the tool sends, `id`, `masked` and `label`, never its value), `key_made`, `key_removed` and `model` (a
+connect's: the model written for the tool to start with; left out when core served no chat model and none
+was asked for, and on disconnect). Core keeps each connect's record, the files as they were among it,
+in `state/tools/<id>.json`, readable by core's user alone, and logs which files it changed, never a
+key.
 
 ### Import
 

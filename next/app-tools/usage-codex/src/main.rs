@@ -1,11 +1,3 @@
-//! pluxy/usage-codex: the usage hub's parser of Codex's session files (`../README.md`). It reads
-//! the rollout files under `~/.codex/sessions` and `~/.codex/archived_sessions` (the hub's `roots`
-//! name others), read-only, and sends the hub only token counts per hour and model: never a prompt,
-//! a message, a folder or a key. The rules that turn a file into rows are in `rollout.rs`.
-//!
-//! A session's file ID is its file name, so a session Codex moves to the archive is the same file
-//! (and one copied there is still one session, the newer file being the one read).
-
 mod rollout;
 #[cfg(test)]
 mod tests;

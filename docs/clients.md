@@ -6,7 +6,19 @@ Anthropic or Gemini API.
 
 You need a running pluxy with at least one account ([setup](setup.md)).
 
-## Set up a tool
+## Connect automatically (Claude Code and Codex)
+
+For Claude Code and Codex on the computer pluxy runs on, pluxy can write the settings itself:
+`pluxy client connect claude-code` (or `codex`, with optional `--model <name>`), or **Connect** on
+the panel's **Tools** page and in step 2 of its guided setup. It makes a client key for the tool,
+sets the lines below in the tool's file with the best-matching model pluxy serves (or the model you
+picked in **Set up by hand** or `--model`; when pluxy serves no chat model yet, it writes no placeholder
+and keeps whatever model the file already had), keeps the rest of the file, and keeps a copy of the
+file as it was. `pluxy client disconnect <tool>`, or **Disconnect**, puts it back; when the file
+changed since, Disconnect keeps those changes and takes back only the settings Connect wrote that
+nobody changed since. pluxy changes no other file of a client's, and these two only when asked.
+
+## Set up a tool by hand
 
 1. **Get a client key.** A client key is the secret a tool sends to prove it may use pluxy. The
    first one is in `client_keys` in pluxy's `config.json`. `pluxy key add` makes another and
@@ -29,7 +41,7 @@ You need a running pluxy with at least one account ([setup](setup.md)).
    below a table line inside that table. `pluxy client show` only prints: it changes no file.
 4. **Start the tool again** so it reads the new settings.
 
-The panel's **Tools** page shows the same settings under each tool's **Set up**, as numbered steps
+The panel's **Tools** page shows the same settings under each tool's **Set up** (or **Set up by hand** beside **Connect** for Claude Code and Codex), as numbered steps
 with a **Copy** button and a model picker when core serves models. Its **Make key** button makes a
 new client key and puts it into the text, so you do not paste it yourself. The panel's guided setup
 (the **Set up pluxy** page, called **Setup** once first-run setup is done) shows the same in its

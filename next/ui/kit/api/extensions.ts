@@ -1,5 +1,3 @@
-// The running extensions' pages and settings (next/ui/extension-pages/README.md).
-
 import type { Host } from "../host";
 import { seg } from "./path";
 
@@ -19,7 +17,6 @@ export interface UIExtension {
   config: boolean;
 }
 
-/** The extensions' pages and settings (next/ui/extension-pages/README.md). */
 export interface UI {
   pages_origin?: string;
   pages_error?: string;

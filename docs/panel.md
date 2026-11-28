@@ -538,7 +538,7 @@ Settings lists its pages as topics in three groups: **This device** (**General**
   navigates to another document, the panel closes its channel and offers **Reload**.
 - **Settings keys:** `extension_pages.listen`, `extension_pages.url`
   ([config.md](config.md#extension_pages)). See the
-  [extension pages contract](../next/ui/extension-pages/README.md).
+  [extension pages contract](extension-pages.md).
 
 ## Where API keys added in the panel are kept
 

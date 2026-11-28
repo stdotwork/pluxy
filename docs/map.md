@@ -50,8 +50,8 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   (`ClosedURL`, `HangUp`, `WantError`, `LoginServer`, `CheckLoginError`) and the per-provider `*test`
   packages in the table below. Read an upstream's `Retry-After` with `sdk.RetryAfter`
   (`next/sdk/retryafter.go`).
-- **Handbook**: `next/protocol/README.md` ("Overview", "Package manifest", "Calls") and
-  `next/protocol/TUTORIAL.md`.
+- **Handbook**: `docs/protocol.md` ("Overview", "Package manifest", "Calls") and
+  `docs/extension-tutorial.md`.
 
 ### Codex client catalog
 - **Entry**: `next/extensions/codex/client_models.json`, the templates behind the catalog the Codex
@@ -143,7 +143,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   `next/internal/core/managethemes.go`.
 - **Tests**: from `next/ui`, `bun test tests/theme.test.ts tests/theme-state.test.ts`; from `next/`,
   `go test -count=1 -run TestHandleThemesHTTP ./internal/core`.
-- **Handbook**: `next/ui/themes/README.md` ("Tokens", "Layout options", "Changes to this contract").
+- **Handbook**: `docs/themes.md` ("Tokens", "Layout options", "Changes to this contract").
 
 ### Desktop app behaviour
 - **Entry (UI)**: `next/app/src/main.tsx` mounts the shared kit with `appHost`
@@ -165,7 +165,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   `tests/updates-page.test.tsx`, `tests/device.test.tsx`, `tests/launcher-page.test.tsx`); Rust unit tests in
   `next/app/src-tauri` via `cargo test --locked` (see `AGENTS.md`).
 - **Handbook**: `next/app/README.md` ("How the app reaches core", "Commands", "Extensions on this
-  device") and `next/app/app-host/README.md`.
+  device") and `docs/app-packages.md`.
 
 ### Native tool
 - **Definition**: a **native tool** is a standalone Rust binary the desktop app starts on demand
@@ -176,7 +176,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   `next/app-tools/claude-code`, `next/app-tools/codex`, `next/app-tools/codex-sessions`, and
   `next/app-tools/agent-usage`. Packed by `next/cmd/pluxy-pack` (`-app-tools`).
 - **Tests**: `cargo test --locked` in `next/app-tools` (see `AGENTS.md`).
-- **Handbook**: `next/app-tools/README.md` and `next/app/app-host/README.md` ("App program contract v0").
+- **Handbook**: `docs/app-tools.md` and `docs/app-packages.md` ("App program contract v0").
 
 ### Usage records
 - **Entry**: in-memory ring and aggregation in `next/internal/usage/usage.go` (`Store`, `Event`,
@@ -208,7 +208,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   secret-shape table in `next/internal/secretshapes/shapes.go` (`Rows`, `URLRows`, `NumberRows`).
 - **Tests**: `go test -count=1 -run TestSecretShapes ./protocol ./internal/configdoc` and
   `go test -count=1 -run TestRedact ./protocol`.
-- **Handbook**: `next/protocol/README.md` ("Errors", "Upstream capture").
+- **Handbook**: `docs/protocol.md` ("Errors", "Upstream capture").
 
 ### Credentials and token renewal
 - **Entry**: versioned credential store in `next/internal/cred/store.go`; single-flight renewal and
@@ -218,7 +218,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 - **Tests**: `go test -count=1 -run TestConcurrentRequestsShareOneRenewal ./internal/cred` and
   `go test -count=1 -run TestLoginPromptIsRedacted ./internal/host`.
 - **Handbook**: `docs/providers.md` ("How accounts added by sign-in are kept and renewed"),
-  `docs/management-api.md` ("Sign-ins") and `next/protocol/README.md` ("Login and refresh").
+  `docs/management-api.md` ("Sign-ins") and `docs/protocol.md` ("Login and refresh").
 
 ### Differential test corpus
 - **Definition**: the **corpus** (`next/corpus`) replays recorded HTTP/WebSocket cases against core

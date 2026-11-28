@@ -2300,21 +2300,10 @@ fn a_tool_gets_its_home_and_its_own_data_folder_and_a_planted_link_refuses_the_s
     assert_eq!(h.status(ID).pid, None);
 }
 
-// Lifetimes, on every platform ----------------------------------------------------------------
-//
-// What each kind of process does when its tool idles or crashes, when the app quits or crashes,
-// and what a stop does, as `app-host/README.md` states it for each platform. The managed runtime
-// and the detached launch are the fixture's heartbeat (`fixture::heartbeat`): a process lives
-// while its heartbeat file advances. Each process a check starts ends through its stop file (a
-// `Lab`) or through the check's own handle of it (`Held`), also when an assertion fails; never by
-// a process ID.
-
 /// The variable that makes this test program a lifetime check's host (`lifetime_host`): its role.
 const LIFETIME_HOST: &str = "PLUXY_LIFETIME_TEST_HOST";
 /// And the host's folder.
 const LIFETIME_DIR: &str = "PLUXY_LIFETIME_TEST_DIR";
-/// How long a stop waits, once it has asked a runtime to stop, before it ends it: five seconds
-/// (`app-host/README.md`).
 const GRACE: Duration = Duration::from_secs(5);
 
 /// path with `.ext` added to its name.

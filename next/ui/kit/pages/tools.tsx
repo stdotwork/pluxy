@@ -9,7 +9,14 @@
 
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { type Account, type ClientKey, problem, type Setup, type SetupClient } from "../api";
+import {
+  type Account,
+  type ClientConnection,
+  type ClientKey,
+  problem,
+  type Setup,
+  type SetupClient,
+} from "../api";
 import { Icon } from "../icons";
 import { Phases, refreshWord, StaleNotice, StatePane, ToolRow, tryAgainWord } from "../parts";
 import { usePrivacy } from "../privacy";
@@ -22,6 +29,7 @@ import {
   Notice,
   PageHead,
   Time,
+  useAction,
   useCopy,
   useKit,
   useLoad,
@@ -58,7 +66,22 @@ const t = strings("tools", {
   noAccount: "pluxy has no accounts yet, so a coding tool you set up here will get errors.",
   addAccount: "Add an account",
   setUp: "Set up",
+  byHand: "Set up by hand",
   hide: "Hide",
+  connect: "Connect",
+  connectAgain: "Connect again",
+  disconnect: "Disconnect",
+  connectHint:
+    "Connect makes a key for {tool} and writes it into {path} on this computer. pluxy keeps a copy of the file as it was, and Disconnect puts it back.",
+  connectHintThere:
+    "Connect makes a key for {tool} and writes it into {path} on the computer pluxy runs on. pluxy keeps a copy of the file as it was, and Disconnect puts it back.",
+  connected: "Connected. Start {tool} again so it reads the new settings.",
+  disconnectedRestored: "Disconnected. {path} is back as it was.",
+  disconnectedMerged: "Disconnected. pluxy took its settings out of {path} and kept the changes made since.",
+  disconnectedRemoved: "Disconnected. pluxy removed {path}, which it had made.",
+  disconnected: "Disconnected.",
+  connectFailed: "Could not connect {tool}. {reason}",
+  disconnectFailed: "Could not disconnect {tool}. {reason}",
   fromApp: "Set up from the desktop app",
   needsAddOn: "Needs its add-on",
 
@@ -289,12 +312,18 @@ function CopyButton(props: { value: string }) {
 }
 
 /** The steps to set one tool up, with the text for its settings file. */
-function Steps(props: { client: SetupClient; made: MadeKeys; onKeysChanged?: () => void }) {
+function Steps(props: {
+  client: SetupClient;
+  made: MadeKeys;
+  model?: string;
+  onModel: (model: string) => void;
+  onKeysChanged?: () => void;
+}) {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
   const tool = toolName(props.client);
   // The model the person picked; until they pick, the text names pluxy's best match.
-  const [model, setModel] = useState<string>();
+  const model = props.model;
   const paste = useLoad(() => api.clientPaste(props.client.id, undefined, model));
   const askedFor = useRef(model);
   useEffect(() => {
@@ -365,7 +394,7 @@ function Steps(props: { client: SetupClient; made: MadeKeys; onKeysChanged?: () 
             <select
               data-slot="select-trigger"
               value={data.model ?? ""}
-              onChange={(e) => setModel(e.currentTarget.value)}
+              onChange={(e) => props.onModel(e.currentTarget.value)}
             >
               {data.model && !data.models?.includes(data.model) && (
                 <option value={data.model}>{data.model}</option>
@@ -420,6 +449,106 @@ function Steps(props: { client: SetupClient; made: MadeKeys; onKeysChanged?: () 
   );
 }
 
+/** What a Connect or Disconnect left to say under a tool's row. */
+interface RowNote {
+  tone: "ok" | "danger";
+  text: string;
+}
+
+/** What a finished disconnect says, from what it did to the tool's file. */
+function disconnectedText(reply: ClientConnection): string {
+  const file = reply.files[0];
+  const path = file?.path ?? reply.client.config;
+  switch (file?.change) {
+    case "restored":
+      return t("disconnectedRestored", { path });
+    case "merged":
+      return t("disconnectedMerged", { path });
+    case "removed":
+      return t("disconnectedRemoved", { path });
+  }
+  return t("disconnected");
+}
+
+/**
+ * Connect, or Disconnect for a tool pluxy connected: pluxy writes the tool's settings on its own
+ * computer. Connect again when pluxy connected it and its settings no longer point at pluxy.
+ */
+function ConnectButtons(props: {
+  client: SetupClient;
+  model?: string;
+  onDone: (note: RowNote) => void;
+  onChanged: () => void;
+}) {
+  const { api } = useKit();
+  const p = usePrivacy();
+  const tool = toolName(props.client);
+  const byPluxy = props.client.connected_by_pluxy === true;
+  // Which call runs, and its reply: read when it ends, so a ref, not the render's state.
+  const verb = useRef<"connect" | "disconnect">("connect");
+  const reply = useRef<ClientConnection | undefined>(undefined);
+  const [running, setRunning] = useState<"connect" | "disconnect">();
+  const action = useAction(() => {
+    const r = reply.current;
+    props.onDone({
+      tone: "ok",
+      text: verb.current === "connect" || !r ? t("connected", { tool }) : disconnectedText(r),
+    });
+    props.onChanged();
+  });
+  useEffect(() => {
+    if (!action.error) return;
+    const reason = p.text(action.error);
+    props.onDone({
+      tone: "danger",
+      text:
+        verb.current === "connect"
+          ? t("connectFailed", { tool, reason })
+          : t("disconnectFailed", { tool, reason }),
+    });
+    // A refused call changes nothing, but what core reads may have changed meanwhile: read again.
+    props.onChanged();
+  }, [action.error]);
+  const run = (which: "connect" | "disconnect") => {
+    verb.current = which;
+    setRunning(which);
+    return action.run(async () => {
+      const r =
+        which === "connect"
+          ? await api.connectClient(props.client.id, tool, props.model)
+          : await api.disconnectClient(props.client.id);
+      reply.current = r.body;
+      return r;
+    });
+  };
+  const busy = (which: "connect" | "disconnect") => action.busy && running === which;
+  return (
+    <>
+      {(!byPluxy || props.client.state !== "configured") && (
+        <Button busy={busy("connect")} onClick={() => run("connect")}>
+          {byPluxy ? t("connectAgain") : t("connect")}
+        </Button>
+      )}
+      {byPluxy && (
+        <Button busy={busy("disconnect")} onClick={() => run("disconnect")}>
+          {t("disconnect")}
+        </Button>
+      )}
+    </>
+  );
+}
+
+/** A note under a row, focused when it comes, so a keyboard or screen reader user hears it. */
+function NoteLine(props: { note: RowNote }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => ref.current?.focus(), [props.note]);
+  return (
+    <div ref={ref} tabIndex={-1} class="tool-note" data-part="tool-note">
+      <Notice tone={props.note.tone}>{props.note.text}</Notice>
+    </div>
+  );
+}
+
 /** What the list of tools needs from its page. */
 export interface ToolListProps {
   toolAction?: ToolsOptions["toolAction"];
@@ -448,6 +577,8 @@ export function ToolListView(
   const { state } = props;
   const setup = state.setup;
   const [open, setOpen] = useState<string>();
+  const [pickedModels, setPickedModels] = useState<Record<string, string | undefined>>({});
+  const [rowNotes, setRowNotes] = useState<Record<string, RowNote | undefined>>({});
   const remote = props.remote ?? !onThisMachine(host.address);
   const rows = {
     toolAction: props.toolAction,
@@ -457,6 +588,15 @@ export function ToolListView(
     remote,
     open,
     setOpen,
+    pickedModels,
+    setPickedModel: (id: string, model: string) => setPickedModels((m) => ({ ...m, [id]: model })),
+    rowNotes,
+    setRowNote: (id: string, note?: RowNote) => setRowNotes((n) => ({ ...n, [id]: note })),
+    // A connect or disconnect changed the tool's settings and the keys: both are read again.
+    onConnected: () => {
+      setup.reload();
+      props.onKeysChanged?.();
+    },
     made: props.made,
     onKeysChanged: props.onKeysChanged,
     refresh: props.refresh,
@@ -530,6 +670,13 @@ function ToolRows(props: {
   remote: boolean;
   open?: string;
   setOpen: (id: string | undefined) => void;
+  /** The model picked for each tool in Set up by hand, so Connect writes the same one. */
+  pickedModels: Record<string, string | undefined>;
+  setPickedModel: (id: string, model: string) => void;
+  /** What a Connect or Disconnect said under each row, by tool ID. */
+  rowNotes: Record<string, RowNote | undefined>;
+  setRowNote: (id: string, note?: RowNote) => void;
+  onConnected: () => void;
   /** When pluxy last scanned; without it the summary has no time. */
   scannedAt?: string;
   /** Show the summary line (the rows may come with no scan to count). */
@@ -550,21 +697,68 @@ function ToolRows(props: {
     const custom = props.toolAction?.(client);
     const hasCustom = custom !== undefined && custom !== null && custom !== false && custom !== "";
     const opened = props.open === client.id;
+    // pluxy writes the settings of the tools it can connect itself; the steps to paste them stay,
+    // as Set up by hand, until pluxy has connected the tool. A tool already connected by hand keeps
+    // its Set up alone.
+    const byPluxy = !hasCustom && client.connected_by_pluxy === true;
+    const connect =
+      !hasCustom &&
+      (byPluxy || (client.can_connect === true && client.installed && client.state !== "configured"));
+    const note = props.rowNotes[client.id];
+    // Next to Connect, the steps by hand are the lesser way: a ghost button.
+    const toggle = (
+      <Button
+        variant={connect ? "ghost" : undefined}
+        onClick={() => props.setOpen(opened ? undefined : client.id)}
+      >
+        {opened ? t("hide") : connect ? t("byHand") : t("setUp")}
+      </Button>
+    );
     // A tool with no text to paste is set up from the app; where the app gives rows (extraTools)
     // and its add-on is missing, it says so.
     const action = hasCustom ? (
       custom
+    ) : connect ? (
+      <>
+        <ConnectButtons
+          client={client}
+          model={props.pickedModels[client.id]}
+          onDone={(n) => {
+            props.setRowNote(client.id, n);
+            if (n.tone === "ok") props.setOpen(undefined);
+          }}
+          onChanged={props.onConnected}
+        />
+        {!byPluxy && hasPasteText(client) && toggle}
+      </>
     ) : !hasPasteText(client) ? (
       <span class="muted">{props.extraTools ? t("needsAddOn") : t("fromApp")}</span>
     ) : (
-      <Button onClick={() => props.setOpen(opened ? undefined : client.id)}>
-        {opened ? t("hide") : t("setUp")}
-      </Button>
+      toggle
     );
+    const steps = !hasCustom && hasPasteText(client) && opened;
+    const hint = connect && !byPluxy && !note && !steps;
+    const path = <span class="mono">{client.config}</span>;
     return (
       <ToolRow key={client.id} client={named(client)} unchecked={isUnchecked(client)} action={action}>
-        {!hasCustom && hasPasteText(client) && opened && (
-          <Steps client={client} made={props.made} onKeysChanged={props.onKeysChanged} />
+        {(note || hint || steps) && (
+          <>
+            {note && <NoteLine note={note} />}
+            {hint && (
+              <p class="muted tool-hint">
+                {rich(remote ? t("connectHintThere") : t("connectHint"), { tool: toolName(client), path })}
+              </p>
+            )}
+            {steps && (
+              <Steps
+                client={client}
+                made={props.made}
+                model={props.pickedModels[client.id]}
+                onModel={(m) => props.setPickedModel(client.id, m)}
+                onKeysChanged={props.onKeysChanged}
+              />
+            )}
+          </>
         )}
       </ToolRow>
     );

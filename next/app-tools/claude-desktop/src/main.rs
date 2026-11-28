@@ -1,14 +1,3 @@
-//! pluxy/claude-desktop: sets up Claude Desktop to use pluxy's core as its third-party inference
-//! gateway, and starts it, for pluxy's desktop app (README.md). Its operations: `preview` (read:
-//! pins Claude Desktop's three third-party files and reads their values back, never the key),
-//! `folders` (write: creates the default configuration library folder when Claude Desktop has not
-//! yet), `apply`, `clear` and `restore` (write: each call asks the person; `apply` receives the
-//! client key as a secret's value and writes it where Claude Desktop reads it), `status` (read:
-//! the applied set, the originals kept for restore, the latest recovery reports), `recipe` (read:
-//! how the launcher starts Claude Desktop) and the backup browser's standard operations. Writes go
-//! through pluxy-transactions: link-preserving, journalled, with the originals and manual backups
-//! in the host's vault.
-
 mod files;
 
 use files::{Checked, File, Settings, PROFILE_ID};

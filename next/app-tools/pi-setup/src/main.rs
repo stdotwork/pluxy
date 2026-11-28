@@ -1,19 +1,3 @@
-//! pluxy/pi-setup: sets up Pi to use pluxy's core through the CLIProxyAPI provider adapter it
-//! carries, manages that adapter, and starts Pi, for pluxy's desktop app (README.md). Its
-//! operations: `preview` (read: pins Pi's three files in an agent folder and pluxy's copy of the
-//! adapter, and reads them back, never the key, or names the folder Connect makes while
-//! `~/.pi/agent` does not exist yet), `apply` (write: makes that folder first when the preview
-//! named it, installs the adapter when it is not there, then writes the core's address, the
-//! client key, the adapter's registration and Pi's default provider and model, and removes the
-//! adapter's model cache), `update` (write: replaces
-//! the installed adapter the preview pinned with the one this program carries), `uninstall`
-//! (write: takes the adapter's registration out and removes the folder the preview pinned),
-//! `clear` and `restore` (write), `status` (read), `recipe` (read: how the launcher starts Pi)
-//! and the backup browser's standard operations. File writes go through
-//! pluxy-transactions: link-preserving, journalled, with the originals and manual backups in the
-//! host's vault; the adapter's folder goes through its folder writes: through a handle on the
-//! agent folder, the copy moved aside checked against its pin, journalled and reconciled.
-
 mod adapter;
 mod pi;
 

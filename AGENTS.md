@@ -22,7 +22,7 @@ panel for it. All three are in `next/`, and all new work goes there.
 
 `next/` has no `AGENTS.md`: follow nearby code, prefer the standard library (its only other
 dependencies are `github.com/coder/websocket` and `gopkg.in/yaml.v3`), and change the extension
-protocol only together with its README (`next/protocol/README.md`).
+protocol only together with its spec (`docs/protocol.md`).
 
 Code carries next to no comments, and here nearby code is not the guide: much of it still has
 comments this rule does not allow. Say what the code does through names, types and tests. In code

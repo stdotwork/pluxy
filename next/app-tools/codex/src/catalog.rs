@@ -1,9 +1,3 @@
-//! The model catalog Codex reads from `model_catalog_json` (README.md): its own JSON format, a
-//! `models` list of model metadata. Apply writes the models the person keeps, each with the
-//! settings the form edits; a new model is made from pluxy's Codex client template for its
-//! upstream name (the file the core serves Codex, `next/extensions/codex/client_models.json`),
-//! trimmed to the fields Codex needs. Entries already in the file keep every other field.
-
 use pluxy_program::Error;
 use pluxy_transactions::{Json as JsonFile, MAX_FILE};
 use serde_json::{json, Map, Value};

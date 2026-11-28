@@ -1,4 +1,4 @@
-// The page side of pluxy's extension page channel, version 0 (README.md beside this file).
+// The page side of pluxy's extension page channel, version 0 (docs/extension-pages.md).
 // Copy this file into your package's ui folder and load it as a module:
 //
 //   import { connect } from "./pluxy-page.js";

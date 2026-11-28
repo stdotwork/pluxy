@@ -1,7 +1,3 @@
-// The settings form the panel draws from an extension's schema (extension-pages/README.md).
-// Core checks every change against the schema, so the form leaves checking to it and shows
-// what core says.
-
 import { useEffect, useState } from "preact/hooks";
 import { problem as replyProblem, type SettingField, type Settings } from "../api";
 import { SettingRow } from "../parts";

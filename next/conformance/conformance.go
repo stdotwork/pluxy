@@ -1,6 +1,6 @@
 // Package conformance is the extension conformance kit, version 0. It starts a provider
 // extension exactly as core does and checks it against the extension protocol
-// (../protocol/README.md): the handshake, streamed and unstreamed replies, that a tool result
+// (docs/protocol.md): the handshake, streamed and unstreamed replies, that a tool result
 // with media and an error flag and a tool choice naming the tools the model may call are accepted
 // and the call still finishes, cancellation, a crash,
 // shutdown and structured errors; for an extension that
@@ -9,8 +9,7 @@
 // a quiet upstream, its alive frames.
 //
 // The kit cannot know how to make an extension's upstream behave, so the extension's test gives
-// it a fixture: for each Scenario, the account that makes the extension act it out. See
-// ../protocol/TUTORIAL.md.
+// it a fixture: for each Scenario, the account that makes the extension act it out. See docs/extension-tutorial.md.
 package conformance
 
 import (

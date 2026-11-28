@@ -1,6 +1,3 @@
-// Package extconfig is an extension's settings: the schema its manifest declares (a small part
-// of JSON Schema, next/ui/extension-pages/README.md), checking values against it, and the store
-// core keeps them in.
 package extconfig
 
 import (

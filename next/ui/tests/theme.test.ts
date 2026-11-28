@@ -28,7 +28,7 @@ import {
 import { parseTheme, parseThemeText } from "../kit/theme/validate";
 
 const themesDir = join(import.meta.dir, "..", "themes");
-const readme = readFileSync(join(themesDir, "README.md"), "utf8");
+const readme = readFileSync(join(import.meta.dir, "..", "..", "..", "docs", "themes.md"), "utf8");
 const env = { systemDark: false, reducedMotion: false };
 const base = { theme_version: 0, id: "test/t", name: "T" };
 

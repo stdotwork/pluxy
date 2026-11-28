@@ -15,7 +15,7 @@ The Go code is one module, `github.com/stdotwork/pluxy/next`. To use pluxy, star
 | `cmd/pluxy` | The core program, and the `pluxy` command that manages it ([CLI](../docs/cli.md)). |
 | `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index; packs the desktop app's native tools with `-app-tools` ([Pack extensions](../docs/extensions.md#pack-extensions)). |
 | `cmd/pluxy-bench` | Measures the time and memory pluxy adds between a client and its upstream, against a mock upstream, and checks them against budgets in CI ([docs/design/perf.md](../docs/design/perf.md)). |
-| `protocol/` | The extension protocol: [README](protocol/README.md), [tutorial](protocol/TUTORIAL.md), wire types and framing. |
+| `protocol/` | The extension protocol: wire types and framing ([protocol](../docs/protocol.md), [tutorial](../docs/extension-tutorial.md)). |
 | `llm/` | The internal model of a request and its streamed reply, shared by core and extensions. |
 | `sdk/` | Go SDK for writing extensions. |
 | `conformance/` | The conformance kit extensions run in their tests. |
@@ -41,13 +41,13 @@ The Go code is one module, `github.com/stdotwork/pluxy/next`. To use pluxy, star
 | `internal/private` | Core's private folders and files (credentials, extensions' settings, logs): 0700 and 0600 on Linux and macOS, an owner-only access list on Windows. |
 | `internal/packages` | Registries, release archives and the record of installed packages. |
 | `internal/panel` | Serves the web panel at `/panel/`, embedded in core's binary. |
-| `internal/pages` | Serves extension pages on a site of their own ([extension pages](ui/extension-pages/README.md)). |
+| `internal/pages` | Serves extension pages on a site of their own ([extension pages](../docs/extension-pages.md)). |
 | `internal/logfile` | Core's log files: `main.log`, its rotation, the folder's size cap, reading lines back ([Usage and logs](../docs/usage-and-logs.md)). |
 | `internal/usage` | The usage record: one event per request, kept in memory and written asynchronously to daily JSONL files. |
 | `internal/extconfig` | Extensions' settings: the schema from the manifest, checking values, and the store core keeps them in. |
-| `ui/` | The UI kit the panel and the desktop app share, the panel's browser build, and the [theme contract](ui/themes/README.md) ([README](ui/README.md)). |
+| `ui/` | The UI kit the panel and the desktop app share, the panel's browser build, and the [theme contract](../docs/themes.md) ([README](ui/README.md)). |
 | `app/` | The desktop app: the kit's second build in a Tauri window, with a tray icon and three ways to reach core ([README](app/README.md)). Linux only for now; how to use it is in [docs/app.md](../docs/app.md). |
-| `app-tools/` | The desktop app's optional native tools and the libraries they share: a cargo workspace of its own ([README](app-tools/README.md)). |
+| `app-tools/` | The desktop app's optional native tools and the libraries they share: a cargo workspace of its own ([docs/app-tools.md](../docs/app-tools.md)). |
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
 | `corpus/` | Differential test corpus: cases replayed against core and compared with recorded replies, with listed exceptions ([README](corpus/README.md)). |
 

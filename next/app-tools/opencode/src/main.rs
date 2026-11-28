@@ -1,14 +1,3 @@
-//! pluxy/opencode: sets up OpenCode to use pluxy's core, and starts its CLI or desktop app, for
-//! pluxy's desktop app (README.md). Its operations: `preview` (read: pins OpenCode's config file
-//! and reads its values back, never the key; not exported), `apply`, `clear` and `restore` (write:
-//! each call asks the person; `apply` receives the client key as a secret's value and writes it
-//! where OpenCode reads it), `status` (read: the applied set, the originals kept for restore, the
-//! latest recovery reports), `recipe` (read: how the launcher starts the CLI or the desktop app)
-//! and the backup browser's standard operations (`backup-list` and `backup-diff`, reads;
-//! `backup-create`, `backup-restore` and `backup-delete`, writes). Writes go through
-//! pluxy-transactions: link-preserving, journalled, with the originals and manual backups in the
-//! host's vault.
-
 mod config;
 
 use config::{Checked, Settings};

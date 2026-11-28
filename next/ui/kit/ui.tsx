@@ -1,6 +1,3 @@
-// The kit's components. Each carries the data-part hook themes/README.md promises; class names
-// are internal.
-
 import { type ComponentChildren, createContext, type Ref } from "preact";
 import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { type Api, problem } from "./api";

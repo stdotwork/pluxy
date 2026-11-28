@@ -9,7 +9,9 @@ import {
   matchesSearch,
   nameProblem,
   orderWord,
+  providerCounts,
   signsInWith,
+  stateCounts,
 } from "../kit/pages/accounts.helpers";
 import { accountCondition } from "../kit/parts";
 
@@ -73,6 +75,10 @@ test("the counts line leaves out every zero count", () => {
       NOW,
     ),
   ).toBe("3 accounts at 1 provider · 2 need you · 1 waiting");
+  expect(
+    countsLine([account("a"), account("b", { state: "reauth_required" })], undefined, NOW, false, "Claude"),
+  ).toBe("2 Claude accounts · 1 needs you · 1 serving");
+  expect(countsLine([account("a")], undefined, NOW, false, "Gemini")).toBe("1 Gemini account · 1 serving");
 });
 
 test("Find an account matches the public ID, the provider's name, the name and the condition word", () => {
@@ -154,4 +160,42 @@ test("a used-up limit on one model leaves the account serving; one on the whole 
   expect(accountCondition(account("c", { health: { state: "exhausted" } }), undefined, NOW).kind).toBe(
     "exhausted",
   );
+});
+
+test("providerCounts preserves first-seen provider order, names each, and skips accounts with no provider", () => {
+  const list = [
+    account("g1", { extension: "pluxy/gemini" }),
+    account("c1", { extension: "pluxy/claude" }),
+    account("broken", { extension: undefined }),
+    account("g2", { extension: "pluxy/gemini" }),
+    account("x1", { extension: "pluxy/xai" }),
+  ];
+  expect(providerCounts(list)).toEqual([
+    { extension: "pluxy/gemini", name: "Gemini", count: 2 },
+    { extension: "pluxy/claude", name: "Claude", count: 1 },
+    { extension: "pluxy/xai", name: "xAI", count: 1 },
+  ]);
+});
+
+test("stateCounts places accounts into needs, waiting, serving, off, and unchecked", () => {
+  const list = [
+    account("ok"),
+    account("wait", { cooldowns: [{ scope: "account", kind: "rate_limit", until: at(10) }] }),
+    account("need", { state: "reauth_required" }),
+    account("off", { disabled: true }),
+  ];
+  expect(stateCounts(list, undefined, NOW, false)).toEqual({
+    needs: 1,
+    waiting: 1,
+    serving: 1,
+    off: 1,
+    unchecked: 0,
+  });
+  expect(stateCounts(list, undefined, NOW, true)).toEqual({
+    needs: 1,
+    waiting: 0,
+    serving: 0,
+    off: 1,
+    unchecked: 2,
+  });
 });

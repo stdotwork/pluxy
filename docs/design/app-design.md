@@ -5,7 +5,7 @@ runs a core of its own, what the window may call, how extension pages and native
 apart from it, how it updates itself and which signatures it trusts. How to use the app is in
 [app.md](../app.md); how to build and test it is in [`next/app/README.md`](../../next/app/README.md).
 The rules app packages and native tools must follow are the app package contract,
-[`next/app/app-host/README.md`](../../next/app/app-host/README.md).
+[`docs/app-packages.md`](../app-packages.md).
 
 The app is a Tauri 2 program. Its window shows the UI kit (`next/ui`), the same pages as the web
 panel, built a second time with an app host (`next/app/src/host.ts`) in place of the browser's.
@@ -88,9 +88,9 @@ In managed mode the app runs only core versions it installed itself, each in its
 pluxy program in place.
 
 **The core's folder.** The app's own core keeps its config, credentials and packages in `core/` in
-the app's data folder. On Unix the app makes that folder 0700 whatever the umask, and tightens one of
-the user's that group or others may use, since core's first `init` refuses a config folder that is a
-link, another user's, or group- or other-writable (`core_folder` in `managed.rs`).
+the app's data folder. On Unix the app makes that folder 0700, and takes away group and other access
+from one of the user's that already exists, since core's first `init` refuses a config folder that
+is a link, another user's, or group- or other-writable (`core_folder` in `managed.rs`).
 
 **Where versions come from.** Three ways, all ending in a version folder of the store:
 
@@ -213,7 +213,7 @@ context, apart from the window's storage, in the app's cache folder and cleared 
 The webview loads one app document from the `pluxy-page:` scheme (`next/app/page/`), which shows
 the extension's page in a frame with `sandbox="allow-scripts"` from core's pages site, as the
 panel does, and does the panel's side of the page's hello
-([extension pages](../../next/ui/extension-pages/README.md)). Its `/send` address is the webview's one
+([extension pages](../extension-pages.md)). Its `/send` address is the webview's one
 way out: the native side tags each message with the webview it came from and passes it to the
 window, which answers with the kit's channel. No page receives a key.
 
@@ -241,16 +241,16 @@ holds a page's frame to its site through WebView2's frame navigation event
 
 ## Packages on this device
 
-The Add-ons page manages app packages ([the app package contract](../../next/app/app-host/README.md))
+The Add-ons page manages app packages ([the app package contract](../app-packages.md))
 installed on this computer, apart from core's extensions: `app.tier` `web` (pages only) and
 `native` (a native tool, a program the app runs on demand). Code: `device.rs` (catalog and store),
 `program.rs` (the program host), `route.rs` (the router), `jobs.rs`, `vault.rs`.
 
-**Sources.** A release archive (the [protocol's format](../../next/protocol/README.md#release-archives))
+**Sources.** A release archive (the [protocol's format](../protocol.md#release-archives))
 comes from a file the person picks in the native file chooser (the window never names a path), or
 from a registry listed in `device-registries.json` in the app's config folder:
 `{"version": 0, "registries": [{"name": "...", "url": "..."}]}`, each `url` a registry index (the
-[protocol's format](../../next/protocol/README.md#registry-index)) at an absolute local path or an
+[protocol's format](../protocol.md#registry-index)) at an absolute local path or an
 `https://` address. The archive must have the size and SHA-256 the index lists for this platform.
 An install that names no version takes the highest stable release the index lists, or the highest
 prerelease when it lists no stable one. An index entry may carry the release's publisher signature
@@ -283,7 +283,7 @@ only when its required imports are enabled tools that export them, with no cycle
 admission, the root, the signature and every installed file again. It runs the opened file in its
 package folder with a cleared environment, only its three private pipes, a process group of its
 own (a job object on Windows) and on Linux a parent-death signal. Calls follow the
-[app program contract v0](../../next/app/app-host/README.md#app-program-contract-v0), one at a time
+[app program contract v0](../app-packages.md#app-program-contract-v0), one at a time
 per tool. A tool stops 30 seconds after its last call; any change to its package, and quitting the
 app, stop it at once (stdin closed, its process group killed after five seconds, reaped). A tool
 that crashes restarts only on a later call, after a backoff of one second doubling to a minute;
@@ -303,17 +303,18 @@ calls only its own tool; a curated web package's page calls only its imports, on
 allowed them in a native confirmation. An unverified package never gets that. The host sets each
 call's chain (the requester, then each tool that called on), refuses a call back into the chain or
 a chain longer than five, and asks a native confirmation naming the whole chain for each `write` or
-`launch` call. [Calls between packages](../../next/app/app-host/README.md#calls-between-packages) has
-the manifest fields and frames, and [Jobs](../../next/app/app-host/README.md#jobs) the data a tool
+`launch` call. [Calls between packages](../app-packages.md#calls-between-packages) has
+the manifest fields and frames, and [Jobs](../app-packages.md#jobs) the data a tool
 produces and consumes.
 
-**The vault** keeps secrets the person types into native key entry, client keys, and tools'
-backups and journals, in a file only the user may read in the app's data folder (not the system
-keyring). The window names a secret only by its ID; a confirmation names each secret and the tool
-that gets it; a tool receives the secret on its pipe, or a reference it may pass on only in that
-call. Secret values and references are redacted from tools' logs, status, errors and outputs. A
-write a tool or the app did not finish is reconciled at its next start, never written again.
-[Secrets, references and the vault](../../next/app/app-host/README.md#secrets-references-and-the-vault)
+**The vault** keeps secrets the person types into native key entry, client keys, and tools' backups
+and journals, in a `vault` folder only the user may read (not the system keyring): in the app's data
+folder, or on Windows in its local data folder, which does not roam with the profile. The window
+names a secret only by its ID; a confirmation names each secret and the tool that gets it; a tool
+receives the secret on its pipe, or a reference it may pass on only in that call. Secret values and
+references are redacted from tools' logs, status, errors and outputs. A write a tool or the app did
+not finish is reconciled at its next start, never written again.
+[Secrets, references and the vault](../app-packages.md#secrets-references-and-the-vault)
 has the details.
 
 **Device pages** open like core's pages, in a page webview, but their frame loads from the
@@ -412,7 +413,7 @@ environment, secrets and execution tool release. The list, recent folders and no
 `launcher.json`, which holds no secret (a secret field holds a vault secret's ID).
 
 On Windows a launch can also start in WSL, prepared inside the distribution by `pluxy/wsl`
-([Tools in WSL](../../next/app/app-host/README.md#tools-in-wsl-windows)).
+([Tools in WSL](../app-packages.md#tools-in-wsl-windows)).
 
 ## The coding-tool pages
 
@@ -420,7 +421,7 @@ The eight tool pages (Claude Code, Codex, Claude Desktop, OpenCode, Oh My Pi, Gr
 Agent, Pi) are the window's own pages, not extension pages, because Connect gives the tool a key:
 only the window can name a vault secret for an operation, and the key's value never reaches the
 page. They share one frame (`next/app/src/clientPage.tsx`), and each needs a curated native tool
-that does the reading and writing ([`next/app-tools/README.md`](../../next/app-tools/README.md)).
+that does the reading and writing ([`docs/app-tools.md`](../app-tools.md)).
 
 The frame's contract:
 
@@ -453,8 +454,7 @@ Agent (`readExtraTools` in `clientPage.tsx`) to the five tools core scans, and g
 `SETUP_CLIENT_PAGES` maps core's tool IDs to page IDs. `toolAction` picks each row's one button
 from `items` (`addonItems.ts`), and `setUpAddon` (`next/app/src/toolRows.tsx`) runs install, turn-on
 confirmation and opening the tool's page in one press. When opened from Setup, `SetupReturn` shows
-the strip back to `#/setup`. Old addresses `#/easy-mode` and `#/clients` redirect to `#/setup` and
-`#/tools` (`movedTo` in `agentPages.ts`).
+the strip back to `#/setup`.
 
 ## Updates
 
@@ -581,7 +581,7 @@ listens at once and waits up to 120 seconds for the lock.
 **The verifier** (`next/app/src-tauri/src/artifact.rs`) checks the exact descriptor bytes with
 Ed25519 before reading the archive, then its size and SHA-256 before extraction, and hands the
 caller the rewound archive reader so the file is never reopened by name
-([the signed descriptor contract](../../next/app/app-host/README.md#signed-descriptor-bytes)). It
+([the signed descriptor contract](../app-packages.md#signed-descriptor-bytes)). It
 neither unpacks nor runs anything. Descriptor signatures and Tauri updater signatures are separate
 formats.
 
@@ -640,7 +640,7 @@ Linux x86_64 is the one platform the app is checked on end to end and the only o
   the usage parsers run there only in their own unit tests (`next-app-tools-platforms.yml`), never
   inside the app.
 - **WSL.** On Windows the app can run the Claude Code add-on's Linux build inside a WSL distribution
-  (`pluxy/wsl`, [Tools in WSL](../../next/app/app-host/README.md#tools-in-wsl-windows)); CI tests that at
+  (`pluxy/wsl`, [Tools in WSL](../app-packages.md#tools-in-wsl-windows)); CI tests that at
   host level only.
 - **Linux arm64.** The add-ons are built for it (`next-app-tools-pack.yml`) but no job builds or runs
   the app there, and the local build and test package refuse it.
