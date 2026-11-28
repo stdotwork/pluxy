@@ -8,15 +8,12 @@ import (
 	"time"
 )
 
-// In the settings of a config file's accounts, everything below a key named like a secret is a
-// secret, however deep, as in an account's settings on their own (RedactSettings), in a JSON
-// config and in a config.yaml; a provider entry of today's core's layout keeps its plain values.
 func TestRedactConfigAccountSettings(t *testing.T) {
 	for _, tc := range []struct {
 		name, src string
 		isYAML    bool
 		secrets   []string
-		kept      []string // text the redacted document still holds
+		kept      []string
 	}{
 		{"json", `{"client_keys": ["fake-client"],
   "extension": {"manifest": "x.json", "accounts": [{"id": "a",
@@ -62,9 +59,6 @@ extensions:
 	}
 }
 
-// An account's settings, or the account, given through a YAML alias is read as strictly as when
-// written in place, while the anchor's own place is read by its own rules; a self-referencing
-// anchor does not stop the reading.
 func TestRedactConfigAccountSettingsThroughAliases(t *testing.T) {
 	for _, tc := range []struct {
 		name, src string
@@ -102,7 +96,6 @@ extension:
 	if got := d.TextSecrets(); !slices.Equal(got, []string{"fake-loop"}) {
 		t.Errorf("TextSecrets() of a self-referencing anchor = %q", got)
 	}
-	// Anchors that each use the one before twice: following every use would read 2^40 nodes.
 	var b strings.Builder
 	b.WriteString("a0: &a0 {password: fake-deep}\n")
 	for i := 1; i <= 40; i++ {
@@ -116,8 +109,6 @@ extension:
 	}
 }
 
-// An alias below a secret key that leads back into itself, or a chain of anchors that each use
-// the one before twice, is read once: TextSecrets returns, and quickly.
 func TestSecretsOfAliasLoopsAndChains(t *testing.T) {
 	var chain strings.Builder
 	chain.WriteString("a0: &a0 [fake-chain]\n")
@@ -146,9 +137,6 @@ func TestSecretsOfAliasLoopsAndChains(t *testing.T) {
 	}
 }
 
-// An alias stands for its anchor wherever a rule looks at a value: an accounts list given by
-// alias, an account merged from a template with <<, and headers given by alias, in account
-// settings and in a provider entry.
 func TestRedactAliasesWhereRulesLookAtTheValue(t *testing.T) {
 	for _, tc := range []struct {
 		name, src string
@@ -195,17 +183,12 @@ extension:
 	}
 }
 
-// Outside account settings, everything below a key named like a secret is a secret too, written
-// in place or given through an alias, except in the provider sections today's core reads at the
-// top of a config.yaml: the v8 api-keys mapping and the older lists such as codex-api-key, whose
-// entries are read by the rules. An extension's own "settings" in its entry under "extensions",
-// which core does not read, is no exception.
 func TestRedactBelowSecretKeysOutsideSettings(t *testing.T) {
 	for _, tc := range []struct {
 		name, src string
 		isYAML    bool
 		secrets   []string
-		kept      []string // text the redacted document still holds
+		kept      []string
 	}{
 		{"extension-wide settings", `extensions:
   pluxy/x:

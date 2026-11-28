@@ -21,9 +21,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
-// place returns where a setting is in the document: the JSON path in a JSON config; in a
-// config.yaml the v8 path, or the older spelling when only that is there (today's core and
-// this one read both, and the v8 one wins when both are set).
 func (d *Doc) place(jsonPath, v8, old string) []string {
 	switch {
 	case !d.YAML:
@@ -35,8 +32,6 @@ func (d *Doc) place(jsonPath, v8, old string) []string {
 	}
 }
 
-// clientKeys returns where the client keys are: client_keys in a JSON config; in a
-// config.yaml access.api-keys, or the older layout's root api-keys list.
 func (d *Doc) clientKeys() []string {
 	if d.YAML && d.Get("access", "api-keys") == nil {
 		if n := d.Get("api-keys"); n != nil && n.Kind == yaml.SequenceNode {
@@ -46,7 +41,6 @@ func (d *Doc) clientKeys() []string {
 	return d.place("client_keys", "access.api-keys", "")
 }
 
-// ClientKeys returns the client keys the document sets.
 func (d *Doc) ClientKeys() ([]string, error) {
 	n := d.Get(d.clientKeys()...)
 	if isNull(n) {
@@ -68,7 +62,6 @@ func (d *Doc) ClientKeys() ([]string, error) {
 	return keys, nil
 }
 
-// AddClientKey adds a client key, written like the keys already there.
 func (d *Doc) AddClientKey(key string) error {
 	path := d.clientKeys()
 	n := d.Get(path...)
@@ -87,8 +80,6 @@ func (d *Doc) AddClientKey(key string) error {
 	return nil
 }
 
-// RemoveClientKeys removes every client key for which drop is true, and returns how many keys
-// are left.
 func (d *Doc) RemoveClientKeys(drop func(key string) bool) (int, error) {
 	if _, err := d.ClientKeys(); err != nil {
 		return 0, err
@@ -110,18 +101,10 @@ func (d *Doc) RemoveClientKeys(drop func(key string) bool) (int, error) {
 	return len(kept), nil
 }
 
-// clientKeyLabels is where the client keys' names are: client_key_labels, a mapping from a key's
-// ID (the one GET /client-keys lists, never the key) to its label. It is this core's own
-// setting, so it keeps its name in a config.yaml too.
 var clientKeyLabels = []string{"client_key_labels"}
 
-// ErrLabelIndirect is the refusal to set or clear a client key's label that a config.yaml sets
-// through a YAML alias or a merge key (<<): there is no entry of its own to change, and changing
-// the shared one would change other labels too. It reads as the reply to the person.
 var ErrLabelIndirect = errors.New("this key's label is set through an alias or merge in config.yaml, so it cannot be changed here: edit config.yaml")
 
-// labelsInEffect returns the client key labels as the file's readers see them, with aliases and
-// merge keys resolved.
 func (d *Doc) labelsInEffect() (map[string]string, error) {
 	var v struct {
 		Labels map[string]string `yaml:"client_key_labels"`
@@ -132,8 +115,6 @@ func (d *Doc) labelsInEffect() (map[string]string, error) {
 	return v.Labels, nil
 }
 
-// RemoveClientKeyLabel removes the entry of the client key with this ID from the labels, if it
-// has one of its own; the mapping goes with its last entry.
 func (d *Doc) RemoveClientKeyLabel(id string) {
 	d.Delete(append(slices.Clone(clientKeyLabels), id)...)
 	if m := d.Get(clientKeyLabels...); m != nil && m.Kind == yaml.MappingNode && len(m.Content) == 0 {
@@ -141,10 +122,6 @@ func (d *Doc) RemoveClientKeyLabel(id string) {
 	}
 }
 
-// SetClientKeyLabel gives the client key with this ID the label, or removes its label when
-// label is empty; the mapping goes with its last entry. It returns ErrLabelIndirect when the labels
-// (or this key's) are set through an alias or a merge key, or when the change would alter
-// another key's label; the document is then not to be written.
 func (d *Doc) SetClientKeyLabel(id, label string) error {
 	labels := d.Get(clientKeyLabels...)
 	if labels != nil && labels.Kind == yaml.AliasNode {
@@ -164,8 +141,6 @@ func (d *Doc) SetClientKeyLabel(id, label string) error {
 	} else {
 		d.RemoveClientKeyLabel(id)
 	}
-	// What the readers see must be the old labels with this one changed: a shared anchor would
-	// change the labels of the keys that alias it.
 	want := maps.Clone(before)
 	if label == "" {
 		delete(want, id)
@@ -175,8 +150,6 @@ func (d *Doc) SetClientKeyLabel(id, label string) error {
 		}
 		want[id] = label
 	}
-	// Read it as it would be written: clearing the label that holds an anchor would leave
-	// an alias without one.
 	b, err := d.encode()
 	if err != nil {
 		return err
@@ -195,15 +168,10 @@ func (d *Doc) SetClientKeyLabel(id, label string) error {
 	return nil
 }
 
-// SetManagementKey sets the management key: management_key in a JSON config; in a
-// config.yaml management.secret-key, or the older remote-management.secret-key when only that
-// is there.
 func (d *Doc) SetManagementKey(key string) error {
 	return d.Set(String(key), d.place("management_key", "management.secret-key", "remote-management.secret-key")...)
 }
 
-// Strategies are the routing strategies by today's core's names, and the names it also takes
-// for them; least-active and soonest-reset are this core's own.
 var strategies = map[string]string{
 	"round-robin": "round-robin", "fill-first": "fill-first", "fillfirst": "fill-first", "ff": "fill-first",
 	"weighted-round-robin": "weighted-round-robin", "weightedroundrobin": "weighted-round-robin",
@@ -211,102 +179,55 @@ var strategies = map[string]string{
 	"soonest-reset": "soonest-reset",
 }
 
-// SettingsPatch is a change to the basic and routing settings, with today's core's names for
-// them. A field left out stays as it is.
 type SettingsPatch struct {
-	Routing       *RoutingPatch       `json:"routing"`
-	Observability *ObservabilityPatch `json:"observability"`
-	// TokenCountEstimate answers a token count no account can give with core's estimate (true,
-	// the default) or with an error saying counting is unsupported (false). This core's own
-	// setting, so it keeps its name in a config.yaml.
-	TokenCountEstimate *bool `json:"token_count_estimate"`
-	// ProxyURL is the proxy of every account without one of its own: an http, https, socks5 or
-	// socks5h URL, direct or none; empty removes it (no proxy).
-	ProxyURL *string `json:"proxy-url"`
-	// ManagementAllowRemote lets computers other than the one core runs on use the management
-	// API (this core's own name for management.allow-remote).
-	ManagementAllowRemote *bool `json:"management_allow_remote"`
-	// Listen is the address core serves on, as host:port: a config.yaml gets it as server.host
-	// and server.port. Core uses a new address only after a restart.
-	Listen *string `json:"listen"`
-	// Payload replaces the payload rules: an object with today's core's lists (default,
-	// default-raw, override, override-raw, filter); null or {} removes them.
-	Payload json.RawMessage `json:"payload"`
+	Routing               *RoutingPatch       `json:"routing"`
+	Observability         *ObservabilityPatch `json:"observability"`
+	TokenCountEstimate    *bool               `json:"token_count_estimate"`
+	ProxyURL              *string             `json:"proxy-url"`
+	ManagementAllowRemote *bool               `json:"management_allow_remote"`
+	Listen                *string             `json:"listen"`
+	Payload               json.RawMessage     `json:"payload"`
 }
 
-// ObservabilityPatch is a change to the usage and log settings.
 type ObservabilityPatch struct {
 	Logs  *LogsPatch  `json:"logs"`
 	Usage *UsagePatch `json:"usage"`
 }
 
-// LogsPatch is a change to the log settings.
 type LogsPatch struct {
-	// LoggingToFile also writes core's log to files.
-	LoggingToFile *bool `json:"logging-to-file"`
-	// LogsMaxTotalSizeMB caps the logs folder's size; 0 is no cap.
+	LoggingToFile      *bool  `json:"logging-to-file"`
 	LogsMaxTotalSizeMB *int64 `json:"logs-max-total-size-mb"`
-	// RequestLog writes every client request to a file.
-	RequestLog *bool `json:"request-log"`
-	// ErrorLogsMaxFiles is how many error logs are kept; 0 is all.
-	ErrorLogsMaxFiles *int64 `json:"error-logs-max-files"`
+	RequestLog         *bool  `json:"request-log"`
+	ErrorLogsMaxFiles  *int64 `json:"error-logs-max-files"`
 }
 
-// UsagePatch is a change to the usage settings.
 type UsagePatch struct {
-	// UsageStatisticsEnabled turns the usage record on or off.
 	UsageStatisticsEnabled *bool `json:"usage-statistics-enabled"`
 }
 
-// RoutingPatch is a change to the routing settings.
 type RoutingPatch struct {
-	// Strategy is round-robin, fill-first, weighted-round-robin, least-active or soonest-reset.
-	Strategy *string `json:"strategy"`
-	// SessionAffinity sends requests of one session to the same account.
-	SessionAffinity *bool `json:"session-affinity"`
-	// SessionAffinityTTL is how long a session stays bound after its last request, such as
-	// "1h".
-	SessionAffinityTTL *string `json:"session-affinity-ttl"`
-	// ForceModelPrefix makes an account with a prefix serve its models only under the prefix.
-	ForceModelPrefix *bool          `json:"force-model-prefix"`
-	Retry            *RetryPatch    `json:"retry"`
-	Cooldown         *CooldownPatch `json:"cooldown"`
-	// Timeouts sets the default upstream timeouts of every account, in milliseconds
-	// (header_ms, idle_ms, total_ms): a field left out stays as it is, 0 turns a limit off and
-	// null removes them all. This core's own setting, so a config.yaml, which today's core
-	// also reads, has no name for it.
-	Timeouts json.RawMessage `json:"timeouts"`
-	// Ignition replaces window ignition's settings (routing.ignition) whole: an object with
-	// enabled, the hours, the waits and the extensions and accounts it runs for; null removes
-	// them, which turns ignition off. This core's own setting, so a config.yaml, which today's core
-	// also reads, has no name for it.
-	Ignition json.RawMessage `json:"ignition"`
+	Strategy           *string         `json:"strategy"`
+	SessionAffinity    *bool           `json:"session-affinity"`
+	SessionAffinityTTL *string         `json:"session-affinity-ttl"`
+	ForceModelPrefix   *bool           `json:"force-model-prefix"`
+	Retry              *RetryPatch     `json:"retry"`
+	Cooldown           *CooldownPatch  `json:"cooldown"`
+	Timeouts           json.RawMessage `json:"timeouts"`
+	Ignition           json.RawMessage `json:"ignition"`
 }
 
-// CooldownPatch is a change to the cooldown settings.
 type CooldownPatch struct {
-	// DisableCooling records no blocks after failures.
-	DisableCooling *bool `json:"disable-cooling"`
-	// TransientErrorCooldownSeconds is how long a failing upstream is blocked: 0 for this
-	// core's backoff, -1 for no block.
-	TransientErrorCooldownSeconds *int64 `json:"transient-error-cooldown-seconds"`
-	// QuotaResponseMode is what a client gets when every account is out of quota: retryable
-	// (a retryable 429) or usage-limit (the final usage-limit reply).
-	QuotaResponseMode *string `json:"quota-response-mode"`
+	DisableCooling                *bool   `json:"disable-cooling"`
+	TransientErrorCooldownSeconds *int64  `json:"transient-error-cooldown-seconds"`
+	QuotaResponseMode             *string `json:"quota-response-mode"`
 }
 
-// RetryPatch is a change to the retry settings.
 type RetryPatch struct {
-	// RequestRetry is how many rounds a request may run after its first.
-	RequestRetry *int64 `json:"request-retry"`
-	// MaxRetryCredentials is how many accounts one request may try; 0 is no limit.
+	RequestRetry        *int64 `json:"request-retry"`
 	MaxRetryCredentials *int64 `json:"max-retry-credentials"`
-	// MaxRetryInterval is the longest one request waits for a blocked account, in seconds.
-	MaxRetryInterval *int64 `json:"max-retry-interval"`
+	MaxRetryInterval    *int64 `json:"max-retry-interval"`
 }
 
-// ApplySettings writes a settings change into the document, in the file's own names: a JSON
-// config's, or in a config.yaml today's core's.
 func (d *Doc) ApplySettings(p SettingsPatch) error {
 	if err := d.applyRouting(p.Routing); err != nil {
 		return err
@@ -339,8 +260,6 @@ func (d *Doc) ApplySettings(p SettingsPatch) error {
 	return d.applyObservability(p.Observability)
 }
 
-// CheckListen refuses an address that is not host:port with a port from 0 to 65535; the host may
-// be empty (every interface). It returns the host and port.
 func CheckListen(s string) (host string, port uint16, err error) {
 	s = strings.TrimSpace(s)
 	host, portText, err := net.SplitHostPort(s)
@@ -354,9 +273,6 @@ func CheckListen(s string) (host string, port uint16, err error) {
 	return host, uint16(n), nil
 }
 
-// applyListen writes the address core serves on: listen in a JSON config; in a config.yaml the
-// host and port it is made of, where the file keeps them (server.host and server.port, or the
-// older root host and port). s is host:port; the host may be empty (every interface).
 func (d *Doc) applyListen(s string) error {
 	host, port, err := CheckListen(s)
 	if err != nil {
@@ -372,13 +288,11 @@ func (d *Doc) applyListen(s string) error {
 	return d.Set(Int(int64(port)), d.place("", "server.port", "port")...)
 }
 
-// applyPayload writes the payload rules, refusing a field they do not have and what
-// payload.Validate refuses; null or no rules remove them, in both spellings of a config.yaml.
 func (d *Doc) applyPayload(raw json.RawMessage) error {
 	var r *payload.Rules
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	dec.UseNumber() // a number is written as it was sent
+	dec.UseNumber()
 	if err := dec.Decode(&r); err != nil {
 		return fmt.Errorf("%w: payload: %v", ErrInvalid, err)
 	}
@@ -398,8 +312,6 @@ func (d *Doc) applyPayload(raw json.RawMessage) error {
 	if err != nil {
 		return fmt.Errorf("%w: payload: %v", ErrInvalid, err)
 	}
-	// JSON is YAML: its nodes carry each value's type, which the JSON writer needs. In a
-	// config.yaml they are written in block style.
 	var n yaml.Node
 	if err := yaml.Unmarshal(b, &n); err != nil || n.Kind != yaml.DocumentNode || len(n.Content) != 1 {
 		return fmt.Errorf("%w: payload: %v", ErrInvalid, err)
@@ -408,8 +320,6 @@ func (d *Doc) applyPayload(raw json.RawMessage) error {
 	return d.Set(n.Content[0], d.place("payload", "requests.payload", "payload")...)
 }
 
-// blockStyle clears the flow and quoting styles of n and everything in it, so the YAML writer
-// chooses them.
 func blockStyle(n *yaml.Node) {
 	n.Style = 0
 	for _, c := range n.Content {
@@ -417,8 +327,6 @@ func blockStyle(n *yaml.Node) {
 	}
 }
 
-// applyProxyURL writes the global proxy setting; "" removes it, in both spellings of a
-// config.yaml, so an older spelling cannot take over.
 func (d *Doc) applyProxyURL(s string) error {
 	s = strings.TrimSpace(s)
 	if err := proxyurl.Check("proxy-url", s); err != nil {
@@ -436,7 +344,6 @@ func (d *Doc) applyProxyURL(s string) error {
 	return d.Set(String(s), d.place("proxy_url", "requests.proxy-url", "proxy-url")...)
 }
 
-// applyObservability writes a change to the usage and log settings.
 func (d *Doc) applyObservability(o *ObservabilityPatch) error {
 	if o == nil {
 		return nil
@@ -477,7 +384,6 @@ func (d *Doc) applyObservability(o *ObservabilityPatch) error {
 	return nil
 }
 
-// applyRouting writes a change to the routing settings.
 func (d *Doc) applyRouting(r *RoutingPatch) error {
 	if r == nil {
 		return nil
@@ -501,8 +407,6 @@ func (d *Doc) applyRouting(r *RoutingPatch) error {
 				return err
 			}
 		default:
-			// Said either way: a JSON config has it on without the setting, and the file should
-			// keep saying what the person chose.
 			if err := d.Set(Bool(*r.SessionAffinity), "routing", "session_affinity", "enabled"); err != nil {
 				return err
 			}
@@ -517,7 +421,6 @@ func (d *Doc) applyRouting(r *RoutingPatch) error {
 		if d.YAML {
 			err = d.Set(String(s), "routing", "session-affinity-ttl")
 		} else if en := d.Get("routing", "session_affinity", "enabled"); en != nil && en.Kind == yaml.ScalarNode && en.Value == "false" {
-			// In a JSON config the TTL is inside routing.session_affinity, next to its switch.
 			err = fmt.Errorf("%w: routing.session-affinity-ttl needs routing.session-affinity on", ErrInvalid)
 		} else {
 			err = d.Set(Int(max(ttl, time.Second).Milliseconds()), "routing", "session_affinity", "ttl_ms")
@@ -600,10 +503,6 @@ func (d *Doc) applyRouting(r *RoutingPatch) error {
 	return nil
 }
 
-// applyIgnition writes window ignition's settings whole: null removes them; anything else must be
-// the section, with no field it does not have, that ignite.Config.Validate accepts. A config.yaml
-// has no name for the section (its Lamplighter plugin settings are read as it, but not written),
-// so a change there is refused, and null changes nothing there, as for the timeouts.
 func (d *Doc) applyIgnition(raw json.RawMessage) error {
 	if string(bytes.TrimSpace(raw)) == "null" {
 		if !d.YAML {
@@ -634,10 +533,6 @@ func (d *Doc) applyIgnition(raw json.RawMessage) error {
 	return d.Set(n.Content[0], "routing", "ignition")
 }
 
-// applyTimeouts writes the default upstream timeouts of every account: null removes the section,
-// and otherwise each field sent is written, the ones left out staying as they are. How core
-// checks them lives with the config it checks, so both refuse the same values. A config.yaml has
-// no name for the section, so a change that would write one there is refused.
 func (d *Doc) applyTimeouts(raw json.RawMessage) error {
 	if string(raw) == "null" {
 		if !d.YAML {

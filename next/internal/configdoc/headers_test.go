@@ -6,17 +6,11 @@ import (
 	"testing"
 )
 
-// The placeholder GET /config shows for a secret header value is the one GET /accounts shows for
-// it (Redactor.Headers on the header core read): for text, a number and text with spaces around
-// it in a provider section of a config.yaml, which core reads as text as written (1e3, not
-// 1000) without the spaces, and for an account's headers in core's own layout, read as written.
-// Restore puts each back as it was, also a number and a string that read as the same header
-// text.
 func TestConfigHeaderPlaceholdersAreThoseOfAccounts(t *testing.T) {
 	for _, tc := range []struct {
 		name, src string
 		isYAML    bool
-		texts     map[string]string // header to the text core reads from it
+		texts     map[string]string
 	}{
 		{"provider section", `listen: 127.0.0.1:8317
 access:
@@ -66,7 +60,7 @@ extensions:
 			for _, a := range cfg.Accounts() {
 				for name, shown := range r.Headers(a.Headers) {
 					if shown == a.Headers[name] {
-						continue // not a secret header
+						continue
 					}
 					n++
 					at := name + ": " + shown
@@ -94,9 +88,6 @@ extensions:
 	}
 }
 
-// A header named like a passphrase is a secret header everywhere, as GET /config reads it: GET
-// /accounts (Redactor.Headers) shows the placeholder GET /config shows in its place, and the
-// header rule extensions and the request log use (upheader.Secret) counts it.
 func TestPassphraseHeaderIsSecret(t *testing.T) {
 	const value = "fake-header-passphrase-1"
 	src := "listen: 127.0.0.1:0\naccess:\n  api-keys: [fake-client-key-1]\nextensions:\n  pluxy/x:\n    accounts:\n      - id: a\n        headers:\n          X-Passphrase: " + value + "\n"
@@ -111,11 +102,6 @@ func TestPassphraseHeaderIsSecret(t *testing.T) {
 	}
 }
 
-// A key named like a secret holds a secret whatever its shape, also when its name says "header":
-// header_token, auth_header_secret, header_api_key. Its value is hidden in GET /config and GET
-// /accounts and taken out of text (Doc.TextSecrets, SettingsSecrets), as the value of any other
-// secret key is. A real mapping of headers (extra_headers) keeps the headers rule: only its secret
-// headers are hidden.
 func TestHeaderNamedSecretKeysAreSecrets(t *testing.T) {
 	const keep = "fake-visible-trace-1"
 	for _, tc := range []struct{ name, key, value, secret string }{

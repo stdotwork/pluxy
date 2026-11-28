@@ -34,8 +34,6 @@ func mustParse(t *testing.T, src string, isYAML bool) *Doc {
 	return d
 }
 
-// scalarValues parses b and returns every scalar in it, keys included. Comments are not
-// values, so a secret repeated in a comment does not show up here.
 func scalarValues(t *testing.T, b []byte, isYAML bool) []string {
 	t.Helper()
 	d := mustParse(t, string(b), isYAML)
@@ -56,7 +54,6 @@ func scalarValues(t *testing.T, b []byte, isYAML bool) []string {
 	return out
 }
 
-// loads checks that core's config reader accepts b and returns what it read.
 func loads(t *testing.T, b string, isYAML bool) *server.Config {
 	t.Helper()
 	path := "config.json"
@@ -70,17 +67,11 @@ func loads(t *testing.T, b string, isYAML bool) *server.Config {
 	return cfg
 }
 
-// secretNodes returns the nodes of the document that hold secrets, and the header text of those
-// that are header values of a provider section.
 func (d *Doc) secretNodes() ([]*yaml.Node, map[*yaml.Node]string) {
 	nodes, texts, _ := found(d.root, false)
 	return nodes, texts
 }
 
-// redactChecked redacts src and checks the properties every redaction must have: every secret
-// the document held is gone as a value (checked by re-parsing, so a comment that repeats it
-// does not count), every placeholder has the documented shape, and Restore puts it all back.
-// It returns the redacted text and the restored text.
 func redactChecked(t *testing.T, src string, isYAML bool, wantSecrets []string) (red, restored string) {
 	t.Helper()
 	r := NewRedactor()
@@ -98,7 +89,6 @@ func redactChecked(t *testing.T, src string, isYAML bool, wantSecrets []string) 
 		if slices.Contains(vals, n.Value) {
 			t.Errorf("secret %q is still a value in the redacted document:\n%s", n.Value, out)
 		}
-		// A secret that is not a string has its type in its placeholder.
 		if !slices.Contains(vals, r.placeholderOf(n, texts)) {
 			t.Errorf("no placeholder for %q in the redacted document:\n%s", n.Value, out)
 		}
@@ -136,7 +126,6 @@ func TestRedactExampleConfig(t *testing.T) {
 			continue
 		}
 		changed++
-		// Only a line that held a secret may change, and it changes to a placeholder.
 		hit := false
 		for _, s := range want {
 			hit = hit || strings.Contains(in[i], s)
@@ -151,7 +140,6 @@ func TestRedactExampleConfig(t *testing.T) {
 	if changed != len(want) {
 		t.Errorf("%d lines changed, want %d", changed, len(want))
 	}
-	// The same secret has the same placeholder within one Redactor, so the three differ.
 	if strings.Count(red, "pluxy-redacted-") != len(want) {
 		t.Errorf("redacted example holds %d placeholders, want %d", strings.Count(red, "pluxy-redacted-"), len(want))
 	}
@@ -199,7 +187,6 @@ func TestRedactJSONConfig(t *testing.T) {
 	if err := json.Unmarshal([]byte(red), &doc); err != nil {
 		t.Fatalf("redacted JSON does not parse: %v\n%s", err, red)
 	}
-	// What must stay visible, and what is hidden, by name.
 	if doc["listen"] != "127.0.0.1:8400" {
 		t.Errorf("listen = %v", doc["listen"])
 	}
@@ -241,7 +228,6 @@ func TestRedactJSONConfig(t *testing.T) {
 		}
 	}
 
-	// The number comes back as a number, not as the quoted text of one.
 	var restored struct {
 		Extension struct {
 			Accounts []struct {
@@ -334,7 +320,6 @@ func TestRedactYAMLLayouts(t *testing.T) {
 			if len(strings.Split(red, "\n")) != len(strings.Split(tc.src, "\n")) {
 				t.Errorf("line count changed:\n%s", red)
 			}
-			// Every line without a secret on it is as it was, comments included.
 			in, out := strings.Split(tc.src, "\n"), strings.Split(red, "\n")
 			for i := range in {
 				hit := false
@@ -347,17 +332,12 @@ func TestRedactYAMLLayouts(t *testing.T) {
 			}
 		})
 	}
-	// The comment in the older layout is the user's text and stays as written.
 	red, _ := redactChecked(t, yamlOld, true, []string{"fake-old-plain", "fake-old-double", "fake-old-single", "fake-old-management", "fake-old-codex", "fake-old-compat", "fake-old-compat-plain"})
 	if !strings.HasPrefix(red, "# older layout, mentions fake-old-plain in a comment\n") {
 		t.Errorf("the comment changed:\n%s", red)
 	}
 }
 
-// A secret behind an anchor, a tag or in a block scalar cannot be replaced where it stands:
-// redaction writes the document out again, which must still hide it.
-// A secret defined by an anchor and used again through an alias must still be hidden, and the
-// redacted document must still parse.
 func TestRedactAnchorWithAlias(t *testing.T) {
 	src := "access:\n  api-keys:\n    - &k fake-anchored\nmanagement:\n  secret-key: *k\n"
 	red, back := redactChecked(t, src, true, []string{"fake-anchored"})
@@ -387,7 +367,6 @@ func TestRedactFallsBackToReencoding(t *testing.T) {
 			if strings.Contains(red, "fake-anchored") || strings.Contains(red, "fake-block-secret") || strings.Contains(red, "fake-tagged") {
 				t.Errorf("redacted document still shows a secret as text:\n%s", red)
 			}
-			// The restored document need not be the same text, but it must mean the same.
 			var a, b any
 			if err := yaml.Unmarshal([]byte(tc.src), &a); err != nil {
 				t.Fatal(err)
@@ -428,7 +407,6 @@ func TestRestoreRefusals(t *testing.T) {
 		if !errors.Is(err, ErrInvalid) || errors.Is(err, ErrStale) {
 			t.Errorf("err = %v, want ErrInvalid only", err)
 		}
-		// The error says which line the placeholder is on (line 2 of restoreJSON's redaction).
 		if err != nil && !strings.Contains(err.Error(), "line 2") {
 			t.Errorf("err = %v, want it to name line 2", err)
 		}
@@ -506,7 +484,6 @@ func TestRestoreKeepsEditsElsewhere(t *testing.T) {
 	if string(got) != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
-	// Dropping a secret from the edited document drops it from the result; the others stay.
 	ph := r.Placeholder("fake-v8-plain")
 	dropped := strings.Replace(string(red), "    - "+ph+"\n", "", 1)
 	if dropped == string(red) {
@@ -521,8 +498,6 @@ func TestRestoreKeepsEditsElsewhere(t *testing.T) {
 	}
 }
 
-// edited parses src, applies change, writes the document and checks core's config reader
-// still accepts it. It returns the new text.
 func edited(t *testing.T, src string, isYAML bool, change func(d *Doc) error) string {
 	t.Helper()
 	d := mustParse(t, src, isYAML)
@@ -585,7 +560,6 @@ func TestEditJSONKeys(t *testing.T) {
 		t.Errorf("management key = %q", k)
 	}
 
-	// A key that is not there is added; the list and the key come after the others.
 	noKeys := `{"listen": "127.0.0.1:8400", "management_key": "fake-m"}`
 	got = edited(t, noKeys, false, func(d *Doc) error { return d.AddClientKey("fake-first") })
 	if keys := loads(t, got, false).ClientKeys; !slices.Equal(keys, []string{"fake-first"}) {
@@ -595,7 +569,6 @@ func TestEditJSONKeys(t *testing.T) {
 		t.Errorf("document not ended by a newline: %q", got)
 	}
 
-	// Removing nothing, or setting nothing, leaves the text as it was.
 	same := edited(t, editJSON, false, func(d *Doc) error {
 		_, err := d.RemoveClientKeys(func(string) bool { return false })
 		return err
@@ -615,7 +588,6 @@ func TestEditJSONKeepsIndent(t *testing.T) {
 			}
 		})
 	}
-	// A document on one line stays on one line.
 	got := edited(t, `{"listen":"127.0.0.1:8400","client_keys":["fake-c"],"management_key":"fake-m"}`, false, func(d *Doc) error { return d.SetManagementKey("fake-n") })
 	if got != "{\"listen\":\"127.0.0.1:8400\",\"client_keys\":[\"fake-c\"],\"management_key\":\"fake-n\"}\n" {
 		t.Errorf("got %q", got)
@@ -701,7 +673,6 @@ func TestApplySettingsJSON(t *testing.T) {
 		if _, err := apply(on, SettingsPatch{Routing: &RoutingPatch{SessionAffinity: flag(false), SessionAffinityTTL: str("1h")}}); !errors.Is(err, ErrInvalid) {
 			t.Errorf("ttl with affinity turned off in the same patch: err = %v, want ErrInvalid", err)
 		}
-		// A JSON config that says nothing has affinity on, so a ttl alone is fine.
 		only, err := apply(editJSON, SettingsPatch{Routing: &RoutingPatch{SessionAffinityTTL: str("2h")}})
 		if err != nil {
 			t.Fatal(err)
@@ -709,7 +680,6 @@ func TestApplySettingsJSON(t *testing.T) {
 		if r := loads(t, only, false).Routing; !r.AffinityOn() || r.AffinityTTL() != 2*time.Hour {
 			t.Errorf("affinity on = %v, ttl %v, want on for 2h", r.AffinityOn(), r.AffinityTTL())
 		}
-		// A ttl shorter than a second is a second, as today's core reads it.
 		short, err := apply(on, SettingsPatch{Routing: &RoutingPatch{SessionAffinityTTL: str("500ms")}})
 		if err != nil {
 			t.Fatal(err)
@@ -805,7 +775,7 @@ func indexOrder(t *testing.T, s string, parts ...string) {
 func TestEditYAMLKeepsCommentsAndOrder(t *testing.T) {
 	for _, tc := range []struct {
 		name, src string
-		keysAt    string // where client keys are
+		keysAt    string
 		mgmtAt    string
 		comments  []string
 		order     []string
@@ -820,7 +790,6 @@ func TestEditYAMLKeepsCommentsAndOrder(t *testing.T) {
 			if len(cfg.ClientKeys) != 2 || cfg.ClientKeys[1] != "fake-key-two" {
 				t.Errorf("client keys = %q in\n%s", cfg.ClientKeys, got)
 			}
-			// The new key is written the way the one before it is.
 			if isV8 && !strings.Contains(got, `- "fake-key-two"`) {
 				t.Errorf("new key not double quoted:\n%s", got)
 			}
@@ -830,7 +799,6 @@ func TestEditYAMLKeepsCommentsAndOrder(t *testing.T) {
 				}
 			}
 			indexOrder(t, got, tc.order...)
-			// The older layout is edited where it is: no v8 section appears beside it.
 			if !isV8 && (strings.Contains(got, "access:") || strings.Contains(got, "\nmanagement:")) {
 				t.Errorf("a v8 section was added to the older layout:\n%s", got)
 			}
@@ -846,7 +814,6 @@ func TestEditYAMLKeepsCommentsAndOrder(t *testing.T) {
 				t.Errorf("a v8 section was added to the older layout:\n%s", got)
 			}
 
-			// Not edited(): core does not load the document this leaves (no client keys).
 			d := mustParse(t, got, true)
 			left, err := d.RemoveClientKeys(func(k string) bool { return strings.HasPrefix(k, "fake-key-") || strings.HasPrefix(k, "fake-old-one") })
 			if err != nil {
@@ -860,7 +827,6 @@ func TestEditYAMLKeepsCommentsAndOrder(t *testing.T) {
 			if left != 0 {
 				t.Errorf("left = %d", left)
 			}
-			// Core refuses a config without client keys, which shows they are all gone.
 			if _, err := server.ParseConfig([]byte(got), "config.yaml"); err == nil || !strings.Contains(err.Error(), "client_keys is empty") {
 				t.Errorf("ParseConfig = %v, want the refusal of no client keys, in\n%s", err, got)
 			}
@@ -870,7 +836,6 @@ func TestEditYAMLKeepsCommentsAndOrder(t *testing.T) {
 }
 
 func TestEditYAMLCreatesMissingSections(t *testing.T) {
-	// No client keys and a null access: the section is made.
 	src := "# top\nserver:\n  host: 127.0.0.1\n  port: 8400\naccess: # none yet\nmanagement:\n  secret-key: fake-m\n" + editYAMLTail
 	got := edited(t, src, true, func(d *Doc) error { return d.AddClientKey("fake-first") })
 	if keys := loads(t, got, true).ClientKeys; !slices.Equal(keys, []string{"fake-first"}) {
@@ -879,14 +844,12 @@ func TestEditYAMLCreatesMissingSections(t *testing.T) {
 	if !strings.Contains(got, "# top") {
 		t.Errorf("comment lost:\n%s", got)
 	}
-	// A v8 root api-keys mapping holds providers, not client keys: it is left alone.
 	providers := "server:\n  host: 127.0.0.1\n  port: 8400\nremote-management:\n  secret-key: fake-management\napi-keys:\n  codex:\n    - base-url: https://codex.example.com\n      keys:\n        - api-key: fake-codex\n"
 	got = edited(t, providers, true, func(d *Doc) error { return d.AddClientKey("fake-first") })
 	cfg := loads(t, got, true)
 	if !slices.Equal(cfg.ClientKeys, []string{"fake-first"}) || !strings.Contains(got, "fake-codex") || !strings.Contains(got, "codex:") {
 		t.Errorf("client keys = %q in\n%s", cfg.ClientKeys, got)
 	}
-	// No management key anywhere: the v8 one is added.
 	got = edited(t, "server:\n  host: 127.0.0.1\n  port: 8400\naccess:\n  api-keys:\n    - fake-c\n"+editYAMLTail, true, func(d *Doc) error { return d.SetManagementKey("fake-m") })
 	if k := loads(t, got, true).ManagementKey; k != "fake-m" || !strings.Contains(got, "management:") {
 		t.Errorf("management key = %q in\n%s", k, got)
@@ -1014,11 +977,7 @@ func TestApplySettingsYAML(t *testing.T) {
 	})
 }
 
-// routing.timeouts is part of a settings change: the fields it names change and the rest stay,
-// core's checks for it apply, null removes it, and a config.yaml has no name for it.
 func TestApplySettingsTimeouts(t *testing.T) {
-	// patch decodes a change as the management API reads one, so the field's JSON name is what
-	// the test uses.
 	patch := func(body string) SettingsPatch {
 		t.Helper()
 		dec := json.NewDecoder(strings.NewReader(body))
@@ -1066,7 +1025,6 @@ func TestApplySettingsTimeouts(t *testing.T) {
 		t.Errorf("routing.timeouts keys = %v in\n%s", raw.Routing["timeouts"], got)
 	}
 
-	// Each field is checked as the config checks it, and an unknown one is refused.
 	for _, body := range []string{
 		`{"routing":{"timeouts":{"header_ms":-1}}}`,
 		`{"routing":{"timeouts":{"idle_ms":2592000001}}}`,
@@ -1079,14 +1037,11 @@ func TestApplySettingsTimeouts(t *testing.T) {
 		}
 	}
 
-	// null removes the section.
 	got, err = apply(withTimeouts, `{"routing":{"timeouts":null}}`, false)
 	if err != nil || strings.Contains(got, `"timeouts"`) {
 		t.Errorf("null = %v, %v; want the section gone:\n%s", got, err, got)
 	}
 
-	// A config.yaml has no key for it: today's core has none, so writing one would be ignored.
-	// A change that would write it there is refused; one that changes nothing is not.
 	if _, err := apply(editYAMLV8, `{"routing":{"timeouts":{"header_ms":15000}}}`, true); !errors.Is(err, ErrInvalid) {
 		t.Errorf("a config.yaml: err = %v, want ErrInvalid", err)
 	}
@@ -1121,7 +1076,6 @@ func TestApplySettingsIgnition(t *testing.T) {
   "routing": {"strategy": "fill-first", "ignition": {"enabled": false, "start_hour": 6}}
 }
 `
-	// The section is replaced whole: a field left out (start_hour) goes back to its default.
 	got, err := apply(src, `{"routing":{"ignition":{"enabled":true,"end_hour":21,"extensions":{"pluxy/claude":{},"pluxy/antigravity":{"windows":{"gemini_models_five_hour":"gemini-3-flash"}}}}}}`, false)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
@@ -1132,7 +1086,6 @@ func TestApplySettingsIgnition(t *testing.T) {
 		ig.Extensions["pluxy/antigravity"].Windows["gemini_models_five_hour"] != "gemini-3-flash" || !ig.AccountOn("a", "pluxy/claude") {
 		t.Fatalf("routing = %+v in\n%s", r, got)
 	}
-	// Each value is checked as the config checks it, and an unknown field is refused.
 	for _, body := range []string{
 		`{"routing":{"ignition":{"start_hour":24}}}`,
 		`{"routing":{"ignition":{"hold_ms":1000}}}`,
@@ -1144,11 +1097,9 @@ func TestApplySettingsIgnition(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrInvalid", body, err)
 		}
 	}
-	// null removes it, which turns ignition off.
 	if got, err := apply(src, `{"routing":{"ignition":null}}`, false); err != nil || strings.Contains(got, "ignition") {
 		t.Errorf("null = %v, %v", got, err)
 	}
-	// A config.yaml has no name for it.
 	if _, err := apply(editYAMLV8, `{"routing":{"ignition":{"enabled":true}}}`, true); !errors.Is(err, ErrInvalid) {
 		t.Errorf("a config.yaml: err = %v, want ErrInvalid", err)
 	}
@@ -1175,18 +1126,13 @@ func TestScrub(t *testing.T) {
 	if got := r.Scrub("x", nil); got != "x" {
 		t.Errorf("Scrub(nil) = %q", got)
 	}
-	// However short, a secret is replaced; an empty one is not a secret.
 	if got := r.Scrub("is z", []string{"z", ""}); got != "is "+r.Placeholder("z") {
 		t.Errorf("Scrub of a 1-character secret = %q", got)
 	}
 }
 
-// A placeholder is never altered, whatever the other secrets are: a short secret may match the
-// placeholder's prefix ("red", "e") or its hex digits ("abc"), and only the message's own text
-// may hold a secret. The key is fixed so the hex case is not left to chance.
 func TestScrubLeavesPlaceholdersAlone(t *testing.T) {
 	r := &Redactor{key: []byte("fixed key for the scrub test....")}
-	// A long secret whose placeholder holds "abc" in its hex digits.
 	var long string
 	for i := 0; ; i++ {
 		long = "long-secret-" + strconv.Itoa(i)
@@ -1194,7 +1140,6 @@ func TestScrubLeavesPlaceholdersAlone(t *testing.T) {
 			break
 		}
 	}
-	// The words between the secrets hold none of the short ones.
 	for _, shorts := range [][]string{{"abc"}, {"red"}, {"e"}, {"pluxy-redacted-"}, {"abc", "red", "e", "9"}} {
 		secrets := append([]string{long}, shorts...)
 		msg := "oh " + long + " is"
@@ -1203,14 +1148,13 @@ func TestScrubLeavesPlaceholdersAlone(t *testing.T) {
 			msg += " so " + s + " us"
 			want += " so " + r.Placeholder(s) + " us"
 		}
-		for range 2 { // in either order
+		for range 2 {
 			if got := r.Scrub(msg, secrets); got != want {
 				t.Errorf("secrets %q:\nScrub = %q\nwant    %q", secrets, got, want)
 			}
 			slices.Reverse(secrets)
 		}
 	}
-	// A short secret that occurs many times, beside placeholders that hold it.
 	got := r.Scrub("ee "+long+" ee", []string{long, "e"})
 	if want := r.Placeholder("e") + r.Placeholder("e") + " " + r.Placeholder(long) + " " + r.Placeholder("e") + r.Placeholder("e"); got != want {
 		t.Errorf("Scrub = %q, want %q", got, want)
@@ -1237,10 +1181,6 @@ func TestPlaceholderIdentity(t *testing.T) {
 	}
 }
 
-// Payload rules from a settings change land in each file's own layout and read back as sent:
-// in a config.yaml as block YAML under requests.payload (or the older top-level payload when
-// only that is there), in a JSON config as payload with numbers kept; null removes them, and a
-// path outside the supported syntax is refused.
 func TestApplySettingsPayload(t *testing.T) {
 	rules := json.RawMessage(`{"override":[{"models":[{"name":"gpt-*","protocol":"codex"}],"params":{"service_tier":"priority","n":128000,"on":"true"}}],` +
 		`"filter":[{"models":[{"name":"gpt-*"}],"params":["tools.#(name==\"apply_patch\")"]}]}`)
@@ -1281,7 +1221,6 @@ func TestApplySettingsPayload(t *testing.T) {
 	}
 }
 
-// The listen address and the remote-management switch are written where each file keeps them.
 func TestApplySettingsListenAndAllowRemote(t *testing.T) {
 	patch := SettingsPatch{Listen: str("0.0.0.0:9000"), ManagementAllowRemote: flag(true)}
 	t.Run("json", func(t *testing.T) {
@@ -1297,7 +1236,6 @@ func TestApplySettingsListenAndAllowRemote(t *testing.T) {
 			if cfg.Listen != "0.0.0.0:9000" || !cfg.ManagementAllowRemote {
 				t.Errorf("listen %q, allow remote %v in\n%s", cfg.Listen, cfg.ManagementAllowRemote, got)
 			}
-			// The file keeps the layout it had: no second copy of host or port.
 			if strings.Count(got, "host:") != 1 || strings.Count(got, "port:") != 1 {
 				t.Errorf("host or port written twice:\n%s", got)
 			}
@@ -1319,7 +1257,6 @@ func TestApplySettingsListenAndAllowRemote(t *testing.T) {
 	})
 }
 
-// "Check for mistakes" on a JSON file that does not parse says where: the line and the column.
 func TestParseJSONErrorsSayWhere(t *testing.T) {
 	for name, c := range map[string]struct{ src, want string }{
 		"a comma where a key goes": {"{\n  \"a\": 1,\n  ,\n  \"b\": 2\n}\n", "not valid JSON at line 3, column 3: invalid character ','"},

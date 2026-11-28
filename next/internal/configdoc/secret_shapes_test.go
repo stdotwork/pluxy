@@ -10,8 +10,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// corePieces returns the pieces of settings the way core takes them (internal/host's
-// accountPieces).
 func corePieces(settings []byte) []string {
 	return protocol.AccountSecretsWith(protocol.Account{}, SettingsSecrets(settings))
 }
@@ -34,10 +32,6 @@ func keptInError(text string, secrets []string) bool {
 	return protocol.RemovePieces(in, secrets...) == in
 }
 
-// Core's path for the settings and URL shapes holds to the same hand-written expected values as
-// the extension side's: SettingsSecrets, then AccountSecretsWith, then RemovePieces. Core also
-// takes a URL's user info as written, so a value with escapes in it can lose a shorter cut than
-// the limit: the check of the cut just below the limit is for a value written as it is.
 func TestSecretShapesCoreSettings(t *testing.T) {
 	type field struct {
 		name, kind string
@@ -84,8 +78,6 @@ func TestSecretShapesCoreSettings(t *testing.T) {
 					}
 				}
 				for _, word := range want.Stay {
-					// Core also counts a URL's "user:password" together, so a password under 8
-					// bytes is covered through that form where the extension side leaves it.
 					if f.kind == secretshapes.InUserinfo && word == row.Value && len(row.Value) < MinTextSecret {
 						continue
 					}
@@ -98,8 +90,6 @@ func TestSecretShapesCoreSettings(t *testing.T) {
 	}
 }
 
-// A URL's secret parts on core's path: in error text, in the whole-value redaction of everything a
-// call sends back, and as a config view shows them.
 func TestSecretShapesCoreURLParts(t *testing.T) {
 	for _, c := range secretshapes.URLRows() {
 		t.Run(c.Name, func(t *testing.T) {
@@ -126,8 +116,6 @@ func TestSecretShapesCoreURLParts(t *testing.T) {
 	}
 }
 
-// A number below a secret key is found by core's rules and by the extension side's, with the same
-// expected text.
 func TestSecretShapesCoreNumbers(t *testing.T) {
 	for _, c := range secretshapes.NumberRows() {
 		t.Run(c.Name, func(t *testing.T) {
@@ -150,8 +138,6 @@ func TestSecretShapesCoreNumbers(t *testing.T) {
 	}
 }
 
-// The config views: a URL with a secret parameter in its fragment shows as a placeholder and goes
-// back unchanged, in settings and in a config file. A URL whose fragment holds none still shows.
 func TestSecretFragmentInConfigViews(t *testing.T) {
 	const secretURL = "https://gw.example/cb#access_token=" + secretshapes.Token
 	const plainURL = "https://gw.example/docs#section"

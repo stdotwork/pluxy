@@ -18,8 +18,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// redactRoundTrip redacts src, checks that no secret is left as a value where a secret was and
-// that each value the test names is still shown, and that Restore gives src back byte for byte.
 func redactRoundTrip(t *testing.T, src string, isYAML bool, secrets, shown []string) string {
 	t.Helper()
 	r := NewRedactor()
@@ -44,8 +42,6 @@ func redactRoundTrip(t *testing.T, src string, isYAML bool, secrets, shown []str
 	return string(red)
 }
 
-// A value below a secret key that is also written in plain elsewhere, such as a 3, is hidden
-// where it is a secret and shown where it is not; the document can still be read.
 func TestRedactSecretValueAlsoPlainElsewhere(t *testing.T) {
 	t.Run("json", func(t *testing.T) {
 		src := `{"listen": "127.0.0.1:8317", "client_keys": ["fake-client-key-1"],
@@ -66,10 +62,6 @@ func TestRedactSecretValueAlsoPlainElsewhere(t *testing.T) {
 	})
 }
 
-// Text keeps a number shorter than MinTextSecret that is a secret only for being in a mapping
-// below a secret key (the 3 of rotate_after_days: 3), and loses every other secret, however
-// short: a string there (hunter2), a secret key's value, its list's items, and a value that is
-// also one of those through an alias.
 func TestTextSecretsLeaveShortNestedNumbers(t *testing.T) {
 	for _, tc := range []struct {
 		name, src string
@@ -105,8 +97,6 @@ func TestTextSecretsLeaveShortNestedNumbers(t *testing.T) {
 	}
 }
 
-// A key written as an alias of an anchored name is read as that name, wherever names are read:
-// a provider entry's api-key, a management secret-key, and a header name.
 func TestRedactAliasKeys(t *testing.T) {
 	for _, tc := range []struct{ name, src, secret string }{
 		{"api-key", "names: [&k api-key]\ncodex-api-key:\n  - {*k : fake-alias-key-secret-1, base-url: https://codex.example.com}\n", "fake-alias-key-secret-1"},
@@ -123,9 +113,6 @@ func TestRedactAliasKeys(t *testing.T) {
 	}
 }
 
-// A secret with an explicit tag is shown as a placeholder and goes back with its tag, so core
-// reads the same value: !!int 0x1F2E3D4C stays the number 523124044. A file without anchors is
-// restored in place, byte for byte; one with an anchored secret is written out again.
 func TestRestoreKeepsExplicitTags(t *testing.T) {
 	for _, tc := range []struct {
 		name, src string
@@ -161,10 +148,6 @@ func TestRestoreKeepsExplicitTags(t *testing.T) {
 	}
 }
 
-// The parts of a URL in settings are removed from text on their own as well: its password, its
-// user name and password together, in Basic form too, and each value of 8 bytes or more of a
-// query parameter named like a secret, as written and decoded. Other query values, such as a
-// date or a region, are no secrets.
 func TestSettingsSecretsHoldURLParts(t *testing.T) {
 	const u = "https://gw-user:fake-gw-pass-1234@up.example/v1?token=fake-url-token-1234&v=2" +
 		"&api-version=2024-10-21&region=us-east-1&key=sk+live/abc%3D%3D1234&sig=fake-url-sig-1234"
@@ -174,9 +157,9 @@ func TestSettingsSecretsHoldURLParts(t *testing.T) {
 		"fake-gw-pass-1234",
 		"gw-user:fake-gw-pass-1234",
 		"fake-url-token-1234",
-		"sk+live/abc%3D%3D1234", // as written
-		"sk live/abc==1234",     // as a query decodes it
-		"sk+live/abc==1234",     // with only its escapes decoded
+		"sk+live/abc%3D%3D1234",
+		"sk live/abc==1234",
+		"sk+live/abc==1234",
 		"fake-url-sig-1234",
 	} {
 		if !slices.Contains(got, want) {
@@ -188,7 +171,6 @@ func TestSettingsSecretsHoldURLParts(t *testing.T) {
 			t.Errorf("SettingsSecrets holds %q, no secret: %q", plain, got)
 		}
 	}
-	// Parameters named like a password, a signed token or an assertion count too.
 	var params []string
 	names := []string{"pwd", "pass", "passwd", "passcode", "jwt", "client_assertion", "code_verifier", "sas", "credential", "credentials"}
 	for _, name := range names {
@@ -200,7 +182,6 @@ func TestSettingsSecretsHoldURLParts(t *testing.T) {
 			t.Errorf("SettingsSecrets lacks the value of %s: %q", name, more)
 		}
 	}
-	// As core removes them from text (host and request log), the Basic form included.
 	data, _ := json.Marshal(got)
 	r := protocol.NewRedactor(&protocol.Credential{Kind: "settings", Data: data})
 	basic := base64.StdEncoding.EncodeToString([]byte("gw-user:fake-gw-pass-1234"))
@@ -210,12 +191,6 @@ func TestSettingsSecretsHoldURLParts(t *testing.T) {
 	}
 }
 
-// Reading and restoring a config file, and finding the secrets of settings, take time in
-// proportion to the document's size: 16 times the secrets take about 16 times as long, not the
-// 256 times a reading that goes over the document once for each secret takes. A config.yaml is
-// read with a key on each line and with all of them on one line (a flow list), with and without
-// characters beyond ASCII. The best of three runs at each size is compared, so a busy machine
-// slows both alike and decides nothing.
 func TestRedactAndRestoreTimeGrowsWithSize(t *testing.T) {
 	const small, large, most = 1000, 16000, 96.0
 	type layout struct {
@@ -248,10 +223,6 @@ func TestRedactAndRestoreTimeGrowsWithSize(t *testing.T) {
 			return []byte(b.String())
 		}
 	}
-	// Provider entries without names, which Restore pairs by their secrets: all with the same key,
-	// and with that key and a header secret of their own (n secrets in all). Those with the key
-	// alone are a quarter as many as n, so a pairing slower than linear fails the test in
-	// seconds, not minutes.
 	sharedKey := func(header bool) func(n int) []byte {
 		return func(n int) []byte {
 			var b strings.Builder
@@ -288,8 +259,6 @@ func TestRedactAndRestoreTimeGrowsWithSize(t *testing.T) {
 		{"yaml on one line", true, yamlList(true, "sk-many")},
 		{"yaml on one line, not ASCII", true, yamlList(true, "sk-mäny")},
 	}
-	// timed runs f with the garbage collector off, which would otherwise run more often the more
-	// memory f takes, and make a larger document slower than its size alone makes it.
 	timed := func(f func()) time.Duration {
 		runtime.GC()
 		defer debug.SetGCPercent(debug.SetGCPercent(-1))
@@ -344,17 +313,13 @@ func TestRedactAndRestoreTimeGrowsWithSize(t *testing.T) {
 	}
 }
 
-// A secret's value written again as a whole value where no secret goes (a note holding the key)
-// is hidden there too, and goes back there; a copy shorter than MinTextSecret, or a number, is
-// no secret and stays shown, as for F1's 3. A copy's placeholder goes back only where the file
-// holds that copy now.
 func TestRedactCopiesOfSecrets(t *testing.T) {
 	const key = "sk-real-secret-value-1234"
 	for _, tc := range []struct {
 		name, src string
 		isYAML    bool
 		shown     []string
-		moved     string // the redacted document with the copy's placeholder moved
+		moved     string
 	}{
 		{"yaml", "api-key: " + key + "\nnote: " + key + "\nnotes: [first, \"" + key + "\"]\nsecret: abcd\nlabel: abcd\nretry: 12345678\nprivate-key: \"12345678\"\n",
 			true, []string{"label: abcd", "retry: 12345678"}, "other: P\n"},
@@ -370,7 +335,6 @@ func TestRedactCopiesOfSecrets(t *testing.T) {
 			}
 		})
 	}
-	// In settings the same.
 	r := NewRedactor()
 	src := `{"api_key": "` + key + `", "note": "` + key + `"}`
 	red, err := r.RedactSettings([]byte(src))
@@ -380,16 +344,12 @@ func TestRedactCopiesOfSecrets(t *testing.T) {
 	if back, err := r.RestoreSettings(red, []byte(src)); err != nil || string(back) != src {
 		t.Errorf("RestoreSettings: %v\n%s", err, back)
 	}
-	// A placeholder that stands for no secret, where no secret goes, is stale.
 	stale := `{"api_key": "` + key + `", "note": "` + r.Placeholder("no-such-secret-1234") + `"}`
 	if _, err := r.RestoreSettings([]byte(stale), []byte(src)); !errors.Is(err, ErrStale) {
 		t.Errorf("RestoreSettings of an unknown placeholder on a plain key: %v, want ErrStale", err)
 	}
 }
 
-// A copy's placeholder goes back only while the document still holds the secret it copies as
-// that secret: one whose original was changed or deleted is refused, naming the copy's line, so
-// the copy is never put back where it would be shown.
 func TestRestoreCopyNeedsItsOriginal(t *testing.T) {
 	const key = "sk-real-secret-value-1234"
 	for _, tc := range []struct {
@@ -426,10 +386,6 @@ func TestRestoreCopyNeedsItsOriginal(t *testing.T) {
 	}
 }
 
-// A document Restore refuses because list items cannot all be paired takes time that grows with
-// its size about as the document does: entries whose keys pair them along a chain, and as many
-// more that each fit only the first entry, which the chain already takes. 32 times the entries
-// take well under 96 times as long; a search for each of them took over 300 times.
 func TestRestoreRefusalTimeGrowsWithSize(t *testing.T) {
 	const small, large, most = 500, 16000, 96.0
 	docs := func(r *Redactor, n int) (cur, edited []byte) {
@@ -487,10 +443,6 @@ func TestRestoreRefusalTimeGrowsWithSize(t *testing.T) {
 	}
 }
 
-// A placeholder put where its secret's text, written back as it was, reads differently (a comma
-// inside a flow list) goes back quoted: the document is written out again rather than
-// refused, also when a copy of that secret stays in place. The secret moves from a block list
-// into a flow list of the same list, which the placement rule allows.
 func TestRestoreQuotesASecretTheFlowWouldSplit(t *testing.T) {
 	const key = "sk-aaaa,bbbb1234"
 	cur := "access:\n  api-keys:\n    - " + key + "\n"
@@ -509,8 +461,6 @@ func TestRestoreQuotesASecretTheFlowWouldSplit(t *testing.T) {
 	}
 }
 
-// After core restarts, a placeholder of the old key stands for no secret: it is stale, whether
-// a copy comes before its original or after it.
 func TestRestoreAfterRestartIsStale(t *testing.T) {
 	const key = "sk-real-secret-value-1234"
 	for _, tc := range []struct {
@@ -548,9 +498,6 @@ func TestRestoreAfterRestartIsStale(t *testing.T) {
 	}
 }
 
-// Only a secret by itself (a secret key's value, a credential's, a secret header's) is copied:
-// a value that is a secret only for being in a mapping below a secret key (the mode of
-// client-secret: {mode: automatic}) leaves the same value elsewhere shown.
 func TestRedactCopiesOnlyOfDirectSecrets(t *testing.T) {
 	redactRoundTrip(t, "routing:\n  strategy: automatic\nclient-secret:\n  mode: automatic\n  value: fake-client-secret-1\n", true,
 		[]string{"fake-client-secret-1", "mode: automatic"}, []string{"strategy: automatic"})
@@ -558,9 +505,6 @@ func TestRedactCopiesOnlyOfDirectSecrets(t *testing.T) {
 		[]string{"fake-client-secret-1", `"mode": "automatic"`}, []string{`"strategy": "automatic"`})
 }
 
-// Inside a header mapping, a value that is a mapping is read by the rules for keys: a
-// credential there is hidden but for its kind, and a mapping below a secret key's name holds
-// secrets only for being there, so its short numbers stay in text.
 func TestHeaderMappingsKeepKeyRules(t *testing.T) {
 	src := `{"settings": {"extra_headers": {"credential": {"kind": "api_key", "value": "fake-header-credential-1"},
   "client_secret": {"value": "fake-header-nested-1", "rotate_after_days": 3}}}}`
@@ -571,24 +515,16 @@ func TestHeaderMappingsKeepKeyRules(t *testing.T) {
 	}
 }
 
-// A JSON key name is compared as encoding/json matches it when core loads the file, so
-// client_keyſ (with U+017F) and management_\u212aey (with the Kelvin sign) are client_keys and
-// management_key, and their values are hidden.
 func TestRedactFoldedJSONNames(t *testing.T) {
 	src := "{\"listen\": \"127.0.0.1:0\", \"client_key\u017f\": [\"fake-fold-client-key-1\"], \"management_\u212aey\": \"fake-fold-mk-1\"}\n"
 	redactRoundTrip(t, src, false, []string{"fake-fold-client-key-1", "fake-fold-mk-1"}, nil)
 }
 
-// Below the v8 api-keys mapping, only the provider sections core reads are read by the rules;
-// any other key's values are secrets, as below any secret key.
 func TestRedactUnknownV8Section(t *testing.T) {
 	src := "api-keys:\n  codex:\n    - base-url: https://codex.example.com\n      keys:\n        - api-key: fake-codex-key-1\n  clients: [fake-misplaced-client-key-1]\n"
 	redactRoundTrip(t, src, true, []string{"fake-codex-key-1", "fake-misplaced-client-key-1"}, []string{"base-url: https://codex.example.com"})
 }
 
-// Names are compared without regard to letter case and to how words are joined, if they are
-// (camelCase, snake_case, kebab-case, written together), and a mapping whose name holds header
-// is read by the header rules, where a key named like a secret is one too.
 func TestSecretNames(t *testing.T) {
 	for _, name := range []string{
 		"api_key", "apiKey", "API-KEY", "accessToken", "access_token", "refreshToken", "id-token",

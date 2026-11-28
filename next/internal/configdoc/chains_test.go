@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// A chain is written under routing.chains, keeping the keys around it in their order, and its
-// removal takes routing.chains with the last chain.
 func TestSetAndRemoveChain(t *testing.T) {
 	d, err := Parse([]byte("{\n  \"listen\": \"127.0.0.1:0\",\n  \"routing\": {\"strategy\": \"fill-first\"},\n  \"client_keys\": [\"k\"]\n}\n"), false)
 	if err != nil {

@@ -7,14 +7,11 @@ import (
 	"testing"
 )
 
-// The same secret written as a number in one place and as a string in another goes back to each
-// place as it was written there, also after its placeholder moved within its list.
 func TestRestoreKeepsEachPlacesType(t *testing.T) {
 	for _, tc := range []struct {
 		name, src string
 		isYAML    bool
-		// want is what the file holds once the two items of its list are swapped.
-		want string
+		want      string
 	}{
 		{"json", `{"api_key": 1234, "secret_key": "1234", "access": {"api_keys": ["1234", 1234]}}`, false,
 			`"api_keys": [1234, "1234"]`},
@@ -27,7 +24,6 @@ func TestRestoreKeepsEachPlacesType(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// A placeholder ends in 24 random hex digits, which can spell 1234 themselves.
 			placeholder := regexp.MustCompile(PlaceholderPrefix + `[0-9a-f]{24}`)
 			if strings.Contains(placeholder.ReplaceAllString(string(red), ""), "1234") {
 				t.Fatalf("the redacted document holds the secret:\n%s", red)
@@ -36,7 +32,6 @@ func TestRestoreKeepsEachPlacesType(t *testing.T) {
 			if err != nil || string(back) != tc.src {
 				t.Errorf("round trip = %s, %v; want %s", back, err, tc.src)
 			}
-			// Swap the list's two items, its last two placeholders: each goes back with its type.
 			at := placeholder.FindAllStringIndex(string(red), -1)
 			if len(at) != 4 {
 				t.Fatalf("want 4 placeholders in the redacted document:\n%s", red)
@@ -51,9 +46,6 @@ func TestRestoreKeepsEachPlacesType(t *testing.T) {
 	}
 }
 
-// In a config file too, a string that spells a number's type and value is still a string: its
-// placeholder is not the number's, in either order, and it does not keep a placeholder from the
-// number alive.
 func TestConfigPlaceholdersOfTypedValuesAreTheirOwn(t *testing.T) {
 	r := NewRedactor()
 	for _, tc := range []struct {
@@ -76,7 +68,6 @@ func TestConfigPlaceholdersOfTypedValuesAreTheirOwn(t *testing.T) {
 			t.Errorf("round trip of %q = %q, %v", tc.src, back, err)
 		}
 	}
-	// The number's placeholder, sent after the number became that string, matches no secret.
 	for _, tc := range []struct {
 		before, now string
 		isYAML      bool

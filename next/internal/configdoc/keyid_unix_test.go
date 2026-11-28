@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// Loading an existing key-ID file makes the state folder and the key owner-only, even when they
-// were made with wider access.
 func TestLoadKeyIDMakesExistingStateOwnerOnly(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	if err := os.Mkdir(dir, 0o755); err != nil {

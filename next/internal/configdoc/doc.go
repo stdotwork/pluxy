@@ -1,8 +1,3 @@
-// Package configdoc reads and edits core's config file as a document: the JSON config, or a
-// config.yaml with today's core's key names. An edit keeps what it does not touch: key order,
-// and in a config.yaml its comments, as today's core keeps them when it saves. It also redacts
-// the secrets a document holds, for the management API, and puts them back when an edited
-// document comes back (redact.go).
 package configdoc
 
 import (
@@ -18,31 +13,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ErrInvalid marks a document that does not parse or an edit that does not fit it.
 var ErrInvalid = errors.New("invalid config document")
 
-// Doc is a config file's contents as a tree of nodes. A JSON file is read into the same kind of
-// tree as a config.yaml, so both are walked and edited by the same code.
 type Doc struct {
-	// YAML is set for a config.yaml; otherwise the document is JSON.
-	YAML bool
-	src  []byte
-	file *yaml.Node // YAML: the document node, which holds the comments around the root
-	root *yaml.Node // the top-level mapping
-	// spans are where each JSON scalar's text is in src.
+	YAML   bool
+	src    []byte
+	file   *yaml.Node
+	root   *yaml.Node
 	spans  map[*yaml.Node]span
 	edited bool
-	// lines are the offsets in src where each line starts, once offset needs them, and chars the
-	// offset of each character of a line, from its start, for a line offset has read that is not
-	// all ASCII (nil for one that is).
-	lines []int
-	chars map[int][]int
+	lines  []int
+	chars  map[int][]int
 }
 
-// span is a range of bytes in a document's source.
 type span struct{ start, end int }
 
-// Parse reads a config file's contents; isYAML says it is a config.yaml.
 func Parse(b []byte, isYAML bool) (*Doc, error) {
 	d := &Doc{YAML: isYAML, src: b}
 	if len(bytes.TrimSpace(b)) == 0 {
@@ -70,9 +55,8 @@ func Parse(b []byte, isYAML bool) (*Doc, error) {
 	return d, nil
 }
 
-// jsonErrorAt says where in b a JSON syntax error is: its line and column, counted from 1, as the
-// config's own parser says them. The streaming reader only knows roughly where it stopped, so the
-// whole document is read again for the exact place. An error that is no syntax error is as it was.
+// The streaming reader only knows roughly where it stopped, so the whole document is read again
+// for the exact place.
 func jsonErrorAt(b []byte, err error) error {
 	var syn *json.SyntaxError
 	if e := json.Unmarshal(b, new(any)); !errors.As(e, &syn) {
@@ -93,14 +77,10 @@ func jsonErrorAt(b []byte, err error) error {
 	return fmt.Errorf("not valid JSON at line %d, column %d: %s", line, col, syn)
 }
 
-// parseJSON reads a JSON document into nodes, keeping the order of keys and where each
-// scalar's text is. Duplicate keys are kept; Get finds the last, as encoding/json reads it.
 func parseJSON(b []byte) (*yaml.Node, map[*yaml.Node]span, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
 	spans := map[*yaml.Node]span{}
-	// next returns where the next token starts: after white space and the separators the
-	// decoder has not consumed yet.
 	next := func() int {
 		off := int(dec.InputOffset())
 		for off < len(b) && strings.IndexByte(" \t\r\n,:", b[off]) >= 0 {
@@ -144,7 +124,7 @@ func parseJSON(b []byte) (*yaml.Node, map[*yaml.Node]span, error) {
 			default:
 				return nil, fmt.Errorf("unexpected %q", t)
 			}
-			if _, err := dec.Token(); err != nil { // the closing delimiter
+			if _, err := dec.Token(); err != nil {
 				return nil, err
 			}
 			return n, nil
@@ -178,21 +158,16 @@ func scalar(tag, value string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: value}
 }
 
-// String returns a string node.
 func String(s string) *yaml.Node { return scalar("!!str", s) }
 
-// Int returns an integer node.
 func Int(n int64) *yaml.Node { return scalar("!!int", fmt.Sprint(n)) }
 
-// Bool returns a boolean node.
 func Bool(b bool) *yaml.Node { return scalar("!!bool", fmt.Sprint(b)) }
 
-// isNull reports whether n is absent or an empty value (`key:` with nothing after it).
 func isNull(n *yaml.Node) bool {
 	return n == nil || (n.Kind == yaml.ScalarNode && n.Tag == "!!null")
 }
 
-// child returns the value of key in mapping m: the last one, when the key is there twice.
 func child(m *yaml.Node, key string) *yaml.Node {
 	if m == nil || m.Kind != yaml.MappingNode {
 		return nil
@@ -206,7 +181,6 @@ func child(m *yaml.Node, key string) *yaml.Node {
 	return v
 }
 
-// Get returns the node at path, or nil when there is none.
 func (d *Doc) Get(path ...string) *yaml.Node {
 	n := d.root
 	for _, k := range path {
@@ -217,8 +191,6 @@ func (d *Doc) Get(path ...string) *yaml.Node {
 	return n
 }
 
-// Set puts v at path, adding the mappings on the way that are missing or empty. A value it
-// replaces keeps its comments.
 func (d *Doc) Set(v *yaml.Node, path ...string) error {
 	m := d.root
 	for i, k := range path {
@@ -244,7 +216,6 @@ func (d *Doc) Set(v *yaml.Node, path ...string) error {
 	return nil
 }
 
-// Delete removes the key at path, if it is there.
 func (d *Doc) Delete(path ...string) {
 	m := d.Get(path[:len(path)-1]...)
 	if m == nil || m.Kind != yaml.MappingNode {
@@ -259,10 +230,6 @@ func (d *Doc) Delete(path ...string) {
 	}
 }
 
-// Bytes returns the document's contents: the source as read when nothing changed, else the
-// tree written out. A config.yaml keeps its comments and key order, with two-space indents
-// and without blank lines, as today's core writes it; a JSON file keeps its key order and the
-// indent it had.
 func (d *Doc) Bytes() ([]byte, error) {
 	if !d.edited {
 		return d.src, nil
@@ -299,8 +266,6 @@ func (d *Doc) encode() ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// jsonIndent returns the indent of the first indented line of a JSON document: empty for a
-// document on one line.
 func jsonIndent(src []byte) string {
 	for _, line := range bytes.Split(src, []byte("\n"))[1:] {
 		trimmed := bytes.TrimLeft(line, " \t")
@@ -355,7 +320,6 @@ func encodeJSON(buf *bytes.Buffer, n *yaml.Node) error {
 	return nil
 }
 
-// jsonString returns s as a JSON string, which is also a YAML double-quoted scalar.
 func jsonString(s string) string {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// A list of lists of keys below a key named like a secret holds secrets at every depth.
 func TestRedactNestedKeyLists(t *testing.T) {
 	src := `{"access": {"api_keys": [["fake-nested-a", "fake-nested-b"], [["fake-nested-c"]]]}}`
 	_, back := redactChecked(t, src, false, []string{"fake-nested-a", "fake-nested-b", "fake-nested-c"})
@@ -20,8 +19,6 @@ func TestRedactNestedKeyLists(t *testing.T) {
 
 var placeholderText = regexp.MustCompile(regexp.QuoteMeta(PlaceholderPrefix) + `[0-9a-z]+`)
 
-// In account settings, everything below a key named like a secret is a secret, however deep,
-// and the rest stays as it is.
 func TestRedactSettings(t *testing.T) {
 	r := NewRedactor()
 	src := `{"base_url":"https://one.example/v1","password":{"primary":"fake-object","spare":[1234]},` +
@@ -31,8 +28,6 @@ func TestRedactSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A placeholder ends in random hex digits, which can spell a short secret such as 1234 by
-	// chance, so the secrets are looked for outside the placeholders.
 	outside := placeholderText.ReplaceAllString(string(out), "")
 	for _, h := range hidden {
 		if strings.Contains(outside, h) {
@@ -58,8 +53,6 @@ func TestRedactSettings(t *testing.T) {
 	}
 }
 
-// In settings, a placeholder goes back only where its secret is: in its own place, or within its
-// own list in any order; in a config document too (TestRestorePlacesEachSecretInItsOwnSlot).
 func TestRestoreSettingsKeepsSecretsInPlace(t *testing.T) {
 	r := NewRedactor()
 	cur := []byte(`{"api_key":"fake-a","password":"fake-b","api_keys":["fake-c","fake-d"]}`)
@@ -83,8 +76,6 @@ func TestRestoreSettingsKeepsSecretsInPlace(t *testing.T) {
 	}
 }
 
-// A key that is the empty string is a key like any other: below a secret key, its value is a
-// secret too.
 func TestRedactEmptyKey(t *testing.T) {
 	r := NewRedactor()
 	for _, c := range []struct {
@@ -105,8 +96,6 @@ func TestRedactEmptyKey(t *testing.T) {
 	}
 }
 
-// A placeholder in a list item goes back only in that same list: not in the same-named list of
-// another item.
 func TestRestoreSettingsKeepsListItemsInTheirList(t *testing.T) {
 	r := NewRedactor()
 	cur := []byte(`{"targets":[{"name":"one","api_keys":["fake-a","fake-c"]},{"name":"two","api_keys":["fake-b"]}]}`)
@@ -125,8 +114,6 @@ func TestRestoreSettingsKeepsListItemsInTheirList(t *testing.T) {
 	}
 }
 
-// The same text as a number and as a string is one placeholder, and each goes back with its own
-// type.
 func TestRestoreSettingsKeepsEachType(t *testing.T) {
 	r := NewRedactor()
 	for _, src := range []string{
@@ -145,8 +132,6 @@ func TestRestoreSettingsKeepsEachType(t *testing.T) {
 	}
 }
 
-// A number and a string with the same text have different placeholders in settings, so each
-// keeps its type wherever its own placeholder goes, whatever else in the list changed.
 func TestRestoreSettingsKeepsTypeOfEachPlaceholder(t *testing.T) {
 	r := NewRedactor()
 	cur := []byte(`{"password":["1234",1234]}`)
@@ -170,8 +155,6 @@ func TestRestoreSettingsKeepsTypeOfEachPlaceholder(t *testing.T) {
 	}
 }
 
-// A string that spells a number's type and value is still a string: its placeholder is not the
-// number's, in any order or place, and it does not keep a placeholder from the number alive.
 func TestSettingsPlaceholdersOfTypedValuesAreTheirOwn(t *testing.T) {
 	r := NewRedactor()
 	for _, src := range []string{
@@ -212,7 +195,6 @@ func TestSettingsPlaceholdersOfTypedValuesAreTheirOwn(t *testing.T) {
 			t.Errorf("round trip of %s = %s, %v", src, back, err)
 		}
 	}
-	// The number's placeholder, sent after the number became that string, matches no secret.
 	before, err := r.RedactSettings([]byte(`{"password":1234}`))
 	if err != nil {
 		t.Fatal(err)

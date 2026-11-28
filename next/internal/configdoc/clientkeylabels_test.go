@@ -6,15 +6,11 @@ import (
 	"testing"
 )
 
-// A client key's label can be set or cleared in place only where the config.yaml holds it
-// itself. Where it is set through a YAML alias or a merge key, SetClientKeyLabel refuses
-// (ErrLabelIndirect) rather than write a file that reads differently from what was asked: a
-// clear that changes nothing, or a change that also changes the label of another key.
 func TestSetClientKeyLabel(t *testing.T) {
 	const shared = "shared: &s\n  k1: One\n"
 	tests := []struct {
 		name, doc, id, label string
-		want                 map[string]string // the labels in effect afterwards; nil: refused
+		want                 map[string]string
 	}{
 		{"set beside others", "client_key_labels:\n  k1: One\n", "k2", "Two", map[string]string{"k1": "One", "k2": "Two"}},
 		{"change its own", "client_key_labels:\n  k1: One\n", "k1", "Uno", map[string]string{"k1": "Uno"}},
@@ -66,7 +62,6 @@ func TestSetClientKeyLabel(t *testing.T) {
 	}
 }
 
-// A JSON config has no aliases or merge keys, so its labels are always set in place.
 func TestSetClientKeyLabelJSON(t *testing.T) {
 	d, err := Parse([]byte(`{"client_key_labels": {"k1": "One"}}`), false)
 	if err != nil {
