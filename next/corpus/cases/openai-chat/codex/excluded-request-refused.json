@@ -16,7 +16,7 @@
       "reason": "For an unknown model the old core says unknown provider (invalid_request_error, param model); the new core says no account serves the model (model_not_found).",
       "want": {
         "code": "model_not_found",
-        "message": "no account serves model \"gpt-test-mini\"",
+        "message": "no account serves model \"gpt-test-mini\". pluxy serves: gpt-test. Set the tool's model to one of them, or add a model alias to an account so that \"gpt-test-mini\" goes to one of them.",
         "type": "invalid_request_error",
         "pluxy": "(volatile)"
       }

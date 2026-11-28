@@ -108,6 +108,84 @@ describe("Install add-on and Turn on add-on", () => {
     });
   }
 
+  test("Install add-on goes on to turn the add-on on, in its one confirmation window, then opens the tool's page", async () => {
+    let opened = 0;
+    const m = await mount(
+      <AddonAction
+        tool="codex"
+        pkg="t/chain-1"
+        step="install"
+        registry="curated"
+        version="1.2.0"
+        changed={() => {}}
+        opens={() => opened++}
+      />,
+      {
+        device_install: () => catalog(["t/chain-1", false]),
+        device_enable: () => catalog(["t/chain-1", true]),
+      },
+    );
+    await m.click("Install add-on");
+    expect(m.commands("device_install")).toHaveLength(1);
+    expect(m.commands("device_enable")).toEqual([{ id: "t/chain-1", enabled: true }]);
+    expect(opened).toBe(1);
+  });
+
+  test("a No in the confirmation window, or an install that failed, stops there and opens nothing", async () => {
+    let opened = 0;
+    const press = (pkg: string, step: "install" | "enable") => (
+      <AddonAction
+        tool="codex"
+        pkg={pkg}
+        step={step}
+        registry="curated"
+        changed={() => {}}
+        opens={() => opened++}
+      />
+    );
+    const no = await mount(press("t/chain-2", "install"), {
+      device_install: () => catalog(["t/chain-2", false]),
+      device_enable: () => Promise.reject("native enable cancelled; t/chain-2 stays disabled"),
+    });
+    await no.click("Install add-on");
+    expect(no.commands("device_enable")).toHaveLength(1);
+    const failed = await mount(press("t/chain-3", "install"), {
+      device_install: () => Promise.reject("registry unreachable"),
+      device_enable: () => catalog(["t/chain-3", true]),
+    });
+    await failed.click("Install add-on");
+    expect(failed.commands("device_enable")).toHaveLength(0);
+    const off = await mount(press("t/chain-4", "enable"), {
+      device_enable: () => Promise.reject("the signature does not hold"),
+    });
+    await off.click("Turn on add-on");
+    expect(opened).toBe(0);
+  });
+
+  test("an install that leaves the add-on on already opens its page without asking", async () => {
+    let opened = 0;
+    const m = await mount(
+      <AddonAction tool="codex" pkg="t/chain-5" step="install" changed={() => {}} opens={() => opened++} />,
+      { device_install: () => catalog(["t/chain-5", true]), device_enable: never },
+    );
+    await m.click("Install add-on");
+    expect(m.commands("device_enable")).toHaveLength(0);
+    expect(opened).toBe(1);
+  });
+
+  test("turned on from setup's step 2, the tool's page opens with the way back to setup", async () => {
+    const off = catalog(["pluxy/claude-code", false]);
+    const m = await mount(
+      toolAction(agents, { catalog: off, offers: [] }, () => {}, true)(client("claude-code")),
+      {
+        device_enable: () => catalog(["pluxy/claude-code", true]),
+      },
+    );
+    await m.click("Turn on add-on");
+    expect(location.hash).toBe("#/claude-code");
+    expect(cameFromSetup()).toBe(true);
+  });
+
   test("one step at a time for each add-on, however many rows show it", async () => {
     const reply = later<unknown>();
     let calls = 0;

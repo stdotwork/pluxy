@@ -36,10 +36,11 @@ pub(crate) fn notice(app: &tauri::AppHandle, text: String) {
 pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> {
     let Review {
         review,
+        details,
         remember,
         summary,
         page,
-        own,
+        quiet,
         confirm,
     } = begin(app, &id)?;
     let handle = app.clone();
@@ -57,12 +58,19 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
                     button == CONFIRM,
                     c.checked(),
                     &summary,
-                    own,
+                    quiet,
                 );
                 After::Close
             }),
         );
-        spec.review = Some(review);
+        // What will happen in plain words first, the exact details below it.
+        match details {
+            Some(details) => {
+                spec.text = Some(review);
+                spec.review = Some(details);
+            }
+            None => spec.review = Some(review),
+        }
         spec.check = remember;
         spec.buttons = vec![(CANCEL, text::CANCEL.into()), (CONFIRM, confirm.into())];
         spec.default = Some(CANCEL);
@@ -80,13 +88,13 @@ pub(crate) fn request(app: &tauri::AppHandle, id: String) -> Result<(), String> 
             }
         }
         // Closing/expiry cannot manufacture a confirm response. The engine checks its own clock.
-        spec.lifetime = Some(LIFETIME);
+        spec.lifetime = Some(SHOWN_LIFETIME);
         let (watch_app, watch_id) = (handle.clone(), id.clone());
         spec.watch = Some(Box::new(move || withdrawn(&watch_app, &watch_id)));
         if let Err(e) = dw::show(mtm, spec, None) {
             eprintln!("pluxy-app: {e}");
             let (app, id, summary) = failed;
-            respond(&app, &id, false, false, &summary, own);
+            respond(&app, &id, false, false, &summary, quiet);
         }
     })
     .map_err(|e| e.to_string())

@@ -5,7 +5,14 @@
 import type { Account } from "../api/accounts";
 import type { SetupClient } from "../api/setup";
 import type { UsageBucket, UsageGroup } from "../api/usage";
-import { accountCondition, backWhen, type Group, leftPercent, rowWindows } from "../parts/account";
+import {
+  accountCondition,
+  backWhen,
+  conditionUnchecked,
+  type Group,
+  leftPercent,
+  rowWindows,
+} from "../parts/account";
 import type { Windows } from "../parts/hooks";
 import { strings } from "../strings";
 
@@ -19,11 +26,14 @@ const t = strings("home.logic", {
   firstBack: " The first is back {when}.",
   nothingNeedsYou: "Nothing needs you.",
   everythingServing: "Everything is serving.",
+  statusUnread: "Could not check which providers are running.",
+  statusUnreadNote: "Accounts with a provider stay unchecked until pluxy's status is read.",
   mostFailed: "Accounts are serving, but most requests failed.",
   mostFailedNote: "Activity lists the failed requests, with the reason for each.",
   noAccounts: "pluxy has no accounts yet.",
   waiting: "{count} waiting",
   serving: "{count} serving",
+  notChecked: "{count} not checked",
   turnedOff: "{count} turned off",
   requests: {
     one: "{n} request in 7 days, {percent} succeeded",
@@ -53,6 +63,7 @@ export interface Counts {
   waiting: number;
   serving: number;
   off: number;
+  unchecked?: number;
   total: number;
 }
 
@@ -62,6 +73,8 @@ export const noAccountsTitle = () => t("noAccounts");
 /** The accounts of each group, in core's order, and when the first of the waiting ones is back. */
 export interface Grouped {
   groups: Record<Group, Account[]>;
+  /** Accounts whose provider status could not be checked because GET /status failed. */
+  unchecked: Account[];
   counts: Counts;
   /** The earliest end among the waiting accounts that have one (ms since 1970). */
   firstBack?: number;
@@ -70,25 +83,36 @@ export interface Grouped {
 }
 
 /** Sorts accounts into the kit's four groups by their condition (parts/account.ts). */
-export function groupAccounts(list: Account[], running?: ReadonlySet<string>, now = Date.now()): Grouped {
+export function groupAccounts(
+  list: Account[],
+  running?: ReadonlySet<string>,
+  now = Date.now(),
+  statusFailed = false,
+): Grouped {
   const groups: Record<Group, Account[]> = { needs: [], waiting: [], serving: [], off: [] };
+  const unchecked: Account[] = [];
   let firstBack: number | undefined;
   const order = new Map<string, number>();
   for (const [i, a] of list.entries()) {
     order.set(a.id, i);
     const c = accountCondition(a, running, now);
+    if (statusFailed && conditionUnchecked(a, c, running)) {
+      unchecked.push(a);
+      continue;
+    }
     groups[c.group].push(a);
     if (c.group === "waiting" && c.until !== undefined && c.until > now)
       firstBack = firstBack === undefined ? c.until : Math.min(firstBack, c.until);
   }
-  const counts = {
+  const counts: Counts = {
     needs: groups.needs.length,
     waiting: groups.waiting.length,
     serving: groups.serving.length,
     off: groups.off.length,
+    ...(unchecked.length > 0 ? { unchecked: unchecked.length } : {}),
     total: list.length,
   };
-  return { groups, counts, firstBack, order };
+  return { groups, unchecked, counts, firstBack, order };
 }
 
 /**
@@ -109,13 +133,14 @@ export interface ProviderGroup {
   extension: string;
   accounts: Account[];
   serving: number;
+  unchecked: number;
 }
 
 /**
  * Home's list under the pools: every account that does not need the person (those are in the band
  * above), grouped by provider in the order core lists each provider's first account. In a group:
- * the waiting ones first, soonest back first; then the serving ones, least left first; then those
- * turned off.
+ * the waiting ones first, soonest back first; then the serving ones, least left first; then any
+ * unchecked ones; then those turned off.
  */
 export function providerGroups(
   grouped: Grouped,
@@ -128,13 +153,19 @@ export function providerGroups(
     const uy = accountCondition(y, running, now).until ?? Number.POSITIVE_INFINITY;
     return ux - uy;
   });
-  const ordered = [...waiting, ...servingOrder(grouped.groups.serving, windows), ...grouped.groups.off];
+  const ordered = [
+    ...waiting,
+    ...servingOrder(grouped.groups.serving, windows),
+    ...grouped.unchecked,
+    ...grouped.groups.off,
+  ];
   const out = new Map<string, ProviderGroup>();
   for (const a of ordered) {
     const key = a.extension ?? "";
-    const g = out.get(key) ?? { extension: key, accounts: [], serving: 0 };
+    const g = out.get(key) ?? { extension: key, accounts: [], serving: 0, unchecked: 0 };
     g.accounts.push(a);
     if (grouped.groups.serving.includes(a)) g.serving++;
+    if (grouped.unchecked.includes(a)) g.unchecked++;
     out.set(key, g);
   }
   // Providers in core's order of their first account.
@@ -143,6 +174,7 @@ export function providerGroups(
     ...grouped.groups.needs,
     ...grouped.groups.waiting,
     ...grouped.groups.serving,
+    ...grouped.unchecked,
     ...grouped.groups.off,
   ];
   for (const a of all) {
@@ -167,6 +199,7 @@ export type VerdictKind =
   | "safe-mode"
   | "no-accounts"
   | "needs-you"
+  | "unchecked"
   | "nothing-serving"
   | "nothing-needs-you"
   | "most-failed"
@@ -196,6 +229,8 @@ export function verdictOf(
   if (status?.safe_mode) return { kind: "safe-mode", headline: t("safeMode"), note: t("safeModeNote") };
   if (counts.total === 0) return { kind: "no-accounts", headline: t("noAccounts") };
   if (counts.needs > 0) return { kind: "needs-you", headline: t("needsYou", { count: counts.needs }) };
+  if ((counts.unchecked ?? 0) > 0)
+    return { kind: "unchecked", headline: t("statusUnread"), note: t("statusUnreadNote") };
   if (counts.serving === 0) {
     const back =
       firstBack !== undefined && firstBack > now ? t("firstBack", { when: backWhen(firstBack, now) }) : "";
@@ -311,6 +346,7 @@ export function countsLine(counts: Counts, week?: { total: number; succeeded: nu
   const parts: string[] = [];
   if (counts.waiting > 0) parts.push(t("waiting", { count: counts.waiting }));
   if (counts.serving > 0) parts.push(t("serving", { count: counts.serving }));
+  if (counts.unchecked && counts.unchecked > 0) parts.push(t("notChecked", { count: counts.unchecked }));
   if (counts.off > 0) parts.push(t("turnedOff", { count: counts.off }));
   if (week && week.total > 0) {
     parts.push(

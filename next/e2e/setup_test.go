@@ -298,7 +298,8 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	}
 
 	r = runCLI(t, cliEnv, "client", "show", "claude-code")
-	if r.code != 0 || r.stderr != "Replace <client-key> with a client key: core's config file holds them, and \"pluxy key add\" makes another.\n" {
+	// This core serves no model, so the text also holds the model placeholder and says so.
+	if r.code != 0 || r.stderr != "Replace <client-key> with a client key: core's config file holds them, and \"pluxy key add\" makes another.\nReplace <model-id> with the name of a model your accounts serve: \"pluxy model list\" lists them.\n" {
 		t.Fatalf("pluxy client show claude-code: %s", r)
 	}
 	if !strings.Contains(r.stdout, base) || !strings.Contains(r.stdout, "ANTHROPIC_BASE_URL") || !strings.Contains(r.stdout, "ANTHROPIC_AUTH_TOKEN") {

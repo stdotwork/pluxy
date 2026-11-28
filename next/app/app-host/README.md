@@ -29,7 +29,7 @@ them. App-only packages omit provider fields; no dummy provider is needed.
 | `resources` | Web only: requested broker resources, each with an `id`, `kind` (`file` or `subtree`) and nonempty `operations` list. A declaration grants no access. |
 | `programs` | Native only: platform (`GOOS/GOARCH`) to relative executable path, as for provider programs. At least one entry is required. |
 | `environments` | Native only, optional: where else its program may run, each once. The only one is `wsl`: on Windows, its Linux program may run in a WSL distribution. Its releases must then publish `linux/amd64` and/or `linux/arm64` archives as well, which the app installs as the [Linux build for WSL](#linux-build-for-wsl). Any other value is refused. |
-| `operations` | Native only: declared operations, each with an `id`, plain `description`, `input_schema` and `output_schema` JSON objects, an optional `effect` (`read`, `write`, `launch` or `disclose`; absent means `write`) and optional `secrets`: at most four input fields that carry a secret, each `"value"` (the tool receives the secret) or `"reference"` (it receives only a reference to it; a `launch` operation's are references only); each must be a `string` property of the input schema. See [Secrets, references and the vault](#secrets-references-and-the-vault). At least one operation is required. |
+| `operations` | Native only: declared operations, each with an `id`, plain `description` (one line of at most 800 characters, which its call's confirmation quotes as the add-on's words), `input_schema` and `output_schema` JSON objects, an optional `effect` (`read`, `write`, `launch` or `disclose`; absent means `write`) and optional `secrets`: at most four input fields that carry a secret, each `"value"` (the tool receives the secret) or `"reference"` (it receives only a reference to it; a `launch` operation's are references only); each must be a `string` property of the input schema. See [Secrets, references and the vault](#secrets-references-and-the-vault). At least one operation is required. |
 | `exports` | Native only, optional: `{"contract": <nonnegative integer>, "operations": [<declared IDs>]}`, the operations other packages may import and the version of that export contract. |
 | `imports` | Optional, both tiers: at most 16 entries `{"package": <ID>, "contract": [<accepted export contracts>], "operations": [<IDs>], "required": <bool, default true>, "secrets": [<IDs>]}`, one per package, never the package itself. `secrets` (native tools only) lists the imported operations it may pass secret references to. See [Calls between packages](#calls-between-packages). |
 | `state` | Native only: `version` written by this release and nonempty `readable_versions` list. Check state compatibility before swap or rollback. |
@@ -1075,14 +1075,16 @@ apart from the management key, which stays in the app's connection. It enters th
 natively, never through the window:
 
 - `client_key_capture` (label, client) trims the label, as core does, and uses that one name
-  throughout: it asks a native confirmation naming the core, the tool and the label; then the app
-  itself asks core for a new key (`POST /v0/management/client-keys`, with `{"label"}` so core
-  lists the key under the name the vault keeps) with the management key and keeps core's reply. A
-  label core's own label check would refuse (once trimmed, more than 64 characters or more than
-  one line) is refused before the confirmation. Core also refuses a label equal to one of its keys,
-  which the app cannot check, as it does not hold every key core has: that refusal comes after the
-  confirmation, before core makes a key. Core shows a new key once: the app keeps it and shows
-  it to no one. If the vault cannot keep it, the app deletes it on core again.
+  throughout: the app itself asks core for a new key (`POST /v0/management/client-keys`, with
+  `{"label"}` so core lists the key under the name the vault keeps) with the management key and
+  keeps core's reply. It asks no native confirmation of its own: the window can already have core
+  make a client key through its management calls, and the key leaves the vault only in a call of
+  its tool, whose native confirmation names it. A label core's own label check would refuse (once
+  trimmed, more than 64 characters or more than one line) is refused before core is asked. Core
+  also refuses a label equal to one of its keys, which the app cannot check, as it does not hold
+  every key core has: that refusal comes before core makes a key. Core shows a new key once: the
+  app keeps it and shows it to no one. If the vault cannot keep it, the app deletes it on core
+  again.
 - `client_key_enter` (label, client) reads an existing client key from native key entry and keeps
   it once the core takes it.
 

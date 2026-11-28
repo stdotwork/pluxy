@@ -14,6 +14,7 @@ pub const COMMANDS: &[&str] = &[
     "core_rollback",
     "core_adopt",
     "key_entry",
+    "certificate_choose",
     "management_key_rotate",
     "sign_out",
     "page_open",

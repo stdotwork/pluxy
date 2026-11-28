@@ -63,7 +63,7 @@ pub(super) fn showing() -> bool {
         "search",
         "--onlyvisible",
         "--name",
-        "^pluxy native confirmation$",
+        &format!("^{}$", crate::confirmation::text::CONFIRM_TITLE),
     ])
     .is_ok_and(|s| !s.is_empty())
 }

@@ -7,7 +7,7 @@ Reference for pluxy's GitHub Actions workflows in `.github/workflows/` and the r
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
 | `ci.yml` | Every PR and every merge-queue group | Works out which folders the change touches (for a PR, the diff against its base; for a group, what it adds to the group ahead of it in the queue, or to `main` for the first group; sound only while the queue's ruleset keeps "Only merge non-failing pull requests" (ALLGREEN)), runs the workflows below whose paths it touches as reusable workflows, and runs `gate`, which passes only when every workflow it chose passed. A change to `ci.yml` runs them all. `next-release.yml` is not among them |
-| `next-ci.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/`, `README.md`, `AGENTS.md` or `docs/*.md` (the docs `TestDocs` reads) | UI type check, lint and unit tests; builds the panel; `gofmt -l .`, `go build ./...`, `go vet ./...`, `staticcheck ./...` and `govulncheck ./...` (both run with `go run` at a pinned version; govulncheck warns and does not fail the job), `go test -race ./...`; the panel's browser test in headless Chromium, and the extension pages test in Chromium, Firefox and WebKit; uploads the browser tests' screenshots and traces as an artifact for 7 days; in a job of its own, `go run ./cmd/pluxy-bench -check`, which fails when pluxy's added latency or memory passes the budgets in `next/cmd/pluxy-bench/budget.go` (`docs/perf.md`); on Windows, `go vet` of `internal/cred`, `internal/private`, `internal/core`, `internal/extconfig`, `internal/logfile`, `internal/server`, `internal/usage` and `internal/configdoc`, `go test` of `internal/cred` and the Windows tests of `internal/core`, `internal/extconfig`, `internal/logfile`, `internal/server`, `internal/usage` and `internal/configdoc` (the access lists of the credential, extension settings, log and usage files, and of the config file a change writes and the client-key-ID key) |
+| `next-ci.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/`, `README.md`, `AGENTS.md`, `docs/*.md` or `docs/design/*.md` (the docs `TestDocs` reads) | UI type check, lint and unit tests; builds the panel; `gofmt -l .`, `go build ./...`, `go vet ./...`, `staticcheck ./...` and `govulncheck ./...` (both run with `go run` at a pinned version; govulncheck warns and does not fail the job), `go test -race ./...`; the panel's browser test in headless Chromium, and the extension pages test in Chromium, Firefox and WebKit; uploads the browser tests' screenshots and traces as an artifact for 7 days; in a job of its own, `go run ./cmd/pluxy-bench -check`, which fails when pluxy's added latency or memory passes the budgets in `next/cmd/pluxy-bench/budget.go` (`docs/design/perf.md`); on Windows, `go vet` of `internal/cred`, `internal/private`, `internal/core`, `internal/extconfig`, `internal/logfile`, `internal/server`, `internal/usage` and `internal/configdoc`, `go test` of `internal/cred` and the Windows tests of `internal/core`, `internal/extconfig`, `internal/logfile`, `internal/server`, `internal/usage` and `internal/configdoc` (the access lists of the credential, extension settings, log and usage files, and of the config file a change writes and the client-key-ID key) |
 | `next-app.yml` | PRs and merge-queue groups (through `ci.yml`) and pushes to `main` touching `next/` | The desktop app in `next/app`: type check, lint, unit tests and build of the window; `cargo fmt --check`, `cargo clippy`, `cargo test --locked` (unit tests and each connection mode against a real core); format, clippy and tests of `next/app-tools`. In parallel, the native test on Xvfb, which also builds and runs the test AppImage and checks the release gate: a `native-build` job builds what the sessions run once, and shard jobs each run their own sessions on it (`next/app/native/shards.ts`) and upload each session's last screenshot as an artifact for 7 days. The `app` job passes only when every other job did |
 | `next-app-platforms.yml` | PRs and merge-queue groups (through `ci.yml`) changing what it builds: `next/app/`, `next/ui/`, `next/protocol/testdata/app-manifests/`, `next/go.mod` or `next/go.sum`, the workflow, the app tools the `tools` and `open` shards build (`next/app-tools/`'s `execution`, `lib/program` and `lib/files`, and its `Cargo.toml` and `Cargo.lock`), or a file other than a test in a Go package the app's tests build (`e2e/panelcore`, `e2e/testext` and `cmd/pluxy` and what they import, as `go list` finds them), and its `native` jobs for the same changes except the app-manifest cases, since their sessions start a test core with `go run ./e2e/panelcore` and the `tools` and `open` shards build those app tools; once a day on `main` (03:17 UTC); `workflow_dispatch` | The desktop app on `windows-latest` and `macos-latest`: the Rust crate's format, clippy and tests, and the native test's sessions that run there (among them the `tools` shard: the signed tool sessions admission, program, routing, launcher and vault; and the `open` shard, on the same build: a tool's opening of a file in the system's own app, and the app's opening of an address in the default browser); the rest of the native test stays on Linux in `next-app.yml`. The workflow file says which jobs run and what each checks; `next/app/README.md` ("Limits") says which sessions run off Linux |
 | `next-app-tools-platforms.yml` | PRs and merge-queue groups (through `ci.yml`) touching `next/app-tools/` or the workflow, or the desktop app's files its real-WSL tests run (`next/app/src-tauri/src/environments*.rs`, its wsl-named files, the program host, spawn service and vault, and the Windows process, private-file and managed-core files those tests start tools with or that code uses, as `ci.yml`'s path case lists them); once a day on `main` (03:47 UTC); `workflow_dispatch` | The app tools on `windows-latest` and `macos-latest` (clippy and tests, with the counts in the job summary), and the `WSL 2` and `WSL 1` jobs, which run the real-WSL tests on GitHub-hosted `windows-latest`, the desktop app's program host and spawn service among them (`wsl_real_*` in `next/app/src-tauri`) (for PRs and merge-queue groups only when what they build or run changes, as `ci.yml` decides; always on the daily and manual runs). The workflow file says what each job checks |
@@ -68,27 +68,30 @@ runners, Namespace's. It holds a bare runner profile label, for example
 `namespace-profile-macos-26` (no `;key=value` settings: the runner check refuses them). When it is not set, those jobs run on `macos-latest`.
 
 Pull requests do not use it: all their macOS jobs run on `macos-latest`. Merge groups, pushes, the
-daily runs and manual runs use it for the jobs listed below, except the `tools` job in
-`next-app-tools-platforms.yml`, which in pull requests and merge groups also runs on `macos-latest`.
-The app tools' Terminal launch
-tests failed on GitHub's macOS runners in both runs tried on 2026-11-19 (Terminal did not take the
-launch's Apple event in time, error -1712), which kept the `tools` job on Namespace; those tests now
-run one at a time. Namespace runs one macOS job at a time, about 20 an hour. From 19:30
-to 23:40 UTC on 2026-11-19 each merge group needed 6 to 8 of them, and three groups building at once
-shared that line with pull requests' runs: one group's macOS jobs ran over 2 hours, while the rest of
-a group's work takes about 23 minutes.
+daily runs and manual runs split their macOS jobs between Namespace and GitHub, except the `tools`
+job in `next-app-tools-platforms.yml`, which uses `PLUXY_MACOS_CLOUD_RUNNER` only on daily and
+manual runs (in pull requests and merge groups it runs on `macos-latest`). Namespace runs one macOS
+job at a time, while GitHub runs five account-wide (shared with `full-ci` pull requests), so
+Namespace's single slot goes to the jobs that save the most GitHub runner time per Namespace minute:
+over 48 hours of successful runs, `native` `platform` (3.6 to 0.7 minutes, 5.1x), `native` `package`
+(14.3 to 3.3 minutes, 4.3x) and `app` (9.3 to 2.4 minutes, 3.9x) gain more than `dialogs` (6.1 to
+1.9 minutes, 3.2x) and `native` `tools` (8.7 to 4.5 minutes, 1.9x), which stay on `macos-latest`
+instead of queueing behind one slot. The app tools' Terminal launch tests failed on GitHub's macOS
+runners in both runs tried on 2026-11-19 (Terminal did not take the launch's Apple event in time,
+error -1712), which kept the `tools` job on Namespace; those tests now run one at a time.
 
 It applies to these jobs:
-- the `app` job in `next-app-platforms.yml`;
-- the macOS legs of the `native` and `dialogs` jobs in `next-app-platforms.yml`, except the `native`
-  job's `open` shard, whose session runs only on a GitHub-hosted runner, and its `update` shard,
-  whose sessions need passwordless `sudo`, which Namespace's macOS runner no longer gives. Their tests write
-  the account's own folders, so they also check the runner (`next/app/native/runner.ts`): the job
-  passes the label in `PLUXY_EPHEMERAL_CI_RUNNER`, and the check accepts only a Namespace profile
-  label, a runner Namespace named and Namespace's own variable. Another provider needs a change to
-  that check;
-- the `tools` job in `next-app-tools-platforms.yml`;
-- the `build` jobs in `next-app-tools-pack.yml`.
+- the macOS leg of the `app` job in `next-app-platforms.yml`;
+- the macOS legs of the `native` job's `package` and `platform` shards in `next-app-platforms.yml`.
+  The other macOS `native` shards and `dialogs` stay on `macos-latest`: `open` runs only on a
+  GitHub-hosted runner, `update` needs passwordless `sudo` (which Namespace's macOS runner no longer
+  gives), and `tools` and `dialogs` have lower speedups there. The `native` job's tests write the
+  account's own folders, so they also check the runner (`next/app/native/runner.ts`): the job passes
+  the label in `PLUXY_EPHEMERAL_CI_RUNNER` only for the shards it sends to Namespace, and the check
+  accepts only a Namespace profile label, a runner Namespace named and Namespace's own variable.
+  Another provider needs a change to that check;
+- the macOS leg of the `tools` job in `next-app-tools-platforms.yml` (daily and manual runs only);
+- the macOS `build` job in `next-app-tools-pack.yml`.
 
 Some macOS jobs and every Windows job stay on GitHub's runners:
 - The app's Windows registry tests run only on a runner that reports itself GitHub-hosted.

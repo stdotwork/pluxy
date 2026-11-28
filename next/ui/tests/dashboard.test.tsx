@@ -482,6 +482,30 @@ describe("the page", () => {
     expect(text).toContain("Base URL");
     expect(text).toContain("http://127.0.0.1:8317/v1");
     expect(text).toContain("Serving");
+    // Nothing needs repair, so Refresh is the view's one filled button.
+    expect(attr(button(page.root, "Refresh"), "data-variant")).toBe("primary");
+  });
+
+  test("Refresh is filled when the only band fix is Turn on, and quiet on the empty state", async () => {
+    const banned = ok({
+      accounts: [
+        {
+          id: "closed-1",
+          extension: "pluxy/claude",
+          source: "login",
+          state: "active",
+          refreshable: true,
+          health: { state: "banned" },
+        },
+      ],
+    });
+    const page = await mount([{ ...good, accounts: banned }]);
+    expect(attr(button(page.root, "Refresh"), "data-variant")).toBe("primary");
+    expect(attr(button(page.root, "Turn on"), "data-variant")).toBe("quiet");
+    await page.unmount();
+
+    const empty = await mount([{ ...good, accounts: list() }]);
+    expect(attr(button(empty.root, "Refresh"), "data-variant")).toBe("quiet");
   });
 
   test("the connection card gives the base URL of the API a tool speaks, a key's masked value and the tools set up", async () => {
@@ -506,6 +530,9 @@ describe("the page", () => {
     expect(all(card, "code")[0]?.textContent).toBe("http://127.0.0.1:8317");
     expect(card.textContent).toContain("Key · Claude Code");
     expect(card.textContent).toContain("sk-pluxy-****3f9a");
+    const keysLink = all(card, "a").find((a) => a.textContent === "Keys");
+    expect(keysLink && attr(keysLink, "href")).toBe("#/tools");
+    expect(keysLink && all(keysLink, "svg")).toHaveLength(1);
     // Set up, and installed but not set up; a tool not installed or unchecked has no chip.
     const chips = parts(card, "tool-chip", "class");
     expect(chips.map((c) => [c.textContent, attr(c, "data-state"), attr(c, "href")])).toEqual([
@@ -523,6 +550,7 @@ describe("the page", () => {
           source: "login",
           state: "reauth_required",
           refreshable: true,
+          quota: { fetched_at: new Date().toISOString(), quota: { plan: "Max 20x", limits: [] } },
         },
         { id: "c-ok", extension: "pluxy/claude", source: "login", state: "active", refreshable: true },
         {
@@ -546,17 +574,39 @@ describe("the page", () => {
       ["Sign in again", "primary"],
       ["Sign in again", "quiet"],
     ]);
+    expect(parts(band, "plan-pill").map((p) => [p.textContent, attr(p, "data-plan-tier")])).toEqual([
+      ["Max 20x", "top"],
+    ]);
+    expect(attr(button(page.root, "Refresh"), "data-variant")).toBe("quiet");
     const groups = parts(page.root, "home-group", "class");
     expect(groups.map((g) => attr(g, "aria-label"))).toEqual(["Claude", "Codex"]);
     const ids = (g: FakeNode) => parts(g, "account-name", "class").map((a) => a.textContent);
     expect(groups.map(ids)).toEqual([["c-ok"], ["x-ok", "x-off"]]);
     const pools = parts(page.root, "pool-card");
     expect(pools.map((p) => attr(p, "data-provider"))).toEqual(["claude", "codex"]);
-    // Turned off is not counted in a pool; the band's accounts are, as unable to serve.
+    // Every account of the provider counts in its pool, including turned-off and needs-you ones.
     expect(pools.map((p) => p.textContent?.match(/\d of \d serving/)?.[0])).toEqual([
       "1 of 2 serving",
-      "1 of 2 serving",
+      "1 of 3 serving",
     ]);
+  });
+
+  test("lists every account under a provider without a six-row cap, and keeps the All accounts link", async () => {
+    const ten = Array.from({ length: 10 }, (_, i) => ({
+      id: `c-${i + 1}`,
+      extension: "pluxy/claude",
+      source: "login",
+      state: "active",
+      refreshable: true,
+    }));
+    const running = { ...statusBody, extensions: [{ id: "pluxy/claude" }] };
+    const page = await mount([{ ...good, accounts: ok({ accounts: ten }), status: ok(running) }]);
+    const group = parts(page.root, "home-group", "class")[0];
+    if (!group) throw new Error("no provider group");
+    expect(parts(group, "account-name", "class").map((a) => a.textContent)).toEqual(ten.map((a) => a.id));
+    expect(page.text()).not.toContain("And 4 more");
+    const allLink = all(page.root, "a").find((a) => a.textContent === "All accounts");
+    expect(allLink && attr(allLink, "href")).toBe("#/accounts");
   });
 
   test("when two of three requests failed the headline does not say everything is serving", async () => {
@@ -584,6 +634,48 @@ describe("the page", () => {
     const page = await mount([{ ...good, status: hiccup }]);
     expect(page.text()).toContain("Everything is serving.");
     expect(page.text()).not.toContain("refused");
+  });
+
+  test("when status fails with no prior read, accounts with a provider read Not checked and stay out of the serving count and pool mean", async () => {
+    const accounts = ok({
+      accounts: [
+        {
+          id: "c-1",
+          extension: "pluxy/claude",
+          source: "login",
+          state: "active",
+          refreshable: true,
+          quota: {
+            fetched_at: new Date().toISOString(),
+            quota: { limits: [{ id: "five", window_seconds: 18_000, used_percent: 20 }] },
+          },
+        },
+        {
+          id: "c-wait",
+          extension: "pluxy/claude",
+          source: "login",
+          state: "active",
+          refreshable: true,
+          cooldowns: [
+            { scope: "account", kind: "rate_limit", until: new Date(Date.now() + 3_600_000).toISOString() },
+          ],
+        },
+      ],
+    });
+    const page = await mount([{ ...good, accounts, status: hiccup }]);
+    const text = page.text();
+    expect(text).toContain("Could not check which providers are running.");
+    expect(text).not.toContain("Everything is serving.");
+    expect(text).toContain("2 not checked");
+    expect(text).toContain("pluxy could not check whether Claude is running.");
+    const rows = parts(page.root, "account-row");
+    expect(rows).toHaveLength(2);
+    for (const r of rows) expect(attr(r, "data-condition")).toBe("unchecked");
+    const pool = parts(page.root, "pool-card")[0];
+    if (!pool) throw new Error("no pool card");
+    expect(pool.textContent).toContain("Not checked");
+    expect(pool.textContent).not.toContain("80%");
+    expect(pool.textContent).not.toContain("serving");
   });
 
   test("a refused settings change shows its error, once", async () => {

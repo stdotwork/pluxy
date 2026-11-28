@@ -1,5 +1,5 @@
 # pluxy
-
+(WIP)
 pluxy (plug + proxy) is a proxy that runs on your machine and serves the OpenAI, Anthropic, Gemini
 and Codex APIs from the accounts you already have: subscription sign-ins and API keys. Your coding
 tools talk to pluxy, and pluxy picks an account for each request.
@@ -80,7 +80,7 @@ can read the file.
 
 Leave pluxy running and open a second terminal in `~/pluxy` for the rest. The `pluxy` commands
 find the address and the management key in pluxy's home from any folder; a `config.json` in the
-folder they run in comes first ([pluxy's home](next/README.md#pluxys-home) has the rules).
+folder they run in comes first ([pluxy's home](docs/config.md#pluxys-home) has the rules).
 
 ### 3. Install a provider
 
@@ -147,17 +147,26 @@ the same record. `./pluxy help` lists every command.
 
 ## Where to read more
 
+[docs/README.md](docs/README.md) lists every page.
+
 | You want to | Read |
 | --- | --- |
+| Build pluxy, start it, or run it in a container | [docs/setup.md](docs/setup.md) |
 | Set up a coding tool or another client | [docs/clients.md](docs/clients.md) |
+| Add an account, and know each provider's options | [docs/providers.md](docs/providers.md) |
+| Know how a request picks an account, and set up fallbacks | [docs/routing.md](docs/routing.md) |
+| Install or remove extensions | [docs/extensions.md](docs/extensions.md) |
+| See usage, logs and request logs | [docs/usage-and-logs.md](docs/usage-and-logs.md) |
 | Move from CLIProxyAPI | [docs/moving-from-cpa.md](docs/moving-from-cpa.md) |
 | Fix a problem or find out why a request failed | [docs/troubleshooting.md](docs/troubleshooting.md) |
-| Run pluxy in a container | [next/README.md, "Run it in a container"](next/README.md#run-it-in-a-container) |
-| Look up a config setting, a provider's options, routing, logs or the management API | [next/README.md](next/README.md) |
+| Look up a config setting | [docs/config.md](docs/config.md) |
+| Know what carries over when a client and a provider speak different APIs | [docs/translation.md](docs/translation.md) |
+| Look up a `pluxy` command | [docs/cli.md](docs/cli.md) |
+| Call the management API | [docs/management-api.md](docs/management-api.md) |
 | Use the desktop app | [next/app/README.md](next/app/README.md) |
 | Write a provider extension | [next/protocol/TUTORIAL.md](next/protocol/TUTORIAL.md) |
-| Know why pluxy is built this way | [docs/design.md](docs/design.md) |
-| Know what pluxy costs in time and memory | [docs/perf.md](docs/perf.md) |
+| Know why pluxy is built this way | [docs/design/design.md](docs/design/design.md) |
+| Know what pluxy costs in time and memory | [docs/design/perf.md](docs/design/perf.md) |
 | Build, test or change pluxy | [AGENTS.md](AGENTS.md) |
 
 ## What is in this repository

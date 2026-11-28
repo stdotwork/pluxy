@@ -58,7 +58,8 @@
     "color.focus": "#f0a36b",
     "color.diff-add": "#5cc98a",
     "color.diff-remove": "#ff7b72",
-    "color.message-action": "var(--px-color-accent)"
+    "color.message-action": "var(--px-color-accent)",
+    "color.message-action-foreground": "var(--px-color-accent-text)"
   },
   "layout": { "frame": "flat", "nav": "top", "list": "cards", "width": "narrow" }
 }

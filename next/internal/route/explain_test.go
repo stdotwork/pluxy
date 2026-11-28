@@ -269,6 +269,39 @@ func TestPlanNamesHeldAccounts(t *testing.T) {
 	}
 }
 
+// A request for a model no account serves says which models pluxy does serve and how to reach
+// one, since a coding tool shows this message to the person and it most often asks for a model of
+// its own default. A long list is cut, and no account at all says to add one.
+func TestNotServedModelSaysWhatIsServed(t *testing.T) {
+	var many []ModelEntry
+	for _, n := range []string{"m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10"} {
+		many = append(many, ModelEntry{Name: n})
+	}
+	for _, c := range []struct {
+		name     string
+		accounts []Account
+		want     string
+	}{
+		{"served models are named", []Account{{ID: "a", Models: []ModelEntry{{Name: "fake-gpt-1"}, {Name: "fake-gpt-mini"}}}},
+			`no account serves model "claude-opus-5-5". pluxy serves: fake-gpt-1, fake-gpt-mini. Set the tool's model to one of them, or add a model alias to an account so that "claude-opus-5-5" goes to one of them.`},
+		{"a long list is cut", []Account{{ID: "a", Models: many}},
+			`no account serves model "claude-opus-5-5". pluxy serves: m1, m10, m2, m3, m4, m5, m6, m7 and 2 more (pluxy model list shows them all). Set the tool's model to one of them, or add a model alias to an account so that "claude-opus-5-5" goes to one of them.`},
+		{"no account serves anything", nil,
+			`no account serves model "claude-opus-5-5". pluxy serves no models yet: add an account first.`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, Config{}, c.accounts...)
+			e := lastError(t, h.run(h.req("claude-opus-5-5")))
+			if e.Message != c.want {
+				t.Errorf("message = %q, want %q", e.Message, c.want)
+			}
+			if e.Code != llm.CodeNotFound || e.ProviderCode != "model_not_found" {
+				t.Errorf("code %q, provider code %q; want %q and model_not_found", e.Code, e.ProviderCode, llm.CodeNotFound)
+			}
+		})
+	}
+}
+
 // A model that every account serving it holds says why: turned off, waiting for a new sign-in, or
 // a mix of both. A pinned request names only the pinned account. The code, status and provider
 // code of the reply do not change, and a model no held account serves keeps today's message.
@@ -293,7 +326,7 @@ func TestHeldModelErrorSaysWhy(t *testing.T) {
 		{"pinned needs a sign-in", []Account{served("a", HealthDisabled), served("b", HealthNeedsLogin)}, "b",
 			`account "b" cannot serve model "m": it needs a new sign-in`},
 		{"no held account serves it", []Account{{ID: "a", Models: []ModelEntry{{Name: "other"}}}}, "",
-			`no account serves model "m"`},
+			`no account serves model "m". pluxy serves: other. Set the tool's model to one of them, or add a model alias to an account so that "m" goes to one of them.`},
 		{"pinned account that does not exist", []Account{served("a", HealthDisabled)}, "nobody",
 			`account "nobody" does not exist or does not serve model "m"`},
 	} {
