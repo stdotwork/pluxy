@@ -6,7 +6,7 @@ model service, and streams the reply back; a provider may also sign in to accoun
 credentials (see [Login and refresh](#login-and-refresh)). [Versioning](#versioning) lists what
 each minor version adds.
 
-If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
+If you want to write an extension, read [the tutorial](extension-tutorial.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
 this document, and the conformance kit (`github.com/stdotwork/pluxy/next/conformance`) checks an
 extension against it.
@@ -53,8 +53,8 @@ An extension ships as a folder with a manifest named `pluxy-extension.json`:
 | `version` | The package version, chosen by the publisher: 1 to 64 letters, digits, `.`, `+`, `_` and `-`, starting with a letter or digit. Core compares versions only for equality. |
 | `protocol` | Protocol versions the program speaks. Core picks one it also speaks. |
 | `programs` | Program to run per platform, keyed by Go's `GOOS/GOARCH`. Paths are relative to the manifest's folder and may not leave it. |
-| `ui` | Optional: pages the panel shows for the extension, with their own `version`. See [extension pages](../ui/extension-pages/README.md#ui). |
-| `config` | Optional: the schema of the extension's settings, with its own `version`; the panel draws a form from it. See [extension pages](../ui/extension-pages/README.md#config). |
+| `ui` | Optional: pages the panel shows for the extension, with their own `version`. See [extension pages](extension-pages.md#ui). |
+| `config` | Optional: the schema of the extension's settings, with its own `version`; the panel draws a form from it. See [extension pages](extension-pages.md#config). |
 | `title` | Since 0.21: the package's name for people, a few words such as `Claude`. One line, at most 80 characters. Core does not need it. `pluxy-pack` refuses to pack without it a provider extension, or an app tool that sets `summary` or `"kind": "client"`. |
 | `summary` | Since 0.21: one sentence saying what the package adds, for someone who does not know the provider. One line, at most 300 characters. `pluxy-pack` needs it as it needs `title`. |
 | `kind` | Since 0.21, optional: what the package adds. `provider` (the default for a manifest with `protocol`), or `client` for an app tool that points a coding client at core. Later versions add kinds. |
@@ -62,8 +62,8 @@ An extension ships as a folder with a manifest named `pluxy-extension.json`:
 The package version, manifest version, protocol version and the versions of `ui` and `config`
 are separate: each can change without the others.
 
-App contributions use manifest version 1 (see the [app package contract](../app/app-host/README.md)
-and its [tutorial](../app/app-host/TUTORIAL.md)); it changes no provider operation or frame. Core
+App contributions use manifest version 1 (see the [app package contract](app-packages.md)
+and its [tutorial](app-package-tutorial.md)); it changes no provider operation or frame. Core
 refuses app-only packages, and uses only the provider part of a mixed package.
 
 ### Release archives
@@ -386,7 +386,7 @@ Since 0.5. Core asks what an account's plan allows and how much of it is used, f
 API's quota view (`GET /v0/management/accounts/{id}/quota`). Core sends it only to an extension that
 reports `protocol_minor` 5 or more and lists `quota` in `operations`, and only when someone asks or
 to check an account that routing keeps out after a refusal (at most once every 15 minutes for each
-such account; see [Checks while an account is blocked](../../docs/routing.md#checks-while-an-account-is-blocked)): core does not poll accounts
+such account; see [Checks while an account is blocked](routing.md#checks-while-an-account-is-blocked)): core does not poll accounts
 that serve.
 
 ```json
@@ -1128,7 +1128,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | `retry_after_ms` | When the upstream said to try again, in milliseconds from now. In Go, `sdk.RetryAfter` turns a `Retry-After` header (seconds or an HTTP date) into this value. |
 | `raw` | The upstream's error body, as the extension got it. Core removes the account's secrets from it before passing it on, as from `message`. |
 | `usage` | Usage the upstream reported before the failure, in the same form as `finish.usage`; absent when it reported none. A reply that fails partway may still have cost tokens. |
-| `quota_window_minutes` | Since 0.6. For code `quota`: the length, in minutes, of the usage window that is used up, when the upstream said (such as 300 for a five-hour window). Core passes it on in its [usage-limit reply](../../docs/routing.md#when-every-account-is-blocked). |
+| `quota_window_minutes` | Since 0.6. For code `quota`: the length, in minutes, of the usage window that is used up, when the upstream said (such as 300 for a five-hour window). Core passes it on in its [usage-limit reply](routing.md#when-every-account-is-blocked). |
 | `dropped` | Since 0.16. Only on a refusal under the request's `drop_policy` `reject`: the paths of the request's parts the upstream's format cannot carry, as the translation's losses name them. Core tells such a refusal from an account that cannot serve the call by it (see [`count_tokens`](#count_tokens)). |
 | `headers` | Since 0.34. Documented upstream rate-limit response headers on an error reply (such as a 429), by lower-case name, subject to the same explicit allowlist and bounds as `response.start`'s `headers`. Core removes the account's secrets and their pieces from them, and forwards only headers documented for the client's format. |
 
@@ -1388,7 +1388,7 @@ through a conversation whose state lives upstream. A crash or stop of the progra
 
 Liveness: the extension checks its upstream connection itself (for example, a read deadline between
 upstream messages), one of the named liveness checks that [core's
-design](../../docs/design/design.md#inside-core) allows in place of time limits. The local session
+design](design/design.md#inside-core) allows in place of time limits. The local session
 connection needs none: either end sees the other go when the connection closes.
 
 ### `openai.responses` sessions
@@ -1421,7 +1421,7 @@ removes `previous_response_id`.
 
 ## Payload rules
 
-Since 0.14. Core's config may hold payload rules (see [Payload rules](../../docs/routing.md#payload-rules)):
+Since 0.14. Core's config may hold payload rules (see [Payload rules](routing.md#payload-rules)):
 fields to set, fill in or remove in the JSON body an extension sends upstream, for the requests
 they name. Core works out which rules apply to a `generate`, `count_tokens` or `endpoint` call, or
 (0.15) a session turn, and sends them, and only them, in the frame's `payload`:
@@ -1495,7 +1495,7 @@ does a call with a [proxy](#proxy).
 ## Upstream capture
 
 Since 0.13. The extension reports what it sent upstream and what came back, for core's request logs
-(see [Request logs](../../docs/usage-and-logs.md#request-logs)). Core asks for it with `"capture": true` on a
+(see [Request logs](usage-and-logs.md#request-logs)). Core asks for it with `"capture": true` on a
 `generate`, `count_tokens` or `endpoint` call frame, or on a `session.turn` frame, only while its
 config writes every request to a request log (`logs.request_log`), and only to an extension whose
 describe reports `protocol_minor` 13 or more. A call without it records nothing and sends nothing

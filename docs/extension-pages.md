@@ -42,7 +42,7 @@ what the page was given. Nothing secret is given.
 ## In the package
 
 A package with pages or settings adds `ui` and `config` to its manifest (see the
-[manifest](../../protocol/README.md#package-manifest)). Each has its own version, separate from
+[manifest](protocol.md#package-manifest)). Each has its own version, separate from
 the manifest's and the protocol's.
 
 ```json
@@ -123,7 +123,7 @@ it, so the form and a page that writes settings get the same answer.
 Any other keyword is refused at install. Settings are kept by core, per extension, in `{packages.dir}/.settings/<publisher>/<name>.json`
 (readable only by core's user and, on Windows, SYSTEM), and survive upgrades: a field the new version no longer
 declares is dropped the next time the settings change. On Windows the `.settings` folder is checked
-and made private, as core's [credentials folder](../../../docs/providers.md#how-accounts-added-by-sign-in-are-kept-and-renewed) is,
+and made private, as core's [credentials folder](providers.md#how-accounts-added-by-sign-in-are-kept-and-renewed) is,
 each time settings are loaded or saved; a settings file that another account owns is skipped, as
 if none were stored, and the next save replaces it. Settings reach the extension's pages, not its program.
 
@@ -239,7 +239,7 @@ four keys, `id` a string of 1 to 64 characters, `params` an object or `null`. Th
 | `theme.get` | `null` | none | The theme snapshot (below). |
 | `config.get` | `null` | `config.read` | `{"values": {...}, "set": [...]}`, as the management API's `GET` gives them. |
 | `config.set` | `{"values": {...}}` | `config.write` | The same, after the change. Fields as for the management API's `PATCH`. |
-| `native.call` | `{"package": "...", "op": "...", "input": {...}}` | the package's declared `imports` and the person's native consent | Desktop app only, for a page of a package on that device: the operation's output. The app answers it natively and never forwards it to its window; see [Calls between packages](../../app/app-host/README.md#calls-between-packages). The panel answers `unknown_method`. |
+| `native.call` | `{"package": "...", "op": "...", "input": {...}}` | the package's declared `imports` and the person's native consent | Desktop app only, for a page of a package on that device: the operation's output. The app answers it natively and never forwards it to its window; see [Calls between packages](app-packages.md#calls-between-packages). The panel answers `unknown_method`. |
 
 Error codes: `bad_request` (the message breaks the shape above, or a method's `params` are
 wrong), `too_large`, `unknown_method`, `forbidden` (the extension did not declare the
@@ -265,7 +265,7 @@ theme choices or privacy mode change.
 }
 ```
 
-`tokens` holds every token of the [theme contract](../themes/README.md) with its resolved value,
+`tokens` holds every token of the [theme contract](themes.md) with its resolved value,
 after the theme, the dark values and the person's density. A page sets them as CSS custom
 properties on its own root (`color.bg` is `--px-color-bg`, as in the kit), so it follows the
 theme as the panel does. The person's and the theme's custom CSS is not sent: it is written for
@@ -278,7 +278,7 @@ a page should do the same with those it shows. The panel cannot hide what a page
 
 ## The page library
 
-[`pluxy-page.js`](pluxy-page.js) is a small module that does the page's side: copy it into your
+[`pluxy-page.js`](../next/ui/extension-pages/pluxy-page.js) is a small module that does the page's side: copy it into your
 package's `ui` folder and load it with `<script type="module">`.
 
 ```js
@@ -297,6 +297,6 @@ attributes there, and does it again on every `theme` event.
 
 - The desktop app shows each page in a webview of its own, which can call no app command, with
   the page in the same sandboxed frame and the same channel, and enforces the channel's limits
-  natively ([the desktop app design note](../../../docs/design/app-design.md#extension-pages)).
+  natively ([the desktop app design note](design/app-design.md#extension-pages)).
 - A package needs a program even when it only brings pages.
 - The page's frame has a fixed size within the panel's content area; a page cannot resize it.

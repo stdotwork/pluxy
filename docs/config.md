@@ -281,7 +281,7 @@ below except `id`, `credential` and `endpoint`.
 ### `extension_pages`
 
 Extension pages are served on a site of their own, never the one that serves the panel
-([extension pages](../next/ui/extension-pages/README.md)).
+([extension pages](extension-pages.md)).
 
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
@@ -366,7 +366,7 @@ and `HOME` (Linux and other Unix systems), `HOME` (macOS) and `LOCALAPPDATA` (Wi
 
 An extension program starts with a cleared environment: only `PATH` (and `SYSTEMROOT` on Windows),
 `PLUXY_TEST_LOGIN_HOSTS` when core has it set, and these three, which core sets. An extension author
-reads them ([extension protocol](../next/protocol/README.md)); you never set them:
+reads them ([extension protocol](protocol.md)); you never set them:
 
 | Variable | What it holds |
 | --- | --- |

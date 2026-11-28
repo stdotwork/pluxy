@@ -6,12 +6,12 @@ streams a reply through, and that passes the conformance kit (pluxy's test suite
 
 The extension is called `scripted`: it answers with whatever its account's settings say and calls
 no upstream, so nothing but the protocol is in view. A real provider makes an HTTP call where this
-one reads its settings. The finished code is in [`examples/scripted`](../examples/scripted);
-[`extensions/openai-compatible`](../extensions/openai-compatible) is a real provider.
+one reads its settings. The finished code is in [`examples/scripted`](../next/examples/scripted);
+[`extensions/openai-compatible`](../next/extensions/openai-compatible) is a real provider.
 
 You can write an extension in any language that can listen on a Unix socket and read and write
 JSON. This tutorial uses pluxy's Go SDK, which does the handshake, framing, cancellation and
-shutdown for you. The [protocol reference](README.md) has the rules behind each step.
+shutdown for you. The [protocol reference](protocol.md) has the rules behind each step.
 
 You need Go and `curl`. pluxy's Go module needs Go 1.26.11 or later; a `go` command from 1.21 on
 downloads that version by itself when it is older.
@@ -144,14 +144,14 @@ you to:
   in the future. A provider's own hint (a body field, a vendor header) is yours to read.
 - Watch `ctx`. When the client goes away, pluxy closes the connection and the SDK cancels `ctx`.
   Pass it to your upstream HTTP request so that request stops too.
-- Do not retry inside the extension: core decides retries (see [`generate`](README.md#generate)).
+- Do not retry inside the extension: core decides retries (see [`generate`](protocol.md#generate)).
 - Write each event when you have it. Writes block while the client is slow; let them.
 
 A real provider also follows these:
 
 - Wrap the transport of every upstream HTTP client with `sdk.Upstream(base)`, including the
   clients for login, token refresh and WebSocket handshakes. An account's
-  [proxy](README.md#proxy) is used only by clients wrapped this way; any other client, such as
+  [proxy](protocol.md#proxy) is used only by clients wrapped this way; any other client, such as
   `http.DefaultClient`, connects directly. An extension that wraps none gets an error reply, not a
   call, when an account has a proxy.
 - Create each wrapped client before `sdk.Serve` runs, for example as a package-level variable. The
@@ -312,10 +312,10 @@ From Refresh, report a refused grant (OAuth `invalid_grant`) as code `auth`, sco
 not retryable: the account then needs a new login. Any other failure is retryable only when the
 request never reached the token endpoint, or when the endpoint rate limited it (HTTP 429); a 5xx
 answer, or a request that failed after it was sent, is not retryable, because the endpoint may
-have run it. [`examples/oauth`](../examples/oauth)
+have run it. [`examples/oauth`](../next/examples/oauth)
 is a complete example with all three login kinds, and its `oauthtest` package is a fake OAuth
 provider for tests. Give the conformance kit a `PrepareLogin` fixture and it checks each login
-method and refresh outcome too. The rules are in [Login and refresh](README.md#login-and-refresh).
+method and refresh outcome too. The rules are in [Login and refresh](protocol.md#login-and-refresh).
 
 ## 7. Hold sessions (optional, protocol 0.1)
 
@@ -345,9 +345,9 @@ sdk.Serve(sdk.Extension{
 - `Close()` is called once when the session ends: close the upstream connection there.
 
 The rules, including what to send when the upstream connection is lost, are in
-[Sessions](README.md#sessions); the Codex extension (`extensions/codex`) is a complete example.
+[Sessions](protocol.md#sessions); the Codex extension (`extensions/codex`) is a complete example.
 
-Core's [payload rules](README.md#payload-rules) (fields to set or remove in upstream bodies) reach a
+Core's [payload rules](protocol.md#payload-rules) (fields to set or remove in upstream bodies) reach a
 turn on its frame, and `sdk.Upstream` cannot apply them to a message that is not an HTTP request.
 So for each turn, pass the message you write upstream to `sdk.ApplyPayload(ctx, body)` once, with
 the turn's `ctx`, just before writing it and after everything else you do to it
@@ -380,7 +380,7 @@ rules, and keeps the list: it asks again every 30 minutes (plus up to 3 minutes,
 all ask at once) and after a login or a credential renewal. A read that fails, takes longer than
 15 seconds or comes back empty keeps the last good list. So the handler needs no cache of its own.
 Without a models handler, core lists only the models accounts' configs name. The fields are in
-[`models`](README.md#models).
+[`models`](protocol.md#models).
 
 ## 9. Check accounts (optional, protocol 0.4)
 
@@ -407,7 +407,7 @@ sdk.Serve(sdk.Extension{
 ```
 
 Return code `unsupported` for an account that cannot be checked without generating: core then
-shows it as not checked. The rules are in [`check`](README.md#check); the OAuth example
+shows it as not checked. The rules are in [`check`](protocol.md#check); the OAuth example
 (`examples/oauth`) checks a token with its provider.
 
 ## 10. Report quota and who signed in (optional, protocol 0.5)
@@ -435,5 +435,5 @@ scope `credential`. Never read quota with a request that spends from the plan.
 A login handler should also say who signed in, in the grant's `Identity`: the fields that tell two
 upstream accounts apart, such as the e-mail address and the account or workspace ID. Core keeps
 them and refuses a later login to the same account that signs in as someone else. The OAuth
-example (`examples/oauth`) does both. The fields are in [`quota`](README.md#quota) and
-[`login`](README.md#login).
+example (`examples/oauth`) does both. The fields are in [`quota`](protocol.md#quota) and
+[`login`](protocol.md#login).

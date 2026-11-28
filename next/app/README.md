@@ -7,15 +7,15 @@ versions, updates, add-ons installed on this computer, the coding-tool pages and
 - How to use it: [docs/app.md](../../docs/app.md).
 - How it works inside (connection modes, the app's own core, commands, extension pages, native
   tools, updates, trust): [docs/design/app-design.md](../../docs/design/app-design.md).
-- The contract app packages and native tools follow: [`app-host/README.md`](app-host/README.md).
-- The native tools themselves: [`../app-tools/README.md`](../app-tools/README.md).
+- The contract app packages and native tools follow: [docs/app-packages.md](../../docs/app-packages.md).
+- The native tools themselves: [docs/app-tools.md](../../docs/app-tools.md).
 
 | Folder or file | What it holds |
 | --- | --- |
 | `src/` | The window: the kit's shell and pages, the app's host (`host.ts`), the first launch screen and Where pluxy runs (`firstLaunch.tsx`, `connection.tsx`, their words in `connectionCopy.ts`), the coding-tool pages (`clientPage.tsx` and one file per tool), extension page drawing (`nativePage.tsx`) |
 | `page/` | The small document an extension page's webview loads, which holds the page's sandboxed frame, and the release notes' style sheet |
 | `src-tauri/` | The native side: commands, the connection to core, the app's own core, extension page webviews, native tools, the updater, the tray |
-| `app-host/` | The app package contract and its tutorial |
+| `app-host/` | Points to the app package contract and tutorial in `docs/` |
 | `native/` | The native test (`run.ts`), its sessions and fixtures |
 | `tests/` | The window's unit tests |
 | `package.ts` | The package commands ([Packages](#packages)) |
@@ -169,6 +169,6 @@ carries a changed one at the same version: remove and install it again to run th
 | Using the app, platforms, troubleshooting | [docs/app.md](../../docs/app.md) |
 | How the app works inside | [docs/design/app-design.md](../../docs/design/app-design.md) |
 | Putting a kept copy back by hand after a failed update | [docs/design/app-design.md](../../docs/design/app-design.md#application-update) |
-| App packages, native tools, the vault, launches, WSL | [`app-host/README.md`](app-host/README.md), [`app-host/TUTORIAL.md`](app-host/TUTORIAL.md) |
-| The native tools | [`../app-tools/README.md`](../app-tools/README.md) |
+| App packages, native tools, the vault, launches, WSL | [docs/app-packages.md](../../docs/app-packages.md), [docs/app-package-tutorial.md](../../docs/app-package-tutorial.md) |
+| The native tools | [docs/app-tools.md](../../docs/app-tools.md) |
 | The web panel and the kit | [`../ui/README.md`](../ui/README.md) |

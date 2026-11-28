@@ -647,4 +647,4 @@ name or selector matches nothing.
 ## Built-in themes
 
 The files in this folder are the themes the UI ships with, and examples of the format:
-[`default.json`](default.json), [`terminal.json`](terminal.json) and [`paper.json`](paper.json).
+[`default.json`](../next/ui/themes/default.json), [`terminal.json`](../next/ui/themes/terminal.json) and [`paper.json`](../next/ui/themes/paper.json).

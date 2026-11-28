@@ -267,7 +267,7 @@ the **Config** page.
    error that kept a response from coming). A refused attempt and the retry on another account show
    as two pairs. A request that made more than two upstream requests keeps the first and the last,
    with a line saying how many were left out. These sections need an extension that supports
-   [upstream capture](../next/protocol/README.md#upstream-capture) (extension protocol 0.13), and
+   [upstream capture](protocol.md#upstream-capture) (extension protocol 0.13), and
    are written only while `logs.request_log` is on, so an error log written while it is off has none.
    The line that says a body was not read to its end needs protocol 0.17; with an older extension a
    body just ends where the read stopped.

@@ -6,7 +6,7 @@ desktop app's Rust code in `next/app/src-tauri/src/`; signature checks are in `a
 device catalog in `device.rs`, the program host in `program.rs`, the router in `route.rs` and the
 launch service in `spawn.rs`. Core reads the same manifests only to refuse app-only packages and to
 use the provider part of a mixed one. To build a first package, start with the
-[tutorial](TUTORIAL.md).
+[tutorial](app-package-tutorial.md).
 
 Two kinds of app package exist:
 
@@ -20,7 +20,7 @@ Two kinds of app package exist:
 
 An app package has one `pluxy-extension.json` at the archive root, with `manifest_version: 1` and
 the same `id` (`publisher/name`) and `version` rules as the
-[provider manifest](../../protocol/README.md#package-manifest). The app part goes in `app`. A
+[provider manifest](protocol.md#package-manifest). The app part goes in `app`. A
 mixed package keeps the provider `protocol`, `programs`, `ui` and `config` at the top level and adds
 `app` beside them; an app-only package has no provider fields. A version 0 manifest ignores `app`.
 
@@ -29,8 +29,8 @@ mixed package keeps the provider `protocol`, `programs`, `ui` and `config` at th
 | `version` | both | App contribution format: `0`. |
 | `tier` | both | `web` or `native`. |
 | `host_versions` | both | Nonempty list of host contract major versions it works with; must include `0`. |
-| `ui` | both | Optional pages, in the [UI format](../../ui/extension-pages/README.md#ui). Paths are relative to the package root. |
-| `config` | both | Optional settings, in the [config format](../../ui/extension-pages/README.md#config). The device catalog serves no settings: a page's settings calls answer `unavailable`. |
+| `ui` | both | Optional pages, in the [UI format](extension-pages.md#ui). Paths are relative to the package root. |
+| `config` | both | Optional settings, in the [config format](extension-pages.md#config). The device catalog serves no settings: a page's settings calls answer `unavailable`. |
 | `resources` | web | Files the package may ask for: each `{"id", "kind": "file" \| "subtree", "operations": [...]}`. Only `file` with `read`, and `subtree` with `list` or `read`, can be granted. Declaring one grants nothing. |
 | `programs` | native | Platform (`GOOS/GOARCH`) to the program's relative path. At least one. |
 | `environments` | native | Optional. The only value is `wsl`: on Windows its Linux program may also run in a WSL distribution ([Linux build for WSL](#linux-build-for-wsl)). |
@@ -59,7 +59,7 @@ Rules:
 
 ## Archives, catalogs and provenance
 
-Archives follow the provider [archive rules](../../protocol/README.md#release-archives): one
+Archives follow the provider [archive rules](protocol.md#release-archives): one
 gzip-compressed tar per platform, regular files and folders only, at most 512 MiB unpacked and
 10,000 entries. The desktop app also refuses an archive over 512 MiB compressed, a manifest over
 1 MiB, entry names with `:` or a Windows device name, and a `ui` folder of more than 1,000 files,
@@ -198,7 +198,7 @@ The environment holds:
 Windows adds a few system values ([Windows and macOS](#windows-and-macos)).
 
 **Frames.** Each frame is a four-byte big-endian length and that many bytes of UTF-8 JSON, as in
-the provider [framing](../../protocol/README.md#framing); unknown fields are ignored. A frame from
+the provider [framing](protocol.md#framing); unknown fields are ignored. A frame from
 the tool is at most 1 MiB. Stdout carries frames only; stderr is a log and must never hold
 credentials.
 
@@ -221,7 +221,7 @@ credentials.
    and answers. If it answers, its answer stands; if it does not within five seconds, the host
    stops it and the call ends with `cancelled`. Closing the pipe cancels every call.
 
-Error objects use the provider [error object](../../protocol/README.md#errors); the host passes a
+Error objects use the provider [error object](protocol.md#errors); the host passes a
 tool's code on and uses `internal` when it has none. A call to an undeclared operation gets
 `unsupported`. When the tool exits or its stdout ends before a call's answer, the call fails; it
 never succeeds empty, and the host never retries it.
@@ -394,7 +394,7 @@ as one of its users: an instance of its own beside the one on Windows (`environm
 app's window chooses where a call runs; the host carries that choice itself, never in an
 operation's input, and refuses an environment it has no record of or a package that does not run
 in WSL. The record is what `pluxy/wsl`'s `check` returned when the person added the environment
-([app tools](../../app-tools/README.md#wsl)): distribution, user, user ID, home, processor and the
+([app tools](app-tools.md#wsl)): distribution, user, user ID, home, processor and the
 Windows drives mounted there. Records are kept in `environments.json` (owner-only, at most 64).
 
 | | In WSL |
@@ -627,7 +627,7 @@ asks for the spawn.
   the path names exactly what it holds (final path, volume serial number and file ID), that the
   program is a `.exe` or `.com` starting `MZ` (and no `.com.exe` sits beside a `.com`), and that only
   the person, SYSTEM, Administrators and TrustedInstaller can change it or its folders. A refusal
-  shows in the terminal window ([execution](../../app-tools/README.md#execution)).
+  shows in the terminal window ([execution](app-tools.md#execution)).
 
 **`environment`.** Names are ASCII letters, digits and `_`, not starting with a digit, at most 128
 characters; a `set` value is at most 32 KiB with no NUL. A name may not appear in more than one of
@@ -1012,13 +1012,13 @@ disk, and the package's next start names it in describe, on the package's turn:
   each was reconciled after a crash.
 
 Config writers use the app tools' transaction library
-([`lib/transactions`](../../app-tools/README.md#libtransactions)): it pins a file at preview, writes
+([`lib/transactions`](app-tools.md#libtransactions)): it pins a file at preview, writes
 only its target, keeps backups (10 manual backups per set) and a journal in the vault, and
 reconciles them from disk.
 
 ## Shared manifest fixtures
 
-[`protocol/testdata/app-manifests`](../../protocol/testdata/app-manifests) holds manifest cases
+[`protocol/testdata/app-manifests`](../next/protocol/testdata/app-manifests) holds manifest cases
 with expected outcomes in `cases.json`. Go runs them through core's install route
 (`next/e2e/packages_test.go`), and the desktop app's Rust tests check each one's `manifest_valid`
 against its validator (`shared_manifest_fixtures_agree_with_core` in `device_tests.rs`). They are

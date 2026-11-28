@@ -8,11 +8,11 @@ launch runs on, and a managed runtime runs until it is stopped, its package is d
 or the app quits or restarts for an update.
 
 The contract between the app and a tool (frames, states, jobs, launches, saving files, the vault)
-is in [`../app/app-host/README.md`](../app/app-host/README.md) ("App program contract v0"). This
+is in [docs/app-packages.md](app-packages.md) ("App program contract v0"). This
 folder implements it and does not change it. This page is the reference for what each tool and
 library does. How a person uses them from the app's pages is in
-[docs/app.md](../../docs/app.md#the-coding-tool-pages), and how the app hosts them in
-[docs/design/app-design.md](../../docs/design/app-design.md#packages-on-this-device).
+[docs/app.md](app.md#the-coding-tool-pages), and how the app hosts them in
+[docs/design/app-design.md](design/app-design.md#packages-on-this-device).
 
 ## Tools and libraries
 
@@ -33,7 +33,7 @@ tool.
 | [`pi-setup`](#pi-setup) | `pluxy/pi-setup` | Points Pi at pluxy: edits three files and manages Pi's provider plugin | Pi |
 | [`execution`](#execution) | `pluxy/execution` | Prepares launches: an agent in a terminal, a program run directly, a file opened in the person's own app | Launcher, the tray's Start… menu, the tool pages' Start section |
 | [`codex-sessions`](#codex-sessions) | `pluxy/codex-sessions` | Reads Codex's local sessions, read-only | Codex sessions |
-| [`agent-usage`](agent-usage/README.md) | `pluxy/agent-usage` | The usage hub: one store of agents' token usage | Agent usage |
+| [`agent-usage`](../next/app-tools/agent-usage/README.md) | `pluxy/agent-usage` | The usage hub: one store of agents' token usage | Agent usage |
 | [`usage-codex`](#usage-parsers), [`usage-claude`](#usage-parsers), [`usage-opencode`](#usage-parsers), [`usage-omp`](#usage-parsers), [`usage-pi`](#usage-parsers) | `pluxy/usage-codex`, `pluxy/usage-claude`, `pluxy/usage-opencode`, `pluxy/usage-omp`, `pluxy/usage-pi` | Usage parsers: read one agent's session files and send the hub token counts | none (their rows show on Agent usage) |
 | `usage-fixture` | `pluxy/usage-fixture` | A parser of a test format for the hub's checks; never released | none |
 | [`wsl`](#wsl) | `pluxy/wsl` (program `pluxy-wsl`) | Lists WSL distributions and users, checks one, prepares launches inside it (Windows only) | The client pages' WSL choice |
@@ -242,7 +242,7 @@ many files. The app's native test packs it (`next/app/native/transactions.ts`).
 ### `lib/usage`
 
 `pluxy-usage`: schemas 1 and 2 of the usage hub's ingest API (see
-[`agent-usage/README.md`](agent-usage/README.md#schema-1)) and what a parser shares. A parser
+[`next/app-tools/agent-usage/README.md`](../next/app-tools/agent-usage/README.md#schema-1)) and what a parser shares. A parser
 implements `Parser` (label, default roots, which files are its, how a file's bytes become rows) and
 answers its produces operation with `produce`:
 
@@ -677,7 +677,7 @@ directly, or a file opened in the person's own app. The Launcher page, the tray'
 tool pages' Start section and `codex-sessions` (to open a session's file) use it. As a tool it never starts a
 process itself and never holds a secret's value: the host confirms each launch natively, spawns
 exactly what was confirmed when the program asks, and resolves secrets from its vault at the spawn
-(`../app/app-host/README.md`, "Launches and managed runtimes").
+(`docs/app-packages.md`, "Launches and managed runtimes").
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
@@ -827,7 +827,7 @@ What it reads:
 ## Usage parsers
 
 A usage parser is a tool that reads one agent's session files and sends the usage hub
-([`agent-usage`](agent-usage/README.md)) token counts per UTC hour and model (schema 1) or per
+([`agent-usage`](../next/app-tools/agent-usage/README.md)) token counts per UTC hour and model (schema 1) or per
 message (schema 2), and nothing else: no prompt, reply, title, folder name or raw ID leaves it. A
 parser never writes an agent's file. Each is a small program on `lib/usage`; the hub's `roots` name
 other roots than the defaults, which come from the app's `HOME`.
@@ -903,7 +903,7 @@ hashed folder is the project's. Each file is read line by line when it changes:
 `pluxy/wsl` (program `bin/pluxy-wsl.exe`, Windows only: every operation answers `unsupported` anywhere
 else) tells the app which WSL distributions and users exist, checks one, and prepares launches inside
 it. The app then runs the client package's own Linux program in the distribution through `wsl.exe`
-itself (`../app/app-host/README.md`, "Tools in WSL (Windows)"). The tool only reads: it writes
+itself (`docs/app-packages.md`, "Tools in WSL (Windows)"). The tool only reads: it writes
 nothing and never starts a launch.
 
 It runs only Windows' own `wsl.exe`, from System32 as `GetSystemDirectoryW` reports it: no window,

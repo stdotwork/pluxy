@@ -233,7 +233,7 @@ block later.
 
 A rate-limit or quota block on an account, or on one of its models, with more than 15 minutes left
 is checked every 15 minutes. The check reads the account's usage from its provider (the extension's
-[`quota` call](../next/protocol/README.md#quota)):
+[`quota` call](protocol.md#quota)):
 
 - A usage window covers a block on the whole account when it counts every request on the account.
   It covers a block on one model when it does that, or when it counts that model's requests. A
@@ -689,7 +689,7 @@ nor the OpenAI-compatible extension's audio transcription and translation reques
 multipart forms. An extension older than protocol 0.14
 cannot apply rules (0.15 for a turn on an upstream WebSocket), so a request that rules apply to is
 not sent to it: it goes to other accounts, and the error says why. The protocol side is in the
-[extension protocol](../next/protocol/README.md#payload-rules).
+[extension protocol](protocol.md#payload-rules).
 
 ## Account checks
 
@@ -720,7 +720,7 @@ Each extension checks with its upstream's model list, and only accounts with an 
 | `pluxy/xai` | `GET {base_url}/models`. A Grok sign-in is not checked. |
 
 The other bundled extensions do not check accounts. The protocol side is the
-[`check` operation](../next/protocol/README.md#check).
+[`check` operation](protocol.md#check).
 
 Core also logs the result of each check the extension ran (`account "work": check passed: ...`,
 `check failed: ...` or `not checked: ...`). An account left unchecked because its extension has no
@@ -750,7 +750,7 @@ more of a long token or of a PEM private key's body:
 - **The account's secrets** are the credential's key and tokens, secret header values, the proxy's
   user name and password, and the secrets core finds in the settings (in a URL, only its user name,
   password and secret query or fragment values). On a sign-in they include the inputs it marks
-  secret (the protocol's [Accounts](../next/protocol/README.md#accounts) section says how).
+  secret (the protocol's [Accounts](protocol.md#accounts) section says how).
 - A typed plain address that a sign-in does not mark secret (an `http` or `https` URL with no query,
   fragment or whitespace, whose host and path hold only plain URL characters, such as a base URL)
   counts only by its user name and password, so its scheme, host,
