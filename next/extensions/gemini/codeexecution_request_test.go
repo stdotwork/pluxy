@@ -61,7 +61,6 @@ func TestCodeExecutionToGemini(t *testing.T) {
 				}
 				return req
 			},
-			// max_tokens from Messages is always dropped on Gemini (left to model's limit).
 			wantDropped: []string{"max_tokens"},
 		},
 		{
@@ -124,7 +123,6 @@ func TestCodeExecutionToGemini(t *testing.T) {
 			})
 		}
 
-		// Third-party base_url gets no codeExecution and a dropped loss.
 		t.Run(tc.name+"/third_party", func(t *testing.T) {
 			req := roundTripReq(t, tc.parse(t))
 			for _, s := range []settings{
@@ -229,7 +227,6 @@ func TestCodeExecutionToGeminiModelGating(t *testing.T) {
 }
 
 func TestCodeExecutionToGeminiCombinations(t *testing.T) {
-	// Beside web search (no function tools): BOTH googleSearch and codeExecution are emitted.
 	reqWS, err := openairesponses.ParseRequest([]byte(`{
 		"model":"gemini-4-hydrogen",
 		"input":"search and compute",
@@ -266,7 +263,6 @@ func TestCodeExecutionToGeminiCombinations(t *testing.T) {
 		t.Errorf("web_search + code_execution: unexpected dropped losses: %+v", trWS.Losses)
 	}
 
-	// Beside function tools on GenerateContent: keep functionDeclarations, drop codeExecution with a loss.
 	for _, model := range []string{"gemini-2.5-flash", "gemini-4-hydrogen"} {
 		reqFn, err := openairesponses.ParseRequest([]byte(`{
 			"model":"` + model + `",
@@ -298,7 +294,6 @@ func TestCodeExecutionToGeminiCombinations(t *testing.T) {
 }
 
 func TestCodeExecutionToGeminiToolChoice(t *testing.T) {
-	// Forced code_interpreter when emitted -> no toolConfig (never mode:ANY without functions!), dropped loss at tool_choice.
 	req, err := openairesponses.ParseRequest([]byte(`{
 		"model":"gemini-4-hydrogen",
 		"input":"compute",
@@ -328,7 +323,6 @@ func TestCodeExecutionToGeminiToolChoice(t *testing.T) {
 		t.Errorf("dropped = %v, want tool_choice in %+v", tr.DroppedPaths(), tr.Losses)
 	}
 
-	// Forced code_interpreter when tool is dropped (third-party base_url) -> no toolConfig, dropped loss at tool_choice.
 	bodyDrop, trDrop, err := buildBodyOn(req, settings{BaseURL: "https://proxy.example.com/v1beta"})
 	if err != nil {
 		t.Fatal(err)
@@ -344,7 +338,6 @@ func TestCodeExecutionToGeminiToolChoice(t *testing.T) {
 		t.Errorf("dropped host: dropped = %v, want tool_choice", trDrop.DroppedPaths())
 	}
 
-	// tool_choice: "required" with only code_interpreter (emitted) -> no toolConfig, dropped loss at tool_choice.
 	reqReq, err := openairesponses.ParseRequest([]byte(`{
 		"model":"gemini-4-hydrogen",
 		"input":"compute",

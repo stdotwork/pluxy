@@ -6,7 +6,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A reply's tool call comes back to the client under the client's own name for the tool.
 func TestReplyNamesRestoresClientToolNames(t *testing.T) {
 	req := llm.Request{
 		Tools: []llm.Tool{{Name: "mcp/server.tool"}, {Name: "get_weather"}},
@@ -34,7 +33,6 @@ func TestReplyNamesRestoresClientToolNames(t *testing.T) {
 		t.Errorf("sent name = %q, want the client's", got)
 	}
 
-	// A GenerateContent body passed through keeps the client's names.
 	if names := replyNames(req, &llm.Translation{To: llm.FormatGeminiGenerate, Passthrough: true}); names != nil {
 		t.Errorf("passthrough names = %v, want none", names)
 	}

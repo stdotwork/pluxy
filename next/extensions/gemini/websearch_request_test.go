@@ -60,7 +60,7 @@ func TestWebSearchToGemini(t *testing.T) {
 				}
 				return req
 			},
-			wantDropped: true, // max_uses, allowed_domains (plus max_tokens from Messages)
+			wantDropped: true,
 		},
 		{
 			name: "chat",
@@ -82,7 +82,6 @@ func TestWebSearchToGemini(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := roundTripReq(t, tc.parse(t))
-			// Official Google host gets googleSearch.
 			body, tr, err := buildBodyOn(req, settings{BaseURL: defaultBaseURL})
 			if err != nil {
 				t.Fatalf("official host: %v", err)
@@ -100,7 +99,6 @@ func TestWebSearchToGemini(t *testing.T) {
 				t.Errorf("official host: dropped = %v, want %v (losses: %+v)", tr.Dropped(), tc.wantDropped, tr.Losses)
 			}
 
-			// Third-party base_url gets no tool and a loss.
 			customBody, customTr, err := buildBodyOn(req, settings{BaseURL: "https://proxy.example.com"})
 			if err != nil {
 				t.Fatalf("custom host: %v", err)

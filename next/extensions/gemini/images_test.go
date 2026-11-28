@@ -17,7 +17,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// imageTestExtension builds the extension and returns a Gemini API account pointed at srv.
 func imageTestExtension(t *testing.T) (*host.Extension, *geminitest.Server, protocol.Account) {
 	t.Helper()
 	srv := geminitest.New(t)
@@ -31,7 +30,6 @@ func imageTestExtension(t *testing.T) (*host.Extension, *geminitest.Server, prot
 		Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: srv.IssueKey()}}
 }
 
-// imageEvents runs one Images API endpoint call and returns its events.
 func imageEvents(t *testing.T, ext *host.Extension, acct protocol.Account, format, body string) []llm.Event {
 	t.Helper()
 	req := llm.Request{Model: "gemini-3.1-flash-image", Native: &llm.Native{Format: format, Body: json.RawMessage(body)}}
@@ -47,7 +45,6 @@ func imageEvents(t *testing.T, ext *host.Extension, acct protocol.Account, forma
 	}
 }
 
-// imagesReply unmarshals a successful Images API endpoint reply.
 func imagesReply(t *testing.T, events []llm.Event) struct {
 	Created int64 `json:"created"`
 	Data    []struct {
@@ -88,9 +85,6 @@ func imagesReply(t *testing.T, events []llm.Event) struct {
 	return reply
 }
 
-// An Images API generation is one non-streamed generateContent call whose prompt, requested
-// modality and aspect ratio are mapped into Gemini's request, and whose every inlineData part
-// becomes an Images API data entry with b64_json.
 func TestGeminiImagesGeneration(t *testing.T) {
 	ext, srv, acct := imageTestExtension(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
@@ -150,8 +144,6 @@ func TestGeminiImagesGeneration(t *testing.T) {
 	}
 }
 
-// OpenAI image sizes map to Google's documented aspect ratios; auto and an absent size leave the
-// ratio to Gemini.
 func TestGeminiImagesSize(t *testing.T) {
 	ext, srv, acct := imageTestExtension(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
@@ -203,8 +195,6 @@ func TestGeminiImagesSize(t *testing.T) {
 	}
 }
 
-// More than one image, a stream and an invalid size are refused before the upstream is called;
-// image edits are unsupported, so another account may serve them.
 func TestGeminiImagesRefusals(t *testing.T) {
 	ext, srv, acct := imageTestExtension(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
@@ -234,14 +224,10 @@ func TestGeminiImagesRefusals(t *testing.T) {
 	}
 }
 
-// A GenerateContent reply larger than maxImagesReply (64 MiB) is refused as an upstream error
-// rather than buffered and decoded into an Images API reply.
 func TestGeminiImagesReplySizeLimit(t *testing.T) {
 	ext, srv, acct := imageTestExtension(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// Leading JSON whitespace pushes a valid small reply past maxImagesReply while keeping
-		// the decoded image small enough to succeed if the limit stops being enforced.
 		pad := bytes.Repeat([]byte{' '}, 1<<20)
 		for written := 0; written < maxImagesReply; written += len(pad) {
 			if _, err := w.Write(pad); err != nil {

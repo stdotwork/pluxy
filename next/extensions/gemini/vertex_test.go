@@ -16,7 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// vertexCall returns a generate call for a Vertex service account at srv.
 func vertexCall(t *testing.T, srv *geminitest.Server) sdk.Call {
 	t.Helper()
 	return sdk.Call{
@@ -26,8 +25,6 @@ func vertexCall(t *testing.T, srv *geminitest.Server) sdk.Call {
 	}
 }
 
-// An upstream that echoes the request's bearer token in an error does not get it to the client:
-// core cannot redact a token it never saw.
 func TestFetchedTokenRedacted(t *testing.T) {
 	tokens = &tokenCache{entries: map[string]*tokenEntry{}}
 	srv := geminitest.New(t)
@@ -48,7 +45,6 @@ func TestFetchedTokenRedacted(t *testing.T) {
 	}
 }
 
-// A token the upstream refuses is not used again.
 func TestRefusedTokenFetchedAgain(t *testing.T) {
 	tokens = &tokenCache{entries: map[string]*tokenEntry{}}
 	srv := geminitest.New(t)
@@ -73,7 +69,6 @@ func TestRefusedTokenFetchedAgain(t *testing.T) {
 	}
 }
 
-// A call waiting for another call's token fetch can be cancelled.
 func TestTokenWaitCancellable(t *testing.T) {
 	tokens = &tokenCache{entries: map[string]*tokenEntry{}}
 	hung := make(chan struct{})
@@ -121,7 +116,6 @@ func TestTokenWaitCancellable(t *testing.T) {
 	}
 }
 
-// Keys whose token fetch failed, and expired tokens, leave the cache.
 func TestTokenCacheDropsUnusable(t *testing.T) {
 	tokens = &tokenCache{entries: map[string]*tokenEntry{}}
 	srv := geminitest.New(t)
@@ -145,8 +139,6 @@ func TestTokenCacheDropsUnusable(t *testing.T) {
 	}
 }
 
-// A key file names where its signed assertion goes, so only Google's token endpoints are taken;
-// a fake one only under a test.
 func TestTokenURIOnlyGoogle(t *testing.T) {
 	srv := geminitest.New(t)
 	t.Setenv(protocol.EnvTestLoginHosts, "")
@@ -154,7 +146,6 @@ func TestTokenURIOnlyGoogle(t *testing.T) {
 		"": true, "https://oauth2.googleapis.com/token": true, "https://accounts.google.com/o/oauth2/token": true,
 		"https://oauth2.example.test/token": false, "http://127.0.0.1:9/token": false, "https://oauth2.googleapis.com/token/": false,
 		"https://oauth2.googleapis.com.example.test/token": false, "http://oauth2.googleapis.com/token": false,
-		// Only the exact strings: no case, port, userinfo, trailing dot, encoding or space variants.
 		"HTTPS://oauth2.googleapis.com/token": false, "https://OAUTH2.googleapis.com/token": false,
 		"https://oauth2.googleapis.com:443/token": false, "https://user@oauth2.googleapis.com/token": false,
 		"https://oauth2.googleapis.com./token": false, "https://oauth2.googleapis.com/%74oken": false,
@@ -175,8 +166,6 @@ func TestTokenURIOnlyGoogle(t *testing.T) {
 	}
 }
 
-// Under a test, a fake token endpoint is taken, but the assertion still never crosses a network
-// in the clear.
 func TestTokenURIPlainHTTPOnlyLocal(t *testing.T) {
 	srv := geminitest.New(t)
 	for uri, ok := range map[string]bool{
@@ -193,7 +182,6 @@ func TestTokenURIPlainHTTPOnlyLocal(t *testing.T) {
 	}
 }
 
-// A token endpoint that stops answering fails the fetch instead of holding the account.
 func TestTokenFetchTimesOut(t *testing.T) {
 	tokens = &tokenCache{entries: map[string]*tokenEntry{}}
 	hung := make(chan struct{})
@@ -233,7 +221,6 @@ func TestTokenFetchTimesOut(t *testing.T) {
 	}
 }
 
-// serviceAccountAt returns a service account whose token endpoint is the server's /token.
 func serviceAccountAt(t *testing.T, tokenURL string) *serviceAccount {
 	t.Helper()
 	var raw map[string]any
@@ -247,10 +234,6 @@ func serviceAccountAt(t *testing.T, tokenURL string) *serviceAccount {
 	return sa
 }
 
-// The token endpoint's reply decides the error: a reply that breaks off or cannot be read says
-// nothing about the key, so it is an unavailable error, not a refusal of the key; a complete 200
-// without a token is an upstream error; a refusal the endpoint wrote stays an auth error. No
-// request has reached the model in any of them, so another account may serve the request.
 func TestTokenFetchErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -262,7 +245,7 @@ func TestTokenFetchErrors(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Content-Length", "200")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"access_token":"ya29.partial`)) // 200 bytes promised, the connection ends
+			_, _ = w.Write([]byte(`{"access_token":"ya29.partial`))
 		}, llm.CodeUnavailable, true},
 		{"400 whose body breaks off", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Length", "200")
@@ -294,8 +277,6 @@ func TestTokenFetchErrors(t *testing.T) {
 	}
 }
 
-// A Gemini client's countTokens body that wraps a whole request reaches Vertex AI as that
-// request's contents, since Vertex AI takes no generateContentRequest.
 func TestVertexCountUnwraps(t *testing.T) {
 	tokens = &tokenCache{entries: map[string]*tokenEntry{}}
 	srv := geminitest.New(t)

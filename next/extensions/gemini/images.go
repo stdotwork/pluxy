@@ -17,10 +17,8 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// maxImagesReply limits what is read of a non-streamed GenerateContent reply.
 const maxImagesReply = 64 << 20
 
-// imagesRequestBody is the GenerateContent body used for an Images API generation.
 type imagesRequestBody struct {
 	Contents         []imagesContent        `json:"contents"`
 	GenerationConfig imagesGenerationConfig `json:"generationConfig"`
@@ -43,7 +41,6 @@ type imagesImageConfig struct {
 	AspectRatio string `json:"aspectRatio"`
 }
 
-// imageData is one image in an Images API reply.
 type imageData struct {
 	B64JSON string `json:"b64_json"`
 }
@@ -71,7 +68,6 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	}
 	send := &reporting{out: out}
 	if t.token != "" {
-		// Core redacts what the credential holds; the fetched access token is redacted here too.
 		send.redact = protocolRedactor(t.token)
 		defer func() {
 			if e, ok := err.(*llm.Error); ok {
@@ -140,13 +136,10 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	return send.Finish(llm.Finish{Reason: llm.FinishStop}, usage)
 }
 
-// protocolRedactor returns a reporting redactor for a Vertex access token fetched during the
-// call, which core does not know to remove from the extension's reply.
 func protocolRedactor(token string) *protocol.Redactor {
 	return protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: token})
 }
 
-// readImagesRequest maps an Images API generation body to Gemini's GenerateContent body.
 func readImagesRequest(r llm.Request) (imagesRequestBody, error) {
 	var out imagesRequestBody
 	if r.Native == nil {
@@ -197,8 +190,6 @@ func badImageRequest(message string) *llm.Error {
 	return &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest, Message: message}
 }
 
-// geminiImageAspectRatio maps an OpenAI image size to one of Gemini's documented ratios. auto and
-// an empty size leave the choice to Gemini; any other value must be WIDTHxHEIGHT.
 func geminiImageAspectRatio(size string) (string, error) {
 	size = strings.TrimSpace(size)
 	if size == "" || strings.EqualFold(size, "auto") {
@@ -236,7 +227,6 @@ func geminiImageAspectRatio(size string) (string, error) {
 	return best, nil
 }
 
-// imagesData returns every inlineData image in a GenerateContent reply as Images API data entries.
 func imagesData(raw []byte) ([]imageData, error) {
 	var reply struct {
 		Candidates []struct {

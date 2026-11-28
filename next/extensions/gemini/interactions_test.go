@@ -16,7 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// resolveFor returns where an Interactions request goes for an account with settings and cred.
 func resolveFor(t *testing.T, settings string, cred *protocol.Credential, stream bool) target {
 	t.Helper()
 	s, err := readSettings(json.RawMessage(settings))
@@ -30,7 +29,6 @@ func resolveFor(t *testing.T, settings string, cred *protocol.Credential, stream
 	return tg
 }
 
-// sameJSON fails the test unless got holds the same JSON as want; object key order does not count.
 func sameJSON(t *testing.T, got []byte, want string) {
 	t.Helper()
 	var g, w any
@@ -47,7 +45,6 @@ func sameJSON(t *testing.T, got []byte, want string) {
 
 func TestResolveInteractionsGeminiAPIKey(t *testing.T) {
 	key := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "geminitest-key-interactions"}
-	// A trailing slash on base_url is trimmed; the stream flag adds no query for the Gemini API.
 	const settings = `{"base_url":"https://gemini.example.test/","interactions":true}`
 	for _, stream := range []bool{false, true} {
 		tg := resolveFor(t, settings, key, stream)
@@ -103,8 +100,6 @@ func TestResolveInteractionsVertexExpressKeyProject(t *testing.T) {
 	}
 }
 
-// With no base_url, Vertex express requests go to the default Vertex host; only the URL is checked,
-// no request is sent.
 func TestResolveInteractionsDefaultHost(t *testing.T) {
 	key := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "geminitest-key-default"}
 	const settings = `{"vertex":{},"interactions":true}`
@@ -116,8 +111,6 @@ func TestResolveInteractionsDefaultHost(t *testing.T) {
 	}
 }
 
-// A service account's Interactions request is authorised with a bearer token from the token
-// endpoint (the fake Google's), and its location stays global even when settings name another.
 func TestResolveInteractionsServiceAccount(t *testing.T) {
 	tokens = &tokenCache{entries: map[string]*tokenEntry{}}
 	srv := geminitest.New(t)
@@ -140,18 +133,15 @@ func TestResolveInteractionsServiceAccount(t *testing.T) {
 			t.Errorf("stream %v: Authorization = %q, want the fetched bearer token", c.stream, h.Get("Authorization"))
 		}
 	}
-	// Both calls share one cached token: the token endpoint issued one.
 	if n := srv.Grants(); n != 1 {
 		t.Errorf("%d access tokens fetched, want 1", n)
 	}
 
-	// Without vertex.project the key's project_id is used.
 	noProject := `{"base_url":"` + srv.URL + `","vertex":{"location":"us-central1"}}`
 	if tg := resolveFor(t, noProject, cred, false); tg.url != srv.URL+"/v1beta1/projects/proj-1/locations/global/interactions" {
 		t.Errorf("url %s, want the key's project_id in the path", tg.url)
 	}
 
-	// Without base_url the default Vertex host is used; no request goes there, only the token fetch.
 	defaultHost := `{"vertex":{"project":"proj-1"}}`
 	if tg := resolveFor(t, defaultHost, cred, false); tg.url != "https://aiplatform.googleapis.com/v1beta1/projects/proj-1/locations/global/interactions" {
 		t.Errorf("url %s, want the default Vertex host", tg.url)
@@ -210,7 +200,6 @@ func TestSanitizeInput(t *testing.T) {
 	}
 }
 
-// A string input is returned byte for byte as it came.
 func TestSanitizeInputStringBytesUnchanged(t *testing.T) {
 	in := json.RawMessage(`"hello"`)
 	if out, changed := sanitizeInput(in); changed || string(out) != `"hello"` {
@@ -228,7 +217,6 @@ func TestInteractionsBody(t *testing.T) {
 	}
 	sameJSON(t, body, `{"model":"gemini-real","input":[{"type":"function_call","id":"call_9","name":"lookup"}],"stream":true}`)
 
-	// An agent body names no model, so none is added.
 	body, stream, err = interactionsBody(json.RawMessage(`{"agent":"deep-research","input":"hi"}`), "gemini-x")
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +226,6 @@ func TestInteractionsBody(t *testing.T) {
 	}
 	sameJSON(t, body, `{"agent":"deep-research","input":"hi"}`)
 
-	// Only the boolean true asks for a stream.
 	for _, raw := range []string{`{"model":"m","input":"hi","stream":false}`, `{"model":"m","input":"hi","stream":"true"}`} {
 		if _, stream, err := interactionsBody(json.RawMessage(raw), "gemini-x"); err != nil || stream {
 			t.Errorf("%s: stream = %v, err = %v; want no stream", raw, stream, err)
@@ -268,7 +255,6 @@ func TestInteractionsUsage(t *testing.T) {
 		want64(t, name+" cached", u.CachedInputTokens, 3)
 		want64(t, name+" reasoning", u.ReasoningTokens, 5)
 	}
-	// Either an input or an output count is enough for a usage.
 	if u := interactionsUsage(json.RawMessage(`{"total_input_tokens":4}`)); u == nil {
 		t.Error("input count alone: usage is nil")
 	} else if u.OutputTokens != nil {
@@ -298,7 +284,6 @@ func TestStreamUsage(t *testing.T) {
 		want64(t, "top-level usage output", u.OutputTokens, 1)
 	}
 
-	// Where an event carries both, the interaction's usage is the one read.
 	both := `{"interaction":{"usage":{"total_input_tokens":11}},"usage":{"total_input_tokens":99}}`
 	if u := streamUsage(both); u == nil {
 		t.Error("both: usage is nil")
@@ -320,7 +305,6 @@ func endpointCall(settings, format, body string) sdk.Call {
 	}
 }
 
-// refusedCall runs an endpoint call that must be refused before anything is sent, and returns its error.
 func refusedCall(t *testing.T, call sdk.Call) *llm.Error {
 	t.Helper()
 	err := endpoint(context.Background(), call, nil)

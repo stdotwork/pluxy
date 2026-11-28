@@ -268,7 +268,6 @@ func TestQuotaPerAccountIsolationAndOverwrite(t *testing.T) {
 		t.Fatalf("first 429 on A = %+v", qA1.Limits)
 	}
 
-	// Second 429 replaces the first rather than merging stale violations.
 	_ = generateTo(context.Background(), sdk.Call{Account: acctA, Request: req}, &recorder{})
 	qA2, err := quota(context.Background(), sdk.QuotaCall{ID: "qa2", Account: acctA})
 	if err != nil {

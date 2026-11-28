@@ -15,32 +15,10 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// Gemini's Interactions API (POST /v1beta/interactions) is served to Interactions clients as an
-// endpoint call, by accounts whose settings say "interactions": true, as today's core serves it
-// only on its interactions key group and on Vertex accounts that opt in. The client's body goes
-// upstream nearly as it came; the upstream's reply comes back as it is except that any error's
-// Google project or account names are masked (maskReply):
-//
-//   - a Gemini API key: POST {base_url}/v1beta/interactions, the key in x-goog-api-key;
-//   - a Vertex service account: POST {host}/v1beta1/projects/{project}/locations/global/interactions
-//     with the access token, the location always global as in today's core;
-//   - a Vertex express mode key: POST {host}/v1beta1/interactions (or the project path above when
-//     the settings name vertex.project), the key in x-goog-api-key.
-//
-// A stream ("stream": true in the body) is asked of Vertex with alt=sse, as today's core asks it;
-// the Gemini API streams on the body's flag alone. Each upstream event reaches the client as soon
-// as it is read.
-
-// defaultAPIRevision is the Interactions API revision a request names when the client names
-// none, today's core's default.
 const defaultAPIRevision = "2026-05-20"
 
-// maxInteractionsReply limits what is read of an upstream's whole (not streamed) reply.
 const maxInteractionsReply = 64 << 20
 
-// endpoint serves endpoint calls: OpenAI embeddings, Gemini embeddings, OpenAI Images API
-// generations, OpenAI Audio speech and transcriptions, Responses compaction on any Gemini account
-// (compact.go), and the Interactions API on an account that opts in.
 func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	ctx = withAccountID(ctx, call.Account.ID)
 	format := ""
@@ -90,7 +68,6 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	}
 	send := &reporting{out: out, known: knownNames(call.Account)}
 	if t.token != "" {
-		// As in generate: the fetched access token is redacted here, which core does not know.
 		send.redact = protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: t.token})
 		defer func() {
 			if e, ok := err.(*llm.Error); ok {
@@ -107,8 +84,6 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 		authorize(h)
 		h.Set("Api-Revision", revision)
 	}
-	// Today's core asks for a stream with the body's flag (and alt=sse on Vertex) alone, with no
-	// Accept header, so postBody is not told the request streams.
 	resp, err := postBody(ctx, t, body, false, req.Model)
 	if err != nil {
 		return err
@@ -140,7 +115,6 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	return send.Finish(llm.Finish{Reason: llm.FinishStop}, interactionsUsage(r.Usage))
 }
 
-// StartBody, Body and Finish send through the redactor, as Send does.
 func (r *reporting) StartBody(format, contentType string) error {
 	raw, err := json.Marshal(llm.EndpointReply{ContentType: contentType})
 	if err != nil {
@@ -161,7 +135,6 @@ func (r *reporting) Finish(f llm.Finish, usage *llm.Usage) error {
 	return r.Send(llm.Event{Type: llm.EventFinish, Finish: &f, Usage: usage})
 }
 
-// resolveInteractions returns where an account's Interactions request goes.
 func resolveInteractions(ctx context.Context, s settings, cred *protocol.Credential, stream bool) (target, error) {
 	if s.Vertex == nil {
 		if cred == nil || cred.Kind != protocol.CredentialAPIKey || cred.APIKey == "" {
@@ -212,9 +185,6 @@ func resolveInteractions(ctx context.Context, s settings, cred *protocol.Credent
 	return target{}, &llm.Error{Code: llm.CodeAuth, Message: "the Vertex account has neither an API key nor a service account key", Scope: llm.ScopeCredential}
 }
 
-// interactionsBody returns the client's Interactions body as it goes upstream, and whether it
-// asks for a stream: the model renamed for the account (when the body names one), and the input
-// cleaned of the IDs the upstream refuses, as today's core cleans it (sanitizeInput).
 func interactionsBody(raw json.RawMessage, model string) ([]byte, bool, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
@@ -235,15 +205,6 @@ func interactionsBody(raw json.RawMessage, model string) ([]byte, bool, error) {
 	return body, string(m["stream"]) == "true", nil
 }
 
-// sanitizeInput removes from an Interactions input (a list of steps) what the upstream refuses,
-// as today's core does (SanitizeGeminiInteractionsUnsupportedInputIDsDoc): a function_call step
-// without an id takes its call_id as its id, and loses call_id; every other step, and every content
-// part of a step that is not a thought, loses its id. A thought step keeps only its signature (the
-// first of signature, thought_signature and thoughtSignature that is not blank, at signature),
-// losing id, content, text and the other two spellings; one with no signature is left out. Today's
-// core also leaves out a thought step whose signature does not look like one Gemini issued; this
-// extension keeps every signed thought step, unchecked. An input that is not a list is left as it
-// is.
 func sanitizeInput(in json.RawMessage) (json.RawMessage, bool) {
 	var steps []map[string]json.RawMessage
 	if json.Unmarshal(in, &steps) != nil {
@@ -312,7 +273,6 @@ func sanitizeInput(in json.RawMessage) (json.RawMessage, bool) {
 	return b, true
 }
 
-// cleanParts removes the id of each content part in a step's content list; ok reports a change.
 func cleanParts(raw json.RawMessage) (json.RawMessage, bool) {
 	var parts []map[string]json.RawMessage
 	if len(raw) == 0 || json.Unmarshal(raw, &parts) != nil {
@@ -335,8 +295,6 @@ func cleanParts(raw json.RawMessage) (json.RawMessage, bool) {
 	return b, true
 }
 
-// relayInteractions sends each upstream event to the client as soon as it is read, with its
-// event name, and takes the usage the stream reports for the finish.
 func relayInteractions(ctx context.Context, body io.Reader, out *reporting) error {
 	if err := out.StartBody(llm.FormatGeminiInteractions, "text/event-stream"); err != nil {
 		return err
@@ -375,8 +333,6 @@ func relayInteractions(ctx context.Context, body io.Reader, out *reporting) erro
 	}
 }
 
-// streamUsage reads the usage an Interactions stream event reports: the interaction's usage on
-// the event that completes it.
 func streamUsage(data string) *llm.Usage {
 	var ev struct {
 		Interaction struct {
@@ -393,9 +349,6 @@ func streamUsage(data string) *llm.Usage {
 	return interactionsUsage(ev.Usage)
 }
 
-// interactionsUsage reads an Interactions usage object; nil when there is none. The Interactions
-// API names its counts total_input_tokens and so on; the shorter names today's core also reads
-// are taken too.
 func interactionsUsage(raw json.RawMessage) *llm.Usage {
 	var u map[string]json.RawMessage
 	if len(raw) == 0 || json.Unmarshal(raw, &u) != nil || u == nil {

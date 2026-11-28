@@ -10,14 +10,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// countTokens counts the request's input tokens with the model's countTokens method. A Gemini
-// client's countTokens body is sent as it came, apart from a thinking suffix on the model name,
-// which sets its thinking settings, and two repairs: its tool schemas are cleaned (schema.go, also
-// inside a wrapped generateContentRequest) and a top-level contents array that starts with a model
-// turn gets an empty user turn in front (fixLeadingTurn). Vertex AI, which takes no
-// generateContentRequest, also gets a wrapped request's contents, system instruction and tools; a
-// request in another format is rebuilt as GenerateContent and counted whole: for the Gemini API
-// under generateContentRequest, for Vertex AI as its contents, system instruction and tools.
 func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	ctx = withAccountID(ctx, call.Account.ID)
 	s, err := readSettings(call.Account.Settings)
@@ -44,7 +36,6 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error
 		return err
 	}
 	if t.token != "" {
-		// As in generate: the fetched access token is redacted here.
 		redact := protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: t.token})
 		defer func() {
 			if e, ok := err.(*llm.Error); ok {
@@ -76,7 +67,6 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, &llm.Usage{InputTokens: r.TotalTokens, Raw: llm.RawJSON(raw)})
 }
 
-// countBody returns the countTokens body for a GenerateContent body built for model.
 func countBody(body []byte, model string, vertex bool) ([]byte, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
@@ -95,9 +85,6 @@ func countBody(body []byte, model string, vertex bool) ([]byte, error) {
 	return json.Marshal(map[string]any{"generateContentRequest": m})
 }
 
-// unwrapCount returns a Gemini client's countTokens body for Vertex AI: a body that wraps a whole
-// request in generateContentRequest becomes that request's contents, system instruction and
-// tools; any other body is returned as it came.
 func unwrapCount(body []byte) ([]byte, error) {
 	var w struct {
 		GenerateContentRequest json.RawMessage `json:"generateContentRequest"`

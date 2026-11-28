@@ -15,9 +15,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// TestRequestPathCleansToolSchema sends a request with $ref/$defs, a boolean subschema, and a root
-// anyOf through generate against an httptest upstream for both Gemini API and Vertex AI and checks
-// that the upstream receives a cleaned object schema without those unsupported constructs.
 func TestRequestPathCleansToolSchema(t *testing.T) {
 	rawSchema := `{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -499,7 +496,6 @@ func TestCleanEnumsAndBooleanSubschemas(t *testing.T) {
 }
 
 func TestCleanUnionsAndOpenAPIPassthrough(t *testing.T) {
-	// Nested oneOf normalizes to anyOf, and openAPI parameters preserve uppercase OBJECT/STRING.
 	in := `{"type":"object","properties":{"a":{"oneOf":[{"type":"string"},{"type":"integer"}]}}}`
 	cleaned, _ := cleanToolSchema(json.RawMessage(in), false, newRefBudget())
 	var m map[string]any
@@ -533,8 +529,6 @@ func TestCleanUnionsAndOpenAPIPassthrough(t *testing.T) {
 	}
 }
 
-// TestRootUnionKeepsEveryBranchsValues checks how a tool's root anyOf/oneOf is flattened into one
-// object when a property appears in more than one branch.
 func TestRootUnionKeepsEveryBranchsValues(t *testing.T) {
 	root := func(parentProps string, branches ...string) string {
 		props := ""
@@ -547,10 +541,9 @@ func TestRootUnionKeepsEveryBranchsValues(t *testing.T) {
 		return `{"type":"object","properties":{` + props + `}}`
 	}
 	cases := []struct {
-		name string
-		in   string
-		want string // the property "p" after cleaning, as JSON
-		// wantOpenAPI is want for OpenAPI mode, when it differs.
+		name        string
+		in          string
+		want        string
 		wantOpenAPI string
 	}{
 		{
@@ -642,15 +635,12 @@ func TestRootUnionKeepsEveryBranchsValues(t *testing.T) {
 	}
 }
 
-// TestNumericEnums checks that JSON Schema mode (parametersJsonSchema) keeps an enum of numbers
-// and its type, and that OpenAPI mode (parameters), whose enum is a list of strings, still turns it
-// into a string enum.
 func TestNumericEnums(t *testing.T) {
 	cases := []struct {
 		name    string
 		in      string
-		json    string // the property "p" after cleaning in JSON Schema mode
-		openAPI string // and in OpenAPI mode
+		json    string
+		openAPI string
 	}{
 		{
 			name:    "integer",
@@ -765,7 +755,6 @@ func TestNumericEnums(t *testing.T) {
 			t.Run(tc.name+"/"+mode, func(t *testing.T) {
 				in := `{"type":"object","properties":{"p":` + tc.in + `}}`
 				first, _ := cleanToolSchema(json.RawMessage(in), openAPI, newRefBudget())
-				// Numbers are decoded as json.Number so that 2e3 is compared as written.
 				var m struct {
 					Properties map[string]any `json:"properties"`
 				}
@@ -785,9 +774,6 @@ func TestNumericEnums(t *testing.T) {
 	}
 }
 
-// TestRequestPathKeepsNumericEnum sends a Chat Completions tool with an integer enum and checks
-// that the mock upstream receives the type and the numbers in parametersJsonSchema. That Google's
-// own API accepts this shape is not checked here.
 func TestRequestPathKeepsNumericEnum(t *testing.T) {
 	for _, kind := range []string{kindGemini, kindVertexSA} {
 		t.Run(kind, func(t *testing.T) {

@@ -17,15 +17,10 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// maxEmbeddingsReply limits what is read of one upstream embeddings reply.
 const maxEmbeddingsReply = 64 << 20
 
-// maxEmbeddingsTotalValues bounds the total embedding float values held in memory across all
-// upstream batches of one request (~64 MiB as float64; covers 2048 x 3072 = 6,291,456 values).
 const maxEmbeddingsTotalValues = 8 << 20
 
-// embeddingBodyChunkSize is the maximum byte size of each EventNative body piece sent to core,
-// keeping every protocol frame well below protocol.MaxFrame (64 MiB).
 var embeddingBodyChunkSize = 1 << 20
 
 // maxGeminiEmbedBatch is Google's per-request limit on Gemini API batchEmbedContents.
@@ -41,7 +36,7 @@ const maxEmbeddingsInputs = 2048
 type embeddingsRequest struct {
 	inputs         []string
 	dimensions     *int
-	encodingFormat string // "float" or "base64"
+	encodingFormat string
 }
 
 type geminiEmbedRequest struct {
@@ -113,11 +108,6 @@ func vertexPredictBatchSize(model string) int {
 	return maxVertexPredictBatch
 }
 
-// embeddings serves OpenAI's POST /v1/embeddings on a Gemini account:
-//   - Gemini API: :embedContent for one input, or :batchEmbedContents in batches of at most 100.
-//   - Vertex AI: :embedContent (one input per request) for gemini-embedding-2*, :predict with one
-//     input per request for gemini-embedding-001, and :predict in batches of up to 250 for other
-//     text embedding models.
 func embeddings(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return embeddingsTo(ctx, call, out)
 }
@@ -148,7 +138,6 @@ func embeddingsTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	}
 	send := &reporting{out: out}
 	if t.token != "" {
-		// Core redacts what the credential holds; the fetched access token is redacted here too.
 		send.redact = protocolRedactor(t.token)
 		defer func() {
 			var e *llm.Error
@@ -199,8 +188,6 @@ func embeddingsTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	return send.Finish(llm.Finish{Reason: llm.FinishStop}, usage)
 }
 
-// writeEmbeddingsReply streams the OpenAI list response into w one embedding entry at a time so
-// large replies (up to 2048 x 3072 floats) are never serialized into one contiguous buffer.
 func writeEmbeddingsReply(w io.Writer, model string, vectors [][]float64, encodingFormat string, promptTokens int64) error {
 	if _, err := io.WriteString(w, `{"object":"list","data":[`); err != nil {
 		return err
@@ -254,8 +241,6 @@ func writeEmbeddingsReply(w io.Writer, model string, vectors [][]float64, encodi
 	return err
 }
 
-// chunkedBodyWriter sends written bytes through reporting.Body in pieces of at most chunkSize
-// bytes, preserving UTF-8 character boundaries across piece splits.
 type chunkedBodyWriter struct {
 	send      *reporting
 	chunkSize int
@@ -301,7 +286,6 @@ func (w *chunkedBodyWriter) flush(all bool) error {
 	}
 	cut := len(w.buf)
 	if !all {
-		// Hold back an incomplete trailing UTF-8 rune (at most 3 bytes), as sdk.BodyWriter does.
 		for i := len(w.buf) - 1; i >= 0 && i >= len(w.buf)-3; i-- {
 			if utf8.RuneStart(w.buf[i]) {
 				if !utf8.FullRune(w.buf[i:]) {
@@ -398,7 +382,6 @@ func runGeminiBatchEmbeddings(ctx context.Context, t target, model string, req e
 			missing = true
 		}
 	}
-	// A total over only some of the calls would understate the usage: report none instead.
 	return all, promptTokens, hasUsage && !missing, nil
 }
 
@@ -438,7 +421,6 @@ func runVertexEmbedContent(ctx context.Context, t target, model string, req embe
 			missing = true
 		}
 	}
-	// A total over only some of the calls would understate the usage: report none instead.
 	return all, promptTokens, hasUsage && !missing, nil
 }
 
@@ -498,7 +480,6 @@ func runVertexPredictEmbeddings(ctx context.Context, t target, model string, req
 			}
 		}
 	}
-	// A total over only some of the calls would understate the usage: report none instead.
 	return all, promptTokens, hasUsage && !missing, nil
 }
 
@@ -552,12 +533,6 @@ func postEmbeddingJSON(ctx context.Context, t target, model string, payload any)
 	return raw, nil
 }
 
-// embeddingNotFound keeps a 404 from an embedding call from blocking the model's generation.
-// Core blocks a model after a model-scoped not-found for hours, but an embedding call proves
-// nothing about generation: a chat model answers :embedContent with a 404 that names it. A 404
-// that names the model becomes a refusal on this account (retryable unsupported, so routing tries
-// another account, with 400 if none can); any other 404 fails the request only. Another error is
-// returned as it is.
 func embeddingNotFound(err error, model string) error {
 	var e *llm.Error
 	if !errors.As(err, &e) || e.Code != llm.CodeNotFound {
@@ -575,7 +550,6 @@ func upstreamEmbeddingError(message string) *llm.Error {
 	return &llm.Error{Code: llm.CodeUpstream, Status: http.StatusBadGateway, Scope: llm.ScopeRequest, Message: message}
 }
 
-// readEmbeddingsRequest validates an OpenAI /v1/embeddings body and extracts what Gemini takes.
 func readEmbeddingsRequest(r llm.Request) (embeddingsRequest, error) {
 	var out embeddingsRequest
 	if r.Native == nil {
@@ -627,8 +601,6 @@ func readEmbeddingsRequest(r llm.Request) (embeddingsRequest, error) {
 	return out, nil
 }
 
-// readEmbeddingInputs parses OpenAI's input field (a string or list of strings) and refuses
-// token-ID arrays with an error naming the input field.
 func readEmbeddingInputs(raw json.RawMessage) ([]string, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, badEmbeddingRequest("input is required")
@@ -658,8 +630,6 @@ func readEmbeddingInputs(raw json.RawMessage) ([]string, error) {
 	return out, nil
 }
 
-// isTokenArray reports whether items is OpenAI's integer token-ID array or array of non-empty
-// integer token-ID arrays. Mixed or malformed arrays return false so they stay invalid requests.
 func isTokenArray(items []json.RawMessage) bool {
 	allInt := true
 	for _, item := range items {
@@ -681,8 +651,6 @@ func isTokenArray(items []json.RawMessage) bool {
 	return true
 }
 
-// encodeFloat32Base64 encodes an embedding vector as IEEE 754 little-endian float32 bytes in
-// standard base64, matching OpenAI's base64 encoding_format.
 func encodeFloat32Base64(values []float64) string {
 	buf := make([]byte, len(values)*4)
 	for i, v := range values {
