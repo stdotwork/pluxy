@@ -10,15 +10,6 @@ import (
 	"sync"
 )
 
-// Unmarshal decodes data into v with the result and the error json.Unmarshal gives. It checks
-// data once and decodes structs, strings, booleans, numbers, json.RawMessage, and slices, maps
-// and pointers of those itself; a value of any other type (json.Number among them) it hands to
-// json.Unmarshal, as it does all of data when it meets text, a type or a name it does not decode
-// exactly as json.Unmarshal would. The json.RawMessage values it decodes itself are slices of
-// data (each with no room after it, so appending to one copies it); those json.Unmarshal sets
-// are copies. Callers must rely on neither: data must not change while the values are in use,
-// and a value must not be changed in place. v must point to a zero value; otherwise it goes to
-// json.Unmarshal whole.
 func Unmarshal(data []byte, v any) error {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
@@ -33,19 +24,12 @@ func Unmarshal(data []byte, v any) error {
 	case decoded:
 		return nil
 	case mismatch:
-		// The value at the top is of another JSON type than v: json.Unmarshal leaves v as it
-		// is and fails with a type error. Callers often try one type and then another, so the
-		// error's text is made only when it is read.
 		return &typeError{data: data, t: e.Type()}
 	}
 	e.SetZero()
 	return json.Unmarshal(data, v)
 }
 
-// StdError returns json.Unmarshal's own error where err is the error Unmarshal gives for a value
-// of another JSON type than v, which only wraps it (and makes it when read): for a caller that
-// passes the error on and must give the one json.Unmarshal gives, type and all. Any other error
-// it returns as it is.
 func StdError(err error) error {
 	if te, ok := err.(*typeError); ok {
 		return te.Unwrap()
@@ -53,7 +37,6 @@ func StdError(err error) error {
 	return err
 }
 
-// typeError is json.Unmarshal's error for data of another JSON type than t, made when read.
 type typeError struct {
 	data []byte
 	t    reflect.Type
@@ -63,7 +46,6 @@ type typeError struct {
 
 func (e *typeError) Error() string { return e.Unwrap().Error() }
 
-// Unwrap returns json.Unmarshal's own error, so errors.As finds a *json.UnmarshalTypeError.
 func (e *typeError) Unwrap() error {
 	e.once.Do(func() { e.err = json.Unmarshal(e.data, reflect.New(e.t).Interface()) })
 	return e.err
@@ -72,16 +54,14 @@ func (e *typeError) Unwrap() error {
 type result int
 
 const (
-	decoded  result = iota
-	mismatch        // the top value is of a JSON type the target cannot hold; nothing was set
-	other           // anything else: json.Unmarshal decides
+	decoded result = iota
+	mismatch
+	other
 )
 
-// decodeFunc decodes data into v. At the top, data is the whole text, not yet checked;
-// below it, one valid JSON value.
 type decodeFunc func(v reflect.Value, data []byte, top bool) result
 
-var decoders sync.Map // reflect.Type → decodeFunc, nil for types Unmarshal leaves to json.Unmarshal
+var decoders sync.Map
 
 func decoderFor(t reflect.Type) decodeFunc {
 	if d, ok := decoders.Load(t); ok {
@@ -99,8 +79,6 @@ var (
 	textUnmarshalerType = reflect.TypeFor[encoding.TextUnmarshaler]()
 )
 
-// scalar checks data at the top (it must be one valid JSON value) and returns it without the
-// whitespace around it, or ok false.
 func scalar(data []byte, top bool) ([]byte, bool) {
 	if top && !Valid(data) {
 		return nil, false
@@ -119,8 +97,6 @@ func build(t reflect.Type, building map[reflect.Type]bool) decodeFunc {
 			return decoded
 		}
 	}
-	// json.Number is a string that json.Unmarshal fills from numbers, and from strings only
-	// when they hold one: encoding/json decodes it.
 	if t == numberType || building[t] || reflect.PointerTo(t).Implements(unmarshalerType) || reflect.PointerTo(t).Implements(textUnmarshalerType) {
 		return nil
 	}
@@ -220,7 +196,7 @@ func build(t reflect.Type, building map[reflect.Type]bool) decodeFunc {
 		}
 	case reflect.Slice:
 		if t.Elem().Kind() == reflect.Uint8 {
-			return nil // base64 text
+			return nil
 		}
 		elem := build(t.Elem(), building)
 		if elem == nil {
@@ -287,7 +263,7 @@ func build(t reflect.Type, building map[reflect.Type]bool) decodeFunc {
 				f := fields.find(m.Key)
 				if f == nil {
 					if bytes.IndexByte(m.Key, '\\') >= 0 {
-						return other // an escaped name: json.Unmarshal matches it
+						return other
 					}
 					continue
 				}
@@ -301,9 +277,6 @@ func build(t reflect.Type, building map[reflect.Type]bool) decodeFunc {
 	return nil
 }
 
-// byEncodingJSON decodes a field of a type Unmarshal does not decode itself with json.Unmarshal,
-// which gives what decoding it as part of the struct gives when it succeeds; when it fails, all
-// of the text goes to json.Unmarshal.
 func byEncodingJSON(v reflect.Value, data []byte, top bool) result {
 	if top || !v.CanAddr() || json.Unmarshal(data, v.Addr().Interface()) != nil {
 		return other
@@ -311,8 +284,6 @@ func byEncodingJSON(v reflect.Value, data []byte, top bool) result {
 	return decoded
 }
 
-// objectOf returns the members of data: checked at the top, split without a check below it,
-// where the text was checked with the value holding it.
 func objectOf(data []byte, top bool) ([]Member, bool) {
 	if top {
 		return Object(data)
@@ -323,7 +294,6 @@ func objectOf(data []byte, top bool) ([]Member, bool) {
 	return members(data), true
 }
 
-// arrayOf is objectOf for arrays.
 func arrayOf(data []byte, top bool) ([][]byte, bool) {
 	if top {
 		return Array(data)
@@ -341,8 +311,6 @@ func mismatchAt(top bool) result {
 	return other
 }
 
-// notContainer is the result for data that is not the array or object a slice, map or struct
-// needs: null sets a slice or map to nil and leaves a struct as it is, as json.Unmarshal does.
 func notContainer(v reflect.Value, data []byte, top bool) result {
 	if top && !Valid(data) {
 		return other
@@ -368,9 +336,6 @@ type field struct {
 
 type fieldList []field
 
-// find returns the field a member's name (as written) goes to, as json.Unmarshal matches it:
-// the field of that exact name, else one whose name is the same but for letter case. A name with
-// escapes matches nothing here.
 func (fs fieldList) find(key []byte) *field {
 	name := key[1 : len(key)-1]
 	if bytes.IndexByte(name, '\\') >= 0 {
@@ -389,9 +354,6 @@ func (fs fieldList) find(key []byte) *field {
 	return nil
 }
 
-// structFields returns the fields json.Unmarshal fills in t, or ok false for a struct whose
-// fields it maps in ways this package does not follow: embedded fields, the string option, a
-// name json.Unmarshal would not take as written, or two names alike but for letter case.
 func structFields(t reflect.Type, building map[reflect.Type]bool) (fieldList, bool) {
 	var fs fieldList
 	for i := range t.NumField() {
@@ -427,8 +389,6 @@ func structFields(t reflect.Type, building map[reflect.Type]bool) (fieldList, bo
 	return fs, true
 }
 
-// plainName reports whether a tag's name is one json.Unmarshal takes as written: ASCII letters,
-// digits and the punctuation request fields use.
 func plainName(s string) bool {
 	for _, c := range []byte(s) {
 		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '_' || c == '-' || c == '.') {

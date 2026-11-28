@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// cases are JSON texts, valid and not, at the edges of what encoding/json accepts.
 var cases = []string{
 	"", " ", "{", "}", "[", "]", "{}", "[]", " {} ", "\t[ ]\r\n", "{} {}", "{}x", "[],",
 	"null", "true", "false", "nul", "truex", "nulll", "True", "NULL",
@@ -27,7 +26,6 @@ func nest(n int, open, close string) string {
 	return strings.Repeat(open, n) + strings.Repeat(close, n)
 }
 
-// allCases adds texts nested to just under, at and just over encoding/json's depth limit.
 func allCases() []string {
 	c := append([]string(nil), cases...)
 	for _, n := range []int{9999, 10000, 10001} {
@@ -55,7 +53,6 @@ func FuzzMatchesEncodingJSON(f *testing.F) {
 	})
 }
 
-// check compares every function of the package on data with what encoding/json does.
 func check(t *testing.T, data []byte) {
 	t.Helper()
 	name := string(data)
@@ -70,8 +67,6 @@ func check(t *testing.T, data []byte) {
 		t.Fatalf("Trim(%q) = %q, want %q", name, got, want)
 	}
 
-	// Object: the members of a valid object, as json.Unmarshal into a map reads them (the
-	// last of duplicate names), each value exactly the bytes json.RawMessage gets.
 	mems, ok := Object(data)
 	var m map[string]json.RawMessage
 	err := json.Unmarshal(data, &m)
@@ -103,7 +98,6 @@ func check(t *testing.T, data []byte) {
 		}
 	}
 
-	// members splits a valid object as Object does, without checking it.
 	if ok {
 		unchecked := members(data)
 		if len(unchecked) != len(mems) {
@@ -115,11 +109,9 @@ func check(t *testing.T, data []byte) {
 			}
 		}
 	} else {
-		_ = members(data) // must not panic
+		_ = members(data)
 	}
 
-	// Array: the elements of a valid array, as json.Unmarshal into []json.RawMessage reads
-	// them.
 	elems, ok := Array(data)
 	var a []json.RawMessage
 	err = json.Unmarshal(data, &a)
@@ -151,7 +143,6 @@ func check(t *testing.T, data []byte) {
 		_ = elements(data)
 	}
 
-	// Unquote: a valid string decodes as json.Unmarshal decodes it, or is left to it.
 	if v := Trim(data); valid && IsString(v) {
 		var want string
 		if err := json.Unmarshal(v, &want); err != nil {
@@ -181,8 +172,6 @@ func TestUnquote(t *testing.T) {
 	}
 }
 
-// plainEnd finds the first byte a string does not hold as it is wherever it falls in a word of
-// eight, after any run of other bytes, high bytes included.
 func TestPlainEnd(t *testing.T) {
 	for _, special := range []byte{'"', '\\', 0x00, 0x1f} {
 		for n := range 70 {

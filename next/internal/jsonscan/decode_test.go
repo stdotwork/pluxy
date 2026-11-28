@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// The shapes the request parsers decode, and a few more.
 type (
 	testSource struct {
 		Type      string "json:\"type\""
@@ -42,7 +41,6 @@ type (
 		skipped string
 		Ignored string "json:\"-\""
 	}
-	// Shapes Unmarshal leaves to json.Unmarshal.
 	testEmbedded struct {
 		testSource
 		Extra string "json:\"extra\""
@@ -53,8 +51,6 @@ type (
 	testMap struct {
 		M map[string]string "json:\"m\""
 	}
-	// json.Number takes numbers, and only strings that hold one; a named string type is a
-	// string.
 	testName    string
 	testNumbers struct {
 		N    json.Number            "json:\"n\""
@@ -62,8 +58,6 @@ type (
 		Ns   []json.Number          "json:\"ns\""
 		M    map[string]json.Number "json:\"m\""
 	}
-	// A frame-like shape: fields Unmarshal decodes itself beside ones it hands to
-	// encoding/json.
 	testFrame struct {
 		Type    string                     "json:\"type\""
 		Headers map[string]string          "json:\"headers\""
@@ -78,7 +72,6 @@ type (
 	}
 )
 
-// targets returns a fresh zero value of each target type.
 func targets() []any {
 	return []any{
 		new(testRequest), new(testBlock), new(testSource), new(string), new(bool), new(int), new(*int),
@@ -122,8 +115,6 @@ func FuzzUnmarshalMatchesEncodingJSON(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) { compare(t, data) })
 }
 
-// compare decodes data into each target with Unmarshal and with json.Unmarshal and wants the
-// same value and the same error.
 func compare(t *testing.T, data []byte) {
 	t.Helper()
 	got, want := targets(), targets()
@@ -146,7 +137,6 @@ func errText(err error) string {
 	return err.Error()
 }
 
-// dump shows a decoded value with nil and empty slices and pointers told apart.
 func dump(v any) string {
 	var b strings.Builder
 	dumpValue(&b, reflect.ValueOf(v))
@@ -206,8 +196,6 @@ func dumpValue(b *strings.Builder, v reflect.Value) {
 	}
 }
 
-// RawMessage values refer to the text instead of copying it, and appending to one does not
-// write into the text.
 func TestUnmarshalRawMessagesShareTheText(t *testing.T) {
 	data := []byte("{\"messages\":[{\"a\":1},{\"b\":2}],\"system\":\"s\"}")
 	var r testRequest
@@ -223,8 +211,6 @@ func TestUnmarshalRawMessagesShareTheText(t *testing.T) {
 	}
 }
 
-// A value of another type at the top fails as json.Unmarshal fails, and errors.As finds its
-// error.
 func TestUnmarshalTypeErrorUnwraps(t *testing.T) {
 	var s string
 	err := Unmarshal([]byte("[1,2]"), &s)
@@ -239,8 +225,6 @@ func TestUnmarshalTypeErrorUnwraps(t *testing.T) {
 
 func errorsAs(err error, target any) bool { return errors.As(err, target) }
 
-// A repeated list key decodes into the list already there, as json.Unmarshal does: the elements
-// of both occurrences are merged into one element.
 func TestUnmarshalRepeatedSliceKeyMatchesEncodingJSON(t *testing.T) {
 	type item struct {
 		X string `json:"x"`

@@ -1,9 +1,3 @@
-// Package jsonscan reads the structure of JSON text without decoding it: whether the text is
-// valid, and the members of an object or the elements of an array as slices of the text. It
-// accepts exactly the text encoding/json accepts (invalid UTF-8 in strings included, as
-// encoding/json replaces it when decoding), so a caller can check text here and leave anything
-// it does not handle to encoding/json with the same outcome. It builds no values, so it is many
-// times faster than decoding into json.RawMessage and copies nothing.
 package jsonscan
 
 import (
@@ -15,31 +9,20 @@ import (
 	"unicode/utf8"
 )
 
-// maxDepth is how deeply arrays and objects may nest, as encoding/json allows.
 const maxDepth = 10000
 
-// Valid reports whether data is one JSON value with optional whitespace around it, as
-// json.Valid does.
 func Valid(data []byte) bool {
 	i := skipSpace(data, 0)
 	end := valueEnd(data, i, 1)
 	return end >= 0 && skipSpace(data, end) == len(data)
 }
 
-// Member is one member of a JSON object: its name as written, quotes and escapes included, and
-// its value. Both are slices of the object's text whose capacity ends where they do, so
-// appending to one never writes into the text.
 type Member struct {
 	Key, Value []byte
 }
 
-// Object returns the members of the JSON object data in their order, duplicates included, and
-// whether data is one valid JSON object with optional whitespace around it.
 func Object(data []byte) ([]Member, bool) { return AppendObject(nil, data) }
 
-// AppendObject is Object with the members appended to dst, so a caller that keeps a small array
-// for them allocates nothing for an object that fits it. On false, the returned slice is not to be
-// used: it may be nil or dst.
 func AppendObject(dst []Member, data []byte) ([]Member, bool) {
 	i := skipSpace(data, 0)
 	if i >= len(data) || data[i] != '{' {
@@ -87,9 +70,6 @@ func AppendObject(dst []Member, data []byte) ([]Member, bool) {
 	}
 }
 
-// Array returns the elements of the JSON array data in their order, and whether data is one
-// valid JSON array with optional whitespace around it. Each element is a slice of data whose
-// capacity ends where it does.
 func Array(data []byte) ([][]byte, bool) {
 	i := skipSpace(data, 0)
 	if i >= len(data) || data[i] != '[' {
@@ -124,9 +104,6 @@ func Array(data []byte) ([][]byte, bool) {
 	}
 }
 
-// members returns the members of data, a JSON object known to be valid (one a check of the
-// text holding it accepted), without checking it again. On other text it returns some slices
-// of data, or nil; it does not panic.
 func members(data []byte) []Member {
 	i := skipSpace(data, 0)
 	if i >= len(data) || data[i] != '{' {
@@ -151,8 +128,6 @@ func members(data []byte) []Member {
 	return ms
 }
 
-// elements returns the elements of data, a JSON array known to be valid, without checking it
-// again; on other text, as members.
 func elements(data []byte) [][]byte {
 	i := skipSpace(data, 0)
 	if i >= len(data) || data[i] != '[' {
@@ -177,8 +152,6 @@ func elements(data []byte) [][]byte {
 	return es
 }
 
-// skip returns the index just after the value at data[i] in text known to be valid, finding
-// the end of each string with bytes.IndexByte.
 func skip(data []byte, i int) int {
 	depth := 0
 	for i < len(data) {
@@ -194,7 +167,6 @@ func skip(data []byte, i int) int {
 		default:
 			i++
 			if depth == 0 {
-				// A number or literal ends at the first byte that cannot be part of it.
 				for i < len(data) && !isSpace(data[i]) && data[i] != ',' && data[i] != '}' && data[i] != ']' {
 					i++
 				}
@@ -209,8 +181,6 @@ func skip(data []byte, i int) int {
 	return len(data)
 }
 
-// skipString returns the index just after the string that starts at data[i] in text known to be
-// valid: after the first quote not escaped by an odd run of backslashes.
 func skipString(data []byte, i int) int {
 	for i++; i < len(data); {
 		j := bytes.IndexByte(data[i:], '"')
@@ -230,10 +200,6 @@ func skipString(data []byte, i int) int {
 	return len(data)
 }
 
-// AppendCompact appends to dst the JSON text src without the whitespace outside its strings, as
-// json.Compact writes it (and json.Marshal does a json.RawMessage, with HTML escaping off), and
-// reports whether src is one valid JSON value as Valid does. For text that is not, it appends
-// nothing and returns dst.
 func AppendCompact(dst, src []byte) ([]byte, bool) {
 	if !Valid(src) {
 		return dst, false
@@ -254,7 +220,6 @@ func AppendCompact(dst, src []byte) ([]byte, bool) {
 	return append(dst, src[start:]...), true
 }
 
-// Trim returns data without the JSON whitespace around it.
 func Trim(data []byte) []byte {
 	i := skipSpace(data, 0)
 	j := len(data)
@@ -264,10 +229,6 @@ func Trim(data []byte) []byte {
 	return data[i:j:j]
 }
 
-// Unquote returns the text of the valid JSON string literal s, quotes included, as
-// json.Unmarshal decodes it. ok is false, and the text is left to encoding/json, when s holds
-// invalid UTF-8 or a \u escape of a UTF-16 surrogate that is not half of a pair, which
-// encoding/json replaces.
 func Unquote(s []byte) (text string, ok bool) {
 	if len(s) < 2 {
 		return "", false
@@ -338,10 +299,8 @@ func Unquote(s []byte) (text string, ok bool) {
 	return b.String(), true
 }
 
-// IsString reports whether the valid JSON value v is a string.
 func IsString(v []byte) bool { return len(v) > 0 && v[0] == '"' }
 
-// IsNull reports whether the valid JSON value v is null.
 func IsNull(v []byte) bool { return len(v) > 0 && v[0] == 'n' }
 
 func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
@@ -353,8 +312,6 @@ func skipSpace(data []byte, i int) int {
 	return i
 }
 
-// valueEnd returns the index just after the JSON value that starts at data[i], or -1 when no
-// valid value starts there. depth is the nesting depth an array or object starting there has.
 func valueEnd(data []byte, i, depth int) int {
 	if i >= len(data) {
 		return -1
@@ -443,7 +400,6 @@ func literalEnd(data []byte, i int, lit string) int {
 
 func isDigit(c byte) bool { return '0' <= c && c <= '9' }
 
-// numberEnd returns the index just after the JSON number at data[i], or -1.
 func numberEnd(data []byte, i int) int {
 	if data[i] == '-' {
 		i++
@@ -481,8 +437,6 @@ func numberEnd(data []byte, i int) int {
 	return i
 }
 
-// plain marks the bytes a JSON string holds as they are: not a quote, a backslash or a control
-// character.
 var plain = func() (t [256]bool) {
 	for c := 0x20; c < 256; c++ {
 		t[c] = c != '"' && c != '\\'
@@ -490,8 +444,6 @@ var plain = func() (t [256]bool) {
 	return t
 }()
 
-// stringEnd returns the index just after the JSON string that starts at data[i] (a quote), or
-// -1 when it is not a valid string.
 func stringEnd(data []byte, i int) int {
 	i++
 	for {
@@ -523,12 +475,11 @@ func stringEnd(data []byte, i int) int {
 				return -1
 			}
 		default:
-			return -1 // a control character
+			return -1
 		}
 	}
 }
 
-// Eight bytes of each value, for testing eight bytes at once.
 const (
 	ones   = 0x0101010101010101
 	highs  = 0x8080808080808080
@@ -537,12 +488,7 @@ const (
 	spaces = 0x20 * ones
 )
 
-// plainEnd returns the index of the first byte at or after data[i] that a JSON string does not
-// hold as it is (see plain), or len(data). It tests eight bytes at a time: a byte b is zero in
-// x^quotes when it is a quote, and (v-ones)&^v has the high bit of the lowest zero byte of v set
-// (and none below it); (x-spaces)&^x does the same for the lowest byte under 0x20.
 func plainEnd(data []byte, i int) int {
-	// Thirty-two bytes at a time while none is special, then eight to find which.
 	for ; i+32 <= len(data); i += 32 {
 		w := data[i : i+32 : i+32]
 		x0 := binary.LittleEndian.Uint64(w[0:8])
@@ -565,14 +511,11 @@ func plainEnd(data []byte, i int) int {
 	return i
 }
 
-// special has the high bit set in the lowest byte of x that is a quote, a backslash or under
-// 0x20 (and maybe in higher bytes), and in none if there is none.
 func special(x uint64) uint64 {
 	q, s := x^quotes, x^slashs
 	return ((q - ones) &^ q) | ((s - ones) &^ s) | ((x - spaces) &^ x)
 }
 
-// hex4 reads the \u escape at the start of s.
 func hex4(s []byte) (rune, bool) {
 	if len(s) < 6 || s[0] != '\\' || s[1] != 'u' {
 		return 0, false

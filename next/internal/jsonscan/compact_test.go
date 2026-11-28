@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// FuzzAppendCompact checks AppendCompact against json.Compact: the same text for valid input, and
-// nothing appended for input that is not valid.
 func FuzzAppendCompact(f *testing.F) {
 	for _, s := range []string{
 		``, ` `, `1`, ` 1 `, "\t[1 , 2]\n", `{"a" : "b c" , "d":[ ] }`, `"a <b> &   "`, "\"a b\xff\"",
