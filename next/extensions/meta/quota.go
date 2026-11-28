@@ -15,16 +15,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// A Muse Code login's quota is what Muse Code's key endpoint reports with the key it mints:
-// POST https://api.meta.ai/muse-code/key with the device token (the credential's refresh token), as
-// the old panel read it. The device token renews the account, so it goes only where a renewal
-// sends it: Meta's own key endpoint (mint_url only in a test run, see sdk.TestLoginHost), never to
-// base_url, which an account may point at a relay. Meta has no other usage endpoint. The call makes a new API key; the reply's key is
-// dropped here, never returned and never kept, and the credential's own key is left alone: if Meta
-// retires it, the account's next request is refused and core renews the credential (a renewal makes
-// a key from the device token the same way).
-
-// quotaBodyLimit bounds the reply read.
 const quotaBodyLimit = 1 << 20
 
 func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
@@ -70,8 +60,6 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	return quotaFrom(body, resp.StatusCode)
 }
 
-// quotaError maps a refused key-endpoint call by its status alone: the endpoint's error text can
-// echo keys and personal data, and core cannot redact a key it does not know.
 func quotaError(status int, h http.Header) *llm.Error {
 	e := &llm.Error{Status: status}
 	switch {
@@ -91,7 +79,6 @@ func quotaError(status int, h http.Header) *llm.Error {
 	return e
 }
 
-// metaWindow is one usage window of the key endpoint's subs_usage.
 type metaWindow struct {
 	UsedPercent *float64 `json:"used_percent"`
 	ResetsAt    *float64 `json:"resets_at"`
@@ -113,8 +100,6 @@ func (w metaWindow) limit(id, label string, withDuration bool) (protocol.QuotaLi
 	return l, l.UsedPercent != nil || l.ResetsAt != 0
 }
 
-// quotaFrom reads the key endpoint's reply. It keeps the plan and the windows and drops the rest,
-// the minted key above all: the raw reply is rebuilt from the fields it keeps.
 func quotaFrom(body []byte, status int) (*protocol.Quota, error) {
 	var doc struct {
 		Tier   string          `json:"subs_tier_name"`
@@ -144,8 +129,6 @@ func quotaFrom(body []byte, status int) (*protocol.Quota, error) {
 			q.Limits = append(q.Limits, l)
 		}
 	}
-	// The raw reply keeps the plan and the usage as Meta sent them; the minted key and the person's
-	// details are not kept.
 	raw := map[string]json.RawMessage{}
 	if doc.Tier != "" {
 		raw["subs_tier_name"], _ = json.Marshal(doc.Tier)

@@ -1,6 +1,3 @@
-// Package metatest is a fake Meta for tests of the Meta extension: the device-code login at
-// /oidc/device/*, the key endpoint at /muse-code/key, and the Responses API at /v1/responses. It
-// issues made-up tokens and keys and never talks to Meta.
 package metatest
 
 import (
@@ -16,45 +13,32 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Email is the e-mail address the key endpoint names.
 const Email = "user@example.com"
 
-// KeyUsage is the subscription usage the key endpoint's default reply reports: a 5-hour window and
-// a weekly one, with reset times in Unix seconds.
 var KeyUsage = map[string]any{
 	"tier":   "Muse Code",
 	"window": map[string]any{"used_percent": 12.5, "resets_at": 1794200000, "window_duration_mins": 300},
 	"weekly": map[string]any{"used_percent": 40, "resets_at": 1794700000},
 }
 
-// KeyRequest is a call to the key endpoint that carried a valid device token.
 type KeyRequest struct {
 	Header http.Header
 	Body   []byte
 }
 
-// Request is a Responses request the server answered with a valid key.
 type Request struct {
 	Header http.Header
 	Body   []byte
 }
 
-// Server is the fake. Set its fields before requests arrive.
 type Server struct {
 	*httptest.Server
 
-	// Generate, if set, answers Responses requests whose key is valid. The default streams
-	// "Hello" with usage 11 in, 7 out.
 	Generate func(w http.ResponseWriter, r *http.Request, req Request)
-	// Deny makes every device login end with access_denied once polled.
-	Deny bool
-	// MintDown makes the key endpoint answer 503.
+	Deny     bool
 	MintDown bool
-	// KeyReply, if set, is the body the key endpoint sends in place of the default (which holds
-	// KeyUsage), after the new key is made.
 	KeyReply func(key string) any
-	// Answer, if set, sees every request first; it answers one by returning true.
-	Answer func(w http.ResponseWriter, r *http.Request) bool
+	Answer   func(w http.ResponseWriter, r *http.Request) bool
 
 	mu       sync.Mutex
 	n        int
@@ -70,9 +54,7 @@ type code struct {
 	approved bool
 }
 
-// New starts a fake that is closed when the test ends.
 func New(t testing.TB) *Server {
-	// The extension honours the fake's address in account settings only under this variable.
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	s := &Server{codes: map[string]*code{}, dca: map[string]bool{}, keys: map[string]bool{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
@@ -80,13 +62,11 @@ func New(t testing.TB) *Server {
 	return s
 }
 
-// Settings returns account settings that point the extension at the server.
 func (s *Server) Settings() json.RawMessage {
 	b, _ := json.Marshal(map[string]string{"base_url": s.URL + "/v1", "auth_base_url": s.URL, "mint_url": s.URL + "/muse-code/key"})
 	return b
 }
 
-// Grant returns a new device token and an API key minted from it.
 func (s *Server) Grant() (dca, key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -96,7 +76,6 @@ func (s *Server) Grant() (dca, key string) {
 	return dca, key
 }
 
-// Revoke makes the server refuse a key or device token it issued.
 func (s *Server) Revoke(token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -104,7 +83,6 @@ func (s *Server) Revoke(token string) {
 	delete(s.dca, token)
 }
 
-// Approve approves the device login showing userCode, as the user would on Meta's page.
 func (s *Server) Approve(userCode string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,7 +95,6 @@ func (s *Server) Approve(userCode string) bool {
 	return false
 }
 
-// KeyRequests returns the key endpoint calls that carried a valid device token, in order.
 func (s *Server) KeyRequests() []KeyRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -211,8 +188,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// StreamText writes a Responses stream: the response's start, one text delta per piece, Meta's
-// subscription usage event, and the completed response with usage.
 func StreamText(w http.ResponseWriter, pieces ...string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	ev := func(name string, v any) {

@@ -16,7 +16,7 @@ import (
 
 func quotaOf(t *testing.T, srv *metatest.Server, settings json.RawMessage, c *protocol.Credential) (*protocol.Quota, error) {
 	t.Helper()
-	t.Setenv(protocol.EnvTestLoginHosts, "1") // the fake's key endpoint stands in for Meta's
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	if settings == nil {
 		settings = srv.Settings()
 	}
@@ -35,10 +35,6 @@ func pct(p *float64) float64 {
 	return *p
 }
 
-// A Muse Code login's quota is read with one POST to Meta's key endpoint (the fake's, in this test): an empty
-// object as the body, the device token (not the minted key) as the bearer, the API version header
-// and Muse Code's client identity. The plan and both windows are reported; the key the call mints
-// and the person's details are in neither the limits nor the raw reply.
 func TestQuota(t *testing.T) {
 	srv := metatest.New(t)
 	dca, key := srv.Grant()
@@ -75,14 +71,11 @@ func TestQuota(t *testing.T) {
 	if json.Unmarshal(q.Raw, &raw) != nil || raw["subs_usage"] == nil || raw["subs_tier_name"] == nil {
 		t.Errorf("raw %s", q.Raw)
 	}
-	// The call mints a key but does not change the account's: its own key still works.
 	if _, _, err := target(settings{}, &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: key}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// The device token goes only to the key endpoint a renewal uses, never to base_url's host, which
-// an account may point at a relay; outside a test run that is Meta's own.
 func TestQuotaKeyEndpointNotBaseURL(t *testing.T) {
 	srv := metatest.New(t)
 	dca, key := srv.Grant()
@@ -101,7 +94,6 @@ func TestQuotaKeyEndpointNotBaseURL(t *testing.T) {
 	}
 }
 
-// An API key has no plan to report, and makes no call.
 func TestQuotaAPIKeyUnsupported(t *testing.T) {
 	srv := metatest.New(t)
 	_, err := quotaOf(t, srv, nil, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k"})
@@ -113,9 +105,6 @@ func TestQuotaAPIKeyUnsupported(t *testing.T) {
 	}
 }
 
-// A refused device token is auth with scope credential, whose message does not carry the endpoint's
-// text; a rate limit keeps Retry-After; an outage is unavailable; an unreachable host is
-// unavailable and retryable; a reply that is not JSON is an upstream error.
 func TestQuotaErrors(t *testing.T) {
 	cred := func(srv *metatest.Server) *protocol.Credential {
 		dca, key := srv.Grant()
@@ -185,8 +174,6 @@ func TestQuotaErrors(t *testing.T) {
 	})
 }
 
-// A reply with no usage yet (nothing requested) is a plan and no limits; out-of-range shares are
-// clamped, and a window with nothing in it is left out.
 func TestQuotaOddReplies(t *testing.T) {
 	srv := metatest.New(t)
 	srv.KeyReply = func(key string) any {
@@ -203,8 +190,6 @@ func TestQuotaOddReplies(t *testing.T) {
 	}
 }
 
-// A device login's grant names who signed in by the e-mail address the key endpoint reports; a
-// reply with none gives no identity.
 func TestLoginIdentity(t *testing.T) {
 	old := waitPoll
 	waitPoll = func(context.Context, time.Duration) bool { return true }
