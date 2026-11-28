@@ -48,7 +48,13 @@ const read = (five: number, week: number, plan?: string): Windows => ({
 const LONG = `${"a-very-long-account-name-".repeat(9)}that-goes-on@example.com`.slice(0, 230);
 
 const ACCOUNTS: { a: Account; w?: Windows; requests?: number }[] = [
-  { a: account("acc_0000sign", { label: "work@example.com", health: { state: "needs_login" } }) },
+  {
+    a: account("acc_0000sign", {
+      label: "work@example.com",
+      health: { state: "needs_login" },
+      quota: { fetched_at: iso(now - HOUR), quota: { plan: "Max 20x", limits: [] } },
+    }),
+  },
   { a: account("acc_0000conf", { label: "Team key", source: "config", health: { state: "needs_login" } }) },
   {
     a: account("acc_0000ban0", {

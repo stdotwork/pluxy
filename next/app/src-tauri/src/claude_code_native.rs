@@ -39,9 +39,10 @@
 //!   Anthropic variable in its environment; an executable override runs the override instead;
 //! - uninstall: disabled and removed, no pluxy/claude-code process is left and the files are as
 //!   the last step left them;
-//! - tools: Claude Code's row on the Tools page (`tools_native.rs`): its add-on installed, turned on,
-//!   then Claude Code applied and started from the row's Set up, with cancels that change nothing
-//!   and a confirmation the row cannot answer;
+//! - tools: Claude Code's row on the Tools page (`tools_native.rs`): its add-on installed and
+//!   turned on from one press, which opens Claude Code's page once it is on, then Claude Code
+//!   applied and started from that page, with cancels that change nothing and a confirmation the
+//!   row cannot answer;
 //! - audit: the key and the login canary are in no window answer and no confirmation, no
 //!   temporary file is left, and files no step names keep their bytes.
 //!

@@ -81,8 +81,9 @@ export function GroupMark(props: { c: Condition; unchecked?: boolean; dot?: bool
       </span>
     );
   }
-  // An account that serves but cools down on a model is marked as waiting: something is held back.
-  const group = props.c.kind === "serving" && props.c.resting.length > 0 ? "waiting" : props.c.group;
+  // An account cooling on one model still serves other models: its mark stays serving while the
+  // reason sentence names the model that cools down.
+  const group = props.c.group;
   return (
     <span class="group-mark" data-group={group} data-dot={props.dot ? "" : undefined}>
       {props.dot ? (
@@ -325,7 +326,7 @@ export function AccountRow(props: {
       onClearCooldown={props.onClearCooldown}
     />
   );
-  const plan = limited ? props.windows?.plan : undefined;
+  const plan = props.windows?.plan ?? (a.quota?.quota?.plan?.trim() || undefined);
   const provider = a.extension ? providerName(a.extension) : undefined;
   // The condition in words beside its dot, so the colour never says it alone. The dot's name says
   // it to assistive technology, so the word is hidden from it.

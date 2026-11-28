@@ -1,17 +1,3 @@
-//! Declared jobs, as the router runs them (`route.rs`; `../app-host/README.md`, "Jobs"): the
-//! jobs under way, with host-issued IDs and their bounds, and each job's batches between its
-//! producer's call and its consumer. Nothing here needs the app.
-//!
-//! A job's producer sends batches as `progress` frames of its call (`program::Feed`). At most
-//! `WINDOW` may wait unacknowledged; a batch past it, one larger than `MAX_BATCH`, or one naming
-//! anything but its value (a source, say) ends the job as failed, and what it had not delivered
-//! is dropped. The pump (`pump`) delivers the batches in order, each only while both sides are
-//! still the releases the job was granted for, acknowledges each to the producer once the
-//! consumer took it, then delivers the job's one end: done (the producer's output, after every
-//! batch), failed or cancelled. A consumer has at most `MAX_PER_CONSUMER` jobs at once and the
-//! host `MAX_JOBS`; only a job's consumer cancels it, and a change to either package
-//! (`Jobs::revoke`) cancels it.
-
 use crate::program::{CallError, Feed};
 use serde_json::{json, Value};
 use std::collections::VecDeque;

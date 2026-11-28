@@ -1162,6 +1162,14 @@ fn an_unknown_outcome_is_reported_at_the_next_start_and_never_sent_again() {
 
     let e = h.call(ID, "crash", json!({}), None).unwrap_err();
     assert!(e.unknown && e.message.contains("outcome is unknown"), "{e}");
+    // What the window shows for it (the native swap check matches these words): no protocol code.
+    let shown = e.user_message();
+    assert!(
+        shown.contains("stopped before it answered crash")
+            && shown.contains("outcome is unknown")
+            && !shown.contains("extension_crashed"),
+        "{shown}"
+    );
     until("the crash", 5, || h.status(ID).pid.is_none());
     let unknown = h.status(ID).unknown;
     assert_eq!(unknown.len(), 1, "{unknown:?}");
@@ -2292,21 +2300,10 @@ fn a_tool_gets_its_home_and_its_own_data_folder_and_a_planted_link_refuses_the_s
     assert_eq!(h.status(ID).pid, None);
 }
 
-// Lifetimes, on every platform ----------------------------------------------------------------
-//
-// What each kind of process does when its tool idles or crashes, when the app quits or crashes,
-// and what a stop does, as `app-host/README.md` states it for each platform. The managed runtime
-// and the detached launch are the fixture's heartbeat (`fixture::heartbeat`): a process lives
-// while its heartbeat file advances. Each process a check starts ends through its stop file (a
-// `Lab`) or through the check's own handle of it (`Held`), also when an assertion fails; never by
-// a process ID.
-
 /// The variable that makes this test program a lifetime check's host (`lifetime_host`): its role.
 const LIFETIME_HOST: &str = "PLUXY_LIFETIME_TEST_HOST";
 /// And the host's folder.
 const LIFETIME_DIR: &str = "PLUXY_LIFETIME_TEST_DIR";
-/// How long a stop waits, once it has asked a runtime to stop, before it ends it: five seconds
-/// (`app-host/README.md`).
 const GRACE: Duration = Duration::from_secs(5);
 
 /// path with `.ext` added to its name.
@@ -3564,6 +3561,107 @@ fn a_start_wsl_refused_is_tried_again_and_counts_as_one_crash_only_when_it_stays
     let e = call_in(&h, &bob).unwrap_err();
     assert!(e.message.contains("may restart it in"), "{e:?}");
     h.stop_all();
+}
+
+#[test]
+fn call_error_user_message_omits_protocol_code_and_falls_back_for_empty() {
+    // A real Host::call error carries its protocol code in `.code` and `Display`, while
+    // `user_message()` gives only the message that reaches a page or dialog.
+    let h = host(Value::Null);
+    let real = h.call(ID, "summary", json!({}), None).unwrap_err();
+    assert_eq!(real.code, "invalid_request", "{real}");
+    assert!(
+        real.to_string().starts_with("invalid_request: "),
+        "Display keeps the code for logs: {real}"
+    );
+    let shown = real.user_message();
+    assert_eq!(shown, real.message);
+    assert!(
+        !shown.contains("invalid_request"),
+        "window string must not show protocol code: {shown}"
+    );
+    h.stop_all();
+
+    // Realistic add-on error (missing settings folder): message only, no `invalid_request:`.
+    let missing = fail(
+        "invalid_request",
+        "/home/me/.claude does not exist yet: run Claude Code once",
+    );
+    assert_eq!(
+        missing.to_string(),
+        "invalid_request: /home/me/.claude does not exist yet: run Claude Code once"
+    );
+    assert_eq!(
+        missing.user_message(),
+        "/home/me/.claude does not exist yet: run Claude Code once"
+    );
+
+    // A message that repeats a protocol code prefix still loses it.
+    let repeated = fail("not_found", "not_found: settings.json is missing");
+    assert_eq!(repeated.user_message(), "settings.json is missing");
+
+    // A cancelled error keeps the `cancelled:` prefix for any message so pages detect cancels by
+    // code rather than by message text.
+    assert_eq!(
+        fail("cancelled", "the native confirmation was cancelled").user_message(),
+        "cancelled: the native confirmation was cancelled"
+    );
+    assert_eq!(
+        fail("cancelled", "confirmation window closed by desktop").user_message(),
+        "cancelled: confirmation window closed by desktop"
+    );
+    assert_eq!(
+        fail("cancelled", "cancelled: already prefixed").user_message(),
+        "cancelled: already prefixed"
+    );
+
+    // Empty, whitespace, bare-code, or punctuation-only messages fall back to a plain sentence
+    // that never leaks the raw protocol code (except `cancelled`, which keeps its `cancelled:`
+    // prefix for window cancel detection).
+    for code in [
+        "invalid_request",
+        "auth",
+        "permission",
+        "account_closed",
+        "not_found",
+        "rate_limit",
+        "quota",
+        "unsupported",
+        "upstream",
+        "unavailable",
+        "internal",
+        "extension_crashed",
+        "extension_protocol",
+        "extension_unavailable",
+        "extension_timeout",
+        "incompatible",
+        "something_new",
+    ] {
+        for empty in ["", "   ", code, &format!("{code}: "), "..."] {
+            let e = fail(code, empty);
+            let msg = e.user_message();
+            assert!(!msg.is_empty(), "{code} / {empty:?}");
+            assert!(
+                !msg.contains('_'),
+                "fallback for {code} / {empty:?} must not leak snake_case code: {msg}"
+            );
+            assert!(
+                !msg.to_ascii_lowercase().starts_with(&format!("{code}:")),
+                "fallback for {code} / {empty:?} must not start with code: {msg}"
+            );
+        }
+    }
+    assert_eq!(
+        fail("not_found", "").user_message(),
+        "What the add-on looked for could not be found."
+    );
+    for empty in ["", "   ", "cancelled", "cancelled: ", "..."] {
+        assert_eq!(
+            fail("cancelled", empty).user_message(),
+            "cancelled: The action was cancelled.",
+            "cancelled / {empty:?}"
+        );
+    }
 }
 
 // The program host and the spawn service against a real WSL distribution (`wsl_real_*`, ignored

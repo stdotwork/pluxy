@@ -1,22 +1,3 @@
-//! This device's extension catalog: page-only app packages (`app.tier` `web`) installed on this
-//! computer, apart from the packages of the core the app is connected to
-//! (`../app-host/README.md`). It reads release archives from a local file the person chose in
-//! the native file chooser, or from a registry named in `device-registries.json`, checks them
-//! before anything is kept, copies each release into an immutable store folder named by its
-//! archive's SHA-256, and serves a page's files only while each still has the digest it had at
-//! install.
-//!
-//! A package from a source that is not curated is Unverified, and one claiming a reserved
-//! publisher (`pluxy`, or a publisher a trust root names) is refused. A native tool (`app.tier`
-//! `native`) is admitted only from a curated registry with a first-party signature, and runs
-//! only after the person enabled it in a native confirmation (`device_admission.rs`). Any other
-//! publisher signature a registry lists is checked with the key the index names before the
-//! archive is unpacked and kept with the release, for Access (`access.rs`) to grant files only to
-//! web packages whose signer the person approved. No package gets settings here. The previous
-//! release stays as the last good one, so a failed candidate keeps the active release and the
-//! person can roll back. With `--safe-mode`, no device page is listed, opened or served and no
-//! native tool is admitted; the catalog can still be managed.
-
 #[cfg(native_stack)]
 pub use admission::main_window;
 pub use admission::{
@@ -152,6 +133,13 @@ pub struct Release {
     /// release's Linux build: `Package::linux`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub environments: Vec<String>,
+    /// The manifest's name for people and one sentence on what it adds, when it has them: what
+    /// the native confirmation enabling it says first. Empty for a release installed before they
+    /// were kept.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
 }
 
 fn web() -> String {
@@ -1188,6 +1176,11 @@ struct Manifest {
     manifest_version: i64,
     id: String,
     version: String,
+    /// The package's name for people, and what it adds (the protocol's manifest, since 0.21).
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    summary: String,
     protocol: Vec<i64>,
     programs: BTreeMap<String, String>,
     ui: Option<Ui>,
@@ -1473,6 +1466,12 @@ impl App {
             {
                 return Err("app.operations require unique IDs and descriptions".into());
             }
+            // Shown in its call's confirmation, which must keep Confirm and Cancel on screen.
+            one_line_within(
+                &op.description,
+                &format!("app.operations {} description", op.id),
+                MAX_DESCRIPTION,
+            )?;
             if !op.input_schema.is_object() || !op.output_schema.is_object() {
                 return Err("app.operations schemas must be JSON objects".into());
             }
@@ -1500,6 +1499,28 @@ impl App {
 
 /// Checks the common manifest format, as core does, except that an app-only package is a valid
 /// manifest here. Returns the app contribution, when there is one.
+/// The longest manifest title and summary, in characters (the protocol's manifest).
+const MAX_TITLE: usize = 80;
+const MAX_SUMMARY: usize = 300;
+/// The longest operation description, in characters: a short paragraph (the app-host's manifest
+/// format).
+const MAX_DESCRIPTION: usize = 800;
+
+/// Refused unless value (a manifest's field name) is one line of at most max characters: no
+/// control character, line or paragraph separator, as the protocol's manifest rules say.
+fn one_line_within(value: &str, name: &str, max: usize) -> Result<(), String> {
+    if value.chars().count() > max
+        || value
+            .chars()
+            .any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}')
+    {
+        return Err(format!(
+            "{name} must be one line of at most {max} characters"
+        ));
+    }
+    Ok(())
+}
+
 fn validate(m: &Manifest) -> Result<Option<App>, String> {
     if m.manifest_version != 0 && m.manifest_version != 1 {
         return Err(format!(
@@ -1513,6 +1534,8 @@ fn validate(m: &Manifest) -> Result<Option<App>, String> {
     if !valid_version(&m.version) {
         return Err(format!("version {:?} is not a package version", m.version));
     }
+    one_line_within(&m.title, "title", MAX_TITLE)?;
+    one_line_within(&m.summary, "summary", MAX_SUMMARY)?;
     let app = match &m.app {
         Some(v) if m.manifest_version == 1 && !v.is_null() => {
             let app: App = serde_json::from_value(v.clone()).map_err(|e| format!("app: {e}"))?;
@@ -1787,6 +1810,8 @@ fn stage_signed(
             produces: vec![],
             consumes: vec![],
             environments: vec![],
+            title: String::new(),
+            summary: String::new(),
         },
         staged: staged.clone(),
     };
@@ -1833,6 +1858,8 @@ fn stage_signed(
     }
     let r = &mut c.release;
     r.version = m.version.clone();
+    r.title = m.title.clone();
+    r.summary = m.summary.clone();
     r.manifest_version = m.manifest_version;
     r.app_version = app.version;
     r.host_versions = app.host_versions.clone();

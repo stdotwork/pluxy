@@ -573,8 +573,9 @@ SOFTWARE.
 
 ## IBM/plex
 
-The typefaces IBM Plex Sans and IBM Plex Mono, from <https://github.com/IBM/plex>, which the UI's
-default theme uses. `next/ui/kit/fonts/` holds five of their font files, copied byte for byte from
+The typefaces IBM Plex Sans and IBM Plex Mono, from <https://github.com/IBM/plex>. Plex Mono is the
+default theme's monospaced face (`font.mono`); Plex Sans ships for themes that name it (the default
+body face is Inter, below). `next/ui/kit/fonts/` holds five of their font files, copied byte for byte from
 the Fontsource packages `@fontsource/ibm-plex-sans` 5.3.0 and `@fontsource/ibm-plex-mono` 5.3.0
 (<https://fontsource.org>), which publish Latin subsets in WOFF2: Plex Sans 400, 500 and 600
 (`plex-sans-400.woff2`, `plex-sans-500.woff2`, `plex-sans-600.woff2`; version 3.201 in their
@@ -682,8 +683,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ## rsms/inter
 
-Inter, from <https://github.com/rsms/inter>, the typeface Inter, which the UI's default theme uses for
-its body text (`font.body`). `next/ui/kit/fonts/` holds one of its font files,
+The typeface Inter, from <https://github.com/rsms/inter>, the default theme's body face
+(`font.body`). `next/ui/kit/fonts/` holds one of its font files,
 `inter-latin-wght-normal.woff2`: the Latin subset of Inter's variable font (weights 100 to 900, normal
 style), copied byte for byte from the Fontsource package `@fontsource-variable/inter` 5.3.0
 (<https://fontsource.org>), its `files/inter-latin-wght-normal.woff2`. The font's own name table gives

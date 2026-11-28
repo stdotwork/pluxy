@@ -51,7 +51,7 @@ var accountAnswerWait = time.Minute
 const accountLoginTimeout = 30 * time.Minute
 
 // waitingError ends a command that started something a person must finish elsewhere, such as a
-// sign-in that needs a browser: exit 7 (next/management/README.md).
+// sign-in that needs a browser: exit 7 (docs/cli.md, "Exit codes").
 type waitingError struct{ msg string }
 
 func (e waitingError) Error() string { return e.msg }
@@ -1039,8 +1039,6 @@ func inputHint(f protocol.LoginInput) string {
 	return fmt.Sprintf("give it with --input %s=<value>, or on standard input, one line for each value the sign-in asks for", f.Name)
 }
 
-// browserWaitLine says what happens to a browser sign-in once standard input has ended: its input
-// is only the fallback for a callback the extension may still receive (next/protocol/README.md).
 func browserWaitLine() string {
 	return fmt.Sprintf("standard input has ended, so nothing more can be pasted. The sign-in can now finish only if the browser's return reaches its provider; core gives up on it %s after it started. Ctrl-C cancels it.", humanSpan(cred.LoginTimeout))
 }

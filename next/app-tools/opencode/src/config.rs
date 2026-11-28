@@ -1,8 +1,3 @@
-//! OpenCode's config (`opencode.json` or `opencode.jsonc`): which files it takes as its own, what
-//! Apply writes into one, what a preview reads back, and the merge Clear uses. Keys are OpenCode's
-//! own (README.md). Every write edits the file's syntax tree in place, so comments, formatting and
-//! keys pluxy does not write stay where the person left them.
-
 use jsonc_parser::cst::{CstInputValue, CstNode, CstObject, CstRootNode};
 use jsonc_parser::ParseOptions;
 use pluxy_program::Error;

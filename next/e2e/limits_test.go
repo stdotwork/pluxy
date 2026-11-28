@@ -179,11 +179,6 @@ func TestLargeRequestFitsTheFrame(t *testing.T) {
 	}
 }
 
-// A request under the HTTP body limit that still cannot fit one extension frame is the
-// client's to fix: 413, not a server failure. A native-only call carries a request's content
-// once, but a body that is not valid UTF-8 goes in a full call (protocol/README.md,
-// "Native-only calls"), and U+2028 is three bytes in the body and six once escaped in that
-// call's parsed copy.
 func TestRequestTooLargeForTheFrameIsAClientError(t *testing.T) {
 	t.Parallel()
 	u := newUpstream(t)

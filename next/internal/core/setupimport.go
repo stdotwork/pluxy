@@ -110,16 +110,15 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 			return management.ImportReport{}, &editError{http.StatusBadRequest, "invalid_request", "auth folder: " + err.Error()}
 		}
 		if fromConfig && p.folder != nil {
-			// The folder's accounts go into core's credential store: core keeps no folder.
 			res.Ledger.Update(legacy.ConfigItem(authDirKey(res)), func(_ *int, row *legacy.Row) {
-				row.Why = "the folder is not kept: core keeps no auth folder, so a later import needs --auth-dir again"
+				row.Why = "the folder's accounts go into pluxy's credential store; pluxy keeps no auth folder"
 			})
 		}
 	}
 
 	if !req.DryRun && c.isYAML() {
 		return management.ImportReport{}, &editError{http.StatusConflict, "conflict",
-			"core runs on a config.yaml, which it reads with today's core's names already; an import writes core's JSON config (pluxy init writes one)"}
+			"pluxy runs on a config.yaml, which it already reads with CLIProxyAPI's key names; an import writes pluxy's JSON config (pluxy init writes one)"}
 	}
 
 	// The config's part, applied to the file (or, in a dry run, to a copy that is only checked).

@@ -88,7 +88,7 @@ test("an account's page: a model cooling down, the models it serves, a test requ
   await expect(result).toContainText(/[0-9]+ ms/);
   // Clear cooldown asks nothing: nothing is lost.
   await opening(page).getByRole("button", { name: "Clear cooldown", exact: true }).click();
-  await expect(opening(page)).toContainText("Serving.");
+  await expect(opening(page).locator(".account-state-text")).toHaveText("Serving");
   const r = await core.mgmt<{ accounts: { id: string; cooldowns?: unknown[] }[] }>("GET", "/accounts");
   expect(r.body.accounts.find((a) => a.id === "tools-key")?.cooldowns ?? []).toEqual([]);
   await tools.getByLabel("Test with").selectOption("server-error");
@@ -231,4 +231,62 @@ test("an address of an account pluxy does not have says so and leads back", asyn
   await expect(page.getByText("This account is not in pluxy.")).toBeVisible();
   await page.getByRole("link", { name: "Back to accounts", exact: true }).click();
   await expect(page).toHaveURL(/#\/accounts$/);
+});
+
+test("the account page shows mark, plan pill, full-width limits with reset times and pace, and fits narrow windows", async ({
+  page,
+}) => {
+  const now = Date.now();
+  const quota = {
+    fetched_at: new Date(now).toISOString(),
+    quota: {
+      plan: "Max 20x",
+      limits: [
+        {
+          id: "5h",
+          window_seconds: 5 * 3600,
+          resets_at: Math.floor((now + 2 * 3600_000) / 1000),
+          used_percent: 82,
+        },
+        {
+          id: "wk",
+          window_seconds: 7 * 86400,
+          resets_at: Math.floor((now + 3 * 86_400_000) / 1000),
+          used_percent: 18,
+        },
+        { id: "credits", label: "API credit", remaining: 42.1, unit: "usd" },
+      ],
+    },
+  };
+  await page.route("**/v0/management/accounts", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const reply = await route.fetch();
+    const body = (await reply.json()) as { accounts: Record<string, unknown>[] };
+    for (const a of body.accounts) if (a.id === "alpha-1") a.quota = quota;
+    await route.fulfill({ response: reply, json: body });
+  });
+  await page.route("**/v0/management/accounts/alpha-1/quota", (route) => route.fulfill({ json: quota }));
+  await openPanel(page, core);
+  await signIn(page, core);
+  await openAccount(page, "alpha-1");
+
+  const header = opening(page);
+  await expect(header.locator('[data-part="provider-mark"]')).toBeVisible();
+  await expect(header.locator('[data-part="plan-pill"]')).toHaveText("Max 20x");
+  await expect(header.locator('[data-part="plan-pill"]')).toHaveAttribute("data-plan-tier", "top");
+
+  const limits = page.getByRole("region", { name: "Limits" });
+  await expect(limits).toContainText("18% left");
+  await expect(limits).toContainText("82% left");
+  await expect(limits).toContainText(/Resets \w{3} \d\d:\d\d · in /);
+  await expect(limits).toContainText(/At this pace it runs out .* before it resets\./);
+  await expect(limits).not.toContainText("At this pace it lasts until reset.");
+  await expect(limits.locator(".account-limit-pace")).toHaveCount(1);
+  await expect(limits).toContainText("$42.10 left");
+  await expect(limits.locator(".account-pace-tick")).toHaveCount(2);
+
+  for (const width of [1440, 820, 560]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
+  }
 });

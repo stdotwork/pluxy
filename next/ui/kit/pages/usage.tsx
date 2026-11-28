@@ -2,7 +2,7 @@
 // account or key. The figures, the chart and the breakdown come from one read of GET /usage in
 // hourly steps, added into local days, read again every minute while the tab is on screen.
 
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useId, useRef, useState } from "preact/hooks";
 import { problem, type UsageSummary } from "../api";
 import { keyName, Phases, providerName, StatePane, timeTaken, useNaming } from "../parts";
 import type { PageDef } from "../shell";
@@ -21,11 +21,13 @@ import {
   type Range,
   rangeDays,
   shortCount,
+  succeededPercent,
   usageSince,
   useAddressQuery,
 } from "./activity";
+import { FilterChip } from "./activityChips";
 import { RecordOff } from "./activityParts";
-import { UsageChart } from "./usageChart";
+import { type Metric, UsageChart } from "./usageChart";
 
 const t = strings("usage", {
   title: "Usage",
@@ -53,8 +55,18 @@ const t = strings("usage", {
   seeThem: "See them",
   seeThese: "See these requests",
   remove: "Remove this filter",
-  chip: "{kind}: {name}",
-  share: "Share of the busiest",
+  share: "Share",
+  chartShows: "What the chart shows",
+  tileRequests: "Requests",
+  tileThrough: "Went through",
+  tileTokens: "Tokens",
+  tileTime: "Avg time",
+  tileFailed: "{count} failed",
+  tileNoneFailed: "None failed",
+  tileOf: "{ok} of {total}",
+  tileCached: "{tokens} from cache",
+  tilePer: "per request",
+  breakdown: "Breakdown",
 });
 
 const TOP = 10;
@@ -66,6 +78,11 @@ const BYS: { value: By; filter: Picked }[] = [
   { value: "accounts", filter: "account" },
   { value: "keys", filter: "key" },
 ];
+
+const sharePercent = (part: number, total: number) => {
+  const percent = (part / Math.max(1, total)) * 100;
+  return percent > 0 && percent < 0.5 ? "<1%" : `${Math.round(percent)}%`;
+};
 
 const rangeWord = (range: Range) => (range === "24h" ? t("h24") : range === "7d" ? t("d7") : t("d30"));
 const kindWord = (filter: Picked) =>
@@ -121,12 +138,64 @@ function useSummary(query: string): Loaded<UsageSummary> {
   return { phase: "ready", data: mine.data, loading, reload };
 }
 
+function UsageTiles(props: { u: UsageSummary; metric: Metric; onMetric: (m: Metric) => void }) {
+  const { u } = props;
+  const name = useId();
+  const tokens = u.tokens?.total_tokens ?? 0;
+  const cached = u.tokens?.cached_tokens ?? 0;
+  const tile = (metric: Metric, label: string, value: string, sub: string | undefined) => (
+    <label class="usage-tile" data-metric={metric}>
+      <input
+        type="radio"
+        name={name}
+        value={metric}
+        checked={props.metric === metric}
+        onChange={() => props.onMetric(metric)}
+      />
+      <span class="usage-tile-label">{label}</span>
+      <span class="usage-tile-value">{value}</span>
+      <span class="usage-tile-sub">{sub ?? "\u00a0"}</span>
+    </label>
+  );
+  return (
+    <fieldset class="usage-tiles" data-part="usage-tiles">
+      <legend class="sr-only">{t("chartShows")}</legend>
+      {tile(
+        "requests",
+        t("tileRequests"),
+        u.total_requests.toLocaleString(),
+        u.failure_count > 0
+          ? t("tileFailed", { count: u.failure_count.toLocaleString() })
+          : t("tileNoneFailed"),
+      )}
+      {tile(
+        "through",
+        t("tileThrough"),
+        succeededPercent(u.success_count, Math.max(1, u.total_requests)),
+        t("tileOf", { ok: u.success_count.toLocaleString(), total: u.total_requests.toLocaleString() }),
+      )}
+      {tile(
+        "tokens",
+        t("tileTokens"),
+        tokens > 0 ? shortCount(tokens) : "—",
+        cached > 0 ? t("tileCached", { tokens: shortCount(cached) }) : undefined,
+      )}
+      <div class="usage-tile" data-static="">
+        <span class="usage-tile-label">{t("tileTime")}</span>
+        <span class="usage-tile-value">{u.average_latency_ms ? timeTaken(u.average_latency_ms) : "—"}</span>
+        <span class="usage-tile-sub">{t("tilePer")}</span>
+      </div>
+    </fieldset>
+  );
+}
+
 export function UsagePage() {
   const { api } = useKit();
   const [address, setAddress] = useAddressQuery();
   const [range, setRange] = useState<Range>("7d");
   const [by, setBy] = useState<By>("providers");
   const [all, setAll] = useState(false);
+  const [metric, setMetric] = useState<Metric>("requests");
   const accounts = useLoad(api.accounts);
   const keys = useLoad(api.clientKeys);
   const naming = useNaming(accounts.data?.accounts);
@@ -166,8 +235,8 @@ export function UsagePage() {
   const groups = u
     ? [...u[by]].filter((g) => g.total_requests > 0).sort((a, b) => b.total_requests - a.total_requests)
     : [];
-  const busiest = Math.max(1, ...groups.map((g) => g.total_requests));
   const rows = all ? groups : groups.slice(0, TOP);
+  const total = Math.max(1, u?.total_requests ?? 0);
 
   if (u && !u.enabled) {
     return (
@@ -195,9 +264,20 @@ export function UsagePage() {
         }
       />
       <div class="usage-top">
-        <p class="usage-figures" aria-live="polite">
-          {figures}
-        </p>
+        <div class="usage-filter">
+          {picked && (
+            <>
+              <FilterChip
+                part="usage-chip"
+                kind={kindWord(picked)}
+                name={nameOf(picked, value)}
+                onRemove={() => setAddress("")}
+              />
+              <a href={`#/activity?${queryOf({ ...NO_FILTERS, [picked]: value })}`}>{t("seeThese")}</a>
+            </>
+          )}
+          {record && <p class="usage-note">{t("starts", { when: record })}</p>}
+        </div>
         <div class="usage-range">
           <Choices
             label={t("range")}
@@ -211,23 +291,9 @@ export function UsagePage() {
           />
         </div>
       </div>
-      {record && <p class="usage-note">{t("starts", { when: record })}</p>}
-      {picked && (
-        <div class="usage-filter">
-          <button
-            type="button"
-            class="usage-chip"
-            data-part="usage-chip"
-            title={t("remove")}
-            onClick={() => setAddress("")}
-          >
-            {t("chip", { kind: kindWord(picked), name: nameOf(picked, value) })}{" "}
-            <span aria-hidden="true">×</span>
-            <span class="sr-only">{t("remove")}</span>
-          </button>
-          <a href={`#/activity?${queryOf({ ...NO_FILTERS, [picked]: value })}`}>{t("seeThese")}</a>
-        </div>
-      )}
+      <p class="usage-figures sr-only" aria-live="polite">
+        {figures}
+      </p>
       <Phases
         load={summary}
         loading={t("loading")}
@@ -237,6 +303,15 @@ export function UsagePage() {
       >
         {() => (
           <>
+            <section class="usage-panel" data-part="usage-panel">
+              {u && <UsageTiles u={u} metric={metric} onMetric={setMetric} />}
+              <UsageChart
+                bars={bars}
+                unit={range === "24h" ? "hour" : "day"}
+                range={rangeWord(range)}
+                metric={metric}
+              />
+            </section>
             {hotspot && (
               <p class="usage-hotspot">
                 {hotspot.text}{" "}
@@ -245,22 +320,23 @@ export function UsagePage() {
                 </a>
               </p>
             )}
-            <UsageChart bars={bars} unit={range === "24h" ? "hour" : "day"} range={rangeWord(range)} />
-            <section class="usage-by" aria-label={t("by")}>
-              <Choices
-                label={t("by")}
-                value={by}
-                choices={[
-                  { value: "providers", label: t("provider") },
-                  { value: "models", label: t("model") },
-                  { value: "accounts", label: t("account") },
-                  { value: "keys", label: t("key") },
-                ]}
-                onChange={(v) => {
-                  setBy(v);
-                  setAll(false);
-                }}
-              />
+            <section class="usage-by" aria-label={t("breakdown")}>
+              <div class="usage-by-head">
+                <Choices
+                  label={t("by")}
+                  value={by}
+                  choices={[
+                    { value: "providers", label: t("provider") },
+                    { value: "models", label: t("model") },
+                    { value: "accounts", label: t("account") },
+                    { value: "keys", label: t("key") },
+                  ]}
+                  onChange={(v) => {
+                    setBy(v);
+                    setAll(false);
+                  }}
+                />
+              </div>
               <div class="usage-breakdown">
                 <TableFrame>
                   <table class="table" data-part="usage-breakdown">
@@ -271,7 +347,7 @@ export function UsagePage() {
                           {t("requests")}
                         </th>
                         <th scope="col" class="usage-bar-col">
-                          <span class="sr-only">{t("share")}</span>
+                          {t("share")}
                         </th>
                         <th scope="col" class="num">
                           {t("failedCol")}
@@ -298,23 +374,28 @@ export function UsagePage() {
                             </button>
                           </th>
                           <td class="num">{g.total_requests.toLocaleString()}</td>
-                          <td class="usage-bar-col" aria-hidden="true">
-                            <span class="usage-bar">
-                              {g.success_count > 0 && (
-                                <i
-                                  data-outcome="success"
-                                  style={{ width: `${(g.success_count / busiest) * 100}%` }}
-                                />
-                              )}
-                              {g.failure_count > 0 && (
-                                <i
-                                  data-outcome="failure"
-                                  style={{ width: `${(g.failure_count / busiest) * 100}%` }}
-                                />
-                              )}
+                          <td class="usage-bar-col">
+                            <span class="usage-share">
+                              <span class="usage-bar" aria-hidden="true">
+                                {g.success_count > 0 && (
+                                  <i
+                                    data-outcome="success"
+                                    style={{ width: `${(g.success_count / total) * 100}%` }}
+                                  />
+                                )}
+                                {g.failure_count > 0 && (
+                                  <i
+                                    data-outcome="failure"
+                                    style={{ width: `${(g.failure_count / total) * 100}%` }}
+                                  />
+                                )}
+                              </span>
+                              <span class="usage-percent">{sharePercent(g.total_requests, total)}</span>
                             </span>
                           </td>
-                          <td class="num">{g.failure_count.toLocaleString()}</td>
+                          <td class="num" data-failed={g.failure_count > 0 ? "" : undefined}>
+                            {g.failure_count.toLocaleString()}
+                          </td>
                           <td class="num">
                             {g.tokens?.total_tokens ? shortCount(g.tokens.total_tokens) : "—"}
                           </td>

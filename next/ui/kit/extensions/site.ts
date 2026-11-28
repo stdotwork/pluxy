@@ -1,6 +1,3 @@
-// Where the panel may show an extension page from: only the pages site core names, and only when
-// that is another site than the panel's own (extension-pages/README.md).
-
 function hostname(h: string): string {
   return h
     .toLowerCase()

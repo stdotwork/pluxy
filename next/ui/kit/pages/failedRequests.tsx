@@ -108,8 +108,10 @@ export function FailedRequests(props: { save: (name: string, content: string) =>
   return (
     <>
       <div class="logs-failed-head">
-        <p class="muted">{t("intro")}</p>
-        {everyRequest && <p class="muted">{t("everyRequest")}</p>}
+        <div class="logs-failed-intro">
+          <p class="muted">{t("intro")}</p>
+          {everyRequest && <p class="muted">{t("everyRequest")}</p>}
+        </div>
         <form
           class="logs-trace-form"
           onSubmit={(e) => {

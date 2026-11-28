@@ -1,9 +1,3 @@
-//! The model catalog Codex reads from `model_catalog_json` (README.md): its own JSON format, a
-//! `models` list of model metadata. Apply writes the models the person keeps, each with the
-//! settings the form edits; a new model is made from pluxy's Codex client template for its
-//! upstream name (the file the core serves Codex, `next/extensions/codex/client_models.json`),
-//! trimmed to the fields Codex needs. Entries already in the file keep every other field.
-
 use pluxy_program::Error;
 use pluxy_transactions::{Json as JsonFile, MAX_FILE};
 use serde_json::{json, Map, Value};
@@ -12,7 +6,8 @@ use std::sync::OnceLock;
 /// The catalog's file name, beside config.toml by default.
 pub const FILE: &str = "pluxy-model-catalog.json";
 
-/// pluxy's Codex client templates, embedded: refreshed with the core's (next/README.md).
+/// pluxy's Codex client templates, embedded: refreshed with the core's (docs/map.md, "Codex client
+/// catalog").
 const TEMPLATES: &str = include_str!("../../../extensions/codex/client_models.json");
 
 /// The fields a new entry takes from its template: those Codex requires and those that shape

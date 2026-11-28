@@ -16,27 +16,18 @@ import (
 	"time"
 )
 
-// maxReply bounds a reply the client reads: the largest replies (logs as JSON) stay well below.
 const maxReply = 64 << 20
 
-// Client calls the management API of one core.
 type Client struct {
-	// URL is the core's base address, such as http://127.0.0.1:8317, without the API's prefix.
-	URL string
-	// Key is the management key.
-	Key string
-	// HTTP sends the calls; nil uses a client with a 2-minute timeout.
+	URL  string
+	Key  string
 	HTTP *http.Client
 }
 
-// APIError is a call core answered with a status that is not 2xx.
 type APIError struct {
-	Status int
-	// Code and Message are from the reply's error object; a reply without one (POST /reload's
-	// refusal is the status) leaves Code empty and Message says the status.
+	Status        int
 	Code, Message string
-	// Body is the reply's body, unchanged.
-	Body []byte
+	Body          []byte
 }
 
 func (e *APIError) Error() string {
@@ -46,8 +37,6 @@ func (e *APIError) Error() string {
 	return e.Message + " (" + e.Code + ")"
 }
 
-// UnreachableError is a call no core answered: nothing listens at the address, or the
-// connection failed before a reply.
 type UnreachableError struct {
 	URL string
 	Err error
@@ -60,9 +49,6 @@ func (e *UnreachableError) Unwrap() error { return e.Err }
 
 var defaultHTTP = &http.Client{Timeout: 2 * time.Minute}
 
-// Call sends one call: method and path under Prefix (such as "GET", "/status"), query
-// parameters, and in as the JSON body when it is not nil. A 2xx reply is decoded into out when
-// out is not nil. It returns the reply's body unchanged, also with an *APIError.
 func (c *Client) Call(ctx context.Context, method, path string, query url.Values, in, out any) ([]byte, error) {
 	u := strings.TrimSuffix(c.URL, "/") + Prefix + path
 	if len(query) > 0 {
@@ -113,7 +99,6 @@ func (c *Client) Call(ctx context.Context, method, path string, query url.Values
 	return b, nil
 }
 
-// apiError is the error for a non-2xx reply whose body is b.
 func apiError(resp *http.Response, b []byte) *APIError {
 	e := &APIError{Status: resp.StatusCode, Body: b}
 	var eb ErrorBody
@@ -125,14 +110,6 @@ func apiError(resp *http.Response, b []byte) *APIError {
 	return e
 }
 
-// Stream sends one call like Call, without a body, and copies a 2xx reply's body to w as it
-// arrives, however large it is: Call stops reading at 64 MiB, which would cut a log file short
-// with no error. A non-2xx reply is the same *APIError Call gives, and nothing is written. A
-// reply that breaks off is an *UnreachableError, after the bytes that arrived were written;
-// an error of w is returned as it is.
-//
-// The client's overall timeout does not bound the copy, since a large file takes as long as it
-// takes: it bounds the wait for the reply to begin, and ctx ends the copy.
 func (c *Client) Stream(ctx context.Context, method, path string, query url.Values, w io.Writer) error {
 	u := strings.TrimSuffix(c.URL, "/") + Prefix + path
 	if len(query) > 0 {
@@ -197,7 +174,6 @@ func (c *Client) Stream(ctx context.Context, method, path string, query url.Valu
 	}
 }
 
-// IsUnreachable reports whether err says no core answered.
 func IsUnreachable(err error) bool {
 	var u *UnreachableError
 	return errors.As(err, &u)
@@ -208,71 +184,56 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 	return err
 }
 
-// Status is GET /status.
 func (c *Client) Status(ctx context.Context) (Status, error) {
 	var v Status
 	err := c.get(ctx, "/status", nil, &v)
 	return v, err
 }
 
-// Accounts is GET /accounts.
 func (c *Client) Accounts(ctx context.Context) ([]Account, error) {
 	var v AccountsReply
 	err := c.get(ctx, "/accounts", nil, &v)
 	return v.Accounts, err
 }
 
-// ChainPath is the path of name's chain, its name escaped as one path segment.
 func ChainPath(name string) string { return "/chains/" + url.PathEscape(name) }
 
-// Packages is GET /packages.
 func (c *Client) Packages(ctx context.Context) ([]Package, error) {
 	var v PackagesReply
 	err := c.get(ctx, "/packages", nil, &v)
 	return v.Packages, err
 }
 
-// PackagePath is the path of package id (publisher/name), each part escaped.
 func PackagePath(id string) string {
 	publisher, name, _ := strings.Cut(id, "/")
 	return "/packages/" + url.PathEscape(publisher) + "/" + url.PathEscape(name)
 }
 
-// ClientKeys is GET /client-keys.
 func (c *Client) ClientKeys(ctx context.Context) ([]ClientKey, error) {
 	var v ClientKeysReply
 	err := c.get(ctx, "/client-keys", nil, &v)
 	return v.Keys, err
 }
 
-// Requests is GET /requests: the client requests core is serving now, oldest first.
 func (c *Client) Requests(ctx context.Context) ([]RunningRequest, error) {
 	var v RequestsReply
 	err := c.get(ctx, "/requests", nil, &v)
 	return v.Requests, err
 }
 
-// RequestCancelPath is the path that cancels the request with a trace ID, the ID escaped as one
-// path segment.
 func RequestCancelPath(trace string) string { return "/requests/" + url.PathEscape(trace) + "/cancel" }
 
-// CancelRequest is POST /requests/{trace}/cancel: it cancels a request core is serving and
-// returns the request as it was then. A trace ID no running request has is an *APIError with
-// status 404.
 func (c *Client) CancelRequest(ctx context.Context, trace string) (RunningRequest, error) {
 	var v RequestReply
 	_, err := c.Call(ctx, http.MethodPost, RequestCancelPath(trace), nil, nil, &v)
 	return v.Request, err
 }
 
-// MultipartBody is a ready multipart/form-data body, made by NewMultipartBody.
 type MultipartBody struct {
 	bytes       []byte
 	contentType string
 }
 
-// NewMultipartBody makes a multipart/form-data body: one file part named field holding data as
-// filename, and the fields name=value.
 func NewMultipartBody(field, filename string, data []byte, fields map[string]string) (*MultipartBody, error) {
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
@@ -294,63 +255,79 @@ func NewMultipartBody(field, filename string, data []byte, fields map[string]str
 	return &MultipartBody{bytes: b.Bytes(), contentType: w.FormDataContentType()}, nil
 }
 
-// Setup is GET /setup.
 func (c *Client) Setup(ctx context.Context) (Setup, error) {
 	var v Setup
 	err := c.get(ctx, "/setup", nil, &v)
 	return v, err
 }
 
-// SetupScan is POST /setup/scan.
 func (c *Client) SetupScan(ctx context.Context) (Setup, error) {
 	var v Setup
 	_, err := c.Call(ctx, http.MethodPost, "/setup/scan", nil, nil, &v)
 	return v, err
 }
 
-// SetupApply is POST /setup/apply.
 func (c *Client) SetupApply(ctx context.Context, picks []string) (SetupApplyReply, error) {
 	var v SetupApplyReply
 	_, err := c.Call(ctx, http.MethodPost, "/setup/apply", nil, SetupApplyRequest{Picks: picks}, &v)
 	return v, err
 }
 
-// ClientPaste is GET /setup/clients/{id}/paste. keyID, when not empty, names the client key
-// the reply's Key placeholder points at.
-func (c *Client) ClientPaste(ctx context.Context, id, keyID string) (ClientPaste, error) {
-	var q url.Values
+func (c *Client) ClientPaste(ctx context.Context, id, keyID, model string) (ClientPaste, error) {
+	q := url.Values{}
 	if keyID != "" {
-		q = url.Values{"key_id": {keyID}}
+		q.Set("key_id", keyID)
+	}
+	if model != "" {
+		q.Set("model", model)
 	}
 	var v ClientPaste
 	err := c.get(ctx, "/setup/clients/"+url.PathEscape(id)+"/paste", q, &v)
 	return v, err
 }
 
-// SetupDone is POST /setup/done.
+func (c *Client) ConnectClient(ctx context.Context, id, label, model string) (ClientConnection, error) {
+	fields := map[string]string{}
+	if label != "" {
+		fields["label"] = label
+	}
+	if model != "" {
+		fields["model"] = model
+	}
+	var body any
+	if len(fields) > 0 {
+		body = fields
+	}
+	var v ClientConnection
+	_, err := c.Call(ctx, http.MethodPost, "/setup/clients/"+url.PathEscape(id)+"/connect", nil, body, &v)
+	return v, err
+}
+
+func (c *Client) DisconnectClient(ctx context.Context, id string) (ClientConnection, error) {
+	var v ClientConnection
+	_, err := c.Call(ctx, http.MethodPost, "/setup/clients/"+url.PathEscape(id)+"/disconnect", nil, nil, &v)
+	return v, err
+}
+
 func (c *Client) SetupDone(ctx context.Context) (SetupDoneReply, error) {
 	var v SetupDoneReply
 	_, err := c.Call(ctx, http.MethodPost, "/setup/done", nil, nil, &v)
 	return v, err
 }
 
-// ThemePath is the path of theme id (publisher/name), each part escaped.
 func ThemePath(id string) string {
 	publisher, name, _ := strings.Cut(id, "/")
 	return "/themes/" + url.PathEscape(publisher) + "/" + url.PathEscape(name)
 }
 
-// CallBytes sends one call with raw JSON bytes body (if non-nil) and behaves like Call.
 func (c *Client) CallBytes(ctx context.Context, method, path string, query url.Values, raw []byte, out any) ([]byte, error) {
 	return c.callRaw(ctx, method, path, query, "application/json", raw, out)
 }
 
-// CallForm sends one call with a multipart/form-data body (form) and behaves like Call.
 func (c *Client) CallForm(ctx context.Context, method, path string, query url.Values, form *MultipartBody, out any) ([]byte, error) {
 	return c.callRaw(ctx, method, path, query, form.contentType, form.bytes, out)
 }
 
-// callRaw sends one call with body and its content type.
 func (c *Client) callRaw(ctx context.Context, method, path string, query url.Values, contentType string, raw []byte, out any) ([]byte, error) {
 	u := strings.TrimSuffix(c.URL, "/") + Prefix + path
 	if len(query) > 0 {

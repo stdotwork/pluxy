@@ -158,6 +158,10 @@ export const keyMadeFor = (key: Secret, tool: string) => !!key.client_key && key
 /** Whether a native call's error is the person's cancel of its confirmation, which stops quietly. */
 export const cancelled = (e: string | undefined) => !!e && (e === "cancelled" || e.startsWith("cancelled:"));
 
+/** Whether an add-on turn-on or install confirmation was answered No, which stops quietly. */
+export const answeredNo = (e: string | undefined) =>
+  cancelled(e) || !!e?.startsWith("native enable cancelled;");
+
 /** A native error as the second sentence of a line: its first letter a capital (pluxy keeps its
  * own lower-case name). */
 export const sentence = (s: string) => (s.startsWith("pluxy") ? s : s.charAt(0).toUpperCase() + s.slice(1));
@@ -493,7 +497,7 @@ export function useToolSetup<P extends ToolPreview>(o: {
         setMade(capture.body);
         setChosen(id);
         secrets.reload();
-        // The person may have left the page while the key's window was open: the settings shown
+        // The person may have left the page while the key was being made: the settings shown
         // when Connect was pressed are no longer the ones on screen, so nothing is written.
         if (!still(at)) {
           setKept(true);
@@ -537,9 +541,9 @@ export function useToolSetup<P extends ToolPreview>(o: {
     });
   const turnOn = () =>
     run("addon", async () => {
-      const e = failure(plainReply(await device.setEnabled(o.pkg, true)));
+      const r = plainReply(await device.setEnabled(o.pkg, true));
       catalog.reload();
-      return e;
+      return r.error && answeredNo(r.error.message) ? "" : failure(r);
     });
   const enterKey = () =>
     run("key", async () => {

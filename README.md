@@ -1,5 +1,5 @@
 # pluxy
-
+(WIP)
 pluxy (plug + proxy) is a proxy that runs on your machine and serves the OpenAI, Anthropic, Gemini
 and Codex APIs from the accounts you already have: subscription sign-ins and API keys. Your coding
 tools talk to pluxy, and pluxy picks an account for each request.
@@ -21,8 +21,10 @@ If you run coding agents on subscription accounts, you have probably met these:
 - **Setup means writing a config file by hand.** The first start writes the config. A setup page
   then looks at the machine, offers the providers that fit what it found, and installs only the
   ones you pick.
-- **Every tool wants different settings.** `pluxy client show <tool>` prints what to paste into
-  Claude Code, Codex, OpenCode, Pi or Oh My Pi.
+- **Every tool wants different settings.** `pluxy client connect <tool>` writes them into Claude
+  Code's or Codex's settings, and `pluxy client disconnect <tool>` puts the file back (or, when the
+  file changed since, takes back only the settings connect wrote);
+  `pluxy client show <tool>` prints what to paste into Claude Code, Codex, OpenCode, Pi or Oh My Pi.
 
 pluxy has three parts: the core (the proxy itself, a Go program), a web panel the core serves at
 `/panel/`, and a desktop app that runs or connects to a core (Linux only for now). Each kind of
@@ -80,7 +82,7 @@ can read the file.
 
 Leave pluxy running and open a second terminal in `~/pluxy` for the rest. The `pluxy` commands
 find the address and the management key in pluxy's home from any folder; a `config.json` in the
-folder they run in comes first ([pluxy's home](next/README.md#pluxys-home) has the rules).
+folder they run in comes first ([pluxy's home](docs/config.md#pluxys-home) has the rules).
 
 ### 3. Install a provider
 
@@ -117,11 +119,14 @@ Check that the account answers:
 ### 5. Point a client at pluxy
 
 ```bash
-./pluxy client show claude-code
+./pluxy client connect claude-code
 ```
 
-This prints the lines to put in the tool's config file, with `<client-key>` where your client key
-goes. The other tools are `codex`, `opencode`, `pi` and `omp`; [docs/clients.md](docs/clients.md)
+This writes Claude Code's settings (`~/.claude/settings.json`) with a client key made for it, and
+keeps the file as it was: `./pluxy client disconnect claude-code` puts it back, or, when the file
+changed since, takes back only the settings connect wrote and keeps the rest. To paste the
+settings yourself instead, `./pluxy client show claude-code` prints the lines to put in the tool's
+config file, with `<client-key>` where your client key goes. The other tools are `codex`, `opencode`, `pi` and `omp`; [docs/clients.md](docs/clients.md)
 has each one's settings, and the base URLs for any other client.
 
 ### 6. Send a request and see it counted
@@ -147,17 +152,26 @@ the same record. `./pluxy help` lists every command.
 
 ## Where to read more
 
+[docs/README.md](docs/README.md) lists every page.
+
 | You want to | Read |
 | --- | --- |
+| Build pluxy, start it, or run it in a container | [docs/setup.md](docs/setup.md) |
 | Set up a coding tool or another client | [docs/clients.md](docs/clients.md) |
+| Add an account, and know each provider's options | [docs/providers.md](docs/providers.md) |
+| Know how a request picks an account, and set up fallbacks | [docs/routing.md](docs/routing.md) |
+| Install or remove extensions | [docs/extensions.md](docs/extensions.md) |
+| See usage, logs and request logs | [docs/usage-and-logs.md](docs/usage-and-logs.md) |
 | Move from CLIProxyAPI | [docs/moving-from-cpa.md](docs/moving-from-cpa.md) |
 | Fix a problem or find out why a request failed | [docs/troubleshooting.md](docs/troubleshooting.md) |
-| Run pluxy in a container | [next/README.md, "Run it in a container"](next/README.md#run-it-in-a-container) |
-| Look up a config setting, a provider's options, routing, logs or the management API | [next/README.md](next/README.md) |
-| Use the desktop app | [next/app/README.md](next/app/README.md) |
-| Write a provider extension | [next/protocol/TUTORIAL.md](next/protocol/TUTORIAL.md) |
-| Know why pluxy is built this way | [docs/design.md](docs/design.md) |
-| Know what pluxy costs in time and memory | [docs/perf.md](docs/perf.md) |
+| Look up a config setting | [docs/config.md](docs/config.md) |
+| Know what carries over when a client and a provider speak different APIs | [docs/translation.md](docs/translation.md) |
+| Look up a `pluxy` command | [docs/cli.md](docs/cli.md) |
+| Call the management API | [docs/management-api.md](docs/management-api.md) |
+| Use the desktop app | [docs/app.md](docs/app.md) |
+| Write a provider extension | [docs/extension-tutorial.md](docs/extension-tutorial.md) |
+| Know why pluxy is built this way | [docs/design/design.md](docs/design/design.md) |
+| Know what pluxy costs in time and memory | [docs/design/perf.md](docs/design/perf.md) |
 | Build, test or change pluxy | [AGENTS.md](AGENTS.md) |
 
 ## What is in this repository

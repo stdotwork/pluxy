@@ -75,8 +75,8 @@ export interface AddonView {
 /** What a tool's row offers, by its add-on. */
 export type RowAction =
   | { kind: "link"; page: string; label: "Open" | "Set up" }
-  | { kind: "turn-on"; pkg: string }
-  | { kind: "install"; pkg: string; registry: string; version?: string }
+  | { kind: "turn-on"; pkg: string; page: string }
+  | { kind: "install"; pkg: string; page: string; registry: string; version?: string }
   | { kind: "checking" }
   | { kind: "none" };
 
@@ -92,7 +92,7 @@ export function toolPage(
 /**
  * The one press a row offers. The tool's page, when its add-on is on (Open for a tool that is
  * Connected, else Set up). The add-on's own step when it is installed but off (turn it on) or only
- * offered (install it). Nothing while the add-ons are still read. Nothing at all when no add-on is
+ * offered (install it, then turn it on), which opens the tool's page once the add-on is on. Nothing while the add-ons are still read. Nothing at all when no add-on is
  * to be had: the row keeps the kit's own Set up. In safe mode, or when the device's add-ons cannot
  * be read, the page alone: it says what the add-on needs.
  */
@@ -113,9 +113,15 @@ export function rowAction(
   if (!view.catalog) return { kind: "checking" };
   const [item] = items([agent.package], view.catalog, view.offers);
   if (item?.state === "enabled") return link;
-  if (item?.state === "installed") return { kind: "turn-on", pkg: agent.package };
+  if (item?.state === "installed") return { kind: "turn-on", pkg: agent.package, page };
   if (item?.state === "offered")
-    return { kind: "install", pkg: agent.package, registry: item.registry ?? "", version: item.version };
+    return {
+      kind: "install",
+      pkg: agent.package,
+      page,
+      registry: item.registry ?? "",
+      version: item.version,
+    };
   return view.offers ? { kind: "none" } : { kind: "checking" };
 }
 
@@ -131,6 +137,11 @@ export function toolAction(
 ) {
   return (client: SetupClient) => {
     const action = rowAction(client, agents, view);
+    // The tool's page, once its add-on is on: what Set up would open next.
+    const opens = (page: string) => () => {
+      if (fromSetup) openedFromSetup();
+      location.hash = `#/${page}`;
+    };
     switch (action.kind) {
       case "link":
         return h(
@@ -146,7 +157,13 @@ export function toolAction(
           t(action.label === "Open" ? "open" : "setUp"),
         );
       case "turn-on":
-        return h(AddonAction, { tool: client.id, pkg: action.pkg, step: "enable", changed });
+        return h(AddonAction, {
+          tool: client.id,
+          pkg: action.pkg,
+          step: "enable",
+          changed,
+          opens: opens(action.page),
+        });
       case "install":
         return h(AddonAction, {
           tool: client.id,
@@ -155,6 +172,7 @@ export function toolAction(
           registry: action.registry,
           version: action.version,
           changed,
+          opens: opens(action.page),
         });
       case "checking":
         return h(Checking, null);

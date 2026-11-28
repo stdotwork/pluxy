@@ -8,8 +8,6 @@ import (
 	"strings"
 )
 
-// AppContribution describes the desktop part of a version-1 manifest. Its files and
-// programs are never used by core. The contract is in app/app-host/README.md.
 type AppContribution struct {
 	Version      int               `json:"version"`
 	Tier         string            `json:"tier"`

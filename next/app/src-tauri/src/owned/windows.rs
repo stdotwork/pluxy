@@ -390,7 +390,7 @@ impl Command {
     /// A detached process that shows no window itself: started with no console, not a new one,
     /// so none flashes (the execution program's `open` and `app` modes).
     // shortcut: no test sees the flag reach the process: the unit tests run in a runner's job,
-    // which a detached launch may not leave (README, "Limits").
+    // which a detached launch may not leave.
     pub(crate) fn windowless(&mut self, windowless: bool) -> &mut Self {
         self.windowless = windowless;
         self

@@ -1,6 +1,3 @@
-// An extension page in the panel: the extension's own document in a sandboxed frame from the
-// pages site, talking to the panel only through the channel (extension-pages/README.md).
-
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { Api, UIExtension, UIPage } from "../api";
 import type { PrivacyState } from "../privacy";

@@ -1,7 +1,3 @@
-//! The `export` operation, served over real pipes to a host played here: it reads the `files`
-//! frames the tool sends, keeps what they carry and answers them by hand, as the host's save
-//! service does (`next/app/app-host/README.md`, "Saving files").
-
 use super::*;
 use pluxy_program::{read_frame, serve, write_frame, Description, Identity, MAX_INBOUND};
 use std::io::PipeWriter;

@@ -41,9 +41,10 @@
     align-content: start;
   }
 
-  /* Over data from an earlier read, when a refresh failed: dimmed under the notice that says so. */
-  .home-body[data-stale] .home-fade {
-    opacity: 0.7;
+  /* Over data from an earlier read, when a refresh failed: fade the marks, meters and bars under
+     the notice, leaving every word at its normal colour so secondary text stays at 4.5:1. */
+  .home-body[data-stale] .home-fade :is(.provider-mark, .meter, .pool-bar, .days-bars) {
+    opacity: 0.6;
   }
 
   /* ---- the verdict -------------------------------------------------------------------------- */
@@ -120,8 +121,9 @@
     background: var(--px-color-error);
   }
 
+  .home-state-bar [data-group="unchecked"],
   .home-state-bar [data-group="off"] {
-    background: var(--px-color-meter-unknown);
+    background: var(--px-color-text-muted);
   }
 
   /* ---- the band ----------------------------------------------------------------------------- */
@@ -206,14 +208,6 @@
 
   .home-accounts .home-group:last-child .account-row:last-child {
     border-bottom: 0;
-  }
-
-  .home-more {
-    margin: 0;
-    padding: calc(var(--s) * 2) calc(var(--s) * 3.5);
-    border-bottom: var(--px-shape-border) solid var(--px-color-border);
-    color: var(--px-color-text-muted);
-    font-size: var(--px-font-size-small);
   }
 
   /* ---- the side column ---------------------------------------------------------------------- */

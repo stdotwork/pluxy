@@ -73,14 +73,6 @@ function inComment(content: string, at: number): boolean {
   return false;
 }
 
-/**
- * Finds where an account's ID is written in the config text, as the range of the ID itself, for
- * an account listed under `extension` or `extensions` (`accounts[].id`), in a JSON or a YAML
- * file. Undefined when the file does not hold that ID in exactly one place that is not a comment:
- * an account of a provider key section (`claude-api-key`, `api-keys.codex`, ...) has no `id`, its
- * ID is made from the entry's name and place (see the README's provider key sections), and the
- * file does not say it.
- */
 export function findAccount(content: string, id: string): { start: number; end: number } | undefined {
   const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const key = new RegExp(

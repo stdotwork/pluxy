@@ -1,9 +1,3 @@
-//! pluxy/codex-sessions: reads Codex's local sessions for pluxy's desktop app, read-only. Its
-//! operations (README.md): `list` (read), `detail` and `export` (disclose: each call asks the
-//! person), `open` (read: opens a rollout in the person's own app through `pluxy/execution`,
-//! whose launch the person confirms) and `settings` (write: the Codex home folder, kept in the
-//! tool's data folder).
-
 mod reader;
 
 use pluxy_program::{run, Call, Error, Handler, SaveOutcome};

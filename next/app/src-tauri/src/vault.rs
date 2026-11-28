@@ -1,30 +1,3 @@
-//! The host-private vault (`../app-host/README.md`, "Secrets, references and the vault"): the
-//! secrets the person entered natively, the references to them the host gives native tools, and
-//! each tool's backups and mutation journals. It lives in the app's data folder (`vault`; on
-//! Windows in its local data folder, which does not roam with the profile, `folder`), private to
-//! this user (folders 0700 and files 0600 on Linux and macOS; on Windows an access list naming
-//! only this user and SYSTEM, `private_windows.rs`), never in a folder a package can name, and no page or window API gives its paths,
-//! a secret's value, a backup's bytes or a journal's intent. Same-user programs, native tools among
-//! them, could read it directly: this separates APIs and storage, it is no OS sandbox.
-//!
-//! A secret has an opaque ID (`s-…`), a label and its value. The router (`route.rs`) gives a tool
-//! a reference (`r-…`) to it for one call: bound to the secret, to the release of the tool it was
-//! given to (ID, digest, generation) and to that call, and so to the call's chain. Only that tool,
-//! running that release, may pass it on, and only in a call it makes for that call
-//! (`Vault::present`); the reference ends with the call. References live in memory only.
-//!
-//! A client key (`client_keys.rs`) is a secret bound to the core it was made on or entered for
-//! (the connection's mode and origin), to core's ID of it then, and to the one native tool (its
-//! client) that may get it; the router checks that binding at every use (`ClientKey`).
-//!
-//! Backups (`b-…`) and journals (`j-…`) belong to a package, whatever its release: a tool reaches
-//! its own through `vault` frames on its pipe (`Vault::frame`), only while it serves a host call
-//! or answers describe. A journal is begun before a write and committed after it; one still open
-//! (the tool crashed, or the app did) goes in the describe of the package's next start, and the
-//! tool ends it as committed or rolled back from what it finds, never by writing again. Ending it
-//! again with the same outcome is answered the same: delivery of an open journal may repeat.
-//! Package removal keeps its vault folder: backups stay until they are removed explicitly.
-
 use crate::environments::Instance;
 use base64::Engine;
 use serde::{Deserialize, Serialize};

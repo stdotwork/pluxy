@@ -110,7 +110,7 @@ claude-api-key:
 			"brought": {
 				{What: "api-keys", As: "1 client key"},
 				{What: "claude-api-key[0]", As: "pluxy/claude account claude-api-key-1"},
-				{What: "auth-dir", Why: "the folder is not kept: core keeps no auth folder, so a later import needs --auth-dir again"},
+				{What: "auth-dir", Why: "the folder's accounts go into pluxy's credential store; pluxy keeps no auth folder"},
 				{What: "auth file", Name: "antigravity-a.json", As: "pluxy/antigravity account antigravity-a"},
 				{What: "auth file", Name: "claude-a.json", As: "pluxy/claude account claude-a"},
 			},
@@ -600,8 +600,6 @@ func TestSetupImportRefusedPool(t *testing.T) {
 	}
 }
 
-// The file's auth folder is read once: its row says core keeps no folder, so a later import needs
-// --auth-dir again.
 func TestSetupImportAuthDirNotKept(t *testing.T) {
 	setTestHome(t)
 	dir := t.TempDir()
@@ -609,19 +607,36 @@ func TestSetupImportAuthDirNotKept(t *testing.T) {
 	writeTestFile(t, cfgPath, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"fake-mgmt-key"}`)
 	cpa := t.TempDir()
 	writeTestFile(t, filepath.Join(cpa, "auths", "claude-a.json"), `{"type": "claude", "access_token": "fake"}`)
-	writeTestFile(t, filepath.Join(cpa, "config.yaml"), "auth-dir: auths\n")
+	cpaCfg := filepath.Join(cpa, "config.yaml")
+	writeTestFile(t, cpaCfg, "auth-dir: auths\n")
 	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Stop()
-	code, rep, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: filepath.Join(cpa, "config.yaml"), DryRun: true})
+	code, rep, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: cpaCfg, DryRun: true})
 	if code != http.StatusOK {
 		t.Fatalf("dry run: %d %s", code, body)
 	}
+	const wantWhy = "the folder's accounts go into pluxy's credential store; pluxy keeps no auth folder"
 	row := slices.IndexFunc(rep.Brought, func(r management.ImportRow) bool { return r.What == "auth-dir" })
-	if row < 0 || !strings.Contains(rep.Brought[row].Why, "not kept") || !strings.Contains(rep.Brought[row].Why, "--auth-dir") {
-		t.Errorf("the auth folder's row does not say it is not kept: %s", body)
+	if row < 0 || rep.Brought[row].Why != wantWhy {
+		t.Errorf("auth-dir row = %+v, want Why %q\n%s", rep.Brought, wantWhy, body)
+	}
+	if row >= 0 && strings.Contains(rep.Brought[row].Why, "--auth-dir") {
+		t.Errorf("auth-dir row claims --auth-dir is needed: %q", rep.Brought[row].Why)
+	}
+	code, _, body = importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: cpaCfg})
+	if code != http.StatusOK {
+		t.Fatalf("first import: %d %s", code, body)
+	}
+	writeTestFile(t, filepath.Join(cpa, "auths", "claude-b.json"), `{"type": "claude", "access_token": "fake-b"}`)
+	code, rep, body = importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: cpaCfg})
+	if code != http.StatusOK {
+		t.Fatalf("second import: %d %s", code, body)
+	}
+	if !slices.ContainsFunc(rep.Brought, func(r management.ImportRow) bool { return r.What == "auth file" && r.Name == "claude-b.json" }) {
+		t.Errorf("second import without --auth-dir did not read config's auth-dir again: %s", body)
 	}
 }
 
@@ -739,6 +754,38 @@ func TestSetupImportRefusals(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &reply); err != nil || code != http.StatusBadRequest ||
 		reply.Error.Code != "invalid_request" || reply.Error.Message != "there is no file at "+missing {
 		t.Errorf("a missing config: %d %s, want 400 invalid_request: there is no file at %s", code, body, missing)
+	}
+}
+
+func TestSetupImportRefusesYAMLCore(t *testing.T) {
+	setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	const yamlCfg = "server:\n  host: 127.0.0.1\n  port: 8317\naccess:\n  api-keys: [fake-client-key-1]\nmanagement:\n  secret-key: fake-mgmt-key\n"
+	writeTestFile(t, cfgPath, yamlCfg)
+	cpa := t.TempDir()
+	cpaCfg := filepath.Join(cpa, "config.yaml")
+	writeTestFile(t, cpaCfg, "api-keys: [fake-cpa-client-key]\n")
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+
+	code, rep, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: cpaCfg, DryRun: true})
+	if code != http.StatusOK || !rep.DryRun {
+		t.Fatalf("dry run on yaml core: %d %s", code, body)
+	}
+
+	code, _, body = importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: cpaCfg})
+	var reply management.ErrorBody
+	const want = "pluxy runs on a config.yaml, which it already reads with CLIProxyAPI's key names; an import writes pluxy's JSON config (pluxy init writes one)"
+	if err := json.Unmarshal([]byte(body), &reply); err != nil || code != http.StatusConflict ||
+		reply.Error.Code != "conflict" || reply.Error.Message != want {
+		t.Errorf("import on yaml core: %d %s, want 409 conflict %q", code, body, want)
+	}
+	if after, err := os.ReadFile(cfgPath); err != nil || string(after) != yamlCfg {
+		t.Errorf("config.yaml changed after refused import: err=%v content=%q", err, after)
 	}
 }
 

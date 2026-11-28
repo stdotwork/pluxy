@@ -541,3 +541,34 @@ func TestParseConfigClientKeyLabels(t *testing.T) {
 		}
 	}
 }
+
+// LocalURL turns any unspecified listen host (0.0.0.0, ::, or empty) into 127.0.0.1, which a
+// newcomer recognises and Go's dual-stack tcp listener answers on, while leaving specific
+// addresses (including [::1]) unchanged.
+func TestLocalURL(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		listen string
+		tls    bool
+		want   string
+	}{
+		{"unspecified IPv4", "0.0.0.0:18417", false, "http://127.0.0.1:18417"},
+		{"unspecified IPv6", "[::]:18417", false, "http://127.0.0.1:18417"},
+		{"empty host", ":18417", false, "http://127.0.0.1:18417"},
+		{"unspecified IPv4 over https", "0.0.0.0:8443", true, "https://127.0.0.1:8443"},
+		{"unspecified IPv6 over https", "[::]:8443", true, "https://127.0.0.1:8443"},
+		{"specific IPv4 loopback", "127.0.0.1:8317", false, "http://127.0.0.1:8317"},
+		{"specific IPv6 loopback", "[::1]:8317", false, "http://[::1]:8317"},
+		{"specific LAN address", "10.0.0.2:18417", false, "http://10.0.0.2:18417"},
+		{"hostname", "localhost:8317", false, "http://localhost:8317"},
+	} {
+		got, err := LocalURL(tc.listen, tc.tls)
+		if err != nil {
+			t.Errorf("%s: LocalURL(%q, %v) error: %v", tc.name, tc.listen, tc.tls, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s: LocalURL(%q, %v) = %q, want %q", tc.name, tc.listen, tc.tls, got, tc.want)
+		}
+	}
+}

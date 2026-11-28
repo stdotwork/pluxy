@@ -1,38 +1,3 @@
-//! macOS: the rule that admits a bundle in the stock `/Applications` (README.md, "Application
-//! update"). That folder is root's, its group `admin` may write it (`drwxrwxr-x root admin`), so
-//! the bundle's folder fails the rule every other folder must pass (this user's, writable by no
-//! one else). It is admitted instead when all of these hold, read through the folder's open
-//! descriptor (opened without following a link) and decided by `judge`, which the tests run with
-//! the values given:
-//!
-//! - its path is exactly `/Applications` (the bundle's path, links resolved, has no link on it:
-//!   `app::provenance` refuses one);
-//! - it is a folder owned by root (uid 0), its group is the one `getgrnam("admin")` names now, and
-//!   others cannot write to it (group write is what this rule is for; the sticky bit is fine);
-//! - no allow entry of its extended access list gives anyone but root or the `admin` group any
-//!   right beyond reading, inherit-only entries included (they reach what is copied in later).
-//!   Entries are compared by their UUIDs with root's and `admin`'s, never by numbers, which would
-//!   take group 0 for user 0;
-//! - the app's data folder, where the update is staged, is on the same volume, so the only change
-//!   the update makes in `/Applications` is the swap of the bundle's own entry;
-//! - this user is a member of `admin` (`mbr_check_membership`). Without the group the kernel
-//!   refuses the swap; this check says so before an update is offered, with what to do. The swap
-//!   checks again (`app::swap_in`), so a membership change while a new version accepts itself
-//!   refuses putting the earlier version back: the update fails closed, as it would in the kernel.
-//!
-//! The bundle itself, opened through that folder's descriptor, must be this user's folder that no
-//! one else can write to, and its own access list may give no one but this user and root more than
-//! reading (`judge_bundle`).
-//!
-//! Why that is safe, in short (README.md has each step): the folder's other writers are this Mac's
-//! administrators, and any of them can already rename the user's bundle aside and put one of
-//! their own at its name, which the user's next start runs. The updater adds nothing to that: it
-//! unpacks and checks in the user's private data folder, makes one change in `/Applications` (the
-//! swap, relative to the descriptor checked), and never lists or deletes anything there.
-//!
-//! Access lists are read and judged as everywhere else in the updater (`acl.rs`): by what an
-//! allow entry lets another account do, its qualifier compared as a UUID. libc has no bindings
-//! for membership(3): the few calls used are declared here.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 use super::acl;
 use std::path::Path;

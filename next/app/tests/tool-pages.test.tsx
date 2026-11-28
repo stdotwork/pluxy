@@ -411,6 +411,59 @@ describe("the head, by state", () => {
     expect(ch.reads.length).toBe(2);
   });
 
+  // The add-on's preview while the tool has never run here: no folder, nothing pinned, and the
+  // folder Connect makes named (next/app-tools/claude-code and pi-setup, create_folder).
+  const unmade = (file: string) => ({
+    selected: file,
+    link: null,
+    target: file,
+    identity: { link: null, parent: null, file: null },
+    sha256: null,
+  });
+  for (const [name, read, button, line] of [
+    [
+      "Claude Code",
+      { ...claudeCode("not-configured"), targets: [unmade(SETTINGS)], create_folder: "/home/me/.claude" },
+      "Connect Claude Code",
+      "Claude Code has not run here yet. You can connect it now: Connect makes Claude Code's folder and puts pluxy's settings in it. When Claude Code first starts, it asks you to pick a text style and whether you trust your project folder, but not to sign in.",
+    ],
+    [
+      "Pi",
+      {
+        ...pi("not-configured", false, plugin(false)),
+        targets: ["cliproxyapi.json", "settings.json", "cliproxyapi-models.json"].map((f) =>
+          unmade(`/home/me/.pi/agent/${f}`),
+        ),
+        create_folder: "/home/me/.pi/agent",
+      },
+      "Install plugin",
+      "Pi has not run on this computer yet. You can set it up now: Install plugin makes Pi's folder, installs the plugin there and connects Pi to pluxy.",
+    ],
+  ] as const) {
+    test(`${name} that has never run here: not connected, and Connect makes its folder in the same write`, async () => {
+      const ch = channel();
+      const page = await mount(TOOLS.find((t) => t.name === name)?.page as () => VNode, ch.invoke);
+      ch.reads[0]?.answer(read);
+      await settle();
+      expect(page.text()).toContain(line);
+      expect(page.text()).not.toContain("Could not read");
+      expect(page.text()).not.toContain("run Claude Code once");
+      await page.click(button);
+      // One write, as for a tool that has run: the folder it makes is in what its confirmation shows.
+      expect(applies(ch).map((w) => [w.input.create_folder, w.input.targets])).toEqual([
+        [read.create_folder, read.targets],
+      ]);
+      expect(ch.writes.map((w) => w.op)).toEqual(["apply"]);
+    });
+  }
+
+  test("Claude Code's folder made: Connect names no folder to make", async () => {
+    const { ch, page } = await opened(TOOLS[0] as Tool, "not-configured");
+    expect(page.text()).not.toContain("has not run here yet");
+    await page.click("Connect Claude Code");
+    expect(applies(ch).map((w) => "create_folder" in w.input)).toEqual([false]);
+  });
+
   test("a read that fails says so, with Try again", async () => {
     const ch = channel();
     const page = await mount(() => <CodexPage />, ch.invoke);
@@ -419,6 +472,43 @@ describe("the head, by state", () => {
     expect(page.text()).toContain("Could not read Codex's settings. Disk exploded");
     await page.click("Try again");
     expect(ch.reads.length).toBe(2);
+  });
+
+  test("an add-on error shows the message Rust sends without a protocol code, and a cancel stops quietly", async () => {
+    const claude = channel();
+    const claudePage = await mount(() => <ClaudeCodePage />, claude.invoke);
+    claude.reads[0]?.fail(
+      "/home/me/.claude does not exist yet: run Claude Code once (it makes the folder), then read the settings again",
+    );
+    await settle();
+    expect(claudePage.text()).toContain(
+      "Could not read Claude Code's settings. /home/me/.claude does not exist yet: run Claude Code once (it makes the folder), then read the settings again",
+    );
+    expect(claudePage.text()).not.toMatch(/invalid_request/i);
+
+    const pi = channel();
+    const piPage = await mount(() => <PiPage />, pi.invoke);
+    pi.reads[0]?.fail("What the add-on looked for could not be found.");
+    await settle();
+    expect(piPage.text()).toContain(
+      "Could not read Pi's settings. What the add-on looked for could not be found.",
+    );
+    expect(piPage.text()).not.toMatch(/not_found/i);
+
+    const { page } = await opened(TOOLS[0] as Tool, "not-configured", {
+      ops: { apply: () => new Error("settings.json is read-only") },
+    });
+    await page.click("Connect Claude Code");
+    expect(page.text()).toContain("settings.json is read-only");
+    expect(page.text()).not.toMatch(/permission:/i);
+
+    // A cancel with any message stops quietly because Rust keeps the `cancelled:` prefix.
+    const { page: cancelPage } = await opened(TOOLS[0] as Tool, "not-configured", {
+      ops: { apply: () => new Error("cancelled: confirmation window closed by desktop") },
+    });
+    await cancelPage.click("Connect Claude Code");
+    expect(cancelPage.text()).not.toContain("confirmation window closed by desktop");
+    expect(cancelPage.text()).not.toMatch(/cancelled/i);
   });
 });
 
@@ -433,6 +523,20 @@ describe("the add-on first", () => {
     expect(ch.calls.filter((c) => c.cmd === "device_enable").map((c) => c.args)).toEqual([
       { id: "pluxy/claude-code", enabled: true },
     ]);
+  });
+
+  test("answering No to Turn on add-on on a tool page stops quietly", async () => {
+    const catalog = catalogOf(ADDONS.map((id) => ({ id, enabled: id !== "pluxy/claude-code" })));
+    const ch = channel({ catalog });
+    const invoke = (cmd: string, args?: Record<string, unknown>) =>
+      cmd === "device_enable"
+        ? Promise.reject("native enable cancelled; pluxy/claude-code stays disabled")
+        : ch.invoke(cmd, args);
+    const page = await mount(() => <ClaudeCodePage />, invoke);
+    await page.click("Turn on add-on");
+    expect(page.text()).not.toContain("native enable cancelled");
+    expect(page.text()).not.toContain("stays disabled");
+    expect(page.canPress("Turn on add-on")).toBe(true);
   });
 
   test("a missing add-on links to Add-ons and reads nothing", async () => {
@@ -474,6 +578,46 @@ describe("models", () => {
     expect(page.text()).not.toContain("Your accounts do not offer opus.");
     await page.click("Connect Claude Code");
     expect(applies(ch).map((w) => w.input.opus)).toEqual(["claude-opus-9"]);
+  });
+
+  test("a file pluxy has not set up starts with the models pluxy serves when Claude Code's own are not served, and Connect writes them", async () => {
+    const ch = channel();
+    const page = await mount(() => <ClaudeCodePage />, ch.invoke, ["fake-gpt-1", "fake-gpt-mini"]);
+    ch.reads[0]?.answer(claudeCode("not-configured", { opus: "", sonnet: "", haiku: "" }));
+    await settle();
+    expect(page.text()).toContain("so these start with fake-gpt-1, one your accounts serve.");
+    expect(page.text()).not.toContain("Your accounts do not offer");
+    await page.click("Connect Claude Code");
+    const input = applies(ch)[0]?.input;
+    expect([input?.opus, input?.sonnet, input?.haiku]).toEqual(["fake-gpt-1", "fake-gpt-1", "fake-gpt-1"]);
+  });
+
+  test("a file pluxy has not set up keeps Claude Code's own names when pluxy serves no model, and Connect writes them", async () => {
+    const ch = channel();
+    const page = await mount(() => <ClaudeCodePage />, ch.invoke, []);
+    ch.reads[0]?.answer(claudeCode("not-configured", { opus: "", sonnet: "", haiku: "" }));
+    await settle();
+    expect(page.text()).not.toContain("so these start with");
+    expect(page.shown("Opus")).toBe("claude-opus-5-5");
+    await page.click("Connect Claude Code");
+    const input = applies(ch)[0]?.input;
+    expect([input?.opus, input?.sonnet, input?.haiku]).toEqual([
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+      "claude-haiku-5-5",
+    ]);
+  });
+
+  test("a file pluxy already set up keeps its models, served or not", async () => {
+    const ch = channel();
+    const page = await mount(() => <ClaudeCodePage />, ch.invoke, ["fake-gpt-1"]);
+    ch.reads[0]?.answer(
+      claudeCode("configured", { opus: "my-opus", sonnet: "my-sonnet", haiku: "my-haiku" }),
+    );
+    await settle();
+    expect(page.text()).not.toContain("so these start with");
+    expect(page.shown("Opus")).toBe("my-opus");
+    expect(page.shown("Haiku")).toBe("my-haiku");
   });
 
   test("Codex clears what an import could not bring once its files are read again", async () => {

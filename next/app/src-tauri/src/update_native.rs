@@ -48,7 +48,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
-const DIALOG: &str = "pluxy native confirmation";
+const DIALOG: &str = crate::confirmation::text::CONFIRM_TITLE;
 const APP_CARD: &str = "[data-part=release-product][data-product=app]";
 const UPDATE: &str = "[data-part=app-update]";
 

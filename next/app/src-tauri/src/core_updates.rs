@@ -239,7 +239,7 @@ fn settle(app: &AppHandle, id: &str, name: &'static str) {
     use std::time::{Duration, Instant};
     let st = app.state::<App>();
     // The dialog cancels itself after its lifetime; window close invalidates it sooner.
-    let deadline = Instant::now() + Duration::from_secs(75);
+    let deadline = Instant::now() + crate::confirmation::WAIT;
     let result = loop {
         if let Some(r) = st.confirmations.lock().unwrap().take_result(id) {
             break Some(r);
