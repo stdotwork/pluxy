@@ -81,10 +81,11 @@
   }
 
   /* One question sits in the middle of the window (the bottom padding matches the bar above, and
-     the lines under the card hang below it); a step with a list starts near the top. */
+     the lines under the card live in the lower flexible track so they stay in flow on a short
+     window without shifting the card off centre on a tall one); a step with a list starts near the
+     top. */
   .focus-stage[data-width="narrow"] {
-    justify-content: center;
-    padding-bottom: calc(var(--px-size-header) + var(--s) * 6);
+    padding: calc(var(--s) * 4) calc(var(--s) * 4) calc(var(--px-size-header) + var(--s) * 4);
   }
 
   .focus-unit {
@@ -96,15 +97,19 @@
   }
 
   .focus-stage[data-width="narrow"] > .focus-unit {
-    position: relative;
+    flex: 1 0 auto;
+    grid-template-rows: 1fr auto 1fr;
+    align-items: start;
+    gap: 0;
+  }
+
+  .focus-stage[data-width="narrow"] .focus-card {
+    grid-row: 2;
   }
 
   .focus-stage[data-width="narrow"] .focus-below {
-    position: absolute;
-    top: calc(100% + var(--s) * 4);
-    left: 0;
-    right: 0;
-    margin-inline: auto;
+    grid-row: 3;
+    padding-top: calc(var(--s) * 4);
   }
 
   .focus-card {
@@ -204,6 +209,10 @@
 
     .focus-stage {
       padding: calc(var(--s) * 2) calc(var(--s) * 3) calc(var(--s) * 8);
+    }
+
+    .focus-stage[data-width="narrow"] {
+      padding: calc(var(--s) * 2) calc(var(--s) * 3) calc(var(--px-size-header) + var(--s) * 2);
     }
 
     .focus-card {

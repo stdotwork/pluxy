@@ -564,6 +564,18 @@ test("the sign-in page fills the window, says how to open the panel without cust
   if (!again) throw new Error("no sign-in card");
   expect(Math.abs(again.x + again.width / 2 - 640)).toBeLessThan(2);
   expect(Math.abs(again.y + again.height / 2 - 400)).toBeLessThan(2);
+
+  // On a short window the hints under the card stay in the layout and can be scrolled into view.
+  await page.setViewportSize({ width: 1280, height: 420 });
+  const safeHint = page.getByText("add ?safe to the URL to disable it.");
+  await safeHint.scrollIntoViewIfNeeded();
+  await expect(safeHint).toBeInViewport({ ratio: 1 });
+  const [mainBox, hintBox] = await Promise.all([
+    page.locator('main[data-part="main"]').boundingBox(),
+    safeHint.boundingBox(),
+  ]);
+  if (!mainBox || !hintBox) throw new Error("missing sign-in layout box");
+  expect(hintBox.y + hintBox.height).toBeLessThanOrEqual(mainBox.y + mainBox.height + 1);
 });
 
 test("what an add came to is brought into view, and a theme from a file leaves no pasted text", async ({
