@@ -15,8 +15,6 @@
     min-width: 0;
   }
 
-  /* Over data from an earlier read, when a refresh failed: words keep their normal colours so
-     text stays at 4.5:1; only bars and marks fade under the stale notice. */
   .accounts-page[data-stale]
     :is(
       .accounts-state-bar,
@@ -32,8 +30,6 @@
   .accounts-empty.card {
     padding: calc(var(--s) * 2) calc(var(--s) * 4);
   }
-
-  /* Summary line and proportional state bar */
 
   .accounts-summary {
     display: flex;
@@ -83,14 +79,10 @@
     background: var(--px-color-text-muted);
   }
 
-  /* Not checked (status unread) stays at >= 3:1 in text-muted while reading distinct from turned
-     off: a hollow ringed pill, matching muted badges. */
   .accounts-state-bar [data-group="unchecked"] {
     background: transparent;
     border: 1.5px solid var(--px-color-text-muted);
   }
-
-  /* View bar: provider chips left; search, List | Cards switch and Select right */
 
   .accounts-toolbar {
     display: flex;
@@ -192,8 +184,6 @@
     padding-inline-start: calc(var(--s) * 7.5);
   }
 
-  /* List | Cards segmented switch */
-
   .accounts-view {
     display: inline-flex;
     align-items: center;
@@ -235,13 +225,9 @@
     box-shadow: inset 0 0 0 var(--px-shape-border) var(--px-color-border);
   }
 
-  /* Selected provider's pool card */
-
   .accounts-pool {
     max-width: 22rem;
   }
-
-  /* Batch report notices */
 
   .accounts-report {
     display: grid;
@@ -251,8 +237,6 @@
   .accounts-report .notice {
     margin: 0;
   }
-
-  /* Groups */
 
   .accounts-groups {
     display: grid;
@@ -293,8 +277,6 @@
     min-width: 0;
   }
 
-  /* List view: each group is a crisp card with a subtle header bar; Needs you is a tinted band. */
-
   .accounts-page[data-view="list"] .accounts-group {
     border: var(--px-shape-border) solid var(--px-color-card-border);
     border-radius: var(--r-card);
@@ -333,8 +315,6 @@
     background: color-mix(in srgb, var(--px-color-error) 5%, transparent);
   }
 
-  /* On the tinted Needs you ground, muted text falls below 4.5:1 on Paper light: draw secondary
-     lines (reason, week count, metadata) in primary text ink in both List and Cards views. */
   .accounts-group[data-group="needs"] .account-reason,
   .accounts-group[data-group="needs"] .account-week,
   .accounts-group[data-group="needs"] .account-meta {
@@ -358,7 +338,6 @@
     border-bottom: 0;
   }
 
-  /* With Select on in List view, a checkbox leads each row and selected rows tint. */
   .accounts-page[data-view="list"][data-selecting] .accounts-item {
     grid-template-columns: auto minmax(0, 1fr);
   }
@@ -388,8 +367,6 @@
     outline: 2px solid var(--px-color-focus);
     outline-offset: 2px;
   }
-
-  /* Cards view: each group heads a responsive grid of quota cards drawn from AccountRow. */
 
   .accounts-page[data-view="cards"] .accounts-group {
     display: grid;
@@ -585,8 +562,6 @@
     align-self: center;
   }
 
-  /* Floating sticky batch bar while Select is on */
-
   .main:has(.accounts-page[data-selecting]) {
     scroll-padding-bottom: calc(var(--s) * 24);
   }
@@ -616,7 +591,6 @@
     animation: px-in var(--px-motion-duration-slow, 240ms) var(--px-motion-easing-drawer, ease-out);
   }
 
-  /* Cover the gap beneath the floating bar so scrolling rows never peek out underneath it. */
   .accounts-batch::after {
     content: "";
     position: absolute;
@@ -639,8 +613,6 @@
     align-items: center;
     gap: calc(var(--s) * 2);
   }
-
-  /* Loading skeleton */
 
   .accounts-loading .state-pane {
     padding-block: calc(var(--s) * 2) calc(var(--s) * 3);

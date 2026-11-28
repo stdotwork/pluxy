@@ -1,8 +1,3 @@
-// All accounts: every account in the group of what it needs from the person (Needs you, Waiting,
-// Serving, Turned off), each the shared AccountRow in either List or Cards view, with provider
-// filter chips (and that provider's pool card when picked), Find an account, and Select with a
-// floating batch bar. One account's own page is account.tsx.
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { type Account, problem, runningExtensions } from "../api";
 import type { Reply } from "../host";
@@ -198,7 +193,6 @@ export function RoundNotice(props: {
 /** Above this many accounts the list offers Find an account. */
 const SEARCH_ABOVE = 6;
 
-/** Browser storage key for the Accounts page's own List | Cards choice. */
 export const ACCOUNTS_VIEW_KEY = "pluxy.accounts.view";
 
 function accountsStorage(): Storage | undefined {
@@ -224,12 +218,9 @@ function readStoredView(): "list" | "cards" | undefined {
 function writeStoredView(view: "list" | "cards"): void {
   try {
     accountsStorage()?.setItem(ACCOUNTS_VIEW_KEY, view);
-  } catch {
-    // Storage unavailable or blocked: the choice still holds until the page closes.
-  }
+  } catch {}
 }
 
-/** The button that leads to Add an account. Outlined when another repair owns the one filled button. */
 function AddButton(props: { quiet?: boolean }) {
   return (
     <a class="btn" data-part="button" data-variant={props.quiet ? "quiet" : "primary"} href="#/add-account">
@@ -239,7 +230,6 @@ function AddButton(props: { quiet?: boolean }) {
   );
 }
 
-/** Line icons for the List | Cards view switch, drawn in the theme's stroke weight. */
 function ViewIcon(props: { kind: "list" | "cards" }) {
   return (
     <svg
@@ -265,7 +255,6 @@ function ViewIcon(props: { kind: "list" | "cards" }) {
   );
 }
 
-/** The thin bar beside the counts line: serving, waiting, needs you, unchecked and turned off. */
 function StateBar(props: { counts: StateCounts }) {
   const c = props.counts;
   const parts = (["serving", "waiting", "needs", "unchecked", "off"] as const).filter((g) => c[g] > 0);
@@ -279,7 +268,6 @@ function StateBar(props: { counts: StateCounts }) {
   );
 }
 
-/** Skeleton in the page's final shape, shown a moment after a load starts. */
 function AccountsSkeleton(props: { view: "list" | "cards" }) {
   const shown = useShownAfter(BUSY_SHOWS_AFTER_MS);
   if (!shown) return null;
@@ -336,8 +324,6 @@ export function AccountsPage() {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [asking, setAsking] = useState(false);
   const [report, setReport] = useState<Report>();
-  // Starting value follows the kit's `list` layout option; pressing List | Cards stores an
-  // Accounts-only choice in browser storage and never changes other pages' layout option.
   const themeList = themes?.resolved?.layout?.list;
   const [storedView, setStoredView] = useState<"list" | "cards" | undefined>(readStoredView);
   const view: "list" | "cards" = storedView ?? (themeList === "cards" ? "cards" : "list");
@@ -353,7 +339,6 @@ export function AccountsPage() {
   }, [list]);
 
   const providers = useMemo(() => providerCounts(list ?? []), [list]);
-  // If a filtered provider disappears after a refresh or removal, go back to All.
   useEffect(() => {
     if (provider && list && !providers.some((pr) => pr.extension === provider)) setProvider("");
   }, [provider, list, providers]);
@@ -383,11 +368,8 @@ export function AccountsPage() {
       if (rows.length) out.push({ key: g, rows });
     }
     return out;
-    // now moves on every render; the groups follow the list, the providers, the chip and the search.
   }, [list, running, provider, query, unchecked]);
 
-  // The accounts in the order the page shows them: the first ones get their limits read, followed
-  // by any other accounts of the chosen provider so its pool card stays complete while searching.
   const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const providerAccounts = useMemo(
     () => (provider && list ? list.filter((a) => a.extension === provider) : []),
@@ -401,7 +383,6 @@ export function AccountsPage() {
   }, [list, provider, ordered, providerAccounts]);
   const windows = useWindows(forWindows, running);
 
-  // The view's one filled button: the first primary repair in Needs you, else Add an account.
   const firstRepairId = useMemo(() => {
     const needs = sections.find((s) => s.key === "needs")?.rows ?? [];
     return needs.find((a) => accountFix(a, accountCondition(a, running, now))?.variant === "primary")?.id;
@@ -412,8 +393,6 @@ export function AccountsPage() {
   for (const g of week.data?.accounts ?? []) requests.set(g.name, g.total_requests);
   const weekCount = (id: string) => (week.data ? (requests.get(id) ?? 0) : undefined);
   const selected = (list ?? []).filter((a) => checked.has(a.id));
-  // Selected accounts hidden by the search or provider chip: the bar and the question say how many,
-  // and a batch acts on every selected account, as they say.
   const shownIds = new Set(ordered.map((a) => a.id));
   const hidden = selected.filter((a) => !shownIds.has(a.id)).length;
   const allVisibleSelected = ordered.length > 0 && ordered.every((a) => checked.has(a.id));

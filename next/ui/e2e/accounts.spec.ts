@@ -186,7 +186,6 @@ test("provider chips filter with a pool card, and List | Cards stores an Account
   await signIn(page, core);
   await goTo(page, "Accounts");
 
-  // Two providers (Local and Alpha): chips show counts and filter the list with a pool card.
   const chips = page.getByRole("group", { name: "Filter by provider" });
   await expect(chips.getByRole("button", { name: /^All\s+3$/ })).toHaveAttribute("aria-pressed", "true");
   await expect(chips.getByRole("button", { name: /Alpha\s+2/ })).toBeVisible();
@@ -208,8 +207,6 @@ test("provider chips filter with a pool card, and List | Cards stores an Account
   await expect(page.locator('[data-part="pool-card"]')).toHaveCount(0);
   await expect(page.locator('[data-part="account-row"]')).toHaveCount(3);
 
-  // List | Cards switches the Accounts view, persists in Accounts-only storage across reload, and
-  // leaves the kit-wide list layout (html[data-list] and other pages' tables) untouched.
   const viewSwitch = page.getByRole("group", { name: "Account view" });
   const listBtn = viewSwitch.getByRole("button", { name: "List", exact: true });
   const cardsBtn = viewSwitch.getByRole("button", { name: "Cards", exact: true });
@@ -223,12 +220,10 @@ test("provider chips filter with a pool card, and List | Cards stores an Account
   await expect(page.locator("html")).toHaveAttribute("data-list", "table");
   await expect(accountRow(page, "alpha-1")).toBeVisible();
 
-  // Other pages that use List stay tables (System's models list).
   await page.goto(`${core.base}/panel/#/system`);
   await expect(page.locator("html")).toHaveAttribute("data-list", "table");
   await expect(page.locator("table.table").first()).toBeVisible();
 
-  // Returning to Accounts and reloading restores the stored Accounts-only Cards choice.
   await page.goto(`${core.base}/panel/#/accounts`);
   await expect(page.locator(".accounts-page")).toHaveAttribute("data-view", "cards");
   await page.reload();
@@ -236,7 +231,6 @@ test("provider chips filter with a pool card, and List | Cards stores an Account
   await expect(cardsBtn).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("html")).toHaveAttribute("data-list", "table");
 
-  // Narrow viewport in Cards view fits without horizontal scroll.
   await page.setViewportSize({ width: 560, height: 800 });
   await expect(accountRow(page, "alpha-1")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(0);
@@ -272,8 +266,6 @@ test("Select's sticky batch bar keeps the focused last row above it while scroll
   const bar = page.getByRole("toolbar", { name: "Actions for the selected accounts" });
   await expect(bar).toBeVisible();
 
-  // Native focus (as keyboard Tab moves down the list) must keep every focused checkbox above the
-  // sticky bar, including rows that start behind it at the bottom of the scrollport.
   for (let i = 1; i <= many.length; i++) {
     const id = `scroll-${String(i).padStart(2, "0")}`;
     const box = page.getByRole("checkbox", { name: `Select ${id}`, exact: true });
@@ -285,7 +277,6 @@ test("Select's sticky batch bar keeps the focused last row above it while scroll
     expect((focusedRect?.y ?? 0) + (focusedRect?.height ?? 0)).toBeLessThanOrEqual(barRect?.y ?? 0);
   }
 
-  // At the end of scroll, the last row sits completely above the bar with no horizontal overflow.
   await page.locator(".main").evaluate((el) => {
     el.scrollTop = el.scrollHeight;
   });

@@ -79,10 +79,6 @@ export interface ProviderCount {
   count: number;
 }
 
-/**
- * The providers represented in a list, in the order core lists their first account, each with its
- * display name and total account count. Accounts without an extension are left out.
- */
 export function providerCounts(list: Account[]): ProviderCount[] {
   const counts = new Map<string, number>();
   for (const a of list) {
@@ -98,7 +94,6 @@ export function providerCounts(list: Account[]): ProviderCount[] {
 
 export type StateCounts = Record<Group | "unchecked", number>;
 
-/** How many accounts fall in each condition group, matching countsLine. */
 export function stateCounts(
   list: Account[],
   running?: ReadonlySet<string>,

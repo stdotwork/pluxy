@@ -380,7 +380,6 @@ test("provider chips appear for two or more providers, filter rows, show that pr
     ),
   ).toBe(true);
 
-  // Selecting an account and switching provider reports it as hidden by the filter.
   await click(button(page.root, "Select"));
   await act(async () => {
     box(page.root, "claude-a").checked = true;
@@ -459,7 +458,6 @@ test("List | Cards starts from the theme's list layout, stores an Accounts-only 
       all(page.root, "div").find((d) => d.attributes.some((a) => a.name === "data-view"));
     expect(container()?.attributes.find((a) => a.name === "data-view")?.value).toBe("cards");
 
-    // Clicking the already-pressed button neither writes storage nor calls setLayout.
     await click(button(page.root, "Cards"));
     expect(store.has(ACCOUNTS_VIEW_KEY)).toBe(false);
     expect(calls).toEqual([]);
@@ -470,7 +468,6 @@ test("List | Cards starts from the theme's list layout, stores an Accounts-only 
     expect(container()?.attributes.find((a) => a.name === "data-view")?.value).toBe("list");
     await page.unmount();
 
-    // A fresh mount restores the Accounts-only stored choice over the theme's list layout.
     const reloaded = await mount([reply(account("a"), account("b"))], {
       listLayout: "cards",
       onSetLayout: (opt, val) => calls.push([opt, val]),
@@ -484,7 +481,6 @@ test("List | Cards starts from the theme's list layout, stores an Accounts-only 
     expect(calls).toEqual([]);
     await reloaded.unmount();
 
-    // When browser storage throws, the switch falls back to the layout option and still works in memory.
     const throwingStorage = {
       getItem: () => {
         throw new Error("storage blocked");

@@ -1,17 +1,14 @@
-// Accounts page contrast across every built-in theme, light and dark: text at 4.5:1 (WCAG AA)
-// and non-text graphics at 3:1 (WCAG 1.4.11).
 import { expect, type Page, test } from "@playwright/test";
 import { measureContrast } from "./contrast";
 import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
-const THEMES = ["", "pluxy/terminal", "pluxy/paper"] as const; // "" is the default theme
+const THEMES = ["", "pluxy/terminal", "pluxy/paper"] as const;
 const APPEARANCES = ["light", "dark"] as const;
 const AA = 4.5;
 const GRAPHIC = 3;
 
-/** Measures every segment of .accounts-state-bar against the ground behind it (solid fill or ring). */
 async function measureStateBar(page: Page) {
   return page.locator(".accounts-state-bar").evaluate((bar) => {
     const ctx = document.createElement("canvas").getContext("2d");
@@ -157,12 +154,10 @@ for (const theme of THEMES) {
       await openAccounts(page, theme, appearance);
       await expect(page.locator(".accounts-page")).toBeVisible();
 
-      // Trigger a second read immediately via Turn on; GET /accounts fails over the cached list.
       failAccounts = true;
       await page.getByRole("button", { name: "Turn on: Local paused" }).click();
       await expect(page.locator(".accounts-page[data-stale]")).toBeVisible();
 
-      // Open the Alpha chip too so the pool card's bar and mark are checked in stale state.
       await page
         .getByRole("group", { name: "Filter by provider" })
         .getByRole("button", { name: /Alpha/ })
@@ -230,7 +225,6 @@ for (const theme of THEMES) {
         .map((s) => `${s.group} (${s.kind}): ${s.ratio.toFixed(2)}:1`);
       expect(lowNormal).toEqual([]);
 
-      // Reload with status unread so unchecked and turned off show side by side.
       failStatus = true;
       await page.reload();
       await expect(page.locator('.accounts-state-bar [data-group="unchecked"]')).toBeVisible();
