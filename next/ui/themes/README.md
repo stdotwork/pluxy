@@ -404,6 +404,15 @@ When these hooks can change is in [Changes to this contract](#changes-to-this-co
 | `data-part="account-edit"` | The Edit form of an account added by login. |
 | `data-part="account-edit-row"` | One model or model alias row in the Edit form. |
 | `data-part="account-edit-discard"` | The Edit form's question before unsaved changes are discarded. |
+| `data-part="focus"` | The focused window with no navigation (shown while checking Setup, and by sign-in, first launch and first-run Setup). |
+| `data-part="focus-brand"` | pluxy's mark and name at the start of the focused window's bar. |
+| `data-part="focus-card"` | The centred card inside the focused window. |
+| `data-part="signin-where"` | The line under the panel's sign-in card saying where the management key is kept. |
+| `data-part="first-launch"` | The desktop app's first launch focused window. |
+| `data-part="first-choice"` | One of the two stacked answers on the app's first launch card; `data-picked` is set on the picked one. |
+| `data-part="setup-focus"` | Setup's focused window on a first run. |
+| `data-part="setup-stepper"` | The row of three step buttons above Setup's card on a first run; each item's `data-state` is `open`, `done` or `todo`. |
+| `data-part="setup-later"` | Home's "Finish setting up pluxy" card after Finish later. |
 | `data-part="setup-step"` | One of the Setup page's three steps; `data-state` is `open`, `done` or `todo`. |
 | `data-part="setup-import"` | The line above the Setup steps when a CLIProxyAPI setup was found; `data-state` is `found`, `preview`, `done` or `imported`. |
 | `data-part="setup-report"` | What importing that setup would do, or did, in three folded lists; `data-state` is `preview` or `done`. |
