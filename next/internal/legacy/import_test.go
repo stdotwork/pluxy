@@ -477,8 +477,8 @@ func TestImportDisableControlPanelReason(t *testing.T) {
 	}
 	off := importYAML(t, "management: {disable-control-panel: false}\n")
 	offRow, offList := rowOf(t, off, "management.disable-control-panel")
-	if offList != NotBrought || !strings.HasPrefix(offRow.Why, want+"; ") {
-		t.Errorf("false: list=%d row=%+v, want NotBrought with Why prefix %q", offList, offRow, want+"; ")
+	if offList != NotBrought || offRow.Why != want+"; it is off, empty or at CLIProxyAPI's default here, so nothing is lost" {
+		t.Errorf("false: list=%d row=%+v, want NotBrought with CLIProxyAPI default suffix", offList, offRow)
 	}
 }
 
@@ -500,10 +500,10 @@ openai-compatibility:
 	if row, list := rowOf(t, res, "claude-api-key[1]"); list != Brought || row.As != "pluxy/claude account claude-api-key-2" {
 		t.Errorf("claude[1]: %d %+v", list, row)
 	}
-	if row, list := rowOf(t, res, "codex-api-key[0]"); list != NotBrought || !strings.Contains(row.Why, "no base-url") {
+	if row, list := rowOf(t, res, "codex-api-key[0]"); list != NotBrought || row.Why != "keys[0] has no base-url: CLIProxyAPI drops a Codex API key without one too" {
 		t.Errorf("codex[0]: %d %+v", list, row)
 	}
-	if row, list := rowOf(t, res, "openai-compatibility[0]"); list != NotBrought || !strings.Contains(row.Why, "disabled") {
+	if row, list := rowOf(t, res, "openai-compatibility[0]"); list != NotBrought || row.Why != "disabled: true, so CLIProxyAPI did not use it either" {
 		t.Errorf("compat[0]: %d %+v", list, row)
 	}
 	if res.Accounts["claude-api-key-2"] != ConfigItem("claude-api-key[1]") {
@@ -577,13 +577,13 @@ func TestAuthFolderRows(t *testing.T) {
 		"meta-a.json":        "0 pluxy/meta",
 		"devin-a.json":       "0 pluxy/devin",
 		"antigravity-a.json": "0 pluxy/antigravity account antigravity-a",
-		"gemini-a.json":      "2  | today's core does not load it either",
-		"notype.json":        "2  | today's core does not load it either",
+		"gemini-a.json":      "2  | type gemini is not supported (CLIProxyAPI does not load it either)",
+		"notype.json":        "2  | it names no type (CLIProxyAPI does not load it either)",
 		"qwen-a.json":        "2  | its type is not one the import takes",
 		"empty-claude.json":  "2  | it holds no token",
 		"broken.json":        "2  | not a JSON object",
-		"notes.txt":          "2  | today's core reads only the .json files",
-		"backup.json":        "2  | today's core reads only the .json files",
+		"notes.txt":          "2  | CLIProxyAPI reads only the .json files at the top of its auth folder",
+		"backup.json":        "2  | CLIProxyAPI reads only the .json files at the top of its auth folder",
 	} {
 		if !strings.HasPrefix(got[name], want) && !strings.Contains(got[name], want) {
 			t.Errorf("%s: %q, want %q", name, got[name], want)
@@ -612,3 +612,73 @@ func TestAuthFolderRows(t *testing.T) {
 type fakeStore struct{}
 
 func (fakeStore) Create(r cred.Record) (cred.Record, error) { return r, nil }
+
+func TestImportMessagesUseCLIProxyAPI(t *testing.T) {
+	res := importYAML(t, `
+host: "127.0.0.1"
+server:
+  host: "127.0.0.1"
+routing:
+  strategy: mystery
+codex-api-key:
+  - {api-key: old-codex, base-url: "https://old.example.com"}
+api-keys:
+  codex:
+    - {name: bare, keys: [{api-key: fake-codex}]}
+  openai-compatibility:
+    - name: pool
+      base-url: "https://pool.example.com/v1"
+      keys: [{api-key: fake-pool}]
+      models:
+        - {name: m-a, alias: shared}
+        - {name: m-b, alias: shared}
+      excluded-models: [m-x]
+oauth:
+  model-alias:
+    qwen: [{name: a, alias: b}]
+  excluded-models:
+    qwen: [a]
+totally-unknown-key: 1
+`)
+	if row, list := rowOf(t, res, "host"); list != NotBrought || row.Why != "the file sets server.host too, and CLIProxyAPI reads that one" {
+		t.Errorf("host: %d %+v", list, row)
+	}
+	if row, list := rowOf(t, res, "routing.strategy"); list != Changed || row.Why != "CLIProxyAPI does not know the name either, and uses round-robin" {
+		t.Errorf("routing.strategy: %d %+v", list, row)
+	}
+	if row, list := rowOf(t, res, "codex-api-key[0]"); list != NotBrought || row.Why != "the file sets api-keys.codex too, and CLIProxyAPI reads that one" {
+		t.Errorf("codex-api-key[0]: %d %+v", list, row)
+	}
+	if row, list := rowOf(t, res, "oauth.model-alias.qwen"); list != NotBrought || row.Why != "no pluxy extension serves CLIProxyAPI's qwen accounts" {
+		t.Errorf("oauth.model-alias.qwen: %d %+v", list, row)
+	}
+	if row, list := rowOf(t, res, "oauth.excluded-models.qwen"); list != NotBrought || row.Why != "no pluxy extension serves CLIProxyAPI's qwen accounts" {
+		t.Errorf("oauth.excluded-models.qwen: %d %+v", list, row)
+	}
+	if row, list := rowOf(t, res, "totally-unknown-key"); list != NotBrought || row.Why != "not a key CLIProxyAPI or pluxy reads" {
+		t.Errorf("totally-unknown-key: %d %+v", list, row)
+	}
+	if row, list := rowOf(t, res, "api-keys.openai-compatibility[0]"); list != Changed || !strings.Contains(row.Why, "it did nothing in CLIProxyAPI either") || !strings.Contains(row.Why, `CLIProxyAPI shared "shared" among`) {
+		t.Errorf("openai-compatibility[0]: %d %+v", list, row)
+	}
+	allNotices := strings.Join(res.Notices, "\n")
+	for _, want := range []string{
+		"dropped, as CLIProxyAPI drops a Codex API key without one",
+		"which CLIProxyAPI rotates over as a pool; pluxy tries them in order as the fallback chain routing.chains.shared",
+		"oauth.model-alias.qwen: no pluxy extension serves CLIProxyAPI's qwen accounts; ignored",
+		"oauth.excluded-models.qwen: no pluxy extension serves CLIProxyAPI's qwen accounts; ignored",
+		`CLIProxyAPI shared "shared" among`,
+	} {
+		if !strings.Contains(allNotices, want) {
+			t.Errorf("notices lack %q:\n%s", want, allNotices)
+		}
+	}
+	if strings.Contains(allNotices, "today's") {
+		t.Errorf("notices still say today's:\n%s", allNotices)
+	}
+
+	dupKeys := importYAML(t, "api-keys: [old-key]\naccess:\n  api-keys: [new-key]\n")
+	if row, list := rowOf(t, dupKeys, "api-keys"); list != NotBrought || row.Why != "the file sets access.api-keys too, and CLIProxyAPI reads that one" {
+		t.Errorf("api-keys: %d %+v", list, row)
+	}
+}

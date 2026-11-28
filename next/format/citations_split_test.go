@@ -9,8 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// citedTexts returns, for each message item of evs, the text its citations cover, as a client
-// would cut it from the item's own text with the rune offsets.
 func citedTexts(t *testing.T, evs []llm.Event) map[string][]string {
 	t.Helper()
 	texts := map[int]string{}
@@ -65,10 +63,7 @@ func hasCitationLoss(losses []llm.Loss, contains string) bool {
 	return false
 }
 
-// Google counts the offsets in bytes within one Part, so the citation for "Alpha" stays on the
-// item that holds "Alpha" when a thought signature starts a new item for the text after it.
 func TestGeminiCitationAcrossThoughtSignatureStream(t *testing.T) {
-	// "Alpha beta. " is 12 bytes, so [12,17) is "Gamma" in the text read as one.
 	g := `"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://a.example/","title":"A"}},{"web":{"uri":"https://b.example/","title":"B"}}],` +
 		`"groundingSupports":[{"segment":{"startIndex":0,"endIndex":5,"text":"Alpha"},"groundingChunkIndices":[0]},` +
 		`{"segment":{"startIndex":12,"endIndex":17,"text":"Gamma"},"groundingChunkIndices":[1]}]}`
@@ -81,7 +76,6 @@ func TestGeminiCitationAcrossThoughtSignatureStream(t *testing.T) {
 	})
 }
 
-// A signature on an empty last part closes the text item before the grounding is read.
 func TestGeminiCitationAcrossEmptySignaturePartStream(t *testing.T) {
 	d := geminigenerate.NewStreamDecoder()
 	var evs []llm.Event
@@ -110,7 +104,6 @@ const groundingAlpha = `"groundingMetadata":{"groundingChunks":[{"web":{"uri":"h
 	`"groundingSupports":[{"segment":{"startIndex":0,"endIndex":5,"text":"Alpha"},"groundingChunkIndices":[0]}]}`
 
 func TestGeminiCitationAcrossThoughtSignatureJSON(t *testing.T) {
-	// Part 1 holds the signature, so its text is the second item; the offsets count within each part.
 	evs, losses := geminiJSON(t, `{"candidates":[{"content":{"parts":[{"text":"Alpha beta."},{"text":"Gamma delta.","thoughtSignature":"sig"}]},"finishReason":"STOP",`+
 		`"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://a.example/","title":"A"}},{"web":{"uri":"https://b.example/","title":"B"}}],`+
 		`"groundingSupports":[{"segment":{"partIndex":0,"startIndex":0,"endIndex":5},"groundingChunkIndices":[0]},`+
@@ -141,8 +134,6 @@ func TestGeminiCitationAcrossFunctionCallJSON(t *testing.T) {
 }
 
 func TestGeminiCitationAcrossFunctionCallStream(t *testing.T) {
-	// The text arrives in separate chunks; the offsets read against the whole text. The call and
-	// the grounding come in one chunk, so the item the call closes still takes its citation.
 	g := `"groundingMetadata":{` + twoSources + `,` +
 		`"groundingSupports":[{"segment":{"startIndex":0,"endIndex":5},"groundingChunkIndices":[0]},` +
 		`{"segment":{"startIndex":11,"endIndex":16},"groundingChunkIndices":[1]}]}`
@@ -155,9 +146,7 @@ func TestGeminiCitationAcrossFunctionCallStream(t *testing.T) {
 	})
 }
 
-// Offsets are bytes, and the item they land in counts runes from its own start.
 func TestGeminiCitationAcrossSplitNonASCII(t *testing.T) {
-	// "héllo " is 7 bytes; 日本語 is bytes [7,16) of the text read as one.
 	g := `"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://a.example/","title":"A"}}],` +
 		`"groundingSupports":[{"segment":{"startIndex":7,"endIndex":16},"groundingChunkIndices":[0]}]}`
 	evs := geminiStream(t,
@@ -166,7 +155,6 @@ func TestGeminiCitationAcrossSplitNonASCII(t *testing.T) {
 	wantCited(t, citedTexts(t, evs), map[string][]string{"日本語 end": {"https://a.example/ 日本語"}})
 }
 
-// A citation that cannot be placed on one item is a reported loss, not a citation elsewhere.
 func TestGeminiCitationThatCannotBePlacedIsALoss(t *testing.T) {
 	t.Run("range across two items", func(t *testing.T) {
 		d := geminigenerate.NewStreamDecoder()
@@ -212,7 +200,6 @@ func TestGeminiCitationThatCannotBePlacedIsALoss(t *testing.T) {
 	})
 }
 
-// A Chat client gets the same ranges from the decoder's events.
 func TestGeminiCitationAcrossSplitReachesChatClient(t *testing.T) {
 	evs, _ := geminiJSON(t, `{"candidates":[{"content":{"parts":[{"text":"Alpha beta."},{"functionCall":{"name":"f","args":{}}},{"text":"Gamma delta."}]},"finishReason":"STOP",`+
 		`"groundingMetadata":{`+twoSources+`,`+

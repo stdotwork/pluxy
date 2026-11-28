@@ -7,8 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// reasoningEvents returns the reasoning and text deltas a set of stream chunks produced, in
-// order, as "R:<reasoning>" and "T:<text>".
 func reasoningEvents(t *testing.T, chunks ...string) string {
 	t.Helper()
 	d := NewStreamDecoder()
@@ -30,8 +28,6 @@ func reasoningEvents(t *testing.T, chunks ...string) string {
 	return strings.Join(got, "|")
 }
 
-// responseEvents returns the reasoning and text deltas a non-streamed reply produced, in order,
-// as "R:<reasoning>" and "T:<text>".
 func responseEvents(t *testing.T, body string) string {
 	t.Helper()
 	evs, err := DecodeResponse([]byte(body))
@@ -50,20 +46,16 @@ func responseEvents(t *testing.T, body string) string {
 	return strings.Join(got, "|")
 }
 
-// deltaChunk wraps a Chat stream delta object as one chunk of a reply.
 func deltaChunk(delta string) string {
 	return `{"id":"x","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":` + delta + `,"finish_reason":null}]}`
 }
 
-// finishChunk is the chunk that ends a reply.
 const finishChunk = `{"id":"x","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`
 
 func completionBody(message string) string {
 	return `{"id":"x","object":"chat.completion","model":"m","choices":[{"index":0,"message":` + message + `,"finish_reason":"stop"}]}`
 }
 
-// Reasoning arrives in more than one field: reasoning_content (DeepSeek and others), reasoning
-// (vLLM, GLM) and reasoning_details (OpenRouter), and reasoning_content may be a list of parts.
 func TestReasoningFieldVariants(t *testing.T) {
 	t.Run("nonstream reasoning", func(t *testing.T) {
 		got := responseEvents(t, completionBody(`{"role":"assistant","content":"Hi","reasoning":"plan"}`))

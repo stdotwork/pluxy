@@ -12,7 +12,6 @@ import (
 )
 
 func TestCodeExecutionDroppedInChat(t *testing.T) {
-	// Responses code_interpreter with forced tool_choice -> both dropped with losses, no tool_choice emitted.
 	req, err := openairesponses.ParseRequest([]byte(`{
 		"model":"gpt-5.4",
 		"input":"compute",
@@ -41,7 +40,6 @@ func TestCodeExecutionDroppedInChat(t *testing.T) {
 		t.Errorf("dropped = %v, want tools[0] and tool_choice in %+v", dropped, losses)
 	}
 
-	// Messages code_execution beside a function tool, forcing code_execution -> function kept, tool_choice dropped.
 	reqMsg, err := anthropicmessages.ParseRequest([]byte(`{
 		"model":"gpt-5.4",
 		"max_tokens":1024,

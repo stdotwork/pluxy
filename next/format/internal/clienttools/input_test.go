@@ -39,7 +39,6 @@ func TestCustomInput(t *testing.T) {
 	}
 }
 
-// Every way of cutting the arguments in two gives the same text.
 func TestInputDecoderFragments(t *testing.T) {
 	const args = `{ "input" : "a\néé😀z" }`
 	const want = "a\néé😀z"

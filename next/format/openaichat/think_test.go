@@ -8,14 +8,11 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// The tags are built from pieces so that no tool or editor treats them as markup.
 const (
 	openTag  = "<" + "think" + ">"
 	closeTag = "<" + "/think" + ">"
 )
 
-// A reply that opens its content with a think tag sends the tagged run as reasoning and the rest
-// as text: some OpenAI-compatible upstreams put their reasoning there.
 func TestThinkTagsBecomeReasoning(t *testing.T) {
 	t.Run("nonstream", func(t *testing.T) {
 		got := responseEvents(t, completionBody(`{"role":"assistant","content":"`+openTag+`x`+closeTag+`y"}`))
@@ -48,8 +45,6 @@ func TestThinkTagsBecomeReasoning(t *testing.T) {
 			deltaChunk(`{"content":"ing`+closeTag[:5]+`"}`),
 			deltaChunk(`{"content":"`+closeTag[5:]+`answer"}`),
 			finishChunk)
-		// The closing tag's prefix is held while it could still be the tag, so the last
-		// reasoning delta is the part before it.
 		if got != "R:reason|R:ing|T:answer" {
 			t.Errorf("got %q, want R:reason|R:ing|T:answer", got)
 		}
@@ -80,7 +75,6 @@ func TestThinkTagsBecomeReasoning(t *testing.T) {
 	})
 }
 
-// significantEvents returns a reply's text, reasoning and item starts in order.
 func significantEvents(t *testing.T, chunks ...string) []string {
 	t.Helper()
 	d := NewStreamDecoder()
@@ -104,8 +98,6 @@ func significantEvents(t *testing.T, chunks ...string) []string {
 	return got
 }
 
-// Content the think filter still holds goes out before the tool call or refusal that interrupts
-// it, not after it.
 func TestHeldThinkContentGoesBeforeInterruptions(t *testing.T) {
 	call := `{"id":"x","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":null}]}`
 	callFinish := `{"id":"x","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`

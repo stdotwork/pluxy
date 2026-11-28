@@ -10,10 +10,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// OpenAI's Chat Completions create reference allows only text and refusal parts in assistant
-// message content (https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
-// Any assistant image that reaches EncodeRequest is dropped with a loss at that part's path,
-// leaving content "" when no tool calls are present (never []), while user-role images stay unchanged.
 func TestEncodeAssistantImage(t *testing.T) {
 	t.Run("messages_text_and_image", func(t *testing.T) {
 		req, err := anthropicmessages.ParseRequest([]byte(`{

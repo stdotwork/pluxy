@@ -8,10 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Function names Messages does not take are sent under valid, distinct names, the same in the
-// tool list, the replayed calls and the tool choice; ToolNames gives the client's name for each.
-// The expected names are worked out by hand: characters replaced with underscores, and for two
-// names that would be the same, the first ten hex digits of the SHA-256 of the client's name.
 func TestToolNamesForMessages(t *testing.T) {
 	long := strings.Repeat("x", 60) + ".tool"
 	fn := func(name string) llm.Tool {
@@ -80,8 +76,6 @@ func TestToolNamesForMessages(t *testing.T) {
 	}
 }
 
-// A tool's parameter schema becomes an object schema without a root union, as Messages requires;
-// the branches' properties and allOf's required names move to the root.
 func TestInputSchemaForMessages(t *testing.T) {
 	for _, c := range []struct{ name, in, want string }{
 		{"missing", ``, `{"type":"object","properties":{}}`},

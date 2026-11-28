@@ -10,35 +10,18 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Claude models differ in the thinking settings they take, and answer the others with a 400.
-// thinkingRules is what a model takes, as Anthropic's tables give it:
-//   - thinking types and their defaults, per model:
-//     https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting ("Thinking
-//     support, defaults, and rejected configurations by model");
-//   - effort levels: https://platform.claude.com/docs/en/build-with-claude/effort (max on every
-//     model that thinks adaptively, xhigh from Claude 4.7: "Not every model that supports max
-//     supports xhigh");
-//   - forced tool choice, top_k and display:
-//     https://platform.claude.com/docs/en/build-with-claude/thinking ("Response prefill and forced
-//     tool use", "Sampling parameters", "Controlling thinking display").
-//
-// shortcut: decided from the model name, as claudeVersion is. Move to the model's own
-// capabilities (Anthropic's model list has capabilities.effort and capabilities.thinking.types)
-// when the core's model list carries them.
 type thinkingRules struct {
-	adaptive        bool   // takes thinking type adaptive: Claude 4.6 and later, Mythos Preview
-	budget          bool   // takes thinking type enabled with budget_tokens: Claude 4.6 and earlier, Mythos Preview
-	noEffort        bool   // refuses output_config.effort: budget-only models but Opus 4.5
-	xhigh           bool   // takes effort xhigh: Claude 4.7 and later
-	newSampling     bool   // refuses top_k on every request: Claude 4.7 and later, Mythos Preview
-	thinksByDefault bool   // thinks when the request has no thinking setting
-	off             string // the thinking type that turns thinking off; "" where thinking is always on
-	offUpToHigh     bool   // off is taken only at effort high or below
-	noForcedTools   bool   // refuses tool_choice any and tool on every request
+	adaptive        bool
+	budget          bool
+	noEffort        bool
+	xhigh           bool
+	newSampling     bool
+	thinksByDefault bool
+	off             string
+	offUpToHigh     bool
+	noForcedTools   bool
 }
 
-// rulesFor returns the thinking rules for model; ok is false for a name that is not a Claude
-// model that can think (claudeVersion, plus Claude Mythos Preview), which is then left as it is.
 func rulesFor(model string) (r thinkingRules, ok bool) {
 	name := claudeName(model)
 	if name == "claude-mythos-preview" || strings.HasPrefix(name, "claude-mythos-preview-") {
@@ -66,7 +49,6 @@ func rulesFor(model string) (r thinkingRules, ok bool) {
 	}
 	switch family {
 	case "fable", "mythos":
-		// Always on; Fable and Mythos 5.1 and later refuse a forced tool choice.
 		r.thinksByDefault, r.off, r.noForcedTools = true, "", from(5, 1)
 	case "opus":
 		r.thinksByDefault = from(5, 0)
@@ -87,7 +69,6 @@ func rulesFor(model string) (r thinkingRules, ok bool) {
 	return r, true
 }
 
-// fitter changes a Messages body's top-level fields to ones its model takes, recording each change.
 type fitter struct {
 	m      map[string]json.RawMessage
 	r      thinkingRules
@@ -103,7 +84,6 @@ func (f *fitter) set(key string, v any) {
 	f.m[key] = b
 }
 
-// thinking returns the body's thinking setting as an object (nil when there is none) and its type.
 func (f *fitter) thinking() (map[string]json.RawMessage, string) {
 	th := rawjson.Object(f.m["thinking"])
 	var t struct {
@@ -113,7 +93,6 @@ func (f *fitter) thinking() (map[string]json.RawMessage, string) {
 	return th, t.Type
 }
 
-// setThinking sets thinking, or removes it when th is nil.
 func (f *fitter) setThinking(th map[string]json.RawMessage) {
 	if th == nil {
 		delete(f.m, "thinking")
@@ -128,7 +107,6 @@ func (f *fitter) effort() string {
 	return e
 }
 
-// setEffort sets output_config.effort, keeping the rest of output_config.
 func (f *fitter) setEffort(e string) {
 	cfg := rawjson.Object(f.m["output_config"])
 	if cfg == nil {
@@ -138,7 +116,6 @@ func (f *fitter) setEffort(e string) {
 	f.set("output_config", cfg)
 }
 
-// budgetEffort returns the effort a thinking budget falls in, as reasoningEffort reads one.
 func budgetEffort(budget int) string {
 	for _, b := range effortBudgets {
 		if budget <= b.max {
@@ -151,7 +128,6 @@ func budgetEffort(budget int) string {
 	return "xhigh"
 }
 
-// config fits the thinking type and the effort level.
 func (f *fitter) config() {
 	th, typ := f.thinking()
 	switch {
@@ -168,9 +144,6 @@ func (f *fitter) config() {
 	}
 }
 
-// toBudget turns adaptive thinking into budget thinking on a model that takes only a budget,
-// sized from output_config.effort when set and minBudget otherwise, kept below max_tokens. When
-// max_tokens leaves no room for the smallest budget, thinking is left out instead.
 func (f *fitter) toBudget(th map[string]json.RawMessage) {
 	budget := minBudget
 	if b, ok := budgets[f.effort()]; ok {
@@ -201,8 +174,6 @@ func (f *fitter) toBudget(th map[string]json.RawMessage) {
 	f.lose(llm.LossApproximated, "thinking.type", "this model takes no adaptive thinking; sent as extended thinking with budget_tokens "+strconv.Itoa(budget))
 }
 
-// toAdaptive turns budget thinking into adaptive thinking at the effort the budget falls in,
-// unless the body names an effort, and reports it at path.
 func (f *fitter) toAdaptive(th map[string]json.RawMessage, path, detail string) {
 	var b struct {
 		Budget *int `json:"budget_tokens"`
@@ -219,10 +190,6 @@ func (f *fitter) toAdaptive(th map[string]json.RawMessage, path, detail string) 
 	f.lose(llm.LossApproximated, path, detail)
 }
 
-// thinkingOff sends a request to turn thinking off as the model takes it: without thinking
-// settings at the lowest effort where thinking is always on, as between_tools on Claude Sonnet
-// 5.5, and with no other field in thinking, which the off types take none of. Where the model
-// turns thinking off only at effort high or below, a higher effort is sent as high.
 func (f *fitter) thinkingOff(th map[string]json.RawMessage, typ string) {
 	if f.r.off == "" {
 		f.setThinking(nil)
@@ -263,9 +230,6 @@ func (f *fitter) thinkingOff(th map[string]json.RawMessage, typ string) {
 	}
 }
 
-// toolChoice sends a forced tool choice (any, or a named tool) to a model that refuses one as
-// auto, and a forced tool choice with budget thinking, which Claude refuses on every model,
-// without thinking: a forced call starts the reply, with no thinking before it either way.
 func (f *fitter) toolChoice() {
 	tc := rawjson.Object(f.m["tool_choice"])
 	var c struct {
@@ -287,8 +251,6 @@ func (f *fitter) toolChoice() {
 	}
 }
 
-// topK leaves out top_k where Claude refuses it: on Claude 4.7 and later and Mythos Preview,
-// and on older models while thinking is on.
 func (f *fitter) topK() {
 	v, ok := f.m["top_k"]
 	if !ok || string(v) == "null" {
@@ -304,10 +266,9 @@ func (f *fitter) topK() {
 	}
 }
 
-// histMessage is one message of a body's conversation.
 type histMessage struct {
 	role   string
-	blocks []json.RawMessage // nil for string content
+	blocks []json.RawMessage
 }
 
 func isThinkingBlock(b json.RawMessage) bool {
@@ -319,22 +280,6 @@ func hasBlock(blocks []json.RawMessage, typ string) bool {
 	return slices.ContainsFunc(blocks, func(b json.RawMessage) bool { return blockType(b) == typ })
 }
 
-// history repairs the conversation for thinking:
-//   - with budget thinking, an assistant turn that a tool result answers must start with a thinking
-//     block (Anthropic's Thinking page, "Thinking with tool use": "In extended (manual) mode, the
-//     API additionally enforces that the final assistant turn of a thinking-enabled request starts
-//     with a thinking block. Adaptive mode relaxes this"). When none of the conversation's
-//     assistant turns has thinking, as when a client turned thinking on mid-conversation, the
-//     request goes with adaptive thinking on a model that takes it, and else without thinking, as
-//     LiteLLM does; a conversation with thinking elsewhere is left as it is;
-//   - on the models that take a prefilled assistant turn (Claude 4.5 and earlier; RepairTurns
-//     drops it for the others), trailing assistant turns are dropped while thinking is on ("On
-//     earlier models, you can't prefill the assistant response while thinking is on"), and with
-//     thinking off a prefilled turn that ends on reasoning loses that reasoning, which cannot be
-//     continued (thinking may be left out of earlier turns outside tool use), or the whole turn
-//     when nothing else is in it.
-//
-// A conversation with nothing left is an invalid_request error.
 func (f *fitter) history(model string) error {
 	var raw []json.RawMessage
 	if json.Unmarshal(f.m["messages"], &raw) != nil || len(raw) == 0 {
@@ -408,25 +353,6 @@ func (f *fitter) history(model string) error {
 	return nil
 }
 
-// FitThinking makes the thinking settings of a Messages body built for model, a client's own or a
-// translated one, ones the model takes (thinkingRules), and reports each change with its path in
-// body:
-//   - a thinking budget on a model that takes none becomes adaptive thinking at the effort the
-//     budget falls in;
-//   - adaptive thinking on a budget-only model becomes extended thinking with a budget sized from
-//     output_config.effort (or minBudget), or is dropped when max_tokens leaves no room;
-//   - thinking turned off (disabled, or between_tools) is sent as the model turns it off: without
-//     thinking settings at effort low on a model that always thinks, as between_tools on Claude
-//     Sonnet 5.5, as disabled elsewhere, with no other field in it, and at effort high at most
-//     where the model asks for that;
-//   - effort xhigh on a model without it is sent as max;
-//   - a forced tool choice is sent as auto to a model that refuses one, and with budget thinking
-//     goes without thinking;
-//   - top_k is left out where Claude refuses it;
-//   - the conversation gets the thinking repairs history describes.
-//
-// A name that is not a Claude model that can think, and a body that needs none of this, are
-// returned as they came.
 func FitThinking(body []byte, model string) ([]byte, []llm.Loss, error) {
 	r, ok := rulesFor(model)
 	if !ok {
@@ -450,15 +376,6 @@ func FitThinking(body []byte, model string) ([]byte, []llm.Loss, error) {
 	return out, f.losses, err
 }
 
-// ApplySummary sets thinking.display on a Messages body built for model from the reasoning summary
-// a Responses client asked for (reasoning.summary, or the older reasoning.generate_summary): auto,
-// concise and detailed as summarized (Claude has one summary level, so the last two are reported
-// as approximated), none or null as omitted. With no thinking setting in the body, a summary turns
-// on adaptive thinking with display summarized on a model that thinks by default anyway; a body
-// with thinking off has nothing to summarise. carried reports that the client's reasoning field
-// has nothing else in it and is now carried, so the caller stops reporting it as dropped. A
-// request in another format, or one that names no summary, is left as it is: Chat Completions
-// has no field for it.
 func ApplySummary(body []byte, model string, req llm.Request) ([]byte, []llm.Loss, bool, error) {
 	o := req.Origin
 	if o == nil || o.Format != llm.FormatOpenAIResponses {
@@ -502,8 +419,6 @@ func ApplySummary(body []byte, model string, req llm.Request) ([]byte, []llm.Los
 	case typ == "" && display == "summarized" && r.thinksByDefault:
 		f.set("thinking", map[string]string{"type": "adaptive", "display": display})
 	case display == "omitted":
-		// Thinking is off, or on with its default display, omitted, on every model that thinks by
-		// default: nothing to change.
 		return body, losses, onlySummary(reasoning), nil
 	default:
 		return body, nil, false, nil
@@ -512,8 +427,6 @@ func ApplySummary(body []byte, model string, req llm.Request) ([]byte, []llm.Los
 	return out, losses, onlySummary(reasoning), err
 }
 
-// onlySummary reports whether a Responses reasoning field left over from the effort has nothing
-// but the summary in it.
 func onlySummary(reasoning map[string]json.RawMessage) bool {
 	for k := range reasoning {
 		if k != "summary" && k != "generate_summary" {

@@ -229,7 +229,6 @@ func TestWebSearchExternalWebAccessFalseDropsOnChatAndGemini(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Chat target: drops tool with a dropped loss at tools[0].
 	chatBody, chatLosses, err := openaichat.EncodeRequestWith(req, openaichat.EncodeOptions{WebSearch: true})
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +244,6 @@ func TestWebSearchExternalWebAccessFalseDropsOnChatAndGemini(t *testing.T) {
 		t.Errorf("chat dropped = %v, want [tools[0]] (losses: %+v)", dropped, chatLosses)
 	}
 
-	// Gemini target: drops tool with a dropped loss at tools[0].
 	reqG := req
 	reqG.Model = "gemini-2.5-flash"
 	gemBody, gemLosses, err := geminigenerate.EncodeRequestWith(reqG, geminigenerate.EncodeOptions{WebSearch: true})
@@ -263,7 +261,6 @@ func TestWebSearchExternalWebAccessFalseDropsOnChatAndGemini(t *testing.T) {
 		t.Errorf("gemini dropped = %v, want [tools[0]] (losses: %+v)", dropped, gemLosses)
 	}
 
-	// Responses-to-Claude target: stays as at base (no tool, no losses).
 	reqC := req
 	reqC.Model = "claude-sonnet-4-6"
 	claudeBody, claudeLosses, err := anthropicmessages.EncodeRequestWith(reqC, anthropicmessages.EncodeOptions{WebSearch: true})
@@ -280,7 +277,6 @@ func TestWebSearchExternalWebAccessFalseDropsOnChatAndGemini(t *testing.T) {
 }
 
 func TestWebSearchBlockedDomainsResponsesAndClaude(t *testing.T) {
-	// 1. Responses parser reads filters.blocked_domains into WebSearch.BlockedDomains.
 	rReq, err := openairesponses.ParseRequest([]byte(`{
 		"model":"claude-sonnet-4-6",
 		"input":"hi",
@@ -292,7 +288,6 @@ func TestWebSearchBlockedDomainsResponsesAndClaude(t *testing.T) {
 	if len(rReq.Tools) != 1 || rReq.Tools[0].WebSearch == nil || !slices.Equal(rReq.Tools[0].WebSearch.BlockedDomains, []string{"bad.com"}) {
 		t.Fatalf("parsed BlockedDomains = %+v, want [bad.com]", rReq.Tools)
 	}
-	// And Claude target carries blocked_domains with no loss.
 	cBody, cLosses, err := anthropicmessages.EncodeRequestWith(rReq, anthropicmessages.EncodeOptions{WebSearch: true})
 	if err != nil {
 		t.Fatal(err)
@@ -305,7 +300,6 @@ func TestWebSearchBlockedDomainsResponsesAndClaude(t *testing.T) {
 		t.Errorf("responses_preview -> claude blocked_domains: tools=%v losses=%+v", cGot.Tools, cLosses)
 	}
 
-	// 2. Messages blocked_domains -> Responses writes filters.blocked_domains with no loss.
 	mBlocked, err := anthropicmessages.ParseRequest([]byte(`{
 		"model":"gpt-5.4",
 		"max_tokens":1024,
@@ -336,7 +330,6 @@ func TestWebSearchBlockedDomainsResponsesAndClaude(t *testing.T) {
 		t.Errorf("messages -> responses blocked_domains: unexpected losses %+v", respLosses)
 	}
 
-	// 3. Messages with BOTH allowed_domains and blocked_domains -> Responses writes allowed_domains only and drops blocked_domains.
 	mBoth, err := anthropicmessages.ParseRequest([]byte(`{
 		"model":"gpt-5.4",
 		"max_tokens":1024,
@@ -366,7 +359,6 @@ func TestWebSearchBlockedDomainsResponsesAndClaude(t *testing.T) {
 		t.Errorf("both -> responses dropped = %v, want [tools[0].blocked_domains]", dropped)
 	}
 
-	// 4. Both allowed_domains and blocked_domains -> Claude writes allowed_domains only and drops blocked_domains.
 	rBoth, err := openairesponses.ParseRequest([]byte(`{
 		"model":"claude-sonnet-4-6",
 		"input":"hi",
@@ -392,7 +384,6 @@ func TestWebSearchBlockedDomainsResponsesAndClaude(t *testing.T) {
 }
 
 func TestWebSearchUserLocationValidation(t *testing.T) {
-	// Chat -> Claude: invalid type and non-2-letter country are normalised/dropped with losses.
 	chatReq, err := openaichat.ParseRequest([]byte(`{
 		"model":"claude-sonnet-4-6",
 		"messages":[{"role":"user","content":"hi"}],
@@ -422,7 +413,6 @@ func TestWebSearchUserLocationValidation(t *testing.T) {
 		t.Errorf("claude dropped = %v, want %v", dropped, wantChatDropped)
 	}
 
-	// Messages -> Responses & Chat: invalid type and non-2-letter country.
 	msgReq, err := anthropicmessages.ParseRequest([]byte(`{
 		"model":"gpt-5-search-api",
 		"max_tokens":1024,
@@ -472,9 +462,6 @@ func TestWebSearchUserLocationValidation(t *testing.T) {
 }
 
 func TestWebSearchISOCountryCodes(t *testing.T) {
-	// UK is a 2-letter code but not an ISO 3166-1 alpha-2 code (GB is).
-	// Lowercase "us" is not uppercase.
-	// When city is present, country is dropped, city is kept.
 	chatReq, err := openaichat.ParseRequest([]byte(`{
 		"model":"claude-sonnet-4-6",
 		"messages":[{"role":"user","content":"hi"}],
@@ -504,7 +491,6 @@ func TestWebSearchISOCountryCodes(t *testing.T) {
 		t.Errorf("claude dropped = %v, want %v", dropped, wantChatDropped)
 	}
 
-	// Lowercase "us" with city "Paris" -> country dropped, city kept.
 	chatReqLower, err := openaichat.ParseRequest([]byte(`{
 		"model":"claude-sonnet-4-6",
 		"messages":[{"role":"user","content":"hi"}],
@@ -533,8 +519,6 @@ func TestWebSearchISOCountryCodes(t *testing.T) {
 }
 
 func TestWebSearchEmptyUserLocationDropped(t *testing.T) {
-	// When no country/city/region/timezone survives (e.g. UK only, or empty approximate),
-	// user_location must be omitted entirely and reported as dropped.
 	chatReq, err := openaichat.ParseRequest([]byte(`{
 		"model":"claude-sonnet-4-6",
 		"messages":[{"role":"user","content":"hi"}],
@@ -544,7 +528,6 @@ func TestWebSearchEmptyUserLocationDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1. Translated to Claude
 	cBody, cLosses, err := anthropicmessages.EncodeRequestWith(chatReq, anthropicmessages.EncodeOptions{WebSearch: true})
 	if err != nil {
 		t.Fatal(err)
@@ -564,7 +547,6 @@ func TestWebSearchEmptyUserLocationDropped(t *testing.T) {
 		t.Errorf("claude dropped = %v, want %v", dropped, wantDropped)
 	}
 
-	// 2. Translated to Responses
 	rBody, rLosses, err := openairesponses.EncodeRequestWith(chatReq, openairesponses.EncodeOptions{WebSearch: true})
 	if err != nil {
 		t.Fatal(err)
@@ -583,7 +565,6 @@ func TestWebSearchEmptyUserLocationDropped(t *testing.T) {
 		t.Errorf("responses dropped = %v, want %v", dropped, wantDropped)
 	}
 
-	// 3. Messages -> Chat with empty approximate location
 	msgReq, err := anthropicmessages.ParseRequest([]byte(`{
 		"model":"gpt-5-search-api",
 		"max_tokens":1024,
@@ -609,7 +590,6 @@ func TestWebSearchEmptyUserLocationDropped(t *testing.T) {
 		t.Errorf("chat dropped = %v, want %v", dropped, wantMsgDropped)
 	}
 
-	// 4. Existing Responses -> Claude mapping keeps its bytes
 	respReq, err := openairesponses.ParseRequest([]byte(`{
 		"model":"claude-sonnet-4-6",
 		"input":"hi",

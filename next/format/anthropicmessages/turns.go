@@ -9,31 +9,12 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Claude answers some conversations with a 400 that a client cannot always avoid: a tool call left
-// without a result (a session that stopped while a tool ran), a tool result with no call before it,
-// an empty user turn, and on newer models a conversation that ends on an assistant turn. The
-// repairs here send such a conversation in a form Claude takes, and report each change.
-//
-// The tool pairing follows the old core's repairClaudeToolPairing (CLIProxyAPI,
-// internal/translator/claude/openai/responses/claude_openai-responses_request.go): a missing
-// result is sent as an error result, and a result that answers no call is sent as text.
-
 const (
-	// interruptedResult is the error result sent for a tool call that has none, as the old core
-	// words it.
 	interruptedResult = "Tool call was interrupted before any output was recorded."
-	// emptyToolResult stands in for a tool result with nothing in it once it is sent as text.
-	emptyToolResult = "(empty tool result)"
-	// emptyMessage stands in for a user turn with nothing in it, which Claude refuses.
-	emptyMessage = "(empty message)"
+	emptyToolResult   = "(empty tool result)"
+	emptyMessage      = "(empty message)"
 )
 
-// refusesPrefill reports whether model refuses a conversation that ends on an assistant turn:
-// Claude 4.6 and later and Mythos Preview do ("Claude 4.6 and later models and Claude Mythos
-// Preview reject a prefilled final assistant turn with a 400 error",
-// https://platform.claude.com/docs/en/build-with-claude/thinking), and so does a claude- name not
-// known as a version, as every model since 4.6 refuses it.
-// Older Claude models and other vendors' models take one.
 func refusesPrefill(model string) bool {
 	if !strings.HasPrefix(claudeName(model), "claude-") {
 		return false
@@ -42,16 +23,8 @@ func refusesPrefill(model string) bool {
 	return !ok || major > 4 || (major == 4 && minor >= 6)
 }
 
-// claudeFamily reads the model line of a Claude model name in the newer form.
 var claudeFamily = regexp.MustCompile(`^claude-(opus|sonnet|haiku|fable|mythos)-`)
 
-// takesMidSystem reports whether model takes a system message inside the conversation: Claude
-// Opus 4.8 and later, Fable and Mythos 5 and later, Sonnet and Haiku 5.5 and later (not Sonnet 5),
-// as Anthropic lists them
-// (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages). Any
-// other name, a Claude one not placed as a version included, is treated as one that does not.
-//
-// shortcut: decided from the model name, as claudeVersion is.
 func takesMidSystem(model string) bool {
 	f := claudeFamily.FindStringSubmatch(claudeName(model))
 	if f == nil {
@@ -72,23 +45,6 @@ func takesMidSystem(model string) bool {
 	}
 }
 
-// RepairTurns repairs the conversation of a Messages body for model, a Messages client's own
-// body, as EncodeRequest repairs a translated one:
-//   - a tool call the next user turn does not answer gets an error result there (a new user turn
-//     when an assistant turn follows), after the results the turn has; a tool result that answers
-//     no call in the assistant turn just before it is sent as text in its place; the answered
-//     results go first in their user turn, as Claude requires. A user turn that needs any of this
-//     is sent as one message, the consecutive user messages it was made of put together, as
-//     Claude reads them anyway;
-//   - blank text blocks in a user turn are dropped, and a user turn left with nothing gets a
-//     placeholder text;
-//   - for a model that refuses prefill (refusesPrefill), trailing assistant turns are dropped,
-//     except a last turn paused on a server tool (its last block a server_tool_use), which is how
-//     a paused turn is continued.
-//
-// Each change is reported, with its path in body. A body that needs none is returned as it came,
-// and so is one whose messages it cannot read. A conversation with nothing left once its
-// trailing assistant turns are dropped is an invalid_request error.
 func RepairTurns(body []byte, model string) ([]byte, []llm.Loss, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
@@ -148,8 +104,6 @@ func RepairTurns(body []byte, model string) ([]byte, []llm.Loss, error) {
 	return out2, e.losses, err
 }
 
-// repairTurns makes the repairs RepairTurns describes on msgs, reporting each in e, keeping the
-// trailing assistant turns when e.keepModelTurn says so.
 func (e *encoder) repairTurns(msgs []*outMessage, model string) ([]*outMessage, error) {
 	msgs = e.pairToolCalls(msgs)
 	e.fillEmptyUserTurns(msgs)
@@ -169,7 +123,6 @@ func (e *encoder) repairTurns(msgs []*outMessage, model string) ([]*outMessage, 
 	return msgs, nil
 }
 
-// slicesHasTurn reports whether msgs holds a user or assistant message.
 func slicesHasTurn(msgs []*outMessage) bool {
 	for _, m := range msgs {
 		if m.role == llm.RoleUser || m.role == llm.RoleAssistant {
@@ -179,8 +132,6 @@ func slicesHasTurn(msgs []*outMessage) bool {
 	return false
 }
 
-// pausedOnServerTool reports whether an assistant message ends with a server tool call, as a turn
-// paused by the server (stop reason pause_turn) does.
 func pausedOnServerTool(m *outMessage) bool {
 	return len(m.content) > 0 && blockType(m.content[len(m.content)-1]) == "server_tool_use"
 }
@@ -206,8 +157,6 @@ func textBlock(s string) json.RawMessage {
 	return b
 }
 
-// pairToolCalls answers each tool call left without a result and turns each tool result that
-// answers no call into text (RepairTurns).
 func (e *encoder) pairToolCalls(msgs []*outMessage) []*outMessage {
 	out := make([]*outMessage, 0, len(msgs))
 	for i := 0; i < len(msgs); {
@@ -218,14 +167,11 @@ func (e *encoder) pairToolCalls(msgs []*outMessage) []*outMessage {
 			if m.role != llm.RoleAssistant || i == len(msgs) || msgs[i].role == llm.RoleUser {
 				continue
 			}
-			// The next turn is not the user's: the calls get their results in a user turn of
-			// their own.
 			if calls := e.unanswered(m, nil); len(calls) > 0 {
 				out = append(out, &outMessage{role: llm.RoleUser, content: calls, paths: make([]string, len(calls)), path: m.path, changed: true})
 			}
 			continue
 		}
-		// A run of user messages, which Claude reads as one turn.
 		j := i
 		for j < len(msgs) && msgs[j].role == llm.RoleUser {
 			j++
@@ -240,7 +186,6 @@ func (e *encoder) pairToolCalls(msgs []*outMessage) []*outMessage {
 	return out
 }
 
-// toolUseIDs returns the ids of an assistant message's tool calls, in order.
 func toolUseIDs(m *outMessage) []string {
 	var ids []string
 	if m == nil {
@@ -254,8 +199,6 @@ func toolUseIDs(m *outMessage) []string {
 	return ids
 }
 
-// unanswered returns an error result for each tool call of the assistant message call that is not
-// in answered, and reports each.
 func (e *encoder) unanswered(call *outMessage, answered map[string]bool) []json.RawMessage {
 	if call == nil {
 		return nil
@@ -277,9 +220,6 @@ func (e *encoder) unanswered(call *outMessage, answered map[string]bool) []json.
 	return results
 }
 
-// pairRun repairs a run of user messages that follows the assistant message prev (nil when the
-// turn before is not the assistant's). It returns the run as it came when it needs no change, or
-// else as one message.
 func (e *encoder) pairRun(prev *outMessage, run []*outMessage) []*outMessage {
 	ids := map[string]bool{}
 	for _, id := range toolUseIDs(prev) {
@@ -333,8 +273,6 @@ func (e *encoder) pairRun(prev *outMessage, run []*outMessage) []*outMessage {
 	return []*outMessage{{role: llm.RoleUser, content: content, paths: paths, path: run[0].path, raw: run[0].raw, changed: true}}
 }
 
-// resultText returns a tool result's content as user content: a string as a text block, a list
-// as its blocks (a block without a type as text), leaving out blank text.
 func resultText(content json.RawMessage) []json.RawMessage {
 	var s string
 	if json.Unmarshal(content, &s) == nil {
@@ -361,14 +299,11 @@ func resultText(content json.RawMessage) []json.RawMessage {
 	return out
 }
 
-// blank reports whether a block is a text block with no visible text, which Claude refuses.
 func blank(b json.RawMessage) bool {
 	f := readBlock(b)
 	return f.Type == "text" && (f.Text == nil || strings.TrimSpace(*f.Text) == "")
 }
 
-// fillEmptyUserTurns drops blank text blocks from user turns, and gives a user turn left with
-// nothing a placeholder text.
 func (e *encoder) fillEmptyUserTurns(msgs []*outMessage) {
 	for _, m := range msgs {
 		if m.role != llm.RoleUser {

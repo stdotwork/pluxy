@@ -5,9 +5,6 @@ import (
 	"strings"
 )
 
-// onScan, when set, is told how much the masking code does: the bytes the JSON scanners pass over,
-// the steps of the name search, and each name tried against a string. Tests set it to hold the
-// work to a bound that does not depend on the clock; it is nil otherwise.
 var onScan func(n int)
 
 func scanned(n int) {
@@ -16,23 +13,15 @@ func scanned(n int) {
 	}
 }
 
-// nameMatcher tells which of a list of names a string holds, in one pass over the string
-// (Aho-Corasick), so that only those names are tried against it. The list is ordered by rank: a
-// lower rank is replaced first.
-//
-// A string costs one pass over its length and one step for each distinct name it holds, whatever
-// the number of names known; memory is the size of the names and of the string's hits, never one
-// entry for every name that ends at every position. Replacing a name that the string holds scans
-// the string once more, as replacing every name one after the other did.
 type nameMatcher struct {
 	list    []string
-	first   []int32 // first child of a node, 0 for none (the root is node 0 and never a child)
-	next    []int32 // next sibling
-	char    []byte  // the byte on the edge into the node
-	fail    []int32 // longest proper suffix of the node's text that is also a node
-	out     []int32 // rank of the name that ends at the node, -1 for none
-	link    []int32 // nearest node on the fail chain that ends a name, 0 for none
-	special []int32 // ranks of the names that hold the marker's word, in rank order
+	first   []int32
+	next    []int32
+	char    []byte
+	fail    []int32
+	out     []int32
+	link    []int32
+	special []int32
 	seen    []uint32
 	gen     uint32
 	found   []int32
@@ -101,14 +90,8 @@ func (m *nameMatcher) child(u int32, c byte) int32 {
 	return 0
 }
 
-// markerWord is the letters of the marker. A name that is not in a string as it stands matches in
-// it only where a replacement wrote a marker, and takes in some of the marker's text: its
-// brackets, or its word (a name that stands alone inside a marker is "redacted" itself, since the
-// letters have letters beside them). Such a name holds a bracket or the word.
 const markerWord = "redacted"
 
-// hold returns the ranks of the names s holds, lowest first. The slice is the matcher's own and
-// lasts until the next call.
 func (m *nameMatcher) hold(s string) []int32 {
 	scanned(len(s))
 	m.gen++
@@ -128,8 +111,6 @@ func (m *nameMatcher) hold(s string) []int32 {
 		if m.out[n] < 0 {
 			n = m.link[n]
 		}
-		// A name already found in s has every name that ends inside it found too, so the walk
-		// stops at the first one it has seen.
 		for ; n != 0; n = m.link[n] {
 			rank := m.out[n]
 			if m.seen[rank] == m.gen {
@@ -144,10 +125,6 @@ func (m *nameMatcher) hold(s string) []int32 {
 	return m.found
 }
 
-// mask replaces the names in s one after the other in rank order, each where it stands alone, in
-// the text the ones before left; the result is the same as trying every name, because a name that
-// s does not hold can match only across the text of a marker an earlier replacement wrote, and
-// the names that can are tried whenever s holds a marker.
 func (m *nameMatcher) mask(s string) string {
 	held := m.hold(s)
 	marked := strings.Contains(s, Redacted)
@@ -182,9 +159,6 @@ func isAlnum(c byte) bool {
 
 func isTokenByte(c byte) bool { return isAlnum(c) || c == '_' || c == '-' }
 
-// replaceToken replaces id in s where it stands alone: not next to a letter, digit, underscore
-// or hyphen, nor to a dot that has a letter or digit beyond it (so 12 leaves 123, 12.5 and a
-// model name such as gemini-2.5-flash alone).
 func replaceToken(s, id string) string {
 	if id == "" || !strings.Contains(s, id) {
 		return s

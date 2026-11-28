@@ -1,11 +1,3 @@
-// Package anthropicmessages converts between Anthropic Messages and pluxy's internal model: core
-// uses it to read client requests and write client replies, and provider extensions use it to
-// read replies from an upstream that speaks Messages.
-//
-// A request read here keeps its body as the native form, so an upstream that speaks Messages gets
-// it unchanged, thinking blocks, signatures and cache_control included. A reply from such an
-// upstream keeps every upstream event in its raw field, so a Messages client gets the upstream's
-// events unchanged; a reply from another format is rebuilt into the Messages event sequence.
 package anthropicmessages
 
 import (
@@ -20,14 +12,8 @@ import (
 
 const format = llm.FormatAnthropicMessages
 
-// Headers are the client request headers that belong to a Messages body: the API version it is
-// written against and the beta features it uses. Core passes them on with the native body.
 var Headers = []string{"anthropic-version", "anthropic-beta"}
 
-// ClientHeaders are the headers a Messages client names itself with, such as Claude Code's
-// User-Agent, X-App and the X-Stainless headers of Anthropic's SDKs. Core passes them on with the
-// native body too, so a provider that sends the body through unchanged can send the client's own
-// identification with it.
 var ClientHeaders = []string{
 	"user-agent",
 	"x-app",
@@ -48,11 +34,6 @@ var ClientHeaders = []string{
 	"x-anthropic-additional-protection",
 }
 
-// ClaudeCodeHeaders are Claude Code's own subagent, request and remote-session headers. Core
-// passes them on with the native body like ClientHeaders, but a provider sends them upstream only
-// for a request that names itself as Claude Code (IsClaudeCode), as today's core sends them only
-// for a client it takes for Claude Code: another client must not present itself as one of Claude
-// Code's agents or request classes through core.
 var ClaudeCodeHeaders = []string{
 	"x-claude-code-agent-id",
 	"x-claude-code-parent-agent-id",
@@ -66,10 +47,6 @@ var ClaudeCodeHeaders = []string{
 	"x-claude-remote-session-id",
 }
 
-// IsClaudeCode reports whether native headers (by lower-case name) are those of a request that
-// names itself as Claude Code: X-App cli or cli-bg, a claude-cli User-Agent and the
-// claude-code-20250219 beta, the header signals today's core requires before it takes a client for
-// Claude Code.
 func IsClaudeCode(headers map[string]string) bool {
 	if (headers["x-app"] != "cli" && headers["x-app"] != "cli-bg") || !strings.HasPrefix(headers["user-agent"], "claude-cli/") {
 		return false
@@ -98,17 +75,9 @@ type request struct {
 	Tools         []json.RawMessage `json:"tools"`
 }
 
-// requestFields are the top-level fields the model carries. tool_choice, thinking and
-// output_config are carried only in the shapes the parser knows; anything else in them stays in
-// Origin.Raw.
 var requestFields = []string{"model", "messages", "system", "max_tokens", "stream", "temperature", "top_p",
 	"stop_sequences", "tools", "tool_choice", "thinking", "output_config"}
 
-// parseServiceTier reads the request's service tier and returns it with the top-level fields the
-// model carries. A fast speed is the priority tier, and the service_tier beside it, which says
-// nothing about speed, stays in Origin.Raw. Without it, service_tier's auto is the auto tier and
-// standard_only the default tier. Any other value, and a speed that is not fast, stays in
-// Origin.Raw.
 func parseServiceTier(top map[string]json.RawMessage) (string, []string) {
 	if speed, ok := rawjson.Text(top["speed"]); ok && speed == "fast" {
 		return llm.ServiceTierPriority, rawjson.With(requestFields, "speed")
@@ -124,10 +93,6 @@ func parseServiceTier(top map[string]json.RawMessage) (string, []string) {
 	return "", requestFields
 }
 
-// ParseRequest reads a Messages request body. The result keeps body as its Native form, and every
-// item, part and tool keeps the fields the model has no place for (cache_control, signatures,
-// citations and the like) in its Origin. The result refers to body rather than copying it, so
-// body must not change afterwards. Errors are *llm.Error with code invalid_request.
 func ParseRequest(body []byte) (llm.Request, error) {
 	var in request
 	if err := rawjson.Unmarshal(body, &in); err != nil {
@@ -239,16 +204,12 @@ func parseTool(raw json.RawMessage, path string) llm.Tool {
 		}
 	}
 	if err != nil || (t.Type != "" && t.Type != "custom") || t.Name == "" || len(t.InputSchema) == 0 {
-		// Other server tools (web fetch, ...) and versioned client tools (bash, text editor, ...)
-		// are not function tools; they survive whole. Web search and code execution returned above.
 		return llm.Tool{Type: llm.ToolNative, Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)}}
 	}
 	return llm.Tool{Name: t.Name, Description: t.Description, Parameters: t.InputSchema, Strict: t.Strict,
 		Origin: rawjson.Origin(format, path, rawjson.Object(raw), []string{"type", "name", "description", "input_schema", "strict"}, nil)}
 }
 
-// parseToolChoice reads tool_choice: the mode, whether parallel tool use was turned off, and the
-// fields left over.
 func parseToolChoice(raw json.RawMessage) (*llm.ToolChoice, *bool, json.RawMessage) {
 	m := rawjson.Object(raw)
 	var tc struct {
@@ -283,18 +244,11 @@ func parseToolChoice(raw json.RawMessage) (*llm.ToolChoice, *bool, json.RawMessa
 	return choice, parallel, rawjson.Rest(m, "type", "name", "disable_parallel_tool_use")
 }
 
-// Thinking budgets at or below these get the named reasoning effort; above the last, xhigh. They
-// are today's core's thresholds.
 var effortBudgets = []struct {
 	max    int
 	effort string
 }{{0, "none"}, {512, "minimal"}, {1024, "low"}, {8192, "medium"}, {24576, "high"}}
 
-// reasoningEffort reads the reasoning effort a request asks for from thinking and
-// output_config.effort, as today's core does: an explicit effort as given; a thinking budget as
-// the effort it falls in; adaptive thinking without an effort as xhigh; disabled thinking as none.
-// It returns the fields of thinking and output_config the effort does not carry, so they are
-// reported when a translation drops them.
 func reasoningEffort(thinkingRaw, configRaw json.RawMessage) (effort string, thinkingRest, configRest json.RawMessage) {
 	thinkingRest, configRest = thinkingRaw, configRaw
 	th := rawjson.Object(thinkingRaw)
@@ -340,12 +294,9 @@ func reasoningEffort(thinkingRaw, configRaw json.RawMessage) (effort string, thi
 	default:
 		return "", thinkingRest, configRest
 	}
-	// The type is carried by the effort; the budget and anything else are not.
 	return effort, rawjson.Rest(th, "type"), configRest
 }
 
-// parseOutputConfigFormat reads output_config.format (json_schema) into ResponseFormat and returns
-// the fields of output_config it did not carry, so unmodelled settings remain in Origin.Raw.
 func parseOutputConfigFormat(configRaw json.RawMessage) (*llm.ResponseFormat, json.RawMessage) {
 	cfg := rawjson.Object(configRaw)
 	if cfg == nil {
@@ -373,8 +324,6 @@ func parseOutputConfigFormat(configRaw json.RawMessage) (*llm.ResponseFormat, js
 	return &llm.ResponseFormat{Type: llm.ResponseFormatJSONSchema, Name: "response", Schema: f.Schema}, rawjson.Encode(rest)
 }
 
-// parseSystem reads the system prompt, a string or a list of text blocks, into one system
-// message.
 func parseSystem(raw json.RawMessage) (*llm.Item, error) {
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return nil, nil
@@ -421,9 +370,6 @@ type block struct {
 	Title string `json:"title"`
 }
 
-// parseMessage reads one message into items, in block order: runs of content blocks become a
-// message item, and each thinking block, tool_use and tool_result becomes its own item, so the
-// order of thinking, calls and results survives.
 func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 	m := rawjson.Object(raw)
 	if m == nil {
@@ -436,8 +382,6 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 	if err := rawjson.Unmarshal(raw, &head); err != nil {
 		return nil, err
 	}
-	// A system message in the conversation is a system item where it stands; today's core passes
-	// such messages on too, and matches the role whatever its case and spacing.
 	if strings.EqualFold(strings.TrimSpace(head.Role), llm.RoleSystem) {
 		head.Role = llm.RoleSystem
 	}
@@ -458,8 +402,7 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 		return nil, fmt.Errorf("content must be a string or a list of content blocks")
 	}
 	var items []llm.Item
-	msg := -1 // index in items of the message item collecting content parts, or -1
-	// The message's own fields go on its first message item.
+	msg := -1
 	messageOrigin := func() *llm.Origin {
 		if origin == nil || len(origin.Raw) == 0 {
 			return &llm.Origin{Format: format, Path: path}
@@ -484,8 +427,6 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 		}
 		switch {
 		case b.Type == "thinking" && head.Role == llm.RoleAssistant:
-			// The signature stays in Origin.Raw: it is opaque, and only a Messages upstream can
-			// check it.
 			item(llm.Item{Type: llm.ItemTypeReasoning, Text: b.Thinking, Origin: rawjson.Origin(format, bp, bm, []string{"type", "thinking"}, nil)})
 		case b.Type == "tool_use" && head.Role == llm.RoleAssistant && b.ID != "" && b.Name != "":
 			args, err := compactJSON(b.Input)
@@ -497,8 +438,6 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 		case b.Type == "tool_result" && head.Role == llm.RoleUser:
 			it := llm.Item{Type: llm.ItemTypeToolResult, CallID: b.ToolUseID}
 			modelled := []string{"type", "tool_use_id"}
-			// A string, or text blocks with nothing else in them, is the result's text; a list
-			// holding images, documents or fields on its blocks is carried as parts too.
 			if out, ok := textResult(b.Content); ok {
 				it.Output = out
 				modelled = append(modelled, "content")
@@ -522,14 +461,9 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 			}
 			items[msg].Content = append(items[msg].Content, p)
 		default:
-			// redacted_thinking, server tool use and results, container uploads, ...: opaque
-			// to the model, kept whole and in place.
 			item(llm.Item{Type: llm.ItemTypeNative, Origin: &llm.Origin{Format: format, Path: bp, Raw: append(json.RawMessage(nil), rb...)}})
 		}
 	}
-	// A message whose blocks all became other items still keeps its own fields, on an empty
-	// message item (encoders for other formats report them and send nothing for it): first for
-	// an assistant turn, last for a user turn, so tool results stay next to their calls.
 	if origin != nil && len(origin.Raw) > 0 {
 		it := llm.Item{Type: llm.ItemTypeMessage, Role: head.Role, Origin: origin}
 		if head.Role == llm.RoleAssistant {
@@ -541,7 +475,6 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 	return items, nil
 }
 
-// parsePart reads a text, image or document block.
 func parsePart(raw json.RawMessage, path string) (llm.Part, error) {
 	m := rawjson.Object(raw)
 	var b block
@@ -579,7 +512,6 @@ func parsePart(raw json.RawMessage, path string) (llm.Part, error) {
 				p = llm.Part{Type: llm.PartFile, FileID: b.Source.FileID}
 			}
 		default:
-			// Plain-text and content-block documents have no place in the model.
 			return native, nil
 		}
 		if b.Type == "document" && b.Title != "" {
@@ -592,8 +524,6 @@ func parsePart(raw json.RawMessage, path string) (llm.Part, error) {
 	return native, nil
 }
 
-// textResult returns a tool result's content as text when it is a string or a list of text
-// blocks with no other fields.
 func textResult(raw json.RawMessage) (string, bool) {
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return "", true
@@ -618,8 +548,6 @@ func textResult(raw json.RawMessage) (string, bool) {
 	return strings.Join(texts, "\n"), true
 }
 
-// partsResult reads a tool result's list of content blocks as parts, with its text blocks joined
-// as textResult joins them.
 func partsResult(raw json.RawMessage, path string) ([]llm.Part, string, bool) {
 	var blocks []json.RawMessage
 	if rawjson.Unmarshal(raw, &blocks) != nil || len(blocks) == 0 {
@@ -640,7 +568,6 @@ func partsResult(raw json.RawMessage, path string) ([]llm.Part, string, bool) {
 	return parts, strings.Join(texts, "\n"), true
 }
 
-// compactJSON returns a tool_use input as compact JSON text; a missing input is {}.
 func compactJSON(raw json.RawMessage) (string, error) {
 	if len(raw) == 0 {
 		return "{}", nil

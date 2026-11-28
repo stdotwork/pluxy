@@ -6,8 +6,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A function_call_output given as a list of parts is read into the result's parts; a list of
-// text alone stays text.
 func TestParseFunctionCallOutputParts(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","input":[
 	 {"type":"function_call","call_id":"c1","name":"f","arguments":"{}"},

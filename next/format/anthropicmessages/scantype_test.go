@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// rawTypeDecoded is rawType before scanType: the type field as encoding/json reads it.
 func rawTypeDecoded(raw json.RawMessage) string {
 	var e struct {
 		Type string `json:"type"`
@@ -80,7 +79,6 @@ func TestScanTextDeltaMatchesDecoding(t *testing.T) {
 	}
 }
 
-// scanSeeds are Messages stream events, real ones and the odd ones above.
 var scanSeeds = []string{
 	`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[],"usage":{"input_tokens":3,"output_tokens":1}}}`,
 	`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
@@ -96,9 +94,6 @@ var scanSeeds = []string{
 	`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"},"Type":"x"}`,
 }
 
-// TestScansMatchDecodingOnEditedEvents compares scanTextDelta with decoding into streamEvent, and
-// scanType with rawType's decoding, on every seed and many random edits of them: bytes changed,
-// dropped and added, a key spelled in another case, an object cut short.
 func TestScansMatchDecodingOnEditedEvents(t *testing.T) {
 	seeds := append([]string(nil), scanSeeds...)
 	seeds = append(seeds,
@@ -141,8 +136,6 @@ func TestScansMatchDecodingOnEditedEvents(t *testing.T) {
 	t.Logf("%d events compared; scanTextDelta took %d, scanType %d", cases, textTaken, typeTaken)
 }
 
-// compareScans checks scanTextDelta and rawType on data against decoding, and counts in the two
-// counters the events each scan took.
 func compareScans(t *testing.T, data string, textTaken, typeTaken *int) {
 	t.Helper()
 	if index, text, ok := scanTextDelta([]byte(data)); ok {
@@ -165,8 +158,6 @@ func compareScans(t *testing.T, data string, textTaken, typeTaken *int) {
 	}
 }
 
-// TestScansMatchDecodingOnRecordedEvents runs the same comparison over every stream event in the
-// differential corpus's recorded replies.
 func TestScansMatchDecodingOnRecordedEvents(t *testing.T) {
 	files, _ := filepath.Glob("../../corpus/cases/*/*/*.json")
 	if len(files) == 0 {
@@ -178,7 +169,6 @@ func TestScansMatchDecodingOnRecordedEvents(t *testing.T) {
 		switch x := v.(type) {
 		case map[string]any:
 			if data, ok := x["data"]; ok && x["event"] != nil {
-				// A recorded server-sent event: its data is an object or text.
 				text, isText := data.(string)
 				if !isText {
 					b, _ := json.Marshal(data)
@@ -212,11 +202,8 @@ func TestScansMatchDecodingOnRecordedEvents(t *testing.T) {
 	t.Logf("%d recorded events from %d case files; scanTextDelta took %d, scanType %d", events, len(files), textTaken, typeTaken)
 }
 
-// TestScanHooksStayHooked fails when a fast path is unhooked: each call below takes many more
-// allocations through encoding/json than through the scan. The limits hold with and without -race.
 func TestScanHooksStayHooked(t *testing.T) {
 	raw := json.RawMessage(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`)
-	// Measured: 1 allocation with scanType, 7 through encoding/json.
 	if got := testing.AllocsPerRun(100, func() { _ = rawType(raw) }); got > 3 {
 		t.Errorf("rawType took %v allocations, want at most 3: it no longer uses scanType", got)
 	}
@@ -231,7 +218,6 @@ func TestScanHooksStayHooked(t *testing.T) {
 		}
 	}
 	delta := []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello there"}}`)
-	// Measured: 5 allocations with scanTextDelta, about 14 through encoding/json.
 	got := testing.AllocsPerRun(100, func() {
 		if _, err := d.Decode(delta); err != nil {
 			t.Fatal(err)

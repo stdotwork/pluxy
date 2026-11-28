@@ -7,8 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A Chat client keeps the param of an OpenAI-format error, wherever that format puts it, and gets
-// none from an error in another format.
 func TestErrorKeepsParam(t *testing.T) {
 	for _, c := range []struct{ name, raw, want string }{
 		{"HTTP error", `{"error":{"message":"m","type":"invalid_request_error","param":"messages","code":"c"}}`, "messages"},

@@ -1,7 +1,3 @@
-// Package textdoc carries a plain-text document from a format that has document blocks of that
-// type into the text of a format that has none. The text stays exactly as the client sent it; a
-// line before and after it names the document, so the model can tell it from the message's own
-// text.
 package textdoc
 
 import (
@@ -11,10 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/format/internal/media"
 )
 
-// FromAnthropic returns the text and title of a Messages plain-text document block
-// ({"type":"document","source":{"type":"text","media_type":"text/plain","data":"..."},
-// "title":"..."}), or ok false for any other block. A source of another media type is not a
-// plain-text document, whatever its type says.
 func FromAnthropic(raw []byte) (text, title string, ok bool) {
 	var b struct {
 		Type   string `json:"type"`
@@ -34,9 +26,6 @@ func FromAnthropic(raw []byte) (text, title string, ok bool) {
 	return b.Source.Data, b.Title, true
 }
 
-// Wrap returns text delimited as a document, naming title when there is one. A title is put on
-// one line, its line breaks (and the other separators a line break can be written with) becoming
-// spaces, so it cannot end the delimiter early.
 func Wrap(title, text string) string {
 	name := strings.NewReplacer("\r", " ", "\n", " ", "\v", " ", "\f", " ", "\u2028", " ", "\u2029", " ", "\u0085", " ").Replace(title)
 	if name != "" {

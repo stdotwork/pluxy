@@ -8,7 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// CountryCodes holds the 249 officially assigned ISO 3166-1 alpha-2 country codes.
 var CountryCodes = map[string]struct{}{
 	"AD": {}, "AE": {}, "AF": {}, "AG": {}, "AI": {}, "AL": {}, "AM": {}, "AO": {}, "AQ": {}, "AR": {},
 	"AS": {}, "AT": {}, "AU": {}, "AW": {}, "AX": {}, "AZ": {}, "BA": {}, "BB": {}, "BD": {}, "BE": {},
@@ -37,25 +36,20 @@ var CountryCodes = map[string]struct{}{
 	"VN": {}, "VU": {}, "WF": {}, "WS": {}, "YE": {}, "YT": {}, "ZA": {}, "ZM": {}, "ZW": {},
 }
 
-// IsCountryCode reports whether s is one of the 249 officially assigned ISO 3166-1 alpha-2 codes (uppercase only).
 func IsCountryCode(s string) bool {
 	_, ok := CountryCodes[s]
 	return ok
 }
 
-// WebSearchCarried reports which canonical web search settings an encoder actually emitted
-// in the target format's tool.
 type WebSearchCarried struct {
 	MaxUses           bool
 	AllowedDomains    bool
 	BlockedDomains    bool
 	UserLocation      bool
-	RawUserLocation   bool // true when user_location JSON was copied verbatim
+	RawUserLocation   bool
 	SearchContextSize bool
 }
 
-// WebSearchLosses returns a dropped loss for every field of a translated web search tool that
-// the target did not carry, at that field's path in the client's original tool.
 func WebSearchLosses(t llm.Tool, fallbackPath, target string, carried WebSearchCarried) []llm.Loss {
 	p := fallbackPath
 	if t.Origin != nil && t.Origin.Path != "" {

@@ -421,7 +421,7 @@ function Status(props: { status: FrameStatus; compact: boolean }) {
   const menuId = useId();
   const says = `${status.word}, ${status.where}`;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     const outside = (e: PointerEvent) => {
       if (!wrap.current?.contains(e.target as Node)) setOpen(false);

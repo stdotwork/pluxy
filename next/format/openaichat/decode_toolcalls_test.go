@@ -7,13 +7,10 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// chunk builds one stream chunk of choice 0 whose delta holds calls.
 func chunk(delta string) string {
 	return `{"id":"x","model":"m","choices":[{"index":0,"delta":` + delta + `,"finish_reason":null}]}`
 }
 
-// decodeAll decodes the chunks into events, checking them against the protocol's ordering rules,
-// and returns the decoder so its losses can be read.
 func decodeAll(t *testing.T, chunks ...string) (*StreamDecoder, []llm.Event) {
 	t.Helper()
 	d := NewStreamDecoder()
@@ -34,7 +31,6 @@ func decodeAll(t *testing.T, chunks ...string) (*StreamDecoder, []llm.Event) {
 	return d, out
 }
 
-// eventLines summarises events as "type kind call_id delta" lines.
 func eventLines(events []llm.Event) []string {
 	var got []string
 	for _, ev := range events {
@@ -50,8 +46,6 @@ func eventLines(events []llm.Event) []string {
 	return got
 }
 
-// A new id on an index already in use starts a new call, and a chunk with no index at all is a
-// continuation only while it names no new id.
 func TestStreamDecoderSplitsToolCallsByIndexAndID(t *testing.T) {
 	_, events := decodeAll(t,
 		chunk(`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"f","arguments":"{\"x\":"}}]}`),
@@ -74,9 +68,6 @@ func TestStreamDecoderSplitsToolCallsByIndexAndID(t *testing.T) {
 	}
 }
 
-// A call whose name only arrives in a later chunk keeps its arguments buffered until the item can
-// start with the name. A call that never names its function is dropped and reported, never sent
-// as an item.start core would refuse.
 func TestStreamDecoderHoldsToolCallUntilName(t *testing.T) {
 	d, events := decodeAll(t,
 		chunk(`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"arguments":"{\"city\":"}}]}`),
@@ -97,8 +88,6 @@ func TestStreamDecoderHoldsToolCallUntilName(t *testing.T) {
 	}
 }
 
-// A non-streamed reply whose call never names its function leaves the call out too: the same
-// item.start core refuses.
 func TestDecodeResponseLeavesOutNamelessToolCall(t *testing.T) {
 	body := `{"id":"x","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[
 		{"id":"call_a","type":"function","function":{"arguments":"{}"}},
@@ -121,7 +110,6 @@ func TestDecodeResponseLeavesOutNamelessToolCall(t *testing.T) {
 	}
 }
 
-// A stream whose call never names its function still produces one item.start per call that did.
 func TestStreamDecoderNamelessOnlyCallHasNoItem(t *testing.T) {
 	d, events := decodeAll(t,
 		chunk(`{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"arguments":"{}"}}]}`),

@@ -9,7 +9,7 @@ func TestApplyEffort(t *testing.T) {
 	for _, c := range []struct {
 		model, effort string
 		maxTokens     int
-		want          string // thinking and output_config as JSON, "" when not applied
+		want          string
 	}{
 		{"claude-opus-4-6", "high", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`},
 		{"claude-sonnet-5-5-20261001", "xhigh", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"}}`},
@@ -29,7 +29,6 @@ func TestApplyEffort(t *testing.T) {
 		{"claude-opus-4-6", "unheard-of", 32000, ""},
 		{"claude-3-5-sonnet-latest", "high", 32000, ""},
 		{"gpt-5", "high", 32000, ""},
-		// Token budgets, as a thinking suffix names them.
 		{"claude-sonnet-4-5", "16000", 32000, `{"thinking":{"type":"enabled","budget_tokens":16000}}`},
 		{"claude-sonnet-4-5", "40000", 32000, `{"thinking":{"type":"enabled","budget_tokens":31999}}`},
 		{"claude-sonnet-4-5", "100", 32000, `{"thinking":{"type":"enabled","budget_tokens":1024}}`},

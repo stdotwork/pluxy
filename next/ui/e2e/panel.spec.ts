@@ -486,6 +486,25 @@ test("the status block says where pluxy runs; its menu copies the address and cl
   await expect(menu).toHaveCount(0);
 });
 
+test("the status menu hears Escape as soon as it opens, before the next paint", async ({ page }) => {
+  await open(page);
+  await signIn(page, core);
+  await expect(page.locator('[data-part="status"]')).toHaveAttribute("data-state", "running");
+  const seen = await page.evaluate(async () => {
+    const shown = () => document.querySelector('[data-part="status-menu"]') !== null;
+    const settle = async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    };
+    document.querySelector<HTMLButtonElement>('[data-part="status"] button.status-block')?.click();
+    await settle();
+    const opened = shown();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await settle();
+    return { opened, closed: !shown() };
+  });
+  expect(seen).toEqual({ opened: true, closed: true });
+});
+
 test("a change of page opens the new page at its top; a change inside a page keeps the place", async ({
   page,
 }) => {

@@ -7,8 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A Messages client keeps the request ID and error details of a Messages upstream's error, and
-// gets neither from an error in another format.
 func TestErrorKeepsMessagesFields(t *testing.T) {
 	const details = `{"error_code":"enforced_spend_limit_reached"}`
 	raw := `{"type":"error","error":{"type":"rate_limit_error","message":"limit","details":` + details + `},"request_id":"req_1"}`
@@ -42,8 +40,6 @@ func TestErrorKeepsMessagesFields(t *testing.T) {
 	}
 }
 
-// Another upstream's overflow reaches a Messages client with Anthropic's words before its own; an
-// Anthropic message is left as it came.
 func TestOverflowMessage(t *testing.T) {
 	for in, want := range map[string]string{
 		"The input token count (9) exceeds the maximum number of tokens allowed (8).": "prompt is too long: The input token count (9) exceeds the maximum number of tokens allowed (8).",

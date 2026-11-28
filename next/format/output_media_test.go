@@ -23,7 +23,6 @@ var (
 	sampleSVG = base64.StdEncoding.EncodeToString([]byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`))
 )
 
-// roundTripMediaEvents marshals and unmarshals each event through JSON, matching the protocol crossing.
 func roundTripMediaEvents(t *testing.T, evs []llm.Event) []llm.Event {
 	t.Helper()
 	out := make([]llm.Event, len(evs))
@@ -179,7 +178,6 @@ func TestGeminiImageToAllFormats(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			evs := decode(stream)
 
-			// 1. Same-format Gemini -> Gemini: byte-identical.
 			gBody, gSSE, gAL, gSL, _ := renderGemini(t, evs)
 			if len(gAL) != 0 || len(gSL) != 0 {
 				t.Errorf("gemini same-format losses: agg=%+v stream=%+v", gAL, gSL)
@@ -194,7 +192,6 @@ func TestGeminiImageToAllFormats(t *testing.T) {
 				}
 			}
 
-			// 2. Gemini -> Responses: no invented image item, the text in order, a loss reported.
 			rBody, _, rAL, rSL, _ := renderResponses(t, evs)
 			if !hasLoss(rAL, "media.image") || !hasLoss(rSL, "media.image") {
 				t.Errorf("gemini->responses missing media.image loss: %+v / %+v", rAL, rSL)
@@ -206,7 +203,6 @@ func TestGeminiImageToAllFormats(t *testing.T) {
 				t.Errorf("gemini->responses text out of order: %s", rBody)
 			}
 
-			// 3. Gemini -> Chat: no media, text intact, loss reported.
 			cBody, cSSE, cAL, cSL, _ := renderChat(t, evs)
 			if !hasLoss(cAL, "media.image") || !hasLoss(cSL, "media.image") {
 				t.Errorf("gemini->chat missing media.image loss: agg=%+v stream=%+v", cAL, cSL)
@@ -218,7 +214,6 @@ func TestGeminiImageToAllFormats(t *testing.T) {
 				t.Errorf("chat text changed: %s", cBody)
 			}
 
-			// 4. Gemini -> Messages: no media, text intact, loss reported.
 			mBody, mSSE, mAL, mSL, _ := renderMessages(t, evs)
 			if !hasLoss(mAL, "media.image") || !hasLoss(mSL, "media.image") {
 				t.Errorf("gemini->messages missing media.image loss: agg=%+v stream=%+v", mAL, mSL)
@@ -241,13 +236,11 @@ func TestGeminiAudioToAllFormats(t *testing.T) {
 	}
 	evs = roundTripMediaEvents(t, evs)
 
-	// Same-format Gemini -> Gemini byte-identical.
 	gBody, _, gAL, gSL, _ := renderGemini(t, evs)
 	if string(gBody) != body || len(gAL) != 0 || len(gSL) != 0 {
 		t.Errorf("gemini audio same-format mismatch: body=%s losses=%+v/%+v", gBody, gAL, gSL)
 	}
 
-	// Responses, Chat, Messages: no audio output, loss reported.
 	for name, fn := range map[string]func(*testing.T, []llm.Event) ([]byte, string, []llm.Loss, []llm.Loss, int){
 		"responses": renderResponses,
 		"chat":      renderChat,
@@ -307,9 +300,7 @@ func TestResponsesImageToAllFormats(t *testing.T) {
 				evs = roundTripMediaEvents(t, append(evs, end...))
 			}
 
-			// 1. Same-format Responses -> Responses byte-identical.
 			rBody, rSSE, rAL, rSL, _ := renderResponses(t, evs)
-			// A stream rebuilt from a non-streamed reply has no raw items, so it reports the image.
 			if len(rAL) != 0 || (stream && len(rSL) != 0) {
 				t.Errorf("responses same-format losses: %+v / %+v", rAL, rSL)
 			}
@@ -320,7 +311,6 @@ func TestResponsesImageToAllFormats(t *testing.T) {
 				t.Errorf("responses same-format stream missing image_generation_call")
 			}
 
-			// 2. Responses -> Gemini: inlineData in exact order between Before. and After.
 			gBody, gSSE, gAL, gSL, gSize := renderGemini(t, evs)
 			if len(gAL) != 0 || len(gSL) != 0 {
 				t.Errorf("responses->gemini losses: %+v / %+v", gAL, gSL)
@@ -355,7 +345,6 @@ func TestResponsesImageToAllFormats(t *testing.T) {
 				t.Errorf("gemini SSE order wrong: before=%d media=%d after=%d\n%s", beforeIdx, mediaIdx, afterIdx, gSSE)
 			}
 
-			// 3. Responses -> Chat & Messages: loss reported, text intact.
 			_, _, cAL, cSL, _ := renderChat(t, evs)
 			if !hasLoss(cAL, "media.image") || !hasLoss(cSL, "media.image") {
 				t.Errorf("responses->chat missing media.image loss: %+v / %+v", cAL, cSL)
@@ -406,7 +395,6 @@ func TestChatAudioToAllFormats(t *testing.T) {
 				evs = roundTripMediaEvents(t, append(evs, end...))
 			}
 
-			// 1. Chat -> Gemini: inlineData audio part!
 			wantData, wantMT := sampleWAV, "audio/wav"
 			if stream {
 				wantData, wantMT = samplePCM, "audio/pcm;rate=24000"
@@ -425,7 +413,6 @@ func TestChatAudioToAllFormats(t *testing.T) {
 				t.Errorf("chat->gemini SSE missing audio: %s", gSSE)
 			}
 
-			// 2. Same-format Chat -> Chat: keeps message.audio / delta.audio with no loss.
 			cBody, cSSE, cAL, cSL, cSize := renderChat(t, evs)
 			if len(cAL) != 0 || len(cSL) != 0 {
 				t.Errorf("chat same-format unexpected losses: %+v / %+v", cAL, cSL)
@@ -440,7 +427,6 @@ func TestChatAudioToAllFormats(t *testing.T) {
 				t.Errorf("chat same-format SSE missing audio: %s", cSSE)
 			}
 
-			// 3. Chat -> Responses & Messages: no audio output, loss reported.
 			_, _, rAL, rSL, _ := renderResponses(t, evs)
 			if !hasLoss(rAL, "media.audio") || !hasLoss(rSL, "media.audio") {
 				t.Errorf("chat->responses missing media.audio loss: %+v / %+v", rAL, rSL)
@@ -475,7 +461,6 @@ func TestMediaOnlyReply(t *testing.T) {
 }
 
 func TestUnsafeAndMalformedMediaDroppedWithLoss(t *testing.T) {
-	// Gemini: bad media type, invalid base64, SVG, and valid text that must still arrive whole.
 	body := fmt.Sprintf(`{"responseId":"gbad","modelVersion":"gemini-2.5-flash","candidates":[{"index":0,"content":{"role":"model","parts":[
 		{"text":"Keep me."},
 		{"inlineData":{"mimeType":"application/pdf","data":%q}},
@@ -503,7 +488,6 @@ func TestUnsafeAndMalformedMediaDroppedWithLoss(t *testing.T) {
 		t.Errorf("text did not arrive whole: %s", cBody)
 	}
 
-	// Responses: SVG disguised in image_generation_call must be dropped with loss.
 	svgResp := fmt.Sprintf(`{"id":"r_svg","object":"response","status":"completed","model":"gpt-5","output":[{"id":"ig_svg","type":"image_generation_call","status":"completed","result":%q},{"id":"m1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Safe text."}]}]}`, sampleSVG)
 	rEvs, rLosses, err := openairesponses.DecodeResponseLosses([]byte(svgResp))
 	if err != nil {
@@ -521,8 +505,6 @@ func TestUnsafeAndMalformedMediaDroppedWithLoss(t *testing.T) {
 }
 
 func TestOutputMediaFrameAndReplyLimits(t *testing.T) {
-	// 1. Three parts of 22 MiB each = 66 MiB > protocol.MaxFrame (64 MiB):
-	// each part travels on its own event fitting under MaxFrame, and all 3 succeed.
 	part22 := strings.Repeat("A", 22<<20)
 	d := geminigenerate.NewStreamDecoder()
 	mediaCount := 0
@@ -545,7 +527,6 @@ func TestOutputMediaFrameAndReplyLimits(t *testing.T) {
 			}
 		}
 	}
-	// A 4th and 5th part (total 110 MiB > MaxOutputMediaReplyBytes = 96 MiB): the 5th is dropped with a loss.
 	for i := 3; i < 5; i++ {
 		chunk := fmt.Sprintf(`{"responseId":"gbig","modelVersion":"m","candidates":[{"index":0,"content":{"role":"model","parts":[{"inlineData":{"mimeType":"image/png","data":%q}}]}}]}`, part22)
 		evs, err := d.Decode([]byte(chunk))
@@ -558,7 +539,6 @@ func TestOutputMediaFrameAndReplyLimits(t *testing.T) {
 			}
 		}
 	}
-	// Finish chunk.
 	if _, err := d.Decode([]byte(`{"responseId":"gbig","modelVersion":"m","candidates":[{"index":0,"finishReason":"STOP"}]}`)); err != nil {
 		t.Fatalf("finish decode: %v", err)
 	}
@@ -572,7 +552,6 @@ func TestOutputMediaFrameAndReplyLimits(t *testing.T) {
 		t.Errorf("expected reply-limit loss for 5th part, got none")
 	}
 
-	// 2. One single part past MaxOutputMediaPartBytes (25 MiB): dropped with a loss, no error.
 	part25 := strings.Repeat("A", (25 << 20))
 	d2 := geminigenerate.NewStreamDecoder()
 	evs, err := d2.Decode([]byte(fmt.Sprintf(`{"responseId":"gover","modelVersion":"m","candidates":[{"index":0,"content":{"role":"model","parts":[{"inlineData":{"mimeType":"image/png","data":%q}},{"text":"ok"}]},"finishReason":"STOP"}]}`, part25)))
@@ -590,7 +569,6 @@ func TestOutputMediaFrameAndReplyLimits(t *testing.T) {
 }
 
 func TestNextTurnReplayAcrossAllEncoders(t *testing.T) {
-	// Case 1: Gemini client replays assistant inlineData image + audio on the next turn.
 	geminiNextTurn := fmt.Sprintf(`{"contents":[
 		{"role":"user","parts":[{"text":"Make an image and audio."}]},
 		{"role":"model","parts":[{"text":"Here they are."},{"inlineData":{"mimeType":"image/png","data":%q}},{"inlineData":{"mimeType":"audio/wav","data":%q}}]},
@@ -601,30 +579,25 @@ func TestNextTurnReplayAcrossAllEncoders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("geminigenerate.ParseRequest: %v", err)
 	}
-	// Encode to Gemini: keeps inlineData.
 	if b, _, err := geminigenerate.EncodeRequest(gReq); err != nil || !strings.Contains(string(b), samplePNG) {
 		t.Errorf("gemini->gemini replay: err=%v hasPNG=%v", err, strings.Contains(string(b), samplePNG))
 	}
-	// Encode to Responses: drops assistant image/audio with losses, never sends invalid parts.
 	if b, losses, err := openairesponses.EncodeRequest(gReq); err != nil {
 		t.Errorf("gemini->responses replay failed: %v", err)
 	} else if strings.Contains(string(b), samplePNG) || strings.Contains(string(b), sampleWAV) || len(losses) < 2 {
 		t.Errorf("gemini->responses replay should drop assistant media with losses: losses=%+v body=%s", losses, b)
 	}
-	// Encode to Chat: drops assistant image/audio with losses, never sends image_url/input_audio in assistant role.
 	if b, losses, err := openaichat.EncodeRequest(gReq); err != nil {
 		t.Errorf("gemini->chat replay failed: %v", err)
 	} else if strings.Contains(string(b), samplePNG) || strings.Contains(string(b), sampleWAV) || len(losses) < 2 {
 		t.Errorf("gemini->chat replay should drop assistant media with losses: losses=%+v body=%s", losses, b)
 	}
-	// Encode to Messages: drops assistant image/audio with losses, never sends image block in assistant role.
 	if b, losses, err := anthropicmessages.EncodeRequest(gReq); err != nil {
 		t.Errorf("gemini->messages replay failed: %v", err)
 	} else if strings.Contains(string(b), samplePNG) || strings.Contains(string(b), sampleWAV) || len(losses) < 2 {
 		t.Errorf("gemini->messages replay should drop assistant media with losses: losses=%+v body=%s", losses, b)
 	}
 
-	// Case 2: Responses client replays image_generation_call in input[] on the next turn.
 	respNextTurn := fmt.Sprintf(`{"model":"gpt-5","input":[
 		{"type":"message","role":"user","content":"Draw a dot."},
 		{"id":"ig_g1_0","type":"image_generation_call","status":"completed","result":%q},
@@ -649,7 +622,6 @@ func TestNextTurnReplayAcrossAllEncoders(t *testing.T) {
 		}
 	}
 
-	// Case 3: Chat client replays assistant audio reference {"id":"audio_abc"} on the next turn.
 	chatNextTurn := `{"model":"gpt-4o-audio-preview","messages":[
 		{"role":"user","content":"Say hi."},
 		{"role":"assistant","audio":{"id":"audio_abc"}},

@@ -9,7 +9,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A functionResponse's parts are read into the result's parts after its response text.
 func TestParseFunctionResponseParts(t *testing.T) {
 	req, err := ParseRequest("m", false, []byte(`{"contents":[
 	 {"role":"model","parts":[{"functionCall":{"id":"c1","name":"shot","args":{}}}]},
@@ -33,8 +32,6 @@ func TestParseFunctionResponseParts(t *testing.T) {
 	}
 }
 
-// A text part beside a tool result's text cannot go in functionResponse.parts. When it is not in
-// the result's output, it is reported as dropped rather than vanishing.
 func TestFunctionResponseTextPartOutsideOutput(t *testing.T) {
 	req := llm.Request{Model: "m", Items: []llm.Item{
 		{Type: llm.ItemTypeToolCall, CallID: "c1", Name: "save", Arguments: "{}",
@@ -56,8 +53,6 @@ func TestFunctionResponseTextPartOutsideOutput(t *testing.T) {
 	}
 }
 
-// A tool result's text part is the text in its output, so it reaches GenerateContent as the
-// response rather than being sent twice or reported lost.
 func TestFunctionResponseTextPartInOutput(t *testing.T) {
 	req, err := anthropicmessages.ParseRequest([]byte(`{"model":"m","max_tokens":5,"messages":[
 	 {"role":"user","content":"hi"},

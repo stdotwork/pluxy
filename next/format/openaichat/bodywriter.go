@@ -5,16 +5,8 @@ import (
 	"unicode/utf8"
 )
 
-// This file writes the request body into one slice, as the bytes json.Marshal writes for the same
-// values. json.Marshal builds each value in a buffer of its own and copies it out, so a long text
-// was escaped into a buffer, copied to a result, copied into its message, copied into the body.
-// Here a text is escaped once, into the slice that is sent.
-
 const hexDigits = "0123456789abcdef"
 
-// escapeClass says what appendString does with a byte: 0 writes it as it is, 1 escapes it, 2
-// starts a multi-byte rune that may need escaping. It matches encoding/json's HTML-safe set; the
-// test compares the two for every byte value.
 var escapeClass = func() (t [256]uint8) {
 	for b := range t {
 		switch {
@@ -27,8 +19,6 @@ var escapeClass = func() (t [256]uint8) {
 	return t
 }()
 
-// appendString appends s to dst as a JSON string, as json.Marshal writes it: <, > and & are
-// escaped, so are U+2028 and U+2029, and a byte that is not valid UTF-8 becomes the escape for U+FFFD.
 func appendString(dst []byte, s string) []byte {
 	dst = append(dst, '"')
 	start := 0
@@ -78,11 +68,8 @@ func appendString(dst []byte, s string) []byte {
 	return append(dst, '"')
 }
 
-// quoted estimates the bytes appendString writes for s: the text, its quotes, and room for the
-// escapes of a text that has a few.
 func quoted(s string) int { return len(s) + len(s)/16 + 2 }
 
-// appendRaw appends b, which is JSON a marshal wrote, as Marshal writes a RawMessage: nil is null.
 func appendRaw(dst []byte, b json.RawMessage) []byte {
 	if b == nil {
 		return append(dst, "null"...)
@@ -90,7 +77,6 @@ func appendRaw(dst []byte, b json.RawMessage) []byte {
 	return append(dst, b...)
 }
 
-// appendList appends items as a JSON array.
 func appendList(dst []byte, items []json.RawMessage) []byte {
 	dst = append(dst, '[')
 	for i, it := range items {
@@ -102,8 +88,6 @@ func appendList(dst []byte, items []json.RawMessage) []byte {
 	return append(dst, ']')
 }
 
-// partJSON returns p as marshal(p, raw) does. A part with no kept fields is written directly into
-// a slice of its own size.
 func partJSON(p outPart, raw json.RawMessage) json.RawMessage {
 	if len(raw) > 0 {
 		return marshal(p, raw)
@@ -161,7 +145,6 @@ func partJSON(p outPart, raw json.RawMessage) json.RawMessage {
 	return append(b, '}')
 }
 
-// chatToolCallJSON returns tc as marshal(tc, raw) does, written directly when raw adds nothing.
 func chatToolCallJSON(tc chatToolCall, raw json.RawMessage) json.RawMessage {
 	if len(raw) > 0 {
 		return marshal(tc, raw)
@@ -178,7 +161,6 @@ func chatToolCallJSON(tc chatToolCall, raw json.RawMessage) json.RawMessage {
 	return append(b, "}}"...)
 }
 
-// customToolCallJSON returns tc as marshal(tc, raw) does, written directly when raw adds nothing.
 func customToolCallJSON(tc customToolCall, raw json.RawMessage) json.RawMessage {
 	if len(raw) > 0 {
 		return marshal(tc, raw)
@@ -195,8 +177,6 @@ func customToolCallJSON(tc customToolCall, raw json.RawMessage) json.RawMessage 
 	return append(b, "}}"...)
 }
 
-// knownContent reports whether appendMessage writes content c itself: the types the encoder puts
-// there.
 func knownContent(c any) bool {
 	switch c.(type) {
 	case nil, string, *string, []json.RawMessage:
@@ -205,9 +185,6 @@ func knownContent(c any) bool {
 	return false
 }
 
-// appendMessage appends m as marshal(m, m.raw) writes it, when it can without a marshal of its
-// own: the message holds nothing kept from a client, and its parts and calls are compact JSON
-// written by marshal or by the writers above.
 func appendMessage(dst []byte, m *outMessage) []byte {
 	if len(m.raw) > 0 || !knownContent(m.Content) {
 		return appendRaw(dst, marshal(m, m.raw))
@@ -248,7 +225,6 @@ func appendMessage(dst []byte, m *outMessage) []byte {
 	return append(dst, '}')
 }
 
-// size estimates the bytes of m's JSON, so that the body's slice is one allocation.
 func (m *outMessage) size() int {
 	n := 64 + len(m.Role) + len(m.raw) + quoted(m.ReasoningContent) + quoted(m.ToolCallID)
 	switch c := m.Content.(type) {
@@ -269,11 +245,6 @@ func (m *outMessage) size() int {
 	return n
 }
 
-// encodeBodyFast returns out as the request body's JSON, with msgs as its messages, as
-// encodeBody returns it for those messages marshaled. Every message and tool is written once into
-// one slice: nothing is marshaled again, and a long text is escaped into the body itself. The
-// caller has seen to it that no part or tool is JSON the client wrote (encoder.foreign), which
-// a marshal would compact and escape.
 func encodeBodyFast(out *outRequest, msgs []*outMessage) ([]byte, error) {
 	head, err := json.Marshal(out.tailHead)
 	if err != nil {
@@ -301,8 +272,6 @@ func encodeBodyFast(out *outRequest, msgs []*outMessage) ([]byte, error) {
 		b = appendMessage(b, m)
 	}
 	b = append(b, `],`...)
-	// The head always holds stream, so it starts with the object's brace and its fields follow
-	// the messages' array after a comma; it ends with the brace the tail's other parts take over.
 	b = append(b, head[1:len(head)-1]...)
 	if len(out.Tools) > 0 {
 		b = append(b, `,"tools":`...)

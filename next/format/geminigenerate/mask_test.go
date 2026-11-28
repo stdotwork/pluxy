@@ -19,8 +19,6 @@ func TestMarkerIsProtocolRedacted(t *testing.T) {
 	}
 }
 
-// Google's documented CONSUMER_SUSPENDED reply names the project in the message and in the
-// details' metadata; both go, and everything else stays.
 func TestMaskConsumerSuspended(t *testing.T) {
 	raw := `{"error":{"code":403,"message":"The consumer 'projects/123' is suspended.","status":"PERMISSION_DENIED",` +
 		`"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"CONSUMER_SUSPENDED","domain":"googleapis.com",` +
@@ -48,8 +46,6 @@ func TestMaskConsumerSuspended(t *testing.T) {
 	}
 }
 
-// SERVICE_DISABLED: a bare project number in containerInfo, the activation URL, a console URL in
-// Help, and the message.
 func TestMaskServiceDisabled(t *testing.T) {
 	raw := `{"error":{"code":403,"message":"Generative Language API has not been used in project 987654321 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/generativelanguage.googleapis.com/overview?project=987654321 then retry.","status":"PERMISSION_DENIED",` +
 		`"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED","domain":"googleapis.com",` +
@@ -68,7 +64,6 @@ func TestMaskServiceDisabled(t *testing.T) {
 	}
 }
 
-// A 429 keeps RetryInfo and the quota facts; only the subject's project goes.
 func TestMaskQuotaFailureKeepsTheQuota(t *testing.T) {
 	raw := `{"error":{"code":429,"message":"You exceeded your current quota.","status":"RESOURCE_EXHAUSTED","details":[` +
 		`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests",` +
@@ -100,7 +95,6 @@ func TestMaskResourceInfoAndAccounts(t *testing.T) {
 	}
 }
 
-// The identifiers the caller knows go as whole tokens: ID 12 leaves 123 and a model name alone.
 func TestMaskKnownIdentifiersWholeTokens(t *testing.T) {
 	msg := "model gemini-2.5-flash in my-proj: 12 and 123 and 12.5 and version 2.5 and xmy-proj and my-proj-2 and (my-proj)."
 	got := MaskProject(&llm.Error{Code: llm.CodeUpstream, Message: msg}, "12", "my-proj", "2")
@@ -110,7 +104,6 @@ func TestMaskKnownIdentifiersWholeTokens(t *testing.T) {
 	}
 }
 
-// A known email is replaced whole, and the project in a service account's address goes too.
 func TestMaskKnownEmail(t *testing.T) {
 	got := MaskProject(&llm.Error{Code: llm.CodeUpstream, Message: "bad token for svc@owner-proj.iam.gserviceaccount.com in owner-proj"}, "svc@owner-proj.iam.gserviceaccount.com")
 	if got.Message != "bad token for [redacted] in [redacted]" {
@@ -118,8 +111,6 @@ func TestMaskKnownEmail(t *testing.T) {
 	}
 }
 
-// Numbers keep their exact digits and the keys and layout stay as sent; a body with nothing to
-// mask is the same bytes.
 func TestMaskKeepsNumbersAndBytes(t *testing.T) {
 	raw := `{ "error" : {"code":429,"message":"slow down","status":"RESOURCE_EXHAUSTED","details":[{"@type":"x","big":12345678901234567890,"f":1.50e3,"quotaValue":"123"}]} }`
 	e := &llm.Error{Code: llm.CodeRateLimit, Message: "Your project has been denied access. GenerateRequestsPerDayPerProjectPerModel", Raw: json.RawMessage(raw)}
@@ -136,7 +127,6 @@ func TestMaskKeepsNumbersAndBytes(t *testing.T) {
 	}
 }
 
-// Google's OpenAI-compatible API sends its error in a one-element array.
 func TestMaskArrayForm(t *testing.T) {
 	raw := `[{"error":{"code":403,"message":"The consumer 'projects/123' is suspended.","status":"PERMISSION_DENIED","details":[{"metadata":{"consumer":"projects/123"}}]}}]`
 	got := MaskProject(&llm.Error{Code: llm.CodeAccountClosed, Message: "m", Raw: json.RawMessage(raw)})
@@ -145,7 +135,6 @@ func TestMaskArrayForm(t *testing.T) {
 	}
 }
 
-// Text patterns: each form of naming a project, and the words around them, which stay.
 func TestMaskPatterns(t *testing.T) {
 	for in, want := range map[string]string{
 		"consumer 'projects/123' x":              "consumer 'projects/[redacted]' x",
@@ -167,7 +156,6 @@ func TestMaskPatterns(t *testing.T) {
 	}
 }
 
-// A pattern found in one place masks the same bare identifier everywhere else in the error.
 func TestMaskLearnsFromPatterns(t *testing.T) {
 	got := MaskProject(&llm.Error{Message: "quota of project 5550001 used", Raw: json.RawMessage(`{"error":{"message":"owner 5550001 is over","status":"RESOURCE_EXHAUSTED"}}`)})
 	if strings.Contains(string(got.Raw), "5550001") || strings.Contains(got.Message, "5550001") {
@@ -206,7 +194,6 @@ func TestIsGoogleErrorShape(t *testing.T) {
 	}
 }
 
-// ErrorInfo's own example puts the project in metadata.resource.
 func TestMaskErrorInfoResource(t *testing.T) {
 	raw := `{"error":{"code":403,"message":"m","status":"PERMISSION_DENIED","details":[{"reason":"API_DISABLED","domain":"googleapis.com","metadata":{"resource":"projects/123","service":"pubsub.googleapis.com"}}]}}`
 	got := MaskProject(&llm.Error{Message: "m", Raw: json.RawMessage(raw)})
@@ -216,8 +203,6 @@ func TestMaskErrorInfoResource(t *testing.T) {
 	}
 }
 
-// More ways Google's text names a project, an organization, a folder, a billing account or a
-// person; the words around them stay.
 func TestMaskMorePatterns(t *testing.T) {
 	for in, want := range map[string]string{
 		"Permission denied on resource project my-proj-1.":              "Permission denied on resource project [redacted].",
@@ -243,7 +228,6 @@ func TestMaskMorePatterns(t *testing.T) {
 	}
 }
 
-// The project of any service account address is learned and masked wherever else it stands.
 func TestMaskLearnsProjectOfAnyServiceAccount(t *testing.T) {
 	got := MaskProject(&llm.Error{Message: "Caller foo@my-proj-2.iam.gserviceaccount.com in my-proj-2 lacks permission"})
 	if got.Message != "Caller [redacted] in [redacted] lacks permission" {
@@ -251,8 +235,6 @@ func TestMaskLearnsProjectOfAnyServiceAccount(t *testing.T) {
 	}
 }
 
-// A QuotaFailure's subject and a ResourceInfo's owner go whole, whatever they say; the other
-// details' subjects, and the quota facts, stay.
 func TestMaskWholeSubjectAndOwner(t *testing.T) {
 	raw := `{"error":{"code":429,"message":"m","status":"RESOURCE_EXHAUSTED","details":[` +
 		`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[` +
@@ -278,7 +260,6 @@ func TestMaskWholeSubjectAndOwner(t *testing.T) {
 	}
 }
 
-// Empty subject or owner values mask nothing else (nor turn themselves into [redacted]).
 func TestMaskEmptySubjectAndOwner(t *testing.T) {
 	for name, raw := range map[string]string{
 		"empty subject": `{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"m","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"","quotaId":"Q"}]},{"@type":"type.googleapis.com/google.rpc.LocalizedMessage","locale":"","message":""}]}}`,
@@ -293,8 +274,6 @@ func TestMaskEmptySubjectAndOwner(t *testing.T) {
 	}
 }
 
-// A whole value (QuotaFailure.violations[].subject or ResourceInfo.owner) is masked only in its
-// own field, not where another field or detail uses the same plain word.
 func TestMaskWholeOnlyInOwnField(t *testing.T) {
 	raw := `{"error":{"code":429,"message":"global quota exceeded","status":"RESOURCE_EXHAUSTED","details":[` +
 		`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"global","quotaDimensions":{"location":"global"}}]},` +
@@ -314,8 +293,6 @@ func TestMaskWholeOnlyInOwnField(t *testing.T) {
 	}
 }
 
-// A subject or owner that looks like an identifier (contains :, / or @) is also masked where the
-// message or another string repeats it, as a whole token; a plain word is not.
 func TestMaskSubjectAndOwnerIdentifierInMessage(t *testing.T) {
 	raw := `{"error":{"code":429,"message":"Quota exceeded for clientip:203.0.113.7 (not clientip:203.0.113.70), owner acme/team-7 and bob@corp.example in global.","status":"RESOURCE_EXHAUSTED","details":[` +
 		`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"clientip:203.0.113.7"},{"subject":"global"}]},` +
@@ -343,8 +320,6 @@ func TestMaskSubjectAndOwnerIdentifierInMessage(t *testing.T) {
 	}
 }
 
-// "resource project <id>" with an all-letter ID (6..30 chars) followed by end of text or
-// punctuation is masked, while ordinary prose stays and digit/hyphen forms still work.
 func TestMaskResourceProjectAllLetterID(t *testing.T) {
 	max30 := strings.Repeat("a", 30)
 	over31 := strings.Repeat("a", 31)
@@ -378,8 +353,6 @@ func TestMaskResourceProjectAllLetterID(t *testing.T) {
 	}
 }
 
-// A subject or owner that is a bare project ID (looksLikeProjectID) is masked in its own field
-// and added to the token list so repetitions in the message are masked; global stays elsewhere.
 func TestMaskBareProjectIDInOwnerRepeatedInMessage(t *testing.T) {
 	raw := `{"error":{"code":403,"message":"The consumer acme-prod-4821 is suspended.","details":[` +
 		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"acme-prod-4821"},` +
@@ -400,8 +373,6 @@ func TestMaskBareProjectIDInOwnerRepeatedInMessage(t *testing.T) {
 	}
 }
 
-// Structured-field scanning stops at maxFieldDepth; the pattern pass still looks at every string
-// at any depth, so a name in a pattern form is masked there.
 func TestMaskDepthCap(t *testing.T) {
 	wrap := func(depth int, inner string) string {
 		return strings.Repeat(`{"a":`, depth) + inner + strings.Repeat(`}`, depth)
@@ -468,18 +439,13 @@ func depthLabel(d int) string {
 	}
 }
 
-// A project scoped to a domain is one name in the output: the domain's marker, the colon and the
-// ID become one marker.
 func TestMaskDomainScopedProject(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"see projects/example.com:acme-prod-4821/locations", "see projects/[redacted]/locations"},
 		{"see ?project=example.com:acme-prod-4821&x=1", "see ?project=[redacted]&x=1"},
 		{"the project:example.com:acme-prod-4821 is off", "the project:[redacted] is off"},
 		{"folders/example.com:acme-prod-4821.", "folders/[redacted]."},
-		// The domain goes wherever the body names it again, as before. The ID alone does not, unless
-		// the names already mask it.
 		{"projects/example.com:acme-prod-4821 and acme-prod-4821 and example.com", "projects/[redacted] and acme-prod-4821 and [redacted]"},
-		// Without a dot before the colon the colon ends the name, as before.
 		{"POST projects/acme-prod-4821:setIamPolicy", "POST projects/[redacted]:setIamPolicy"},
 		{"projects/12345: denied", "projects/[redacted]: denied"},
 	} {
@@ -493,8 +459,6 @@ func TestMaskDomainScopedProject(t *testing.T) {
 	}
 }
 
-// project= takes a value with a dot at its start or two dots in a row, as it did before names
-// were read as dotted words; a dot that ends a sentence stays outside the name.
 func TestMaskProjectQueryOddDots(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"see ?project=.acme-prod-4821&x=1", "see ?project=[redacted]&x=1"},
@@ -508,9 +472,6 @@ func TestMaskProjectQueryOddDots(t *testing.T) {
 	}
 }
 
-// countWork returns the work f makes the masking code do: the bytes its JSON scanners pass over
-// and the steps of its name matcher. It stands in for a clock, which a slow or busy machine
-// makes useless as a bound.
 func countWork(f func()) int {
 	var n int
 	onScan = func(k int) { n += k }
@@ -519,10 +480,8 @@ func countWork(f func()) int {
 	return n
 }
 
-// What masking a body costs is a few passes over the body, whatever the depth of its nesting.
-// Scanning each level's whole subtree again would multiply the work by the depth.
 func TestMaskWorkDoesNotGrowWithDepth(t *testing.T) {
-	const bound = 8 // passes over the body; masking measures about 5
+	const bound = 8
 	for _, depth := range []int{100, 4000} {
 		raw := makeDeepError(depth, 1<<20)
 		if w := countWork(func() { MaskBody(raw) }); w > bound*len(raw) {
@@ -536,8 +495,6 @@ func TestMaskWorkDoesNotGrowWithDepth(t *testing.T) {
 	}
 }
 
-// What masking a body costs does not grow with the number of names it holds: each string is
-// matched against all names in one pass, so a body of N names costs N times a name, not N times N.
 func TestMaskWorkDoesNotGrowWithNames(t *testing.T) {
 	const bound = 8
 	for _, n := range []int{500, 8000} {
@@ -547,7 +504,6 @@ func TestMaskWorkDoesNotGrowWithNames(t *testing.T) {
 			if i > 0 {
 				b.WriteByte(',')
 			}
-			// Each name is learned from a structured field and again named in plain text.
 			fmt.Fprintf(&b, `{"consumer":"projects/p-%06d"},"p-%06d is off","projects/q-%06d"`, i, i, i)
 		}
 		b.WriteString(`]}}`)
@@ -563,8 +519,6 @@ func TestMaskWorkDoesNotGrowWithNames(t *testing.T) {
 	}
 }
 
-// maskOneByOne is the plain way to replace names: every name in turn, longest first, in the text
-// the ones before it left. The matcher must give the same text without trying them all.
 func maskOneByOne(s string, list []string) string {
 	for _, id := range list {
 		s = replaceToken(s, id)
@@ -574,8 +528,6 @@ func maskOneByOne(s string, list []string) string {
 
 func TestNameMatcherMatchesNameByName(t *testing.T) {
 	r := rand.New(rand.NewSource(7))
-	// Pieces of the marker's own text are in the mix, so names that hold part of a marker, or all
-	// of "redacted", are met by the replacements.
 	pieces := []string{"a", "b", "1", "-", "_", ".", " ", "/", ":", "[", "]", "redacted", "red", "acted", "d]", "[r", "]/"}
 	word := func(max int) string {
 		var b strings.Builder
@@ -595,7 +547,6 @@ func TestNameMatcherMatchesNameByName(t *testing.T) {
 		}
 		s := word(14)
 		sorted := append([]string(nil), d.list...)
-		// the order maskString uses: longest first, then as learned
 		slices.SortStableFunc(sorted, func(a, b string) int { return len(b) - len(a) })
 		want := maskOneByOne(s, sorted)
 		if got := d.maskString(s); got != want {
@@ -610,8 +561,6 @@ func TestNameMatcherMatchesNameByName(t *testing.T) {
 	}
 }
 
-// A name made of a marker's text and what stands next to it is still found: a name learned from
-// a field can be a name only once another name has been replaced.
 func TestMaskNameAcrossMarker(t *testing.T) {
 	raw := `{"error":{"code":403,"message":"acme-prod-4821-long-name-x/topsecret","details":[` +
 		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"acme-prod-4821-long-name-x"},` +
@@ -622,8 +571,6 @@ func TestMaskNameAcrossMarker(t *testing.T) {
 	}
 }
 
-// Names nested in one another (a, aa, aaa, ... or a, a/a, a/a/a, ...) and a long string of them
-// must not make the search cost the string's length times the names that end at each place.
 func TestMaskWorkWithNestedNames(t *testing.T) {
 	const names = 200
 	for _, tc := range []struct {
@@ -632,13 +579,11 @@ func TestMaskWorkWithNestedNames(t *testing.T) {
 		var b strings.Builder
 		b.WriteString(`{"error":{"code":403,"message":"x","details":[`)
 		if tc.sep == "" {
-			// learned from the text pattern, one name for each length
 			for i := 1; i <= names; i++ {
 				b.WriteString(`"projects/` + strings.Repeat("a", i) + `",`)
 			}
 			b.WriteString(`"` + strings.Repeat("a", 20000) + `"]}}`)
 		} else {
-			// learned from QuotaFailure subjects, which are masked whole and learned as names
 			b.WriteString(`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[`)
 			for i := 1; i <= names; i++ {
 				if i > 1 {
@@ -653,15 +598,12 @@ func TestMaskWorkWithNestedNames(t *testing.T) {
 			t.Fatalf("%s: the test body is not valid JSON", tc.name)
 		}
 		w := countWork(func() { MaskBody(body) })
-		// every name is found once in the long string and tried there once; nothing more
 		if bound := 8 * len(body); w > bound {
 			t.Errorf("%s: work %d over %d bytes of body and %d names, want at most %d", tc.name, w, len(body), names, bound)
 		}
 	}
 }
 
-// A project= value that is not a clean name is masked whole, and the name the pattern took from it
-// is masked where the body repeats it, as before.
 func TestMaskMalformedProjectValueKeepsItsName(t *testing.T) {
 	in := "?project=zqbeta..prod-4821&x=1 and zqbeta again"
 	if got, want := string(MaskBody([]byte(in))), "?project=[redacted]&x=1 and [redacted] again"; got != want {
@@ -669,8 +611,6 @@ func TestMaskMalformedProjectValueKeepsItsName(t *testing.T) {
 	}
 }
 
-// A method or a port after a domain-scoped project is masked with it where it stands, and is not
-// learned as a name, so the same word elsewhere stays.
 func TestMaskDomainScopedMethodIsNotLearned(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"POST projects/acme.prod:setIamPolicy failed; setIamPolicy denied", "POST projects/[redacted] failed; setIamPolicy denied"},
@@ -688,8 +628,6 @@ func TestMaskDomainScopedMethodIsNotLearned(t *testing.T) {
 	}
 }
 
-// What widen adds must not take anything from the patterns and names: when a domain-scoped form
-// runs into a keyword, an address or a name that goes on, they still mask what they masked.
 func TestMaskWideFormsKeepWhatTheNarrowOnesMask(t *testing.T) {
 	for _, in := range []string{
 		"projects/a.b:projects/zqbeta",
@@ -702,8 +640,6 @@ func TestMaskWideFormsKeepWhatTheNarrowOnesMask(t *testing.T) {
 			t.Errorf("MaskBody(%q) = %q, a name is shown", in, got)
 		}
 	}
-	// A name that continues past the part a wider form took: "acme..prod-4821" is learned from the
-	// field, and the text names it after a domain and a colon.
 	raw := `{"error":{"message":"projects/a.b:acme..prod-4821 is off","details":[` +
 		`{"@type":"type.googleapis.com/google.rpc.ErrorInfo","metadata":{"consumer":"acme..prod-4821"}}]}}`
 	if got := string(MaskBody([]byte(raw))); strings.Contains(got, "prod-4821") {
@@ -711,8 +647,6 @@ func TestMaskWideFormsKeepWhatTheNarrowOnesMask(t *testing.T) {
 	}
 }
 
-// An address followed by a colon and a project's ID, in a body that also names that ID after a
-// domain, is masked whole.
 func TestMaskAddressBeforeDomainScopedID(t *testing.T) {
 	in := "projects/example.com:acme-prod-4821 denied for user:alice@example.com; caller alice@example.com:acme-prod-4821"
 	got := string(MaskBody([]byte(in)))
@@ -721,8 +655,6 @@ func TestMaskAddressBeforeDomainScopedID(t *testing.T) {
 	}
 }
 
-// Many different domain-scoped IDs in one string cost a few passes over it. Every ID that was a
-// name of its own would copy the string once more. Memory allocated stands in for a clock.
 func TestMaskDomainScopedIDsAreNotNames(t *testing.T) {
 	var b strings.Builder
 	b.WriteString(`{"error":{"code":403,"message":"`)

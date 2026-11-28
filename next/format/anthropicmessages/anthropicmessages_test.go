@@ -18,8 +18,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A multi-turn request with extended thinking, prompt caching and tool use, as Claude Code sends
-// one.
 const thinkingToolTurn = `{"model":"m","max_tokens":1024,"metadata":{"user_id":"u"},"top_k":5,
 "thinking":{"type":"enabled","budget_tokens":4096},
 "system":[{"type":"text","text":"Be brief."},{"type":"text","text":"Use tools.","cache_control":{"type":"ephemeral","ttl":"1h"}}],
@@ -62,9 +60,6 @@ func sameJSON(t *testing.T, what string, got []byte, want string) {
 	}
 }
 
-// A Messages request translated to Chat Completions keeps the order of thinking, text, tool calls
-// and tool results, and reports by path everything Chat Completions has no place for: signatures,
-// redacted thinking, cache_control, server tools and Anthropic-only options.
 func TestTranslationToChatReportsLosses(t *testing.T) {
 	req, err := ParseRequest([]byte(thinkingToolTurn))
 	if err != nil {
@@ -75,15 +70,15 @@ func TestTranslationToChatReportsLosses(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"approximated messages[1].content[0]",          // thinking text becomes reasoning_content
-		"dropped messages[1].content[0].signature",     // only Anthropic can check it
-		"dropped messages[1].content[1]",               // redacted thinking
-		"dropped messages[2].content[2].cache_control", // no cache breakpoints in Chat
+		"approximated messages[1].content[0]",
+		"dropped messages[1].content[0].signature",
+		"dropped messages[1].content[1]",
+		"dropped messages[2].content[2].cache_control",
 		"dropped metadata",
 		"dropped system[1].cache_control",
-		"dropped thinking", // the budget; the effort is carried
+		"dropped thinking",
 		"dropped tools[0].cache_control",
-		"dropped tools[1]", // a server tool
+		"dropped tools[1]",
 		"dropped top_k",
 	}
 	slices.Sort(want)
@@ -103,8 +98,6 @@ func TestTranslationToChatReportsLosses(t *testing.T) {
 	  {"role":"user","content":[{"type":"text","text":"Which is warmer?"}]}]}`)
 }
 
-// The same request translated to Responses keeps every item in place; thinking from another
-// provider is dropped and reported, since a Responses upstream cannot replay it.
 func TestTranslationToResponsesReportsLosses(t *testing.T) {
 	req, err := ParseRequest([]byte(thinkingToolTurn))
 	if err != nil {
@@ -115,8 +108,8 @@ func TestTranslationToResponsesReportsLosses(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"dropped messages[1].content[0]", // thinking
-		"dropped messages[1].content[1]", // redacted thinking
+		"dropped messages[1].content[0]",
+		"dropped messages[1].content[1]",
 		"dropped messages[2].content[2].cache_control",
 		"dropped metadata",
 		"dropped system[1].cache_control",
@@ -142,7 +135,6 @@ func TestTranslationToResponsesReportsLosses(t *testing.T) {
 	  {"type":"message","role":"user","content":[{"type":"input_text","text":"Which is warmer?"}]}]}`)
 }
 
-// Thinking budgets map to the reasoning effort today's core picks for them.
 func TestThinkingEffort(t *testing.T) {
 	for _, c := range []struct{ thinking, config, want string }{
 		{`{"type":"enabled","budget_tokens":0}`, ``, "none"},
@@ -170,8 +162,6 @@ func TestThinkingEffort(t *testing.T) {
 	}
 }
 
-// A message whose role is system, whatever its case and spacing, is a system item where it
-// stands, as today's core matches it; other roles are still matched exactly.
 func TestParseRequestSystemMessage(t *testing.T) {
 	for _, role := range []string{"system", "System", " SYSTEM "} {
 		req, err := ParseRequest([]byte(`{"model":"m","messages":[{"role":"user","content":"hi"},{"role":` + strconv.Quote(role) + `,"content":"Rules"}]}`))
@@ -210,9 +200,6 @@ func asError(err error, e **llm.Error) bool {
 	return ok
 }
 
-// An upstream Messages stream: every upstream event reaches the model events once, in Raw, events
-// the model has no place for become native events, the stream follows the protocol's ordering
-// rules, and usage follows Anthropic's rule that input_tokens leaves out cache reads and writes.
 func TestStreamDecoderKeepsUpstreamEvents(t *testing.T) {
 	stream := []string{
 		`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"up","content":[],"stop_reason":null,"usage":{"input_tokens":12,"cache_read_input_tokens":100,"cache_creation_input_tokens":5,"output_tokens":1}}}`,
@@ -309,7 +296,6 @@ func TestStreamDecoderFailures(t *testing.T) {
 	})
 }
 
-// A reply from a Messages upstream reaches a Messages client exactly as the upstream sent it.
 func TestNativeStreamPassesThrough(t *testing.T) {
 	stream := []string{
 		`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"up","content":[],"usage":{"input_tokens":3,"output_tokens":1},"x_vendor":1}}`,
@@ -342,7 +328,6 @@ func TestNativeStreamPassesThrough(t *testing.T) {
 		t.Errorf("got:\n%s\nwant:\n%s", out.String(), want.String())
 	}
 
-	// A mid-stream upstream error event passes through too.
 	d, out = NewStreamDecoder(), bytes.Buffer{}
 	w = NewStreamWriter(&out)
 	evs, _ := d.Decode([]byte(stream[0]))
@@ -357,8 +342,6 @@ func TestNativeStreamPassesThrough(t *testing.T) {
 	}
 }
 
-// A reply from a Chat upstream is rebuilt as a Messages stream, with Messages usage: input_tokens
-// without the cached tokens, which go in cache_read_input_tokens.
 func TestStreamWriterRebuildsEvents(t *testing.T) {
 	var out bytes.Buffer
 	w := NewStreamWriter(&out)
@@ -410,7 +393,6 @@ func TestStreamWriterRebuildsEvents(t *testing.T) {
 	}
 }
 
-// Error replies use Anthropic's error envelope and type names.
 func TestErrorResponse(t *testing.T) {
 	for _, c := range []struct {
 		e      *llm.Error
@@ -421,7 +403,6 @@ func TestErrorResponse(t *testing.T) {
 		{&llm.Error{Code: llm.CodeInvalidRequest, Message: "bad"}, 400, `{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}`},
 		{&llm.Error{Code: llm.CodeUpstream, Message: "overloaded", Status: 529}, 529, `{"type":"error","error":{"type":"overloaded_error","message":"overloaded"}}`},
 		{&llm.Error{Code: llm.CodeUpstream, Message: "broke"}, 502, `{"type":"error","error":{"type":"api_error","message":"broke"}}`},
-		// An Anthropic error event at the start of a stream keeps its type and gets its status.
 		{&llm.Error{Code: llm.CodeUpstream, Message: "Overloaded", ProviderCode: "overloaded_error"}, 529, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`},
 	} {
 		status, body := ErrorResponse(c.e)
@@ -432,8 +413,6 @@ func TestErrorResponse(t *testing.T) {
 	}
 }
 
-// writeAll writes events through a stream writer and returns the Messages events as
-// "type data" lines.
 func writeAll(t *testing.T, events []llm.Event) []string {
 	t.Helper()
 	var out bytes.Buffer
@@ -451,8 +430,6 @@ func writeAll(t *testing.T, events []llm.Event) []string {
 	return lines
 }
 
-// Content blocks in a Messages stream do not overlap: parallel tool calls a Chat upstream
-// interleaves are written one block after the other, the later one held until the first ends.
 func TestStreamWriterSerialisesParallelBlocks(t *testing.T) {
 	a := &llm.ItemStart{Kind: llm.ItemToolCall, CallID: "call_a", Name: "f"}
 	b := &llm.ItemStart{Kind: llm.ItemToolCall, CallID: "call_b", Name: "g"}
@@ -483,9 +460,6 @@ func TestStreamWriterSerialisesParallelBlocks(t *testing.T) {
 	}
 }
 
-// A non-streamed Message from a Messages upstream, written to a streaming client, comes out as
-// stream events that put the same Message back together: signatures, redacted thinking, the
-// stop sequence and every usage field survive.
 func TestNonStreamedMessageAsStream(t *testing.T) {
 	body := `{"id":"msg_1","type":"message","role":"assistant","model":"up","x_vendor":1,"content":[
 	 {"type":"thinking","thinking":"Hmm.","signature":"sig-1"},
@@ -525,8 +499,6 @@ func TestNonStreamedMessageAsStream(t *testing.T) {
 	sameJSON(t, "message put back together", got, body)
 }
 
-// A streamed reply to a non-streaming Messages client is put together into the Message the
-// stream describes, keeping what the model has no place for.
 func TestAggregatorPutsStreamTogether(t *testing.T) {
 	stream := []string{
 		`{"type":"ping"}`,
@@ -566,13 +538,11 @@ func TestAggregatorPutsStreamTogether(t *testing.T) {
 	 {"type":"redacted_thinking","data":"opaque"},
 	 {"type":"tool_use","id":"toolu_1","name":"f","input":{"a":1}}],
 	 "stop_reason":"stop_sequence","stop_sequence":"END","usage":{"input_tokens":12,"cache_read_input_tokens":100,"output_tokens":30}}`)
-	// The ping before message_start does not lose message_start's usage.
 	if u := last.Usage; u == nil || u.InputTokens == nil || *u.InputTokens != 112 {
 		t.Errorf("finish usage %+v, want input 112 (12+100)", u)
 	}
 }
 
-// Upstream event types the decoder does not know reach a Messages client unchanged.
 func TestNativeStreamPassesUnknownEvents(t *testing.T) {
 	stream := []string{
 		`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"up","content":[],"usage":{"input_tokens":3}}}`,
@@ -595,8 +565,6 @@ func TestNativeStreamPassesUnknownEvents(t *testing.T) {
 	}
 }
 
-// Assistant text after a tool call in the same turn stays in the Chat message that holds the
-// call, so the tool result still follows that message.
 func TestChatKeepsAssistantTurnWhole(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","messages":[
 	 {"role":"user","content":"Weather?"},
@@ -619,7 +587,6 @@ func TestChatKeepsAssistantTurnWhole(t *testing.T) {
 	}
 }
 
-// A message whose blocks are all tool calls keeps its own fields, so a translation reports them.
 func TestMessageFieldsWithoutContentItem(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","messages":[
 	 {"role":"assistant","vendor":true,"content":[{"type":"tool_use","id":"toolu_A","name":"f","input":{}}]}]}`))
@@ -635,8 +602,6 @@ func TestMessageFieldsWithoutContentItem(t *testing.T) {
 	}
 }
 
-// What a reply from another format has that a Message cannot hold is reported: usage details,
-// arguments that are not a JSON object.
 func TestAggregatorReportsReplyLosses(t *testing.T) {
 	a := NewAggregator()
 	for _, ev := range []llm.Event{
@@ -662,9 +627,6 @@ func TestAggregatorReportsReplyLosses(t *testing.T) {
 	}
 }
 
-// Reasoning tokens the upstream reported go in output_tokens_details.thinking_tokens, at most
-// output_tokens, as today's core writes them (core/internal/translator/codex/claude/
-// codex_claude_response.go), and are not reported as lost; none reported, none written.
 func TestUsageThinkingTokens(t *testing.T) {
 	for _, c := range []struct {
 		reasoning *int64
@@ -700,8 +662,6 @@ func TestUsageThinkingTokens(t *testing.T) {
 	}
 }
 
-// A cached input count the model does not hold, because the usage could not be decoded, is not
-// carried: Messages usage writes no cache_read_input_tokens for it, so it is reported as lost.
 func TestUsageCachedTokensWithoutCountIsLost(t *testing.T) {
 	a := NewAggregator()
 	for _, ev := range []llm.Event{
@@ -771,7 +731,6 @@ func TestUsageCacheWriteFromOtherFormat(t *testing.T) {
 	}
 }
 
-// Assistant text on both sides of a tool call stays in the one Chat message holding the call.
 func TestChatKeepsTextAroundToolCall(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","messages":[
 	 {"role":"user","content":"Weather?"},
@@ -794,7 +753,6 @@ func TestChatKeepsTextAroundToolCall(t *testing.T) {
 	}
 }
 
-// Stream events with JSON whitespace before them are put together like any other.
 func TestAggregatorTakesEventsWithLeadingSpace(t *testing.T) {
 	d := NewStreamDecoder()
 	a := NewAggregator()
@@ -820,8 +778,6 @@ func TestAggregatorTakesEventsWithLeadingSpace(t *testing.T) {
 	}
 }
 
-// Stop fields of a non-streamed Message come in message_delta when it is written as a stream, as
-// Anthropic's SDKs read them from there.
 func TestNonStreamedStopFieldsInMessageDelta(t *testing.T) {
 	events, err := DecodeResponse([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"up","content":[],
 	 "stop_reason":"refusal","stop_sequence":null,"stop_details":{"type":"refusal","category":"cyber"},"usage":{"input_tokens":1,"output_tokens":0}}`))
@@ -844,8 +800,6 @@ func TestNonStreamedStopFieldsInMessageDelta(t *testing.T) {
 	}
 }
 
-// A Responses stream that opens with its terminal event still has its encrypted reasoning
-// reported as dropped.
 func TestResponsesTerminalFirstReportsLosses(t *testing.T) {
 	d := openairesponses.NewStreamDecoder()
 	evs, err := d.Decode([]byte(`{"type":"response.completed","response":{"id":"r1","status":"completed","model":"up","output":[
@@ -864,9 +818,6 @@ func TestResponsesTerminalFirstReportsLosses(t *testing.T) {
 	}
 }
 
-// A Gemini GenerateContent request, read by its parser and encoded to Messages: the system
-// instruction becomes the system prompt, each turn's calls and results pair up by id, and Gemini's
-// thought signature and reasoning effort have no place in Messages and are reported.
 func TestGeminiRequestEncodesToMessages(t *testing.T) {
 	const body = `{"systemInstruction":{"parts":[{"text":"Be brief."}]},
 	"contents":[
@@ -908,9 +859,6 @@ func TestGeminiRequestEncodesToMessages(t *testing.T) {
 	}
 }
 
-// Encrypted reasoning from a Responses upstream reaches a Messages client as its thinking block's
-// signature, whether the upstream streamed or sent one JSON Response, and whether the client
-// streams or not. Because the signature carries it, it is not reported as dropped.
 func TestResponsesReasoningCarriedAsSignature(t *testing.T) {
 	sig := base64.URLEncoding.EncodeToString(append([]byte{0x80}, make([]byte, 8+16+16+32)...))
 	reasoning := `{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"Think."}],"encrypted_content":"` + sig + `"}`
@@ -980,10 +928,6 @@ func TestResponsesReasoningCarriedAsSignature(t *testing.T) {
 	}
 }
 
-// A Claude thinking signature survives a Responses client's round trip: the reply's reasoning
-// item carries it as encrypted_content, streamed or not, and when the client replays that item
-// it goes back to Messages as the thinking block, in the assistant turn of the tool call it
-// preceded.
 func TestThinkingSignatureRoundTripsThroughResponses(t *testing.T) {
 	const sig = "EqoBCkgIARABGAIiQRoundTripSig0"
 	stream := []string{
@@ -1061,8 +1005,6 @@ func TestThinkingSignatureRoundTripsThroughResponses(t *testing.T) {
 	}
 }
 
-// Signature deltas are collected for the item's end, up to a limit: a stream that keeps sending
-// them fails instead of growing without bound.
 func TestStreamDecoderBoundsSignature(t *testing.T) {
 	dec := NewStreamDecoder()
 	for _, data := range []string{
@@ -1086,9 +1028,6 @@ func TestStreamDecoderBoundsSignature(t *testing.T) {
 	t.Fatal("the decoder took signature deltas beyond MaxSignature")
 }
 
-// What the reply reports as lost counts toward its size, so core's limit on a non-streamed reply
-// bounds it: each reasoning item of a Responses upstream adds a loss of its own, until llm.MaxLosses
-// are listed and one entry says more were left out.
 func TestAggregatorSizeCountsLosses(t *testing.T) {
 	const n = 1000
 	items := make([]string, n)
@@ -1106,7 +1045,6 @@ func TestAggregatorSizeCountsLosses(t *testing.T) {
 	if len(a.Losses()) != llm.MaxLosses+1 {
 		t.Fatalf("%d losses, want %d", len(a.Losses()), llm.MaxLosses+1)
 	}
-	// The entry that says more were left out is not a loss the size counts.
 	want := 0
 	for _, l := range a.Losses()[:llm.MaxLosses] {
 		want += len(l.Path) + len(l.Detail)
@@ -1116,8 +1054,6 @@ func TestAggregatorSizeCountsLosses(t *testing.T) {
 	}
 }
 
-// A reply with more distinct losses than llm.MaxLosses lists the first MaxLosses, then one entry
-// that says more were left out, and nothing after it.
 func TestStreamWriterBoundsLosses(t *testing.T) {
 	raw := map[string]int{}
 	for i := range 150 {
@@ -1145,9 +1081,6 @@ func TestStreamWriterBoundsLosses(t *testing.T) {
 	}
 }
 
-// A Messages upstream's stream with more distinct events the Message cannot be put together from
-// than llm.MaxLosses lists the first MaxLosses, then one entry that says more were left out, and
-// nothing after it; what the losses add to the size stops growing there too.
 func TestAggregatorBoundsLosses(t *testing.T) {
 	feed := func(n int) *Aggregator {
 		a := NewAggregator()
@@ -1175,8 +1108,6 @@ func TestAggregatorBoundsLosses(t *testing.T) {
 	}
 }
 
-// A Devin reasoning signature is carried in the thinking block's signature, streamed and not, as
-// today's core carries it.
 func TestDevinReasoningSignature(t *testing.T) {
 	events := []llm.Event{
 		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "id1", Model: "m"}},
@@ -1639,9 +1570,6 @@ func TestEncodeCarriesToolCallOnlyMessageCacheControl(t *testing.T) {
 	})
 
 	t.Run("never_lands_on_thinking_block", func(t *testing.T) {
-		// Responses reasoning with a valid Claude signature emits a thinking block, but each
-		// Responses input item has its own turn, so an empty assistant message's cache_control
-		// cannot attach to it.
 		in := `{
 			"model": "claude-sonnet-4-6",
 			"input": [
@@ -1749,7 +1677,6 @@ func TestEncodeResponseFormat(t *testing.T) {
 		if len(losses) != 0 {
 			t.Errorf("losses = %q, want none", lossList(losses))
 		}
-		// An empty ResponseFormat has no format requested and must not report a loss.
 		req.Options.ResponseFormat = &llm.ResponseFormat{}
 		out, losses, err = EncodeRequest(req)
 		if err != nil {
@@ -1942,8 +1869,6 @@ func TestRefusalStopReasonBothWays(t *testing.T) {
 	})
 }
 
-// Messages has no audio block, so an audio part is dropped and reported rather than turning into
-// a document, and the text beside it still reaches Claude.
 func TestEncodeAudioInputIsReported(t *testing.T) {
 	req, err := openaichat.ParseRequest([]byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[
 		{"type":"text","text":"Transcribe this."},
@@ -1962,8 +1887,6 @@ func TestEncodeAudioInputIsReported(t *testing.T) {
 	}
 }
 
-// A Chat upstream's refusal reaches a Messages client as the reply's text and stop_reason
-// "refusal", streamed or not.
 func TestChatRefusalBecomesMessagesRefusal(t *testing.T) {
 	t.Run("nonstream", func(t *testing.T) {
 		evs, err := openaichat.DecodeResponse([]byte(`{"id":"c1","model":"m","choices":[{"index":0,` +
@@ -2030,8 +1953,6 @@ func TestChatRefusalBecomesMessagesRefusal(t *testing.T) {
 	})
 }
 
-// A Messages upstream's output_tokens_details.thinking_tokens is read into the reasoning count,
-// streamed and not, and capped at output_tokens, which already includes it.
 func TestDecodeThinkingTokens(t *testing.T) {
 	check := func(t *testing.T, u *llm.Usage) {
 		t.Helper()

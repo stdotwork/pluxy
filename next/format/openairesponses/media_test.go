@@ -19,7 +19,6 @@ func imageRequest(url, fileID string) llm.Request {
 	}}}
 }
 
-// Responses takes an image by file id, and a file by URL; both are its own forms.
 func TestEncodeImageByFileID(t *testing.T) {
 	body, losses, err := EncodeRequest(imageRequest("", "file_1"))
 	if err != nil {
@@ -50,8 +49,6 @@ func TestEncodeFileURL(t *testing.T) {
 	}
 }
 
-// These encoders also serve OpenAI-compatible vendors, so any image media type is kept: an
-// inline image is sent only when its data is base64 and its media type starts with image/.
 func TestEncodeInlineImageValidation(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -92,8 +89,6 @@ func TestEncodeInlineImageValidation(t *testing.T) {
 	}
 }
 
-// A Messages plain-text document (as anthropicmessages.ParseRequest builds it) has no Responses
-// form: its text is carried in a text part, delimited, and reported as an approximated loss.
 func TestEncodeTextDocument(t *testing.T) {
 	doc := []byte(`{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Line one\nLine two"}}`)
 	req := llm.Request{Model: "m", Items: []llm.Item{{
@@ -117,8 +112,6 @@ func TestEncodeTextDocument(t *testing.T) {
 	}
 }
 
-// Only a Messages document block is a Messages text document: a native part of another format
-// that happens to hold the same JSON is not carried as its text.
 func TestEncodeForeignNativeTextDocumentDropped(t *testing.T) {
 	doc := []byte(`{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Line one\nLine two"},"title":"notes.txt"}`)
 	req := llm.Request{Model: "m", Items: []llm.Item{{
@@ -138,8 +131,6 @@ func TestEncodeForeignNativeTextDocumentDropped(t *testing.T) {
 	}
 }
 
-// A translated file part is checked too: a data URL that is not base64 is not sent, and an empty
-// part does not become an empty input_file.
 func TestEncodeTranslatedFileValidation(t *testing.T) {
 	file := func(p llm.Part) llm.Request {
 		return llm.Request{Model: "m", Items: []llm.Item{{
@@ -178,8 +169,6 @@ func TestEncodeTranslatedFileValidation(t *testing.T) {
 	}
 }
 
-// FileData can be a data URL, raw base64 or a URL. A translated part keeps each of those, and
-// anything else is dropped with a loss.
 func TestEncodeTranslatedFileDataForms(t *testing.T) {
 	file := func(data string) llm.Request {
 		return llm.Request{Model: "m", Items: []llm.Item{{
@@ -214,8 +203,6 @@ func TestEncodeTranslatedFileDataForms(t *testing.T) {
 	}
 }
 
-// An audio file part with the scheme and marker in another case is still audio, as OpenAI's own
-// data URLs are case-insensitive.
 func TestEncodeAudioDataURLCase(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","input":[{"type":"message","role":"user","content":[
 		{"type":"input_text","text":"transcribe"},
@@ -235,8 +222,6 @@ func TestEncodeAudioDataURLCase(t *testing.T) {
 	}
 }
 
-// An inline audio file part's media type is matched without regard to case, so mixed-case media
-// types produce the same input_audio format token as their lowercase forms.
 func TestEncodeAudioMediaTypeCase(t *testing.T) {
 	encode := func(fileData string) string {
 		t.Helper()

@@ -10,7 +10,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// trParse decodes a client message.
 func trParse(t *testing.T, s string) map[string]json.RawMessage {
 	t.Helper()
 	var m map[string]json.RawMessage
@@ -20,7 +19,6 @@ func trParse(t *testing.T, s string) map[string]json.RawMessage {
 	return m
 }
 
-// trDecode decodes a turn body, which must be a JSON object.
 func trDecode(t *testing.T, b []byte) map[string]any {
 	t.Helper()
 	var m map[string]any
@@ -30,7 +28,6 @@ func trDecode(t *testing.T, b []byte) map[string]any {
 	return m
 }
 
-// trNext makes msg into a turn on tr and returns its decoded body.
 func trNext(t *testing.T, tr *Transcript, msg string) map[string]any {
 	t.Helper()
 	turn, e := tr.Next(trParse(t, msg))
@@ -40,7 +37,6 @@ func trNext(t *testing.T, tr *Transcript, msg string) map[string]any {
 	return trDecode(t, turn.Body)
 }
 
-// trIDs returns the id of each item of a body's input, in order ("" for an item without one).
 func trIDs(t *testing.T, m map[string]any) []string {
 	t.Helper()
 	list, ok := m["input"].([]any)
@@ -63,7 +59,6 @@ func trWantIDs(t *testing.T, m map[string]any, want ...string) {
 	}
 }
 
-// trStandalone checks what every turn body carries: no type, no previous_response_id, streamed.
 func trStandalone(t *testing.T, m map[string]any) {
 	t.Helper()
 	for _, k := range []string{"type", "previous_response_id"} {
@@ -76,7 +71,6 @@ func trStandalone(t *testing.T, m map[string]any) {
 	}
 }
 
-// trWantBadRequest checks a 400 error of the kind every websocket request error is.
 func trWantBadRequest(t *testing.T, e *llm.Error, msg string) {
 	t.Helper()
 	if e == nil {
@@ -94,7 +88,6 @@ const (
 	trPrevNotFound = "Previous response is not available on this websocket; resend the full conversation input without previous_response_id"
 )
 
-// trStarted returns a transcript after one completed turn: input [u1], output [a1].
 func trStarted(t *testing.T) *Transcript {
 	t.Helper()
 	tr := &Transcript{}
@@ -252,7 +245,6 @@ func TestTranscriptReplacement(t *testing.T) {
 	})
 }
 
-// Codex's own compaction: a summary user message that starts with compactionSummaryPrefix.
 func TestTranscriptCodexCompactionSummary(t *testing.T) {
 	summary := fmt.Sprintf("%q", compactionSummaryPrefix+"\nSummary body.")
 
@@ -504,8 +496,6 @@ func TestTranscriptWarmup(t *testing.T) {
 		trWantIDs(t, m, "u3")
 	})
 
-	// Only a warmup without a parent is answered locally; today's core sends one that names a
-	// parent upstream as a turn (its local warmup needs previous_response_id empty).
 	t.Run("a warmup with the committed turn as parent merges and goes upstream as a turn", func(t *testing.T) {
 		tr := trStarted(t)
 		turn, e := tr.Next(trParse(t, `{"type":"response.create","generate":false,"previous_response_id":"resp_1","input":[{"type":"message","role":"user","id":"u2","content":"more"}]}`))
@@ -702,7 +692,6 @@ func TestWebsocketInterruptedMessage(t *testing.T) {
 	})
 }
 
-// A replayed item whose key is spelled with JSON escapes is cleaned like the plain spelling.
 func TestTranscriptTokenCountsEscapedKey(t *testing.T) {
 	tr := &Transcript{}
 	turn, e := tr.Next(trParse(t, trFirstCreate))

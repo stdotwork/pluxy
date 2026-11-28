@@ -7,8 +7,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A Gemini client keeps the details of a Google error, and gets no details from another format's
-// error, whose details mean something else.
 func TestErrorDetailsOnlyFromGoogle(t *testing.T) {
 	const details = `[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"X"}]`
 	for _, c := range []struct{ name, raw, want string }{
@@ -31,8 +29,6 @@ func TestErrorDetailsOnlyFromGoogle(t *testing.T) {
 	}
 }
 
-// An overflow keeps the status name a Google upstream gave it, and any other upstream's overflow
-// is INVALID_ARGUMENT.
 func TestOverflowStatusName(t *testing.T) {
 	for raw, want := range map[string]string{
 		`{"error":{"code":400,"message":"m","status":"FAILED_PRECONDITION"}}`:     "FAILED_PRECONDITION",

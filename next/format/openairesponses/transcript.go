@@ -10,31 +10,20 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Transcript keeps the conversation of one Responses WebSocket client whose turns go to an
-// upstream without socket state (each turn is a separate HTTP request), so each turn can carry
-// the whole conversation: a turn that continues the last response (previous_response_id, or a
-// response.append) gets the last request's input and the last response's output in front of its
-// own input. The rules follow today's core (its WebSocket handler's transcript merge), which the
-// corpus records.
 type Transcript struct {
-	last   map[string]json.RawMessage // the last turn's request as sent upstream; nil before one
-	output json.RawMessage            // the last response's output items
-	warmup string                     // the ID of a warmup answered without the upstream, until the next turn
+	last   map[string]json.RawMessage
+	output json.RawMessage
+	warmup string
 }
 
-// Message types a Responses WebSocket client sends.
 const (
 	MessageCreate    = "response.create"
 	MessageAppend    = "response.append"
 	MessageInterrupt = "response.interrupt"
 )
 
-// TranscriptTurn is one client message made into an upstream request.
 type TranscriptTurn struct {
-	// Body is the Responses request body to send upstream.
-	Body []byte
-	// Warmup is set for a warmup (generate: false), which the caller answers without the
-	// upstream (WarmupEvents) and records with Warmup.
+	Body   []byte
 	Warmup bool
 }
 
@@ -53,16 +42,11 @@ func isArray(v json.RawMessage) bool {
 	return len(v) > 0 && v[0] == '['
 }
 
-// IsWarmup reports whether a client message only warms the socket up: a response.create with
-// generate set to false.
 func IsWarmup(msg map[string]json.RawMessage) bool {
 	g, ok := msg["generate"]
 	return ok && jsonString(msg["type"]) == MessageCreate && string(bytes.TrimSpace(g)) == "false"
 }
 
-// Next makes a client message (response.create or response.append) into the next turn's
-// request, or returns the error the client gets for it. It does not change the transcript; the
-// caller records a turn that completed with Commit, a warmup with Warmup.
 func (t *Transcript) Next(msg map[string]json.RawMessage) (TranscriptTurn, *llm.Error) {
 	typ := jsonString(msg["type"])
 	prev := jsonString(msg["previous_response_id"])
@@ -73,7 +57,6 @@ func (t *Transcript) Next(msg map[string]json.RawMessage) (TranscriptTurn, *llm.
 		if prev != t.warmup {
 			return TranscriptTurn{}, PreviousResponseNotFound()
 		}
-		// The warmup's input never reached the upstream: send it with this turn's.
 		if typ != MessageCreate && typ != MessageAppend {
 			return TranscriptTurn{}, badRequest("unsupported websocket request type: " + typ)
 		}
@@ -85,7 +68,6 @@ func (t *Transcript) Next(msg map[string]json.RawMessage) (TranscriptTurn, *llm.
 		m["input"] = merged
 		return TranscriptTurn{Body: marshalObject(m)}, nil
 	case warmup && prev == "", t.warmup != "" && typ == MessageCreate:
-		// A warmup, or a create after one, that names no parent starts the conversation again.
 		if hasInput && !isArray(input) {
 			return TranscriptTurn{}, badRequest("websocket request requires array field: input")
 		}
@@ -109,8 +91,6 @@ func (t *Transcript) Next(msg map[string]json.RawMessage) (TranscriptTurn, *llm.
 	if !isArray(input) {
 		return TranscriptTurn{}, badRequest("websocket request requires array field: input")
 	}
-	// From here on the message names a parent or appends to one (a warmup without a parent is
-	// handled above): it goes upstream as a turn, warmup or not, as in today's core.
 	if replacesTranscript(typ, msg, input) {
 		return TranscriptTurn{Body: marshalObject(t.replacement(msg))}, nil
 	}
@@ -118,20 +98,15 @@ func (t *Transcript) Next(msg map[string]json.RawMessage) (TranscriptTurn, *llm.
 	if !containsCompaction(input) {
 		m["input"] = mergeInput(t.last, t.output, input)
 	}
-	// Input with a compaction item already holds the whole conversation, compacted: merging
-	// the stale turns into it would break its tool call pairs. Today's core sends it as it is
-	// to an upstream that takes compaction items (the Codex endpoint, which made them).
 	return TranscriptTurn{Body: marshalObject(m)}, nil
 }
 
-// Commit records a turn that completed: the request sent upstream and the response's output.
 func (t *Transcript) Commit(body []byte, output json.RawMessage) {
 	_ = json.Unmarshal(body, &t.last)
 	t.output = output
 	t.warmup = ""
 }
 
-// Warmup records a warmup answered without the upstream, with the response ID the client got.
 func (t *Transcript) Warmup(body []byte, id string) {
 	_ = json.Unmarshal(body, &t.last)
 	delete(t.last, "generate")
@@ -139,15 +114,10 @@ func (t *Transcript) Warmup(body []byte, id string) {
 	t.warmup = id
 }
 
-// Reset forgets the conversation.
 func (t *Transcript) Reset() { *t = Transcript{} }
 
-// Started reports whether a turn has completed on the transcript.
 func (t *Transcript) Started() bool { return t.last != nil }
 
-// replacement returns msg as a request that stands alone: without type and
-// previous_response_id, with the last request's model and instructions where msg has none,
-// streamed.
 func (t *Transcript) replacement(msg map[string]json.RawMessage) map[string]json.RawMessage {
 	m := clone(msg)
 	delete(m, "type")
@@ -166,8 +136,6 @@ func (t *Transcript) replacement(msg map[string]json.RawMessage) map[string]json
 	return m
 }
 
-// createRequest finishes the request of a first turn: input a list (empty when absent), a
-// model, streamed.
 func createRequest(m map[string]json.RawMessage) ([]byte, *llm.Error) {
 	input, ok := m["input"]
 	if ok && !isArray(input) {
@@ -210,9 +178,6 @@ func itemOf(raw json.RawMessage) transcriptItem {
 	return it
 }
 
-// replacesTranscript reports whether a message with no previous_response_id carries the whole
-// conversation itself: its input holds a model's output (a tool call or an assistant message),
-// or the Codex client's own compaction summary.
 func replacesTranscript(typ string, msg map[string]json.RawMessage, input json.RawMessage) bool {
 	if jsonString(msg["previous_response_id"]) != "" {
 		return false
@@ -290,9 +255,6 @@ func containsCompaction(input json.RawMessage) bool {
 	return slices.ContainsFunc(items(input), func(r json.RawMessage) bool { return isCompaction(itemOf(r).Type) })
 }
 
-// mergeInput returns the last request's input, then the last response's output (as input
-// items, without fields only output has), then the new input; a tool call whose call_id came
-// earlier is left out, and of the items sharing an id only one stays.
 func mergeInput(last map[string]json.RawMessage, output, appendInput json.RawMessage) json.RawMessage {
 	list := items(last["input"])
 	if isArray(output) {
@@ -308,11 +270,7 @@ func mergeInput(last map[string]json.RawMessage, output, appendInput json.RawMes
 	return marshalList(dedupeByID(dedupeCalls(list)))
 }
 
-// replayItem removes from a response item replayed as input the content_token_count fields of
-// its internal_chat_message_metadata_passthrough objects, which only output has, and such
-// objects left empty.
 func replayItem(r json.RawMessage) json.RawMessage {
-	// The key may be spelled with JSON escapes, which only decoding resolves.
 	if !bytes.Contains(r, []byte("internal_chat_message_metadata_passthrough")) && !bytes.Contains(r, []byte(`\u`)) {
 		return r
 	}
@@ -372,7 +330,6 @@ func isToolCallOutput(typ string) bool {
 	return typ == "function_call_output" || typ == "custom_tool_call_output" || typ == "tool_search_output"
 }
 
-// dedupeCalls keeps the first tool call of each call_id.
 func dedupeCalls(list []json.RawMessage) []json.RawMessage {
 	seen := map[string]bool{}
 	var out []json.RawMessage
@@ -389,8 +346,6 @@ func dedupeCalls(list []json.RawMessage) []json.RawMessage {
 	return out
 }
 
-// dedupeByID keeps one item per id: the last, unless an earlier one is the call a tool output
-// answers and the later one is not.
 func dedupeByID(list []json.RawMessage) []json.RawMessage {
 	its := make([]transcriptItem, len(list))
 	answered := map[string]bool{}

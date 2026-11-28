@@ -20,7 +20,6 @@ func imageRequest(url, fileID string) llm.Request {
 	}}}
 }
 
-// Messages takes an image by URL and by file id, and a PDF by URL, as its own source forms.
 func TestEncodeImageSources(t *testing.T) {
 	for _, c := range []struct {
 		name   string
@@ -49,8 +48,6 @@ func TestEncodeImageSources(t *testing.T) {
 	}
 }
 
-// An inline image is sent only when its data is base64 and its media type is one Claude
-// documents for image input.
 func TestEncodeInlineImageValidation(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -92,7 +89,6 @@ func TestEncodeInlineImageValidation(t *testing.T) {
 	}
 }
 
-// A Messages plain-text document is a Messages block: it is written back as the client sent it.
 func TestEncodeTextDocumentKept(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","max_tokens":9,"messages":[{"role":"user","content":[
 		{"type":"text","text":"summarize"},
@@ -112,8 +108,6 @@ func TestEncodeTextDocumentKept(t *testing.T) {
 	}
 }
 
-// A part the client sent to Messages itself is what Messages accepts: the encoder does not
-// apply the image list or the base64 check to it, only to parts translated from another format.
 func TestEncodeSameFormatImageNotValidated(t *testing.T) {
 	same := imageRequest("data:image/tiff;base64,aGVsbG8=", "")
 	same.Items[0].Content[1].Origin = &llm.Origin{Format: llm.FormatAnthropicMessages, Path: "messages[0].content[1]"}
@@ -138,8 +132,6 @@ func TestEncodeSameFormatImageNotValidated(t *testing.T) {
 	}
 }
 
-// FileData can be a data URL, raw base64 or a URL. A translated part keeps each of those, and
-// anything else is dropped with a loss.
 func TestEncodeTranslatedFileDataForms(t *testing.T) {
 	file := func(data string) llm.Request {
 		return llm.Request{Model: "m", Items: []llm.Item{{
@@ -174,8 +166,6 @@ func TestEncodeTranslatedFileDataForms(t *testing.T) {
 	}
 }
 
-// A native Messages document block with a base64 image source is promoted to an image block
-// regardless of the media type's case.
 func TestEncodeDocumentImageMediaTypeCase(t *testing.T) {
 	encodeType := func(mediaType string) string {
 		t.Helper()

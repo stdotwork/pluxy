@@ -8,7 +8,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// An image in a tool message is read as a part of the result, with the text joined in Output.
 func TestParseToolMessageImage(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","messages":[
 	 {"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},
@@ -25,9 +24,6 @@ func TestParseToolMessageImage(t *testing.T) {
 	}
 }
 
-// Images and files from several tool results go together in one user message after the last
-// tool message, so every tool message still follows the call message directly; a user message
-// that follows takes them at its start.
 func TestToolResultMediaFollowToolMessages(t *testing.T) {
 	img := llm.Part{Type: llm.PartImage, URL: "data:image/png;base64,AAAA"}
 	file := llm.Part{Type: llm.PartFile, FileID: "file_1"}
