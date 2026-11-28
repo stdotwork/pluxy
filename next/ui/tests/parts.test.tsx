@@ -947,18 +947,15 @@ test("a setting that was saved says Saved, and the next change takes it away unt
   };
   expect(m.text()).not.toContain("Saved");
   await toggle(true);
-  // On its way: Saving…, not Saved.
   expect(m.text()).toContain("Saving…");
   expect(m.text()).not.toContain("Saved");
   await reply({ status: 200, body: {} });
   expect(m.text()).toContain("Saved");
   expect(m.text()).not.toContain("Saving…");
-  // A new change: Saved goes at once, and comes back once that one is saved.
   await toggle(false);
   expect(m.text()).not.toContain("Saved");
   await reply({ status: 200, body: {} });
   expect(m.text()).toContain("Saved");
-  // A save that fails never says Saved.
   await toggle(true);
   await reply({ status: 500, error: { code: "internal", message: "the disk is full" } });
   expect(m.text()).not.toContain("Saved");
@@ -1001,7 +998,6 @@ test("a 401 reply or empty error string never says Saved, and 401 asks to sign i
     await settle();
   };
 
-  // 401: signs out, shows no error and no Saved, and reverts the control.
   await toggle(true);
   await reply({ status: 401, error: { code: "unauthorized", message: "session expired" } });
   expect(unauthorizedCalls).toBe(1);
@@ -1010,13 +1006,11 @@ test("a 401 reply or empty error string never says Saved, and 401 asks to sign i
   expect(m.text()).not.toContain("session expired");
   expect(input.checked).toBe(false);
 
-  // An empty string outcome (no error text from useOutcome) also does not flash Saved.
   await toggle(true);
   await reply("");
   expect(m.text()).not.toContain("Saved");
   expect(input.checked).toBe(false);
 
-  // Explicit undefined (nothing returned when it worked) still flashes Saved.
   await toggle(true);
   await reply(undefined);
   expect(m.text()).toContain("Saved");
@@ -1048,12 +1042,10 @@ test("a Settings page's search keeps the rows that hold every word, in the name,
     );
   expect(names("")).toContain("Log every request");
   expect(names("")).toContain("Outbound proxy");
-  // Every word has to be there, in any case, in any order.
   expect(names("PROXY through")).toContain("Outbound proxy");
   expect(names("PROXY through")).not.toContain("Log every request");
   expect(names("proxy log")).not.toContain("Outbound proxy");
   expect(names("proxy log")).not.toContain("Log every request");
-  // The settings file's key and a row's note are searched too.
   expect(names("request_log")).toContain("Log every request");
   expect(names("request_log")).not.toContain("Address");
   expect(names("starts")).toContain("Address");

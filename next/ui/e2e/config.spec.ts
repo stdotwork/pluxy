@@ -907,7 +907,6 @@ test("Config search narrows setting rows while keeping a newly created managemen
   await expect(notice).toBeVisible();
   await expect(notice.locator('[data-part="key-value"]')).toHaveText(newKey);
 
-  // Once the one-time notice is closed, Keys has no matching row left and hides too.
   await notice.getByRole("button", { name: "Close", exact: true }).click();
   await expect(notice).toHaveCount(0);
   await expect(keys).toBeHidden();

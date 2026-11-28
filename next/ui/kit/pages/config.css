@@ -11,7 +11,6 @@
     overflow-wrap: anywhere;
     user-select: all;
   }
-  /* The Settings tab's groups: an address with a group scrolls to it, under the sticky frame. */
   .config-settings {
     min-width: 0;
   }
@@ -48,7 +47,6 @@
   .config-find-count {
     color: var(--px-color-text-muted);
   }
-  /* The Settings file tab: the search bar and the file in one card, the file as wide as the card. */
   .config-editor-card {
     overflow: hidden;
   }

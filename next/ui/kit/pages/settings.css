@@ -1,6 +1,3 @@
-/* The Settings pages' shared look (settingGroup.tsx): groups of rows in rounded cards, and the
-   rows inside them (SettingRow, parts/settingRow.tsx). General, Themes, Config, System and
-   Extensions all draw from it. */
 @layer kit {
   .settings-column,
   .settings-groups {
@@ -15,13 +12,11 @@
     margin-inline: auto;
   }
 
-  /* A group: its title sits outside the card, as in T3 Code's settings. */
   .setting-group {
     display: grid;
     gap: calc(var(--s) * 2);
     align-content: start;
     min-width: 0;
-    /* A link to the group lands below the frame's own sticky head. */
     scroll-margin-top: calc(var(--s) * 4);
   }
 
@@ -56,7 +51,6 @@
     box-shadow: var(--px-shadow-raised);
   }
 
-  /* Rows: 52 high at least, a hairline between, room at the sides; the control is at the end. */
   .setting-group-card > .setting-row {
     padding: calc(var(--s) * 3) calc(var(--s) * 4);
     min-height: 52px;
@@ -94,7 +88,6 @@
     padding: calc(var(--s) * 2) 0 0;
   }
 
-  /* A piece of a group that is not a setting row (a list, a form, a dropzone): the same room. */
   .setting-group-card > .setting-piece {
     padding: calc(var(--s) * 3) calc(var(--s) * 4);
     border-bottom: var(--px-shape-border) solid var(--px-color-border);
@@ -105,13 +98,10 @@
     border-bottom: 0;
   }
 
-  /* Saving… and Saved sit before the control, so the control stays where it is when they come. */
   .setting-group-card .setting-control .setting-saving {
     order: -1;
   }
 
-  /* Saved: a tick and the word, for a moment, in the place Saving… was. It fades in; the theme's
-     motion tokens turn that off for people who ask for less motion. */
   .setting-saving[data-saved] {
     display: inline-flex;
     align-items: center;
@@ -127,7 +117,6 @@
     }
   }
 
-  /* A waiting, empty or failed pane that stands where a group's card would be is drawn as one. */
   .setting-group-body > .state-pane {
     padding: calc(var(--s) * 5) calc(var(--s) * 4);
     border: var(--px-shape-border) solid var(--px-color-card-border);
@@ -135,7 +124,6 @@
     background: var(--px-color-card);
   }
 
-  /* An empty state or notice inside a group takes the card's room too. */
   .setting-group-card > .notice,
   .setting-group-card > .empty,
   .setting-group-card > .state-pane {
@@ -146,8 +134,6 @@
     padding-inline: 0;
   }
 
-  /* In a narrow row a setting stacks its control under its sentence, except a switch, which is
-     small enough to stay at the end of the line. */
   @container (max-width: 40em) {
     .setting-group-card > .setting-row .setting-grid:has(.switch) {
       grid-template-columns: minmax(0, 1fr) auto;
@@ -166,10 +152,6 @@
     }
   }
 
-  /* Search: a field above the groups. It narrows only setting rows: a group with no matching row
-     and no other non-empty control is hidden, while groups holding non-row controls (the Themes
-     gallery, file controls, a new management key) stay visible. A sentence says when no setting
-     row is left. */
   .settings-search {
     display: flex;
     align-items: center;

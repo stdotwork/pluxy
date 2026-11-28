@@ -1,7 +1,3 @@
-// The settings pattern the Settings pages share: a column of groups, each a small heading and a
-// rounded card of rows split by hairlines (SettingRow, or a piece of the page's own). A setting
-// saves the moment it changes, and says Saved beside it.
-
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import { Icon } from "../icons";
@@ -13,10 +9,6 @@ const t = strings("settingGroup", {
   none: "No setting matches that.",
 });
 
-/**
- * The column the groups sit in: centred, no wider than a row stays easy to read. search puts the
- * groups in a SettingsSearchScope.
- */
 export function SettingsColumn(props: { children: ComponentChildren; class?: string; search?: boolean }) {
   return (
     <div
@@ -28,11 +20,6 @@ export function SettingsColumn(props: { children: ComponentChildren; class?: str
   );
 }
 
-/**
- * A field above the groups it holds that narrows every setting row in them to the ones that match
- * what is typed (SettingRow), and says so when no row is left. Groups with controls that are not
- * setting rows stay visible.
- */
 export function SettingsSearchScope(props: { children: ComponentChildren }) {
   const [query, setQuery] = useState("");
   const asked = query.trim();
@@ -57,16 +44,11 @@ export function SettingsSearchScope(props: { children: ComponentChildren }) {
   );
 }
 
-/**
- * One group: title (with actions at its end), an optional sentence under it, and the card of rows.
- * id is the address a link can scroll to.
- */
 export function SettingGroup(props: {
   title?: string;
   about?: ComponentChildren;
   actions?: ComponentChildren;
   id?: string;
-  /** Whether the rows sit in the rounded card. false: what the group holds stands on the page, as the Themes gallery does. */
   card?: boolean;
   children: ComponentChildren;
 }) {

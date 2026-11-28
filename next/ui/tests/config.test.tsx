@@ -248,7 +248,6 @@ test("a row change sends one PATCH with only that field, says Saving… and then
   patch.answer({ status: 200, body: saved });
   await settle();
   expect(row(root, "Log every request").textContent).not.toContain("Saving…");
-  // The row says Saved once core has taken the value.
   expect(row(root, "Log every request").textContent).toContain("Saved");
   expect((all(row(root, "Log every request"), "input")[0] as FakeNode).checked).toBe(true);
   // A saved row reads the file again, as the file has no edits.

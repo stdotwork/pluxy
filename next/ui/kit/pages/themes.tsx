@@ -163,7 +163,6 @@ interface Acts {
   onProblem: (problem: string) => void;
 }
 
-/** A setting of the page that takes effect at once, with its own "Saved". */
 function QuickRow(props: {
   name: string;
   about: string;
@@ -319,16 +318,13 @@ function AddTheme(props: {
     return !("error" in outcome);
   };
 
-  /** A file chosen or dropped: refused when too large, else added like pasted text. */
   const addFile = async (file: File | undefined) => {
     if (!file) return;
-    // Checked before the file is read: a theme file is a few KiB.
     if (file.size > MAX_THEME_BYTES) {
       props.onAct();
       props.onResult({ error: t("tooLarge", { limit: MAX_THEME_BYTES / 1024 }), whole: true });
       return;
     }
-    // The pasted text was not what got added: a theme from a file leaves none behind.
     if (await add(await file.text())) setText("");
   };
 
@@ -511,7 +507,6 @@ export function ThemesPage() {
                 )}
               </QuickRow>
             );
-            // Density is a token, not a layout option; it sits after Width.
             return option === "width"
               ? [
                   row,

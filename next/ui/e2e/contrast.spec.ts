@@ -105,8 +105,6 @@ for (const theme of THEMES) {
         const spans = page.locator(".segment span");
         expect(await spans.count()).toBeGreaterThan(0);
         await expect(page.locator(".theme-card[data-unusable] .theme-about")).toBeVisible();
-        // The text of each segment: its label, and the note under it where it has one; each theme's
-        // name and description (including an unusable theme's reason); each setting's name and sentence.
         const parts = page.locator(
           ".segment span, .segment span small, .theme-name, .theme-about, .setting-name, .setting-description",
         );
@@ -118,8 +116,6 @@ for (const theme of THEMES) {
           .map((m) => `"${m.text}": ${m.ratio.toFixed(2)}:1 (${m.fg} on ${m.bg})`);
         expect(low).toEqual([]);
 
-        // Every palette dot keeps a hairline ring at 3:1+ against the active card, while its fill
-        // stays the previewed theme's own colour.
         const dots = await page.locator(".theme-dots i").evaluateAll((elements) => {
           type Rgba = [number, number, number, number];
           const ctx = document.createElement("canvas").getContext("2d");
@@ -178,7 +174,6 @@ for (const theme of THEMES) {
         });
         expect(dots.length).toBe(15);
         expect(dots.filter((d) => d.borderWidth < 1 || d.ringRatio < 3)).toEqual([]);
-        // Default's page dot (dot 2) keeps Default's light page colour (#fcfcfc) on every theme.
         expect(dots.filter((d) => d.cardName === "Default")[1]?.fill).toBe("rgb(252, 252, 252)");
       } finally {
         await core.mgmt("DELETE", "/themes/me/broken");

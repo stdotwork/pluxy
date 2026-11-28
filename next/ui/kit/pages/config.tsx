@@ -26,7 +26,6 @@ import { fileError, configText as t } from "./configStrings";
 import { nest, settingAt } from "./routing.rules";
 import { SettingsColumn, SettingsSearchScope } from "./settingGroup";
 
-/** A waiting or failed pane of a tab, in the card its rows would be in. */
 function PaneCard(props: Parameters<typeof StatePane>[0]) {
   return (
     <div class="setting-group-card" data-part="setting-card">

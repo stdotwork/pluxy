@@ -257,7 +257,6 @@ test("each extension has a tile with its provider's first letter, one series col
   };
   const claude = tile(m.root, "pluxy/claude");
   expect(claude.textContent).toBe("C");
-  // A picture beside the name, which says it: hidden from assistive technology.
   expect(claude.attributes.find((a) => a.name === "aria-hidden")?.value).toBe("true");
   const series = (n: FakeNode) => Number(n.attributes.find((a) => a.name === "data-series")?.value);
   expect(series(claude)).toBeGreaterThanOrEqual(1);

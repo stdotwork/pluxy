@@ -6,8 +6,6 @@
     margin: 0;
   }
 
-  /* The list and the opened extension side by side need room for both; the column answers to its
-     own width, since the navigation and the topics list take most of a small window. */
   .ext {
     container-type: inline-size;
   }
@@ -26,7 +24,6 @@
     padding-inline: calc(var(--s) * 1);
   }
 
-  /* An extension group stands on the page; its list is the rounded card. */
   .setting-group-body > .notice,
   .setting-group-body > p {
     margin: 0;
@@ -36,7 +33,6 @@
     padding-inline: calc(var(--s) * 1);
   }
 
-  /* The selected and hovered row are painted to the card's rounded corners. */
   .setting-group-card:has(> .ext-rows) {
     overflow: hidden;
   }
@@ -110,7 +106,6 @@
     justify-content: flex-end;
   }
 
-  /* The tile: a letter on a tint of the extension's series colour, with ink on it. */
   .ext-mark {
     display: grid;
     place-items: center;

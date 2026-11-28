@@ -69,11 +69,6 @@ const t = strings("extensions", {
   listFailed: "Could not read the list {name}: {error}",
 });
 
-/**
- * A small tile for an extension: the first letter of its provider's name, on a tint of one of the
- * theme's six series colours, the same colour for the same extension every time. The provider's own
- * mark replaces it once extensions report one.
- */
 function ExtMark(props: { id: string }) {
   let hash = 0;
   for (const c of props.id) hash = (hash * 31 + c.charCodeAt(0)) % 6;

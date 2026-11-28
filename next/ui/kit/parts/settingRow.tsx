@@ -15,13 +15,8 @@ const t = strings("parts.settingRow", {
   saved: "Saved",
 });
 
-/**
- * What a Settings page is searched for. A SettingRow whose name, sentence, note or settings-file
- * key do not hold every word of it is not drawn. Empty: every row is drawn.
- */
 export const SettingsSearchContext = createContext("");
 
-/** Whether text holds every word of query, in any case. */
 export function matchesSearch(query: string, ...texts: (string | undefined)[]): boolean {
   const hay = texts.filter(Boolean).join(" ").toLowerCase();
   return query
@@ -31,13 +26,8 @@ export function matchesSearch(query: string, ...texts: (string | undefined)[]): 
     .every((word) => hay.includes(word));
 }
 
-/** How long "Saved" stays beside a setting that was saved. */
 const SAVED_SHOWS_MS = 1600;
 
-/**
- * "Saved" for a setting that takes effect at once with nothing to wait for (a choice kept on this
- * device): flash() shows it for a moment, and a new flash starts the moment again.
- */
 export function useSavedTick() {
   const [saved, setSaved] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -56,21 +46,12 @@ export function useSavedTick() {
   };
 }
 
-/** Whether a save's outcome means the change was saved (nothing, or a 2xx reply). */
 function savedOk(result: Outcome): boolean {
   if (result === undefined) return true;
   if (typeof result === "string") return false;
   return result.status >= 200 && result.status < 300;
 }
 
-/**
- * A setting's value for a row that saves on change. saved is the value core holds; set shows the
- * new value at once and saves it with save, which gives back the reply, an error to show, or
- * nothing. One save at a time, so core keeps the newest value: a value set while a save is on its
- * way is sent after it ends, and of several set meanwhile only the newest. The last save's answer
- * counts: when it fails, the value goes back to saved and the error stays until the next set; when
- * it works, saved is true for a moment (the row's "Saved").
- */
 export function useSetting<T>(saved: T, save: (value: T) => Promise<Outcome> | Outcome) {
   const outcome = useOutcome();
   const tick = useSavedTick();
@@ -132,14 +113,6 @@ export function useSetting<T>(saved: T, save: (value: T) => Promise<Outcome> | O
   return { value, set, saving, saved: tick.saved, error };
 }
 
-/**
- * One setting. name is the setting's name, description one sentence of what it does, note a line
- * after it on what else it changes, configKey (on Config only) its key in the settings file. children is the control: a Switch, Choices, a
- * select, an input or a Button. saving shows Saving… beside it, and saved (for a moment after a save
- * that worked) a tick and Saved; disabled, a sentence, dims the
- * control and says why under it; error, a save that failed, shows under the row. The reason and
- * the error are masked in privacy mode.
- */
 export function SettingRow(props: {
   name: string;
   description?: string;

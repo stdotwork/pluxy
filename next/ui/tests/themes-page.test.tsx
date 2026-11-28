@@ -240,7 +240,6 @@ const cssOf = (node: FakeNode) => (node.style as unknown as { cssText?: string }
 
 test("each theme in the gallery has a miniature of pluxy's frame in its own colours, light and dark when it has both", async () => {
   const w = world();
-  // A theme someone added, with both appearances, its navigation on top and a flat frame (as Paper has).
   const topFlat = { theme_version: 0, id: "me/topflat", name: "Top Flat", appearance: "both" };
   expect(
     await w.themes.addTheme(JSON.stringify({ ...topFlat, layout: { nav: "top", frame: "flat" } })),
@@ -248,26 +247,19 @@ test("each theme in the gallery has a miniature of pluxy's frame in its own colo
   const m = await w.mount(<ThemesPage />);
   await settle();
   const previews = withClass(m.root, "mini-pair");
-  // Default has both appearances, Terminal is dark only.
   expect(previews.map((p) => attribute(p, "data-halves"))).toEqual(["2", "1", "2"]);
   const halves = (preview: FakeNode) => withClass(preview, "mini");
   const [def, terminal, flat] = previews as [FakeNode, FakeNode, FakeNode];
-  // The miniature's colours are the theme's own tokens, set on the miniature itself: Default's two
-  // halves are its light and its dark ground, so a mix of tokens resolves against the theme.
   const [light, dark] = halves(def).map(cssOf);
   expect(light).toContain("--px-color-bg:#fcfcfc;");
   expect(dark).toContain("--px-color-bg:#111113;");
   expect(withClass(def, "mini-half").map((h) => attribute(h, "data-half"))).toEqual(["light", "dark"]);
   expect(withClass(terminal, "mini-half").map((h) => attribute(h, "data-half"))).toEqual(["dark"]);
-  // The miniature draws the theme's own layout: a theme with its navigation on top and a flat frame
-  // shows that, and Terminal a rail.
   const [flatLight] = halves(flat) as [FakeNode];
   expect([attribute(flatLight, "data-nav"), attribute(flatLight, "data-frame")]).toEqual(["top", "flat"]);
   expect(attribute(halves(terminal)[0] as FakeNode, "data-nav")).toBe("rail");
-  // Each card says which appearances the theme offers.
   const cards = withClass(m.root, "theme-card").map((c) => withClass(c, "theme-modes")[0]?.textContent);
   expect(cards).toEqual(["Light and dark", "Dark only", "Light and dark"]);
-  // The miniatures are pictures: no text in them, and the cards stay named by their theme.
   for (const p of previews) expect(p.textContent).toBe("");
 });
 

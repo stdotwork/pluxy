@@ -244,7 +244,6 @@ test("Themes search narrows only setting rows, keeping the gallery, Save/Remove 
   await expect(page.getByText("Added and turned on Nightfall.")).toBeVisible();
   try {
     const search = page.getByRole("searchbox", { name: "Search settings", exact: true });
-    // A query matching one layout row narrows Layout without hiding non-row controls.
     await search.fill("width");
     await expect(page.getByRole("region", { name: "Layout", exact: true })).toBeVisible();
     await expect(page.locator(".setting-name", { hasText: /^Width$/ })).toBeVisible();
@@ -257,8 +256,6 @@ test("Themes search narrows only setting rows, keeping the gallery, Save/Remove 
     await expect(page.getByLabel("Your CSS")).toBeVisible();
     await expect(page.getByText("No setting matches that.")).toBeHidden();
 
-    // A query matching no setting row hides Layout and shows the no-match line, while keeping the
-    // gallery, Save/Remove, file controls and Your CSS visible.
     await search.fill("theme");
     await expect(page.getByText("No setting matches that.")).toBeVisible();
     await expect(page.getByRole("region", { name: "Layout", exact: true })).toBeHidden();
@@ -294,14 +291,12 @@ test("a long theme description expands in full on keyboard focus", async ({ page
     const card = page.locator(".theme-card", { hasText: "Wordy" });
     const about = card.locator(".theme-about");
     await expect(about).toBeVisible();
-    // Before focus, the description is clamped to three lines.
     const before = await about.evaluate((el) => ({
       scrollHeight: el.scrollHeight,
       clientHeight: el.clientHeight,
     }));
     expect(before.scrollHeight).toBeGreaterThan(before.clientHeight);
 
-    // Tabbing from Remove Wordy lands on the checked Wordy radio with :focus-visible.
     await page.getByRole("button", { name: "Remove Wordy", exact: true }).focus();
     await page.keyboard.press("Tab");
     const radio = card.locator('input[type="radio"]');

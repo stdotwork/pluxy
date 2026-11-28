@@ -1,7 +1,4 @@
-/* The Themes page (themes.tsx): the gallery of miniatures, the drop zone and the layout rows. The
-   groups and their rows are the Settings pages' own (settings.css). */
 @layer kit {
-  /* The gallery stands on the page, without a card round it. */
   .setting-group-body {
     display: grid;
     gap: calc(var(--s) * 3);
@@ -12,7 +9,6 @@
     margin: 0;
   }
 
-  /* A group answers to its own width, not the window's: the settings column can be narrower. */
   .setting-group {
     container-type: inline-size;
   }
@@ -24,7 +20,6 @@
   /* The real input covers the whole card, so a click anywhere on it reaches the input. */
   .theme-card input {
     position: absolute;
-    /* Above the miniature, which is positioned too: a click on the picture reaches the input. */
     z-index: 1;
     inset: 0;
     width: 100%;
@@ -93,8 +88,6 @@
     gap: calc(var(--s) * 2);
     padding-inline: calc(var(--s) * 1);
     margin-top: calc(var(--s) * 0.5);
-    /* Resolved against the active theme so each dot's hairline ring stays visible on the card
-       even when the previewed theme's own colour matches it. */
     --theme-dot-ring: var(--px-color-text-muted);
   }
 
@@ -114,7 +107,6 @@
     overflow: hidden;
   }
 
-  /* A keyboard user sees the full description on focus, as a pointer user does on hover. */
   .theme-card:has(:focus-visible) .theme-about {
     display: block;
     -webkit-line-clamp: unset;
@@ -132,7 +124,6 @@
     align-self: end;
   }
 
-  /* Five dots: the palette, in the theme's own colours (the style on the dots sets its tokens). */
   .theme-dots {
     display: inline-flex;
     flex: none;
@@ -166,7 +157,6 @@
     background: var(--px-color-accent);
   }
 
-  /* The chosen theme's tick, at the corner of its picture. */
   .theme-check {
     position: absolute;
     top: calc(var(--s) * 3.5);
@@ -188,7 +178,6 @@
     cursor: default;
   }
 
-  /* Dim only the empty miniature; the theme name and why it cannot be used stay readable. */
   .theme-card[data-unusable] > .mini-pair {
     opacity: 0.7;
   }
@@ -197,10 +186,6 @@
     flex-wrap: wrap;
   }
 
-  /* ---- the miniature -------------------------------------------------------------------------- */
-
-  /* Pluxy's own frame, small: the light half, and over it the dark half cut along a slant. Every
-     colour is a token, which the miniature's own style sets from the theme (themePreview.tsx). */
   .mini-pair {
     position: relative;
     display: block;
@@ -344,8 +329,6 @@
     background: var(--px-color-message-action);
   }
 
-  /* A theme with the flat frame has its page flush with the window; a rail shows the navigation as
-     a narrow strip, and a top bar as a line across the window. */
   .mini[data-frame="flat"] {
     background: var(--px-color-bg);
   }
@@ -401,12 +384,9 @@
     border-block-start-width: var(--px-shape-border);
   }
 
-  /* A theme with no file read yet: an empty picture in the same place. */
   .mini-pair[data-empty] {
     border-style: dashed;
   }
-
-  /* ---- adding a theme ------------------------------------------------------------------------ */
 
   .setting-group-card > .theme-drop {
     display: flex;

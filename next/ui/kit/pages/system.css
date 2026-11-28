@@ -1,5 +1,4 @@
 @layer kit {
-  /* About: the facts as rows of the group's card, the name at the start and the value after it. */
   .system-facts .facts {
     gap: 0;
   }
@@ -38,7 +37,6 @@
     font-size: var(--px-font-size-small);
     font-weight: normal;
   }
-  /* A provider's models and the addresses are pieces of their group's card. */
   .setting-group-card > .system-group {
     display: grid;
     gap: calc(var(--s) * 2);
@@ -71,8 +69,6 @@
     vertical-align: bottom;
   }
 
-  /* A narrow page: the model column no longer takes a share of the width, so the accounts column
-     keeps room for a name. */
   @container (max-width: 36em) {
     .system-group .table {
       table-layout: auto;
