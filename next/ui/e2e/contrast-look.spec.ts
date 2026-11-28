@@ -93,6 +93,36 @@ function rgbScript() {
       return o;
     };
     const withOpacity = (c, o) => [c[0], c[1], c[2], c[3] * o];
+    // The colour stops of a gradient (computed background-image): its top-level arguments, less the
+    // angle or direction and any stop position, each resolved by the browser on a probe.
+    const gradientStops = (image) => {
+      const open = image.indexOf("(");
+      if (!/^(repeating-)?(linear|radial|conic)-gradient\\(/.test(image) || open < 0) return [];
+      const args = [];
+      let depth = 0, start = open + 1;
+      for (let i = start; i < image.length; i++) {
+        const c = image[i];
+        if (c === "(") depth++;
+        else if (c === ")") { if (depth === 0) { args.push(image.slice(start, i)); break; } depth--; }
+        else if (c === "," && depth === 0) { args.push(image.slice(start, i)); start = i + 1; }
+      }
+      const probe = document.createElement("span");
+      document.body.append(probe);
+      const stops = [];
+      for (const arg of args.map((a) => a.trim())) {
+        if (/^(to\\s|[-\\d.]+(deg|turn|rad|grad)$)/.test(arg)) continue;
+        // A stop position follows the colour at the top level: "color-mix(...) 55%".
+        let colour = arg;
+        const end = arg.lastIndexOf(")");
+        if (end >= 0) colour = arg.slice(0, end + 1);
+        else colour = arg.split(/\\s+/)[0];
+        probe.style.backgroundColor = "";
+        probe.style.backgroundColor = colour;
+        if (probe.style.backgroundColor) stops.push(getComputedStyle(probe).backgroundColor);
+      }
+      probe.remove();
+      return stops;
+    };
     const bgOf = (el) => {
       const layers = [];
       for (let e = el; e; e = e.parentElement) { const c = rgb(getComputedStyle(e).backgroundColor); if (c[3] > 0) layers.push(c); }
@@ -147,16 +177,18 @@ for (const theme of THEMES) {
           const style = getComputedStyle(pill);
           const card = bgOf(pill.parentElement);
           const base = over(rgb(style.backgroundColor), card);
-          // The finish is a gradient: check the text against each of its colour stops.
-          const stops = style.backgroundImage.match(/(?:rgba?|color|oklab|oklch|lab|lch)\\([^()]*\\)/g) ?? [];
-          if (stops.length === 0) stops.push(style.backgroundColor);
+          // The finish is a gradient: check the text against each of its colour stops. A finish whose
+          // stops cannot be read counts as a failure, not as the card behind it.
+          const stops = gradientStops(style.backgroundImage);
+          out.push({ tier, stop: "stops read", ratio: stops.length >= 2 ? 99 : 0 });
           const text = over(rgb(style.color), base);
           for (const stop of stops) out.push({ tier, stop, ratio: ratio(text, over(rgb(stop), base)) });
         }
         return out;
       })()`);
       const list = results as { tier: string; stop: string; ratio: number }[];
-      expect(list.length).toBeGreaterThanOrEqual(2);
+      // Per tier: the "stops read" row and at least two stops.
+      expect(list.length).toBeGreaterThanOrEqual(6);
       const low = list
         .filter((r) => r.ratio < AA)
         .map((r) => `${r.tier} on ${r.stop}: ${r.ratio.toFixed(2)}:1`);
@@ -228,6 +260,74 @@ for (const theme of THEMES) {
       const list = results as { what: string; ratio: number }[];
       expect(list).toHaveLength(12);
       const low = list.filter((r) => r.ratio < GRAPHIC).map((r) => `${r.what}: ${r.ratio.toFixed(2)}:1`);
+      expect(low).toEqual([]);
+    });
+
+    test(`selected text, switches, inputs and chart series are clear: ${name}`, async ({ page }) => {
+      await open(page, theme, appearance);
+      await addSamples(page);
+      await page.evaluate(() => {
+        const box = document.querySelector("#look-samples .card");
+        const track = document.createElement("span");
+        track.className = "track";
+        const input = document.createElement("input");
+        input.type = "text";
+        input.dataset.slot = "input";
+        const words = document.createElement("p");
+        words.id = "look-selected";
+        words.textContent = "Selected words";
+        box?.append(track, input, words);
+        for (const n of [1, 2, 3, 4, 5, 6]) {
+          const bar = document.createElement("span");
+          bar.dataset.series = String(n);
+          bar.style.display = "inline-block";
+          bar.style.width = "12px";
+          bar.style.height = "12px";
+          box?.append(bar);
+          const onPage = bar.cloneNode() as HTMLElement;
+          onPage.dataset.onPage = "";
+          document.querySelector("#look-samples")?.append(onPage);
+        }
+      });
+      const results = await page.evaluate(`(() => {
+        ${rgbScript()}
+        const out = [];
+        const card = document.querySelector("#look-samples .card");
+        const ground = bgOf(card);
+        // Selected text: the ::selection colours over the card.
+        const words = document.getElementById("look-selected");
+        const sel = getComputedStyle(words, "::selection");
+        const selBg = over(rgb(sel.backgroundColor), ground);
+        out.push({ what: "selected text", ratio: ratio(over(rgb(sel.color), selBg), selBg), min: 4.5 });
+        // An off switch: its track against the card, and its knob against the track.
+        const trackEl = card.querySelector(".track");
+        const track = over(rgb(getComputedStyle(trackEl).backgroundColor), ground);
+        const knob = over(rgb(getComputedStyle(trackEl, "::after").backgroundColor), track);
+        out.push({ what: "off switch track on the card", ratio: ratio(track, ground), min: 3 });
+        out.push({ what: "off switch knob on its track", ratio: ratio(knob, track), min: 3 });
+        // An input's border against the card and against the input's own fill.
+        const input = card.querySelector("input");
+        const fill = over(rgb(getComputedStyle(input).backgroundColor), ground);
+        const edge = over(rgb(getComputedStyle(input).borderTopColor), ground);
+        out.push({ what: "input border on the card", ratio: ratio(edge, ground), min: 3, inputs: true });
+        out.push({ what: "input border on its fill", ratio: ratio(edge, fill), min: 3, inputs: true });
+        // Chart series on a card and on the page.
+        for (const bar of document.querySelectorAll("#look-samples [data-series]")) {
+          const under = bgOf(bar.parentElement);
+          const colour = over(rgb(getComputedStyle(bar).backgroundColor), under);
+          const where = "onPage" in bar.dataset ? "the page" : "the card";
+          out.push({ what: "series " + bar.dataset.series + " on " + where, ratio: ratio(colour, under), min: 3 });
+        }
+        return out;
+      })()`);
+      const list = results as { what: string; ratio: number; min: number; inputs?: boolean }[];
+      expect(list).toHaveLength(17);
+      // Paper and Terminal keep their own faint input borders, as before: the 3:1 floor is the
+      // default theme's.
+      const low = list
+        .filter((r) => !(r.inputs && theme !== ""))
+        .filter((r) => r.ratio < r.min)
+        .map((r) => `${r.what}: ${r.ratio.toFixed(2)}:1`);
       expect(low).toEqual([]);
     });
   }

@@ -496,13 +496,14 @@ pub(crate) fn run(
     let geometry = "(() => { const r = document.querySelector('[data-part=release-notes][data-product=app]').getBoundingClientRect(); \
         const m = document.querySelector('[data-part=main]'); const p = m.getBoundingClientRect(); const v = document.documentElement; \
         return {left: r.left, top: r.top, right: r.right, bottom: r.bottom, nav: p.top, pane_left: p.left, \
-        view_width: v.clientWidth, view_height: v.clientHeight, scroll: m.scrollTop}; })()";
+        pane_right: p.right, pane_bottom: p.bottom, view_width: v.clientWidth, view_height: v.clientHeight, \
+        scroll: m.scrollTop}; })()";
     let shows = |g: &Value| -> Value {
         let f = |k: &str| g[k].as_f64().unwrap_or(f64::NAN);
         let (x, y) = (f("left").max(f("pane_left")), f("top").max(f("nav")));
         let (w, h) = (
-            f("right").min(f("view_width")) - x,
-            f("bottom").min(f("view_height")) - y,
+            f("right").min(f("pane_right")).min(f("view_width")) - x,
+            f("bottom").min(f("pane_bottom")).min(f("view_height")) - y,
         );
         if w >= 1.0 && h >= 1.0 {
             json!({"x": x, "y": y, "width": w, "height": h})
@@ -589,8 +590,9 @@ pub(crate) fn run(
     // The error notice appears above the notes area: no scroll, no resize of the window or of
     // the area, yet the area moves down, and the notes webview has to follow it.
     let shown = "(() => { const r = document.querySelector('[data-part=release-notes][data-product=app]').getBoundingClientRect(); \
-        const v = document.documentElement; const x = Math.max(r.left, 0), y = Math.max(r.top, 0); \
-        const w = Math.min(r.right, v.clientWidth) - x, h = Math.min(r.bottom, v.clientHeight) - y; \
+        const p = document.querySelector('[data-part=main]').getBoundingClientRect(); \
+        const v = document.documentElement; const x = Math.max(r.left, p.left, 0), y = Math.max(r.top, p.top, 0); \
+        const w = Math.min(r.right, p.right, v.clientWidth) - x, h = Math.min(r.bottom, p.bottom, v.clientHeight) - y; \
         return w >= 1 && h >= 1 ? {x, y, width: w, height: h} : null; })()";
     let area_before = area(main, "app");
     click(main, "[data-part=release-check]")?;

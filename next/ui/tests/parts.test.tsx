@@ -436,7 +436,7 @@ test("the plan pill's tier follows the plan word, and there is no pill without a
 const limitsOf = (limits: QuotaLimit[], now = NOW) =>
   renderToString(<Limits windows={{ state: "read", limits }} account="alpha" now={now} />);
 
-test("the gauge shows what is left: ok from 60%, warn under 60%, danger under 20% and used up", () => {
+test("the gauge shows what is left: ok from 70%, warn under 70%, danger under 30% and used up", () => {
   const seven = limitsOf([
     { id: "five", window_seconds: 18000, used_percent: 93, resets_at: (NOW + 85 * 60_000) / 1000 },
   ]);
@@ -449,9 +449,10 @@ test("the gauge shows what is left: ok from 60%, warn under 60%, danger under 20
   expect(half).toContain('data-tone="warn"');
   expect(half).toContain("width:58%");
   expect(plain(half)).toBe("wk58% left");
-  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 40 }])).toContain('data-tone="ok"');
-  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 80 }])).toContain('data-tone="warn"');
-  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 81 }])).toContain(
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 30 }])).toContain('data-tone="ok"');
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 31 }])).toContain('data-tone="warn"');
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 70 }])).toContain('data-tone="warn"');
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 71 }])).toContain(
     'data-tone="danger"',
   );
   const out = limitsOf([{ id: "five", window_seconds: 18000, used_percent: 100 }]);
