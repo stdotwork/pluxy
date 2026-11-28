@@ -1,7 +1,3 @@
-//! Claude Code's user settings (`settings.json`): which files it takes as its own, what Apply
-//! writes into one, and what a preview reads back. Keys and variables are Claude Code's own, as
-//! its documentation names them (README.md).
-
 use pluxy_program::Error;
 use pluxy_transactions::{Json, Merge};
 use serde_json::{json, Map, Value};

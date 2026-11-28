@@ -1,14 +1,3 @@
-//! Claude Desktop's third-party files: which ones it takes as its own, what Apply writes into
-//! each, what a preview reads back and how Clear takes pluxy's values out again. Keys and values
-//! are Claude Desktop's own, as its documentation and its Linux package name them (README.md):
-//!
-//! - `claude_desktop_config.json` in its third-party folder (`~/.config/Claude-3p` on Linux,
-//!   `~/Library/Application Support/Claude-3p` on macOS, `%LOCALAPPDATA%\Claude-3p` on Windows:
-//!   `threep_in` in main.rs): the person's sign-in choice, `deploymentMode`;
-//! - `configLibrary/<id>.json`: a saved configuration (here pluxy's gateway profile), flat keys;
-//! - `configLibrary/_meta.json`: the library's index, `{"appliedId", "entries": [{"id", "name"}]}`,
-//!   with an optional `hybridPointer` that wins over `appliedId`.
-
 use pluxy_program::Error;
 use pluxy_transactions::{merge_value, Json, Merge};
 use serde_json::{json, Map, Value};

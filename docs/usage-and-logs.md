@@ -100,11 +100,13 @@ requests**.
 
 **Panel or desktop app.** **Activity** has two tabs:
 
-- **Usage** adds up the requests over a **Range**: the last 24 hours, or 7 or 30 days counted in calendar days from local midnight (today included). It shows a chart over time
-  and a table by **Provider**, **Model**, **Account** or **Key**, with requests, failed requests,
+- **Usage** adds up the requests over a **Range**: the last 24 hours, or 7 or 30 days counted in calendar days from local midnight (today included). It shows the totals as
+  tiles, a chart over time (the requests, the share that went through or the tokens, picked by the first three
+  tiles) and a table by **Provider**, **Model**, **Account** or **Key**, with requests, failed requests,
   tokens and average time. **See these requests** opens the **Requests** tab filtered to a row.
 - **Requests** lists the requests core still keeps in memory, newest first, filtered by **Which
-  requests** (**All** or **Failed**), provider, account, model or key. **Save as spreadsheet** writes
+  requests** (**All** or **Failed**) and, under **Filter**, provider, account, model or key; each filter in use
+  shows as a chip that removes it. A request opens in a pane beside the list. **Save as spreadsheet** writes
   the matching requests, the newest 10,000 at most, to a CSV file with the columns Time, Model,
   Provider, Account, Client key, Failed, Status, Latency, Tokens and Trace ID. Hiding names in the
   panel hides them on screen only; the file has them.
@@ -267,7 +269,7 @@ the **Config** page.
    error that kept a response from coming). A refused attempt and the retry on another account show
    as two pairs. A request that made more than two upstream requests keeps the first and the last,
    with a line saying how many were left out. These sections need an extension that supports
-   [upstream capture](../next/protocol/README.md#upstream-capture) (extension protocol 0.13), and
+   [upstream capture](protocol.md#upstream-capture) (extension protocol 0.13), and
    are written only while `logs.request_log` is on, so an error log written while it is off has none.
    The line that says a body was not read to its end needs protocol 0.17; with an older extension a
    body just ends where the read stopped.

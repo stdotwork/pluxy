@@ -1,6 +1,3 @@
-# pluxy's app tools: the native programs the desktop app runs on demand (app program contract v0,
-# ../app/app-host/README.md), and the libraries they share. A workspace of its own, never linked
-# into the desktop app.
 [workspace]
 resolver = "2"
 members = ["lib/files", "lib/program", "lib/transactions", "lib/usage", "lib/sqlite-ro", "lib/pi-sessions", "agent-usage", "claude-code", "claude-desktop", "codex", "codex-sessions", "execution", "grok-setup", "hermes-setup", "omp-setup", "opencode", "pi-setup", "usage-claude", "usage-codex", "usage-fixture", "usage-omp", "usage-opencode", "usage-pi", "wsl"]

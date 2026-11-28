@@ -1,16 +1,3 @@
-//! Cross-package imports and exports in this device's catalog (`../app-host/README.md`, "Calls
-//! between packages"). A package declares the operations of other packages it may call through
-//! the host (`imports`); a native tool declares which of its operations other packages may
-//! import, under an export contract (`exports`), and each operation's effect class.
-//!
-//! A native tool is enabled only when its required imports are enabled tools exporting them under
-//! a contract it accepts, and only when its imports do not lead back to it. A curated web package's
-//! imports need the person's native consent, bound to its release and to each target's release;
-//! an Unverified package never gets one. Each call is granted again here (`Catalog::main_grant`,
-//! `native_grant`, `page_grant`) from the records as they are then: the caller's import, the
-//! target's export and admitted record, and the consent for a web caller. The caller's identity
-//! comes from the host, never from the call.
-
 use super::*;
 
 /// Imports a package may declare.

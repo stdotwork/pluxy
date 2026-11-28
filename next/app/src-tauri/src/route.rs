@@ -344,7 +344,6 @@ pub fn call_page(app: &AppHandle, label: &str, generation: &str, id: &str, param
     );
 }
 
-/// The page channel's code for a call error (`../../ui/extension-pages/README.md`).
 fn page_code(code: &str) -> &'static str {
     match code {
         "permission" | "cancelled" => "forbidden",

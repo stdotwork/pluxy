@@ -250,7 +250,7 @@ describe("the settings form", () => {
 });
 
 describe("the contract README", () => {
-  const readme = readFileSync(join(import.meta.dir, "..", "extension-pages", "README.md"), "utf8");
+  const readme = readFileSync(join(import.meta.dir, "..", "..", "..", "docs", "extension-pages.md"), "utf8");
   test("lists the limits the channel enforces", () => {
     expect(readme).toContain("at most 64 KiB");
     expect(readme).toContain(`more than ${MAX_CALLS_PER_SECOND} calls in a second`);

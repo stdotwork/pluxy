@@ -1,13 +1,3 @@
-//! pluxy/usage-claude: the usage hub's parser of Claude Code's session transcripts (`../README.md`).
-//! It reads the transcripts (`*.jsonl`) under `~/.claude/projects` (the hub's `roots` name others),
-//! read-only, and sends the hub token counts per message at schema 2: never a prompt, a message, a
-//! folder name or a raw message, request or session ID. The rules that turn a file into rows are in
-//! `transcript.rs`.
-//!
-//! A transcript's file ID is its path below the root with the first folder, Claude Code's project
-//! folder (named after the project's working folder), replaced by a hash of its name, so a file ID
-//! names no folder of the person's.
-
 #[cfg(test)]
 mod tests;
 mod transcript;

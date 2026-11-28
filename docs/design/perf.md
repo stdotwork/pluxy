@@ -241,7 +241,7 @@ request is a plain value that cannot be filled only when it is read. Core still 
 request when the body changed after parsing (a thinking suffix taken off its model), when the
 body is not valid UTF-8, and to an extension that does not say it parses, or parses with another
 version. The protocol's README
-describes the rule (`next/protocol/README.md`, "Native-only calls").
+describes the rule (`docs/protocol.md`, "Native-only calls").
 
 ## The budget check
 

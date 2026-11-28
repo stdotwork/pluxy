@@ -1,8 +1,3 @@
-//! Grok Build's user config (`config.toml`): which files it takes as its own, what Apply writes
-//! into one, what a preview reads back, and the merge Clear makes. Keys are Grok Build's own, as
-//! its CLI reads them (README.md). The file is edited in place with toml_edit, so comments,
-//! formatting and everything Apply does not set stay as the person left them.
-
 use pluxy_program::Error;
 use pluxy_transactions::toml::toml_edit::{DocumentMut, Item, Table};
 use pluxy_transactions::toml::{self, set, table_mut};

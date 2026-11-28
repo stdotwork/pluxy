@@ -23,8 +23,10 @@ installed, and you add only the ones you use.
 - **Setup means writing a config file by hand.** The first start writes the config. Then **Set up
   pluxy** in the panel, or `pluxy setup`, looks at this computer, suggests the providers that fit
   what it found, and installs only the ones you pick.
-- **Every coding tool wants different settings.** `pluxy client show <tool>` prints what to paste
-  into Claude Code, Codex, OpenCode, Pi or Oh My Pi.
+- **Every coding tool wants different settings.** `pluxy client connect <tool>` writes them into
+  Claude Code's or Codex's settings, and `pluxy client disconnect <tool>` puts the file back (or,
+  when the file changed since, takes back only the settings connect wrote);
+  `pluxy client show <tool>` prints what to paste into Claude Code, Codex, OpenCode, Pi or Oh My Pi.
 
 ## Three parts
 
@@ -125,11 +127,14 @@ Check that the account answers:
 ### 5. Point a client at pluxy
 
 ```bash
-./pluxy client show claude-code
+./pluxy client connect claude-code
 ```
 
-This prints the lines to put in the tool's config file, with `<client-key>` where your client key
-goes. The other tools are `codex`, `opencode`, `pi` and `omp`; [docs/clients.md](docs/clients.md)
+This writes Claude Code's settings (`~/.claude/settings.json`) with a client key made for it, and
+keeps the file as it was: `./pluxy client disconnect claude-code` puts it back, or, when the file
+changed since, takes back only the settings connect wrote and keeps the rest. To paste the
+settings yourself instead, `./pluxy client show claude-code` prints the lines to put in the tool's
+config file, with `<client-key>` where your client key goes. The other tools are `codex`, `opencode`, `pi` and `omp`; [docs/clients.md](docs/clients.md)
 has each one's settings, and the base URLs for any other client.
 
 ### 6. Send a request and see it counted
@@ -167,6 +172,7 @@ the same record. `./pluxy help` lists every command.
 | Fix a problem or find out why a request failed | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Use the desktop app | [docs/app.md](docs/app.md) |
 | Move from CLIProxyAPI | [docs/moving-from-cpa.md](docs/moving-from-cpa.md) |
+| Write a provider extension | [docs/extension-tutorial.md](docs/extension-tutorial.md) |
 | Build, test or change pluxy | [AGENTS.md](AGENTS.md) |
 
 ## What is in this repository

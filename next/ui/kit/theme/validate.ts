@@ -1,6 +1,3 @@
-// Reads a theme file by the contract in themes/README.md: refuses a file the UI cannot use at all,
-// and keeps what it can of the rest, with a warning for each part it ignores.
-
 import {
   APPEARANCES,
   isLayoutValue,

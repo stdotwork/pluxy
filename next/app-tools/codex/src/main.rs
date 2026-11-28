@@ -1,13 +1,3 @@
-//! pluxy/codex-setup: sets up Codex to use pluxy's core, and starts it, for pluxy's desktop app
-//! (README.md). Its operations: `preview` (read: pins Codex's config.toml and the model catalog
-//! beside it and reads their values back, never the key), `import` (read: the catalog entries the
-//! core's served models would get, from pluxy's Codex templates; nothing is written), `apply`,
-//! `clear` and `restore` (write: each call asks the person; `apply` receives the client key as a
-//! secret's value and writes it where Codex reads it), `status` (read), `recipe` (read: how the
-//! launcher starts Codex CLI, Codex App, or restarts the Codex CLI background service) and the
-//! backup browser's standard operations. Writes go through pluxy-transactions: link-preserving,
-//! journalled, with the originals and manual backups in the host's vault.
-
 mod catalog;
 mod config;
 

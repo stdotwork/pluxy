@@ -2,8 +2,7 @@
 // the handshake, framing, cancellation and shutdown. An extension supplies a Generate handler,
 // Login and Refresh handlers if it signs in to accounts, a Session handler if it holds
 // sessions, a Models handler if it lists its accounts' models, a Quota handler if it reads their
-// quota, and calls Serve from main. See
-// ../protocol/TUTORIAL.md.
+// quota, and calls Serve from main. See docs/extension-tutorial.md.
 package sdk
 
 import (

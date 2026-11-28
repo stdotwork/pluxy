@@ -33,15 +33,18 @@ from the accounts you already have. These pages say how to set it up, use it and
 
 ## Extend pluxy
 
-- [Extension tutorial](../next/protocol/TUTORIAL.md): write a provider extension, from an empty
+- [Extension tutorial](extension-tutorial.md): write a provider extension, from an empty
   folder to one that passes the conformance kit.
-- [Extension protocol](../next/protocol/README.md): the protocol between core and extensions, the
+- [Extension protocol](protocol.md): the protocol between core and extensions, the
   package manifest and release archives.
-- [Theme contract](../next/ui/themes/README.md): the theme files the panel and the app read.
-- [Extension pages](../next/ui/extension-pages/README.md): pages and settings forms an extension
+- [Theme contract](themes.md): the theme files the panel and the app read.
+- [Extension pages](extension-pages.md): pages and settings forms an extension
   package brings to the panel and the app.
-- [App package contract](../next/app/app-host/README.md): what a package adds to the desktop app,
+- [App package contract](app-packages.md): what a package adds to the desktop app,
   and the contract for its native tools.
+- [App package tutorial](app-package-tutorial.md): build a first web package or native tool
+  for the desktop app.
+- [App tools](app-tools.md): reference for the desktop app's native tools and shared libraries.
 
 ## Design notes
 

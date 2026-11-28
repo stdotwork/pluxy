@@ -1,11 +1,3 @@
-//! Swapping an admitted native tool's release (`../app-host/README.md`, states and lifetime):
-//! an update or a rollback of a native tool the person enabled. The release that replaces it is
-//! staged into the store, kept there while the swap is under way, and admitted only by its own
-//! native confirmation; the program host starts and describes it before it is committed
-//! (`commit_swap`), while the active release stays active, enabled and admitted. A swap that
-//! fails or is cancelled (`end_swap`) leaves the catalog as it was. Either way the release that
-//! replaces another must read the state version the other writes.
-
 use super::*;
 
 /// A native release waiting to replace package `id`'s active, admitted release: an update, or

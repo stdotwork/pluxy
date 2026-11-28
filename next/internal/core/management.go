@@ -34,6 +34,8 @@ const maxManagementBody = 1 << 20
 //	POST   /v0/management/setup/apply  install and enable setup picks
 //	POST   /v0/management/setup/done   end first run
 //	GET    /v0/management/setup/clients/{id}/paste  what to paste into a client tool's settings
+//	POST   /v0/management/setup/clients/{id}/connect  write a client tool's settings on core's machine
+//	POST   /v0/management/setup/clients/{id}/disconnect  put back what connect changed
 //	GET    /v0/management/packages  installed packages
 //	GET    /v0/management/registries  what each registry offers
 //	POST   /v0/management/packages  install a package (InstallRequest)
@@ -129,6 +131,7 @@ func (c *Core) Management() *server.Management {
 		writeJSON(w, http.StatusOK, management.ModelsReply{Models: s.Router.ServedModels(r.Context())})
 	})
 	c.handleSetup(m)
+	c.handleConnect(m)
 	c.handleSetupImport(m)
 	m.Handle("POST /models/refresh", func(w http.ResponseWriter, r *http.Request) {
 		var req management.RefreshModelsRequest

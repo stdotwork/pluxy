@@ -1,6 +1,3 @@
-// The theme contract, version 0, as code. themes/README.md is its reference; tests/contract.test.ts
-// checks that the two agree.
-
 import type { T3Appearance, T3RoleMap } from "./t3";
 
 export const THEME_VERSION = 0;
@@ -301,6 +298,14 @@ export const PARTS = [
   "usage-chip",
   "usage-numbers",
   "usage-breakdown",
+  "requests-table",
+  "request-story",
+  "filter-menu",
+  "filter-button",
+  "filter-chip",
+  "word-chip",
+  "usage-panel",
+  "usage-tiles",
   "tool-steps",
   "tool-key",
 ] as const;

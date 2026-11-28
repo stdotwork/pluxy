@@ -2,6 +2,8 @@
 // tool name a model pluxy serves (with a picker), and a request for the tool's own default model,
 // which no account serves, tells the person which models are served and leads to the account's
 // alias form with the name already filled in.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { goTo, openPanel, signIn, useCore } from "./support";
 
@@ -45,7 +47,11 @@ test("the steps under a tool name a model pluxy serves, and picking another chan
   expect(names.length).toBeGreaterThan(1);
   await goTo(page, "Tools");
   const claude = page.locator('[data-part="tool-row"]').filter({ hasText: "Claude Code" });
-  await claude.getByRole("button", { name: "Set up", exact: true }).click();
+  await expect(claude).toBeAttached();
+  if (await claude.isHidden()) {
+    await page.getByText(/^Other tools \(/).click();
+  }
+  await claude.getByRole("button", { name: /^Set up( by hand)?$/ }).click();
   const steps = claude.locator('[data-part="tool-steps"]');
   const picker = steps.getByLabel("Model Claude Code starts with");
   // The demo serves no Claude model, so the best match is the first chat model it serves.
@@ -59,6 +65,18 @@ test("the steps under a tool name a model pluxy serves, and picking another chan
   await picker.selectOption(other);
   await expect(steps.locator("pre")).toContainText(`"model": "${other}"`);
   await expect(steps.locator("pre")).not.toContainText(`"model": "${chosen}"`);
+  // When Connect is offered (Claude Code is installed), pressing it writes the picked model.
+  const connect = claude.getByRole("button", { name: "Connect", exact: true });
+  if ((await connect.count()) > 0) {
+    await connect.click();
+    await expect(claude).toContainText("Connected. Start Claude Code again so it reads the new settings.");
+    const written = readFileSync(join(dirname(core.config), "home", ".claude", "settings.json"), "utf8");
+    expect(written).toContain(`"model": "${other}"`);
+    expect(written).toContain(`"ANTHROPIC_DEFAULT_HAIKU_MODEL": "${other}"`);
+    expect(written).not.toContain("<model-id>");
+    await claude.getByRole("button", { name: "Disconnect", exact: true }).click();
+    await expect(claude).toContainText("Disconnected.");
+  }
 });
 
 test("a request for a model no account serves says what is served and leads to an alias", async ({
@@ -78,16 +96,17 @@ test("a request for a model no account serves says what is served and leads to a
   await goTo(page, "Requests");
   const request = page.locator(".activity-request").filter({ hasText: ASKED }).first();
   await expect(request).toContainText("Model not served");
-  await request.getByRole("button").first().click();
-  await expect(request).toContainText(`No account serves ${ASKED}.`);
-  await expect(request).toContainText("These accounts serve:");
-  await expect(request).toContainText("add a model alias to an account");
-  await expect(request.getByRole("link", { name: "Tools", exact: true })).toHaveAttribute("href", "#/tools");
+  await request.getByRole("button", { expanded: false }).click();
+  const pane = page.locator('[data-part="detail"]');
+  await expect(pane).toContainText(`No account serves ${ASKED}.`);
+  await expect(pane).toContainText("These accounts serve:");
+  await expect(pane).toContainText("add a model alias to an account");
+  await expect(pane.getByRole("link", { name: "Tools", exact: true })).toHaveAttribute("href", "#/tools");
 
   // An account set in the settings file has no form to add an alias in: it leads to its page.
-  await expect(request.getByRole("link", { name: "Open alpha-1", exact: true })).toBeVisible();
+  await expect(pane.getByRole("link", { name: "Open alpha-1", exact: true })).toBeVisible();
   // The link leads to the account's form with a new alias row that already holds the name.
-  await request.getByRole("link", { name: `Add an alias on ${LOGIN}`, exact: true }).click();
+  await pane.getByRole("link", { name: `Add an alias on ${LOGIN}`, exact: true }).click();
   const form = page.getByRole("dialog", { name: /^Edit /, exact: false });
   const aliases = form.getByRole("group", { name: "Account model aliases", exact: true });
   await expect(aliases.getByLabel("Alias", { exact: true })).toHaveValue(ASKED);

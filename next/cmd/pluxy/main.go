@@ -457,8 +457,6 @@ func run(configPath string, byRule, safeMode bool, watch time.Duration, bundled 
 		}
 	}
 	c.SetListenAddr(ln.Addr().String())
-	// Extension pages have a listener of their own, so they are served on another site than
-	// the panel (next/ui/extension-pages/README.md).
 	pagesLn, err := net.Listen("tcp", cfg.ExtensionPages.Listen)
 	if err != nil {
 		ln.Close()
