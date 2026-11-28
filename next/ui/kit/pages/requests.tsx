@@ -59,6 +59,8 @@ const t = strings("requests", {
   usage: "Usage",
   noMatch: "No requests match.",
   end: "That is every request pluxy keeps, back to {when}.",
+  endToday: "{time} today",
+  endYesterday: "yesterday {time}",
   endUsage: "Usage counts older ones.",
   gone: "That request is no longer kept.",
   lost: {
@@ -87,13 +89,25 @@ const t = strings("requests", {
 
 const SHOW = 50;
 
-/** The time of a request as the end of the list says it: Wednesday 14:05. */
-function endWhen(time: string): string {
+/**
+ * The time of a request as the end of the list says it, so that it never names today's weekday
+ * for another day: "14:05 today", "yesterday 14:05", "Wednesday 14:05" within the last week, and
+ * "Nov 3, 14:05" before that.
+ */
+export function endWhen(time: string, now: number = Date.now()): string {
   const d = new Date(time);
   if (Number.isNaN(d.getTime())) return time;
-  const day = d.toLocaleDateString(undefined, { weekday: "long" });
   const clock = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-  return `${day} ${clock}`;
+  const daysBack = (n: number) => {
+    const today = new Date(now);
+    return new Date(today.getFullYear(), today.getMonth(), today.getDate() - n).getTime();
+  };
+  if (d.getTime() >= daysBack(0)) return t("endToday", { time: clock });
+  if (d.getTime() >= daysBack(1)) return t("endYesterday", { time: clock });
+  if (d.getTime() >= daysBack(6)) {
+    return `${d.toLocaleDateString(undefined, { weekday: "long" })} ${clock}`;
+  }
+  return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${clock}`;
 }
 
 interface List {
@@ -290,6 +304,9 @@ export function RequestsPage() {
   const lost = (summary.data?.dropped ?? 0) + (summary.data?.write_errors ?? 0);
   const idOf = (account: string) =>
     accounts.data?.accounts.find((a) => a.id === account || a.public_id === account)?.id ?? account;
+  // An account set in the settings file has its model aliases there, not in the account's form.
+  const editable = (account: string) =>
+    accounts.data?.accounts.find((a) => a.id === account || a.public_id === account)?.source !== "config";
   const last = shown?.rows[shown.rows.length - 1];
   const oldest = summary.data?.oldest ? Date.parse(summary.data.oldest) : Number.NaN;
   const usageOlder = !!last && !Number.isNaN(oldest) && oldest < Date.parse(last.timestamp);
@@ -418,6 +435,7 @@ export function RequestsPage() {
                 event={opened}
                 name={naming.byId}
                 idOf={idOf}
+                editable={editable}
                 keys={keys.data?.keys}
                 trace={traceMode(opened, requestLog)}
                 onClose={() => setOpen(undefined)}

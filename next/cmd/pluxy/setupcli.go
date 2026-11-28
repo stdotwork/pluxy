@@ -103,6 +103,7 @@ func setupCommands() []command {
 			summary: "print what to paste into a client tool's config to point it at core",
 			flags: func(fs *flag.FlagSet, o *opts) {
 				fs.StringVar(&o.keyID, "key-id", "", "client key ID from pluxy key list to reference")
+				fs.StringVar(&o.model, "model", "", "model the tool starts with, one from pluxy model list (default: the best match)")
 			},
 			run: runClientShow,
 		},
@@ -349,12 +350,15 @@ func printSetup(x *invocation, s management.Setup) {
 }
 
 func runClientShow(x *invocation) error {
-	if _, ok := core.ClientSnippetFor(x.args[0], "", ""); !ok {
+	if _, ok := core.ClientSnippetFor(x.args[0], "", "", ""); !ok {
 		return usageError{fmt.Sprintf("unknown client tool %q (supported: %s)", x.args[0], strings.Join(core.ClientSnippetTools, ", "))}
 	}
-	var q url.Values
+	q := url.Values{}
 	if x.opts.keyID != "" {
-		q = url.Values{"key_id": {x.opts.keyID}}
+		q.Set("key_id", x.opts.keyID)
+	}
+	if x.opts.model != "" {
+		q.Set("model", x.opts.model)
 	}
 	var p management.ClientPaste
 	return x.call(http.MethodGet, "/setup/clients/"+url.PathEscape(x.args[0])+"/paste", q, nil, &p, func() {

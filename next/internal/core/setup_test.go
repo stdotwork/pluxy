@@ -234,7 +234,7 @@ func TestClientSnippetsReadAsConfigured(t *testing.T) {
 	for _, tool := range ClientSnippetTools {
 		t.Run(tool, func(t *testing.T) {
 			home := setTestHome(t)
-			snip, ok := ClientSnippetFor(tool, coreURL, "<client-key>")
+			snip, ok := ClientSnippetFor(tool, coreURL, "<client-key>", "")
 			if !ok || len(snip.Files) == 0 {
 				t.Fatalf("no snippet for %s", tool)
 			}
@@ -258,14 +258,119 @@ func TestClientSnippetsReadAsConfigured(t *testing.T) {
 			}
 		})
 	}
-	if _, ok := ClientSnippetFor("pluxy/omp-setup", coreURL, "k"); !ok {
+	if _, ok := ClientSnippetFor("pluxy/omp-setup", coreURL, "k", ""); !ok {
 		t.Error("the setup package's ID names no tool")
 	}
-	if snip, ok := ClientSnippetFor("claude", coreURL, "k"); !ok || snip.Tool != "claude-code" {
+	if snip, ok := ClientSnippetFor("claude", coreURL, "k", ""); !ok || snip.Tool != "claude-code" {
 		t.Errorf("claude is not taken as claude-code: %+v", snip)
 	}
-	if _, ok := ClientSnippetFor("cursor", coreURL, "k"); ok {
+	if _, ok := ClientSnippetFor("cursor", coreURL, "k", ""); ok {
 		t.Error("an unknown tool has a snippet")
+	}
+}
+
+// The text for a tool names the model the tool starts with, in every place the tool reads one, and
+// still reads as configured. Without a model it holds the placeholder.
+func TestClientSnippetsNameTheModel(t *testing.T) {
+	const coreURL = "http://127.0.0.1:8317"
+	const model = "fake-gpt-1"
+	for _, tool := range ClientSnippetTools {
+		t.Run(tool, func(t *testing.T) {
+			home := setTestHome(t)
+			snip, _ := ClientSnippetFor(tool, coreURL, "<client-key>", model)
+			var all strings.Builder
+			for _, f := range snip.Files {
+				all.WriteString(f.Content + "\n")
+				writeTestFile(t, filepath.Join(home, strings.TrimPrefix(f.Path, "~/")), f.Content)
+			}
+			if strings.Contains(all.String(), ModelPlaceholder) || !strings.Contains(all.String(), model) {
+				t.Errorf("the text does not name %s:\n%s", model, all.String())
+			}
+			bare, _ := ClientSnippetFor(tool, coreURL, "<client-key>", "")
+			if !strings.Contains(bare.Files[0].Content+bare.Files[len(bare.Files)-1].Content, ModelPlaceholder) {
+				t.Errorf("the text with no model holds no placeholder:\n%+v", bare.Files)
+			}
+		})
+	}
+	// Claude Code starts with `model`, and what its opus, sonnet and haiku resolve to is the same.
+	snip, _ := ClientSnippetFor("claude-code", coreURL, "k", model)
+	var got struct {
+		Model string
+		Env   map[string]string
+	}
+	if err := json.Unmarshal([]byte(snip.Files[0].Content), &got); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range map[string]string{"model": got.Model, "opus": got.Env["ANTHROPIC_DEFAULT_OPUS_MODEL"],
+		"sonnet": got.Env["ANTHROPIC_DEFAULT_SONNET_MODEL"], "haiku": got.Env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]} {
+		if v != model {
+			t.Errorf("Claude Code's %s is %q, want %q", k, v, model)
+		}
+	}
+}
+
+// In TOML a key written below a [table] line belongs to that table. The Codex text puts its two
+// top-level keys above its table and says, for a config.toml that already has tables, where they
+// go; its reader sees a config that follows the text as configured, and one that only appends the
+// text to the end of a file with a table as not.
+func TestCodexSnippetPutsTopLevelKeysBeforeTables(t *testing.T) {
+	const coreURL = "http://127.0.0.1:8317"
+	snip, _ := ClientSnippetFor("codex", coreURL, "k", "fake-gpt-1")
+	text := snip.Files[0].Content
+	head, _, found := strings.Cut(text, "\n[")
+	if !found || !strings.Contains(head, "model_provider = ") || !strings.Contains(head, "model = ") {
+		t.Errorf("the top-level keys do not come before the first table:\n%s", text)
+	}
+	if !strings.Contains(snip.Note, "above the first table") || !strings.Contains(snip.Note, "belongs to that table") {
+		t.Errorf("the note does not say where the keys go in a file with tables: %q", snip.Note)
+	}
+
+	const existing = "[projects.\"/work\"]\ntrust_level = \"trusted\"\n"
+	inspect := func(config string) string {
+		home := setTestHome(t)
+		writeTestFile(t, filepath.Join(home, ".codex", "config.toml"), config)
+		_, state := inspectCodex(home, coreURL)
+		return state
+	}
+	keys, table, _ := strings.Cut(text, "\n\n")
+	if got := inspect(keys + "\n\n" + existing + "\n" + table + "\n"); got != management.ClientStateConfigured {
+		t.Errorf("a config that follows the note reads %q, want configured", got)
+	}
+	if got := inspect(existing + "\n" + text + "\n"); got == management.ClientStateConfigured {
+		t.Errorf("the text appended after a table reads as configured, but its keys are in that table")
+	}
+}
+
+func TestSuggestClientModel(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		tool  string
+		names []string
+		want  string
+	}{
+		{"nothing served", "claude-code", nil, ""},
+		{"another service's models", "claude-code", []string{"fake-gpt-1", "fake-gpt-mini"}, "fake-gpt-1"},
+		{"Claude Code takes a Claude model, Opus first", "claude-code", []string{"claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "gpt-6.1-sol"}, "claude-opus-5-5"},
+		{"Claude Code with only Sonnet and Haiku", "claude-code", []string{"claude-haiku-5-5", "gpt-6.1-sol", "claude-sonnet-5-5"}, "claude-sonnet-5-5"},
+		{"Codex takes a Codex model", "codex", []string{"claude-opus-5-5", "gpt-6.1-sol", "gpt-6.1-codex"}, "gpt-6.1-codex"},
+		{"Codex takes a GPT model", "codex", []string{"claude-opus-5-5", "gpt-6.1-sol"}, "gpt-6.1-sol"},
+		{"models that are no chat model are passed over", "opencode", []string{"text-embedding-3", "gpt-image-2", "fake-gpt-1"}, "fake-gpt-1"},
+		{"only models that are no chat model", "codex", []string{"text-embedding-3"}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := SuggestClientModel(c.tool, c.names); got != c.want {
+				t.Errorf("SuggestClientModel(%q, %q) = %q, want %q", c.tool, c.names, got, c.want)
+			}
+		})
+	}
+}
+
+func TestCheckClientModel(t *testing.T) {
+	for in, ok := range map[string]bool{"fake-gpt-1": true, " spaced ": true, "gpt-6.1-sol[1m]": true, "a\nb": false, "a\x00b": false,
+		strings.Repeat("m", maxClientModel): true, strings.Repeat("m", maxClientModel+1): false} {
+		if _, err := checkClientModel(in); (err == nil) != ok {
+			t.Errorf("checkClientModel(%q): err = %v, want ok = %v", in, err, ok)
+		}
 	}
 }
 

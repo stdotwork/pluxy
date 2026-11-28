@@ -51,7 +51,7 @@ var accountAnswerWait = time.Minute
 const accountLoginTimeout = 30 * time.Minute
 
 // waitingError ends a command that started something a person must finish elsewhere, such as a
-// sign-in that needs a browser: exit 7 (next/management/README.md).
+// sign-in that needs a browser: exit 7 (docs/cli.md, "Exit codes").
 type waitingError struct{ msg string }
 
 func (e waitingError) Error() string { return e.msg }

@@ -12,6 +12,7 @@ import { failureWord } from "../states";
 import { strings } from "../strings";
 import { Facts, TraceId } from "../ui";
 import { accountHref, keyName, providerName } from "./account";
+import { ProviderMark } from "./providerMark";
 
 const t = strings("parts.requestRow", {
   succeeded: "Succeeded",
@@ -28,7 +29,20 @@ const t = strings("parts.requestRow", {
   ms: "{count} ms",
   seconds: "{count} s",
   minutes: "{minutes}m {seconds}s",
+  first: "1st",
+  second: "2nd",
+  third: "3rd",
+  nth: "{count}th",
+  backup: "A backup answered, on the {nth} try",
 });
+
+/** An ordinal as a short word: 2nd, 3rd, 4th. */
+function ordinal(n: number): string {
+  if (n === 1) return t("first");
+  if (n === 2) return t("second");
+  if (n === 3) return t("third");
+  return t("nth", { count: n });
+}
 
 const n = (v: number | undefined) => (v ?? 0).toLocaleString();
 
@@ -99,6 +113,8 @@ export function RequestRow(props: {
   const when = new Date(e.timestamp);
   const full = Number.isNaN(when.getTime()) ? e.timestamp : when.toLocaleString();
   if (props.compact) {
+    // A request a backup answered says on which try, beside its mark.
+    const tries = e.tried?.length ?? 0;
     return (
       <a
         class="request-row"
@@ -111,14 +127,23 @@ export function RequestRow(props: {
           {hhmm(e.timestamp, false)}
         </time>
         <span class="request-model" title={model}>
-          {model}
+          <ProviderMark extension={e.provider} size="small" />
+          <span class="request-model-name">{model}</span>
         </span>
-        <span class="request-account" title={e.failed ? undefined : account}>
-          {e.failed ? failureWord(e) : account}
+        <span class="request-account" title={account}>
+          {account}
         </span>
         <span class="request-result" data-result={e.failed ? "failed" : "ok"}>
-          {/* A failed row says its failure word in the account's place: the mark adds nothing to hear. */}
-          <Icon name={e.failed ? "needsYou" : "check"} label={e.failed ? undefined : t("succeeded")} />
+          {e.failed ? (
+            <span class="request-chip" data-tone="danger">
+              {failureWord(e)}
+            </span>
+          ) : tries > 1 ? (
+            <span class="request-chip" title={t("backup", { nth: ordinal(tries) })}>
+              {ordinal(tries)}
+            </span>
+          ) : null}
+          {!e.failed && <Icon name="check" label={t("succeeded")} />}
         </span>
       </a>
     );

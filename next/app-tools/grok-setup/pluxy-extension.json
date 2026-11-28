@@ -72,7 +72,7 @@
       },
       {
         "id": "apply",
-        "description": "Point Grok Build at pluxy's core: write a model entry for each listed model of the core (its address, the client key, the Chat Completions API and its context window) and make one of them the default model in the previewed config, keeping everything else in it. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "description": "Point Grok Build at pluxy: write a model entry for each listed model pluxy serves (its address, the client key, the Chat Completions API and its context window) and make one of them the default model in the previewed config, keeping everything else in it. Saving replaces the file; an edit made in the same instant by another program may be lost.",
         "effect": "write",
         "secrets": {
           "key": "value"

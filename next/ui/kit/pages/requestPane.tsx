@@ -11,6 +11,7 @@ import { strings } from "../strings";
 import { Detail, Facts, TraceId } from "../ui";
 import { decisionOf, shortCount, whyOf } from "./activity";
 import { WordChip } from "./activityChips";
+import { NoServeHelp } from "./requestNoServe";
 
 const t = strings("requests.pane", {
   succeeded: "Succeeded",
@@ -31,7 +32,6 @@ const t = strings("requests.pane", {
   attempts: "Attempts",
   why: "Why this account",
   notTried: "pluxy did not try:",
-  accounts: "Accounts",
   order: "Order & fallback",
   openAccount: "Open {account}",
   openLog: "Open its log",
@@ -43,6 +43,8 @@ export function RequestPane(props: {
   event: UsageEvent;
   name: (account: string) => string;
   idOf: (account: string) => string;
+  /** Whether an account's model aliases are edited in its form (not set in the settings file). */
+  editable: (account: string) => boolean;
   keys?: ClientKey[];
   /** How the trace shows: a link to its log, or text to copy (a request whose log is not kept). */
   trace: "link" | "text";
@@ -100,16 +102,11 @@ export function RequestPane(props: {
       <div class="request-story" data-part="request-story">
         {decision && <p class="request-decision">{decision}</p>}
         {lines.map((line) => (
-          <p key={line}>
-            {line}
-            {story.noServe && line === lines[lines.length - 1] && (
-              <>
-                {" "}
-                <a href="#/accounts">{t("accounts")}</a>
-              </>
-            )}
-          </p>
+          <p key={line}>{line}</p>
         ))}
+        {story.noServe && (
+          <NoServeHelp model={e.model} name={name} idOf={props.idOf} editable={props.editable} />
+        )}
         {story.leftOut.length > 0 && tried.length > 0 && <p>{t("notTried")}</p>}
         {story.leftOut.length > 0 && (
           <ul class="request-left-out">

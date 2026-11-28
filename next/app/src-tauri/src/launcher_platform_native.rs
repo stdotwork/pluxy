@@ -83,7 +83,7 @@ const EXECUTION: &str = "pluxy/execution";
 const AGENT: &str = "pluxy-fixture-agent";
 const CLIENT: &str = "Fixture agent";
 const TERMINAL_CLIENT: &str = "Fixture terminal";
-const NOTICE: &str = "pluxy launch notice";
+const NOTICE: &str = crate::confirmation::text::NOTICE_TITLE;
 /// The vault secret's label.
 const LABEL: &str = "fixture launcher key";
 /// The variable the direct launch gives the secret in.

@@ -414,7 +414,7 @@ function Opening(props: {
           {plan && (
             <>
               {" · "}
-              <PlanPill plan={plan} />
+              <PlanPill plan={plan} provider={a.extension} />
             </>
           )}
         </p>

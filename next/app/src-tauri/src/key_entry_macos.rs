@@ -18,6 +18,7 @@ pub(crate) fn request_as(
     title: &'static str,
     summary: String,
     keep: bool,
+    trust: bool,
 ) -> Result<Option<Input>, &'static str> {
     let (tx, rx) = mpsc::channel();
     let handle = app.clone();
@@ -56,8 +57,11 @@ pub(crate) fn request_as(
             // Each entry starts session-only. Remembering requires an explicit native choice.
             spec.check = Some(text::KEEP.into());
         }
-        spec.buttons = vec![(CANCEL, text::CANCEL.into()), (OK, text::OK.into())];
-        spec.default = Some(OK);
+        // With trust, pressing the confirm button is the answer that the person trusts the
+        // network: it is not the default, so Enter does not press it.
+        let ok = if trust { text::TRUST_OK } else { text::OK };
+        spec.buttons = vec![(CANCEL, text::CANCEL.into()), (OK, ok.into())];
+        spec.default = (!trust).then_some(OK);
         spec.cancel = Some(CANCEL);
         // The cancel answer once the window it is a sheet on is gone (closed to the tray, say):
         // AppKit may close a window without ending its sheet.

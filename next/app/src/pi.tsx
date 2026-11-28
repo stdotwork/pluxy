@@ -58,6 +58,8 @@ const t = strings("pi", {
   uninstallPlugin: "Uninstall plugin",
   uninstallAsk: "Uninstall the Pi plugin? Pi's settings for pluxy stay.",
   uninstalled: "The Pi plugin is uninstalled.",
+  firstRun:
+    "Pi has not run on this computer yet. You can set it up now: Install plugin makes Pi's folder, installs the plugin there and connects Pi to pluxy.",
 });
 
 interface Adapter {
@@ -86,6 +88,8 @@ interface PiConfig extends ReadBack {
 interface Preview extends ToolPreview {
   targets: (ToolPreview["targets"][number] & { path?: string | null })[];
   pi: PiConfig;
+  /** The agent folder Connect makes: Pi has not run here yet, so there is none. */
+  create_folder?: string;
 }
 
 export function PiPage() {
@@ -118,7 +122,9 @@ export function PiPage() {
   const st = cfg?.state === "refused" ? undefined : cfg;
   // Update plugin only when the add-on carries a newer copy than the one installed.
   const newer = !!adapter?.installed && pluginNewer(adapter.version, adapter.bundled);
-  const input = () => ({ model: model.trim() });
+  // Pi has not run here yet: Connect makes its agent folder, which the confirmation names.
+  const unmade = s.preview?.create_folder;
+  const input = () => ({ model: model.trim(), ...(unmade ? { create_folder: unmade } : {}) });
   const held = [
     ...(adapter?.foreign && !adapter.installed ? [t("heldForeign")] : []),
     ...(validModel(model.trim()) ? [] : [t("invalid")]),
@@ -150,6 +156,7 @@ export function PiPage() {
     <>
       {adapter?.foreign && !adapter.installed && <Notice tone="warn">{t("foreign")}</Notice>}
       {st.legacy && <p class="muted">{t("legacy")}</p>}
+      {unmade && <p>{t("firstRun")}</p>}
     </>
   );
 
