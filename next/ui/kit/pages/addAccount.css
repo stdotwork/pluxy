@@ -18,6 +18,10 @@
     height: 18px;
   }
 
+  [data-part="provider-tile"] .provider-mark[data-initial] {
+    font-size: var(--px-font-size);
+  }
+
   /* ---- step 1: the provider tiles ------------------------------------------------------------- */
   .provider-tiles {
     margin: 0;
