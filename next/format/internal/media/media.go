@@ -94,6 +94,8 @@ func InlineImage(url string, allowed []string) (mediaType, problem string) {
 	return mediaType, "its media type is " + mediaType
 }
 
+// The Chat Completions and Responses encoders also serve OpenAI-compatible vendors and Kimi,
+// which take image types OpenAI's own list does not name, so they check only this much.
 func AnyImage(url string) (mediaType, problem string) {
 	mediaType, data, ok := DataURL(url)
 	if !ok {

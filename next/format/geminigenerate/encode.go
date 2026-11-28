@@ -569,6 +569,8 @@ func media(p llm.Part) (map[string]any, string) {
 	return map[string]any{"fileData": map[string]any{"fileUri": url}}, ""
 }
 
+// A Cloud Storage (gs://) URI is refused because Vertex AI would read that object with the
+// account's own permissions on behalf of whoever holds the client key.
 func geminiFileURI(raw string) bool {
 	if strings.ContainsAny(raw, "?#") {
 		return false

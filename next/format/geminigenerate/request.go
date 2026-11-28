@@ -706,6 +706,7 @@ func parsePart(raw json.RawMessage, pm map[string]json.RawMessage, path string) 
 
 var geminiTypes = map[string]bool{"STRING": true, "NUMBER": true, "INTEGER": true, "BOOLEAN": true, "ARRAY": true, "OBJECT": true, "NULL": true}
 
+// schemaInts are Schema fields that are int64, which ProtoJSON may write as strings.
 var schemaInts = []string{"maxItems", "minItems", "maxLength", "minLength", "maxProperties", "minProperties"}
 
 func jsonSchema(raw json.RawMessage) json.RawMessage {
@@ -767,6 +768,8 @@ func convertSchema(m map[string]any) bool {
 	return changed
 }
 
+// number is a floating-point field: a JSON number or, as ProtoJSON allows, a string holding one
+// (including "NaN" and "Infinity").
 type number float64
 
 func (n *number) UnmarshalJSON(b []byte) error {
@@ -787,6 +790,9 @@ func (n *number) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// int32Number is an int32 field: a JSON number or a string holding one, in any form ProtoJSON
+// accepts for an integer (exponents and zero fractions included), refused when it is not a whole
+// number in range.
 type int32Number int32
 
 func (n *int32Number) UnmarshalJSON(b []byte) error {

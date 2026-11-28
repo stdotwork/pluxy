@@ -573,6 +573,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, d.withUsage(malformed("upstream sent a malformed stream chunk", data))
 	}
+	// Chat usage is cumulative and the last chunk usually carries it, but some upstreams send an
+	// empty or zero-filled usage after the real one. Such a chunk does not replace what the
+	// upstream already reported; one with counts does.
 	if u := decodeUsage(c.Usage); u != nil && (d.usage == nil || reportsTokens(u)) {
 		d.usage = u
 	}

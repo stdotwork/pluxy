@@ -172,7 +172,6 @@ func (e *encoder) pairToolCalls(msgs []*outMessage) []*outMessage {
 			}
 			continue
 		}
-		// A run of user messages, which Claude reads as one turn.
 		j := i
 		for j < len(msgs) && msgs[j].role == llm.RoleUser {
 			j++

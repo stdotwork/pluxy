@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+// code_execution_20250825 requires no anthropic-beta header and behaves the same across every
+// supported model.
 const (
 	codeExecutionToolType = "code_execution_20250825"
 	codeExecutionToolName = "code_execution"

@@ -113,9 +113,11 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 }
 
 type EncodeOptions struct {
-	KeepModelTurn         bool
-	SearchResultOwned     func(encryptedContent string) bool
-	ServiceTier           bool
+	KeepModelTurn     bool
+	SearchResultOwned func(encryptedContent string) bool
+	ServiceTier       bool
+	// Anthropic takes the field only with the fast-mode beta header (and only on some models), so
+	// the caller sets it only when it adds that header to the request it sends.
 	FastMode              bool
 	WebSearch             bool
 	CodeExecution         bool
@@ -583,6 +585,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (blocks []json.RawMessage
 		switch p.Type {
 		case llm.PartText:
 			if p.Text == "" {
+				// Messages rejects empty text blocks.
 				e.losses = append(e.losses, rawjson.Losses(p.Origin, format)...)
 				continue
 			}

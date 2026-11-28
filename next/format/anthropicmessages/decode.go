@@ -67,6 +67,8 @@ func decodeUsage(raw json.RawMessage) *llm.Usage {
 	return out
 }
 
+// mergeUsage overlays the usage of a message_delta on what the stream reported so far: Messages
+// stream usage is cumulative, and a field a later event leaves out keeps its earlier value.
 func mergeUsage(have, next json.RawMessage) json.RawMessage {
 	if len(have) == 0 || string(have) == "null" {
 		return next

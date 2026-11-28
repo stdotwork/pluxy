@@ -79,6 +79,9 @@ func callsOf(parts []json.RawMessage) []fnRef {
 	return calls
 }
 
+// Gemini matches responses to calls by position: Google's function calling guide says to
+// "include the responses in the same order as they were requested", Vertex AI's says "in the exact
+// same order as the functionCall parts returned by the model".
 func orderResponses(calls []fnRef, parts []json.RawMessage) ([]json.RawMessage, bool) {
 	var slots []int
 	var keys []string

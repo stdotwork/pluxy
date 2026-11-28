@@ -452,6 +452,8 @@ func (d *StreamDecoder) decode(c chunk, out []llm.Event) []llm.Event {
 			}
 			continue
 		}
+		// ProtoJSON leaves out a zero index. A candidate with none is candidate 0 while this
+		// chunk has not shown one, and otherwise sits where it is listed.
 		idx := i
 		switch {
 		case cand.Index != nil:
