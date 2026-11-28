@@ -24,6 +24,24 @@ panel for it. All three are in `next/`, and all new work goes there.
 dependencies are `github.com/coder/websocket` and `gopkg.in/yaml.v3`), and change the extension
 protocol only together with its README (`next/protocol/README.md`).
 
+Code carries next to no comments, and here nearby code is not the guide: much of it still has
+comments this rule does not allow. Say what the code does through names, types and tests. In code
+you add or change, in any language and in workflow files, a comment may stay only when it is one of
+these:
+
+- a licence header;
+- behaviour forced by something outside pluxy that it cannot reshape (a dependency, a platform, a
+  vendor or a protocol), where the code alone does not make the reason clear;
+- a lint suppression for a style-only rule;
+- a doc comment that defines a public API's contract;
+- a link to an issue or RFC for a constraint the code cannot express.
+
+Anything else goes: narration, section banners, commented-out code, notes that point at a doc, and
+explanations of a workaround in pluxy's own code (change the code so it needs none). When unsure
+whether a comment fits the list, delete it. The standard this follows is the
+[no-comments skill](https://github.com/cursor/plugins/blob/main/pstack/skills/no-comments/SKILL.md)
+and its [comment-sicko agent](https://github.com/cursor/plugins/blob/main/pstack/agents/comment-sicko.md).
+
 If `.private/AGENTS.md` exists, read it too: it holds the owner's private instructions and notes.
 Start with [`docs/map.md`](docs/map.md) to find the entry files, tests, fakes and handbook sections
 for common changes before searching the tree.
