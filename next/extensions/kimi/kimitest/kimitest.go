@@ -1,6 +1,3 @@
-// Package kimitest is a fake Kimi for tests of the Kimi extension: the device-code login and token
-// endpoint at /api/oauth/*, and the Kimi Code API (Chat Completions, Responses, Messages) under
-// /coding/v1. It issues made-up tokens and never talks to Kimi.
 package kimitest
 
 import (
@@ -17,7 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Request is an API request the server answered with a valid token.
 type Request struct {
 	Method string
 	Path   string
@@ -25,30 +21,20 @@ type Request struct {
 	Body   []byte
 }
 
-// Server is the fake. Set its fields before requests arrive.
 type Server struct {
 	*httptest.Server
 
-	// Generate, if set, answers API requests whose token is valid. The default replies "Hello"
-	// as a Chat completion (streamed when asked) with usage 11 in, 7 out.
-	Generate func(w http.ResponseWriter, r *http.Request, req Request)
-	// Usage and Me, if set, are the bodies of GET /coding/v1/usages and /coding/v1/me for a valid
-	// token; the defaults are DefaultUsage and DefaultMe. A status other than 0 makes the endpoint
-	// answer with it and an error body instead (UsageStatus, MeStatus).
+	Generate              func(w http.ResponseWriter, r *http.Request, req Request)
 	Usage, Me             string
 	UsageStatus, MeStatus int
-	// Deny makes every device login end with access_denied once polled.
-	Deny bool
-	// TokenDown makes the token endpoint answer 503.
-	TokenDown bool
-	// CodeLifetime is how long a device code lasts, in seconds; 0 means 600.
-	CodeLifetime int
-	// SlowDown makes every poll of a pending device code answer slow_down.
-	SlowDown bool
+	Deny                  bool
+	TokenDown             bool
+	CodeLifetime          int
+	SlowDown              bool
 
 	mu       sync.Mutex
 	n        int
-	codes    map[string]*code // device code to its state
+	codes    map[string]*code
 	access   map[string]bool
 	refresh  map[string]bool
 	requests []Request
@@ -61,9 +47,7 @@ type code struct {
 	expires  time.Time
 }
 
-// New starts a fake that is closed when the test ends.
 func New(t testing.TB) *Server {
-	// The extension honours the fake's address in account settings only under this variable.
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	s := &Server{codes: map[string]*code{}, access: map[string]bool{}, refresh: map[string]bool{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
@@ -71,13 +55,11 @@ func New(t testing.TB) *Server {
 	return s
 }
 
-// Settings returns account settings that point the extension at the server.
 func (s *Server) Settings() json.RawMessage {
 	b, _ := json.Marshal(map[string]string{"base_url": s.URL + "/coding", "auth_base_url": s.URL})
 	return b
 }
 
-// Grant returns a new access and refresh token the server accepts.
 func (s *Server) Grant() (access, refresh string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,7 +73,6 @@ func (s *Server) grant() (string, string) {
 	return a, r
 }
 
-// Revoke makes the server refuse a token it issued.
 func (s *Server) Revoke(token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -99,7 +80,6 @@ func (s *Server) Revoke(token string) {
 	delete(s.refresh, token)
 }
 
-// Approve approves the device login showing userCode, as the user would on Kimi's page.
 func (s *Server) Approve(userCode string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -112,7 +92,6 @@ func (s *Server) Approve(userCode string) bool {
 	return false
 }
 
-// Requests returns the API requests the server answered, in order.
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -180,7 +159,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// account answers the account endpoints, usage and profile, which a valid token reads.
 func (s *Server) account(w http.ResponseWriter, r *http.Request) {
 	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	s.mu.Lock()
@@ -211,14 +189,11 @@ func (s *Server) account(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, body)
 }
 
-// DefaultUsage is the default body of GET /coding/v1/usages, in the shape Kimi sends: counts as
-// strings, windows with protobuf-style units, and monthly ratios.
 const DefaultUsage = `{"user":{"userId":"u-fake"},
 "usage":{"limit":"100","used":"40","remaining":"60","resetTime":"2026-11-14T00:00:00.123456789Z"},
 "limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"50","used":"10","remaining":"40","resetTime":"2026-11-09T15:00:00Z"}}],
 "usages":{"limit_month_total":{"used_ratio":0.25,"reset_time":"2026-12-01T00:00:00Z"},"limit_month_code":{"used_ratio":0.5,"reset_time":"2026-12-01T00:00:00Z"}}}`
 
-// DefaultMe is the default body of GET /coding/v1/me.
 const DefaultMe = `{"user_id":"u-fake","user_level_name":"Andante"}`
 
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +226,6 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	case "refresh_token":
 		rt := r.PostForm.Get("refresh_token")
 		if !s.refresh[rt] {
-			// Kimi refuses a refresh token with 401, not invalid_grant.
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
@@ -269,11 +243,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// Usage is the usage the default replies report.
 const Usage = `{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}`
 
-// StreamText writes a streamed Chat completion: one chunk per piece, then the finish reason and
-// usage, then [DONE].
 func StreamText(w http.ResponseWriter, pieces ...string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	for i, p := range pieces {
@@ -288,7 +259,6 @@ func StreamText(w http.ResponseWriter, pieces ...string) {
 	io.WriteString(w, "data: [DONE]\n\n")
 }
 
-// JSONText writes a Chat completion holding text.
 func JSONText(w http.ResponseWriter, text string) {
 	t, _ := json.Marshal(text)
 	w.Header().Set("Content-Type", "application/json")

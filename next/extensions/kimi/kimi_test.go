@@ -62,7 +62,6 @@ func TestChatRequest(t *testing.T) {
 		{"role":"assistant","content":"Checking.","reasoning_content":"Checking.","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},
 		{"role":"tool","tool_call_id":"call_1","content":"ok"}]}`)
 
-	// Thinking off keeps 0.6 and nothing else; kimi-k2 gets no thinking settings.
 	got = chatBody(t, `{"model":"kimi-k3","reasoning_effort":"none","temperature":0.6,"messages":[{"role":"user","content":"hi"}]}`)
 	if !strings.Contains(string(got), `"temperature":0.6`) || !strings.Contains(string(got), `"thinking":{"type":"disabled"}`) {
 		t.Errorf("thinking off: %s", got)

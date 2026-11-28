@@ -17,22 +17,12 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// Kimi signs in with the OAuth 2.0 device authorization grant (RFC 8628) at its login host,
-// {auth}/api/oauth/device_authorization and {auth}/api/oauth/token, as Kimi's own CLI does
-// (MoonshotAI/kimi-code, packages/oauth). Kimi issues no client registration to other programs, so
-// the login uses the public client of Kimi's CLI, as pluxy's Codex extension does with OpenAI's.
-// Refresh is the refresh_token grant at the same token endpoint.
-
-// clientID is Kimi CLI's public OAuth client.
 const clientID = "17e5f671-d194-4dfb-9706-5516cb48c098"
 
 const deviceGrant = "urn:ietf:params:oauth:grant-type:device_code"
 
-// defaultPollInterval is the wait between token polls when Kimi names none (RFC 8628 section
-// 3.5).
 const defaultPollInterval = 5 * time.Second
 
-// refreshLead is how long before expiry core renews a token.
 const refreshLead = 5 * time.Minute
 
 var loginMethods = []protocol.LoginMethod{
@@ -42,17 +32,12 @@ var loginMethods = []protocol.LoginMethod{
 	{Method: "device", Kind: protocol.LoginDevice, Label: "Kimi Code (device code)"},
 }
 
-// authClient talks to Kimi's login. Its timeout covers only signing in and renewing, never a
-// model request: a login host that stops answering must not hold a renewal, and every request of
-// the account waiting on it, forever. It follows no redirect, which would send the form (a device
-// code or refresh token) wherever the redirect points.
 var authClient = &http.Client{
 	Transport:     sdk.Upstream(http.DefaultTransport.(*http.Transport).Clone()),
 	Timeout:       30 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
-// prompter shows the user a login prompt; *sdk.LoginSession is one.
 type prompter interface {
 	Prompt(protocol.Prompt) error
 }
@@ -71,7 +56,6 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 	return deviceLogin(ctx, set, s)
 }
 
-// waitPoll waits d between token polls, and reports false when ctx ends first. Tests replace it.
 var waitPoll = func(ctx context.Context, d time.Duration) bool {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -96,8 +80,6 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 	if f := oauthPost(ctx, set.AuthBaseURL+"/api/oauth/device_authorization", deviceID, url.Values{"client_id": {clientID}}, &dc); f != nil {
 		return nil, requestError(ctx, f)
 	}
-	// The code's life and the poll interval are the server's numbers: bounded, so a huge one cannot
-	// overflow a duration and a negative one cannot make a tight polling loop.
 	lifetime := sdk.BoundSeconds(dc.ExpiresIn, sdk.MaxLoginWait)
 	if err := s.Prompt(protocol.Prompt{
 		Kind:                    protocol.PromptDevice,
@@ -114,7 +96,6 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 		interval = d
 	}
 	if lifetime > 0 {
-		// Polling past the code's lifetime only earns expired_token; stop when it ends.
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, time.Now().Add(lifetime))
 		defer cancel()
@@ -192,7 +173,6 @@ type tokenResponse struct {
 	ExpiresIn    int64  `json:"expires_in"`
 }
 
-// requireToken refuses a reply that is not an error but gives no access token.
 func (tr *tokenResponse) requireToken() error {
 	if tr.AccessToken == "" {
 		return &llm.Error{Code: llm.CodeUpstream, Message: "Kimi's token endpoint sent no access token", Scope: llm.ScopeEndpoint}
@@ -215,7 +195,6 @@ func (tr *tokenResponse) credential(deviceID, oldRefresh string) *protocol.Crede
 	return c
 }
 
-// newDeviceID returns a random UUID (version 4) naming this login's device to Kimi.
 func newDeviceID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
@@ -224,18 +203,14 @@ func newDeviceID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// oauthFailure is a token or device reply that is not a success.
 type oauthFailure struct {
 	status       int
 	code         string
 	retryAfterMS int64
 	err          error
-	// sent is whether any of the request was written to the connection. Only a request that was
-	// not sent is safe to try again.
-	sent bool
+	sent         bool
 }
 
-// oauthPost posts form to endpoint with Kimi's device headers and decodes a 200 reply into out.
 func oauthPost(ctx context.Context, endpoint, deviceID string, form url.Values, out any) *oauthFailure {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -270,8 +245,6 @@ func requestError(ctx context.Context, f *oauthFailure) error {
 	return tokenError(f)
 }
 
-// tokenError turns a failed token or device request into an error. Only a request that never
-// reached Kimi is retryable, apart from a 429, where Kimi refused to run the request.
 func tokenError(f *oauthFailure) error {
 	switch {
 	case f.status == 0:
@@ -292,7 +265,6 @@ func refused(msg string) error {
 	return &llm.Error{Code: llm.CodeAuth, Message: msg, Scope: llm.ScopeCredential}
 }
 
-// apiKeyLogin lists models without generating, and retains only a key the API accepted.
 func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -304,7 +276,6 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 		e = redact.Event(llm.Event{Type: llm.EventError, Error: e}).Error
 		e.Message = sdk.LoginText(e.Message)
 		e.ProviderCode = sdk.LoginCode(e.ProviderCode)
-		// A login needs the refusal reason, not a raw body that may echo credentials.
 		e.Raw = nil
 		return e
 	}
