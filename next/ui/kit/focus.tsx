@@ -4,6 +4,11 @@
 
 import { type ComponentChildren, createContext } from "preact";
 import { useContext } from "preact/hooks";
+import { strings } from "./strings";
+
+const t = strings("focus", {
+  checking: "Checking setup…",
+});
 
 /** True inside a page the shell shows in the focused window instead of the frame. */
 export const FocusedContext = createContext(false);
@@ -63,12 +68,15 @@ export function Focus(props: {
 }
 
 /** The bare ground of the focused window, shown for the moment before its card is known. */
-export function FocusGround() {
+export function FocusGround(props: { label?: string }) {
   return (
     <main class="focus" data-part="focus" aria-busy="true">
       <header class="focus-bar">
         <FocusBrand />
       </header>
+      <p class="sr-only" role="status" aria-live="polite">
+        {props.label ?? t("checking")}
+      </p>
     </main>
   );
 }

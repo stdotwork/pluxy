@@ -6,8 +6,8 @@ import type { Host, Reply } from "../kit/host";
 import type { PrivacyState } from "../kit/privacy";
 import { type PageDef, SETUP_GATE_WAIT_MS, SETUP_PAGE, Shell, setupGate } from "../kit/shell";
 import type { ThemeState } from "../kit/theme/state";
-import { mountIn, restoreDom, settle } from "./fakeDom";
-import { withPart } from "./setupWorld";
+import { all, mountIn, restoreDom, settle } from "./fakeDom";
+import { attribute, withPart } from "./setupWorld";
 
 const place = {
   hash: "",
@@ -88,8 +88,13 @@ test("a Setup answer that arrives after SETUP_GATE_WAIT_MS leaves Home on screen
   ];
 
   const m = await mountIn(<Shell host={host} themes={themes} privacy={privacy} pages={pages} />);
-  // While GET /setup is pending and within the wait, only the focused bare ground is shown.
+  // While GET /setup is pending and within the wait, only the focused bare ground is shown,
+  // with a visually hidden live status so screen readers are told what the window is waiting for.
   expect(withPart(m.root, "focus")).toHaveLength(1);
+  const status = all(m.root, "p").find((p) => attribute(p, "role") === "status");
+  expect(status?.textContent).toBe("Checking setup…");
+  expect(status && attribute(status, "aria-live")).toBe("polite");
+  expect(status && attribute(status, "class")).toBe("sr-only");
   expect(m.text()).not.toContain("Home body");
   expect(gateTimers).toHaveLength(1);
 
