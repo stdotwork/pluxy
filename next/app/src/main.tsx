@@ -1,6 +1,6 @@
 // The desktop app's window: the kit's shell with core's pages, the same as the panel's and in the
-// same places, then the app's own: the topics of Tools (Beginner Mode, Manage Clients and the
-// listed clients' pages), and Where pluxy runs, Updates, Add-ons
+// same places, then the app's own: the eight coding tools' pages (each opens as Tools / {Tool}; the
+// Tools page and the guided setup's step 2 link to them), and Where pluxy runs, Updates, Add-ons
 // and Launcher among the Settings topics. Until the app is connected and signed in it
 // shows the first launch screen or the not-running pane (firstLaunch.tsx). Extension pages, from
 // core and from packages installed on this device (devicePage.tsx), open in webviews of their
@@ -9,7 +9,8 @@
 import { listen } from "@tauri-apps/api/event";
 import { render } from "preact";
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
-import { api } from "../../ui/kit/api";
+import { api, type SetupClient } from "../../ui/kit/api";
+import type { Reply } from "../../ui/kit/host";
 import { corePages } from "../../ui/kit/pages/core";
 import { PrivacyState } from "../../ui/kit/privacy";
 import { type PageDef, Shell } from "../../ui/kit/shell";
@@ -18,19 +19,18 @@ import { KitContext } from "../../ui/kit/ui";
 import defaultTheme from "../../ui/themes/default.json";
 import paper from "../../ui/themes/paper.json";
 import terminal from "../../ui/themes/terminal.json";
-import { agentPages, setupClientAction, setupOffersNeeded } from "./agentPages";
-import { clientListPage } from "./clientList";
-import { detected, encode, listed, openClient, PREF, parse } from "./clientListItems";
+import { agentPages, movedTo, setupOffersNeeded } from "./agentPages";
+import { readExtraTools } from "./clientPage";
 import { ConnectionPage } from "./connection";
 import { WHERE } from "./connectionCopy";
 import { type DeviceCatalog, type DeviceRegistry, device, newest } from "./device";
 import { DevicePage, devicePage } from "./devicePage";
-import { easyModePage } from "./easyMode";
 import { FirstLaunch, NotRunning } from "./firstLaunch";
 import { connectionStatus } from "./frameStatus";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
 import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
+import { toolHooks } from "./toolHooks";
 import { updatesPage } from "./updates";
 import { ClosePrompt } from "./window";
 
@@ -82,14 +82,16 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
   };
   const host = useMemo(() => appHost(conn, changed, setShown), [conn]);
   // This device's catalog: reloaded when the native side says it changed, keeping the newest
-  // load's answer.
+  // load's answer. unread: the newest load failed, so the rows do not know which add-ons are on.
   const [catalog, setCatalog] = useState<DeviceCatalog>();
+  const [unread, setUnread] = useState(false);
   const [applyDevice] = useState(() =>
-    newest<DeviceCatalog | undefined>((c) => {
-      if (c) setCatalog(c);
+    newest<Reply<DeviceCatalog>>((r) => {
+      if (r.body) setCatalog(r.body);
+      setUnread(!r.body);
     }),
   );
-  const loadDevice = useCallback(() => applyDevice(device.list().then((r) => r.body)), [applyDevice]);
+  const loadDevice = useCallback(() => applyDevice(device.list()), [applyDevice]);
   useEffect(() => {
     // Listening first: a change made while the first load runs loads again.
     const off = listen("pluxy-device", loadDevice);
@@ -101,18 +103,29 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       );
     };
   }, [loadDevice]);
-  // What the registries offer this device: the Setup page offers to set up a client whose tool
-  // one of them offers, as Beginner Mode does. Read once the window shows that page for a core on
-  // this computer (setupOffersNeeded), not on a start that only shows the Connection page.
+  // What the registries offer this device: a tool's row offers to install its add-on when one of
+  // them offers it. Read once the window shows the Tools page for a pluxy on this computer
+  // (setupOffersNeeded), not on a start that only shows the Connection page. A read that fails
+  // reads as no offers, so the rows stop saying they are checking.
   const [offers, setOffers] = useState<DeviceRegistry[]>();
   const offersNeeded = setupOffersNeeded(conn);
-  useEffect(() => {
+  const loadOffers = useCallback(() => {
     if (!offersNeeded) return;
-    device.registries().then(
-      (r) => setOffers(r.body),
-      () => {},
-    );
+    device.registries().then((r) => setOffers(r.body ?? []));
   }, [offersNeeded]);
+  useEffect(loadOffers, [loadOffers]);
+  // Where the window is (its first address part), and the addresses the app used to have.
+  const [route, setRoute] = useState(() => location.hash.replace(/^#\/?/, "").split(/[/?]/)[0] ?? "");
+  useEffect(() => {
+    const here = () => {
+      const to = movedTo(location.hash);
+      if (to) location.replace(to);
+      setRoute(location.hash.replace(/^#\/?/, "").split(/[/?]/)[0] ?? "");
+    };
+    here();
+    window.addEventListener("hashchange", here);
+    return () => window.removeEventListener("hashchange", here);
+  }, []);
   // The app's own core exited: show it.
   useEffect(() => {
     const off = listen("pluxy-connection", () => connectionGet().then(changed, () => {}));
@@ -124,38 +137,47 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
     };
   }, []);
   const themes = useMemo(() => new ThemeState(host, document, [defaultTheme, terminal, paper]), [host]);
-  // The agent client pages the navigation lists (clientListItems.ts): the saved choice, or the clients
-  // whose tool is installed on this device, and the client page the person is on.
   const agents = useMemo(() => agentPages(), []);
-  const clients = useMemo(
-    () => agents.map((a) => ({ id: a.id, package: a.package, title: a.title })),
-    [agents],
-  );
-  const [saved, setSaved] = useState(() => parse(host.prefs.get(PREF), clients));
-  const saveClients = useCallback(
-    (ids: string[] | undefined) => {
-      host.prefs.set(PREF, encode(ids));
-      setSaved(ids);
-    },
-    [host],
-  );
-  const [open, setOpen] = useState(() => openClient(location.hash, clients));
+  // The tools core does not scan (Claude Desktop, Grok Build, Hermes Agent), read from their
+  // add-ons: as the Tools page or the setup opens, when the device's add-ons change, and on
+  // Refresh. A pluxy elsewhere has none of them here.
+  const [extraTools, setExtraTools] = useState<SetupClient[]>();
+  const [applyExtra] = useState(() => newest<SetupClient[]>(setExtraTools));
+  const remote = conn.mode === "remote";
+  const loadExtra = useCallback(() => {
+    if (remote || !conn.signed_in) return;
+    const kit = api(host);
+    applyExtra(
+      kit
+        .setup()
+        .then(
+          (r) => r.body?.found.clients,
+          () => undefined,
+        )
+        .then((found) => readExtraTools(catalog, found))
+        .then((rows) => rows.map((r) => r.client)),
+    );
+  }, [remote, conn.signed_in, host, catalog, applyExtra]);
+  const onTools = route === "tools" || route === "setup";
   useEffect(() => {
-    const onHash = () => setOpen(openClient(location.hash, clients));
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, [clients]);
+    if (onTools) loadExtra();
+  }, [onTools, loadExtra]);
+  const onRefresh = useCallback(() => {
+    loadExtra();
+    loadOffers();
+  }, [loadExtra, loadOffers]);
   const pages: PageDef[] = useMemo(() => {
-    const installed = detected(clients, catalog);
-    const visible = listed(clients, installed, saved, open);
-    // Setup lists the clients on core's machine. The app sets a client up on this computer, so
-    // it offers to only when core runs here.
-    const setup = conn.mode === "remote" ? undefined : setupClientAction(agents, catalog, offers);
+    const { tools, setup } = toolHooks({
+      conn,
+      agents,
+      view: { catalog, unread, offers },
+      extraTools,
+      loadDevice,
+      onRefresh,
+    });
     return [
-      ...corePages({ general: { signOut: false }, setup }),
-      easyModePage(agents, catalog, loadDevice),
-      clientListPage(clients, installed, saved, visible.length, saveClients),
-      ...visible.flatMap((c) => agents.find((a) => a.id === c.id) ?? []),
+      ...corePages({ general: { signOut: false }, setup, tools }),
+      ...agents,
       {
         id: "connection",
         title: WHERE.title,
@@ -169,7 +191,7 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       launcherPage(),
       ...devicePages(catalog),
     ];
-  }, [conn.mode, shown, catalog, offers, loadDevice, agents, clients, saved, open, saveClients]);
+  }, [conn, shown, catalog, unread, offers, extraTools, loadDevice, onRefresh, agents]);
 
   // Not connected or not signed in (or the app's own pluxy did not start): the first launch screen
   // while no place is chosen, else the frame with the case in its pane. Where pluxy runs and this

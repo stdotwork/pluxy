@@ -34,7 +34,7 @@ mixed package keeps the provider `protocol`, `programs`, `ui` and `config` at th
 | `resources` | web | Files the package may ask for: each `{"id", "kind": "file" \| "subtree", "operations": [...]}`. Only `file` with `read`, and `subtree` with `list` or `read`, can be granted. Declaring one grants nothing. |
 | `programs` | native | Platform (`GOOS/GOARCH`) to the program's relative path. At least one. |
 | `environments` | native | Optional. The only value is `wsl`: on Windows its Linux program may also run in a WSL distribution ([Linux build for WSL](#linux-build-for-wsl)). |
-| `operations` | native | At least one: `{"id", "description", "input_schema", "output_schema", "effect"?, "secrets"?}`. `effect` is `read`, `write`, `launch` or `disclose`; absent means `write`. `secrets` maps at most four input fields, each a `string` property of the input schema, to `"value"` (the tool gets the secret) or `"reference"` (it gets a reference); a `launch` operation takes references only, and its input schema must be an object that requires `executable`, `argv` and `cwd`. The ID `describe` is the host's: a tool that declares it installs but is incompatible when it starts. |
+| `operations` | native | At least one: `{"id", "description", "input_schema", "output_schema", "effect"?, "secrets"?}`. `description` is one line of at most 800 characters, which its call's confirmation quotes as the add-on's words. `effect` is `read`, `write`, `launch` or `disclose`; absent means `write`. `secrets` maps at most four input fields, each a `string` property of the input schema, to `"value"` (the tool gets the secret) or `"reference"` (it gets a reference); a `launch` operation takes references only, and its input schema must be an object that requires `executable`, `argv` and `cwd`. The ID `describe` is the host's: a tool that declares it installs but is incompatible when it starts. |
 | `exports` | native | Optional `{"contract": <integer ≥ 0>, "operations": [<declared IDs>]}`: the operations other packages may call, under an export contract number. |
 | `imports` | both | Optional, at most 16: `{"package", "contract": [<accepted contracts>], "operations": [...], "required": <bool, default true>, "secrets": [...]}`, one per package, never itself. `secrets` (native only) lists the imported operations it may pass secret references to. |
 | `state` | native | Required: `{"version", "readable_versions": [...]}`. An update or rollback is refused unless the new release's `readable_versions` holds the active release's `version`. |
@@ -916,12 +916,14 @@ removed secret's value is replaced until the app restarts. Only exact values are
 A client key, the key a coding tool sends core with its requests, is a vault secret of its own,
 apart from the management key. It enters only natively:
 
-- `client_key_capture` (label, client): trims the label and refuses, before the confirmation, a
+- `client_key_capture` (label, client): trims the label and refuses, before core is asked, a
   client that is not a native tool, a label of more than 64 characters or more than one line, and
-  a full vault. It asks a native confirmation naming core, the tool and the label, then asks core
-  for a key (`POST /v0/management/client-keys` with `{"label"}`) and keeps the key and core's ID
-  from the reply. Core refuses a label one of its keys already has, after the confirmation. If the
-  vault cannot keep the key, the app deletes it on core again.
+  a full vault. It asks no native confirmation of its own: the window can already have core make a
+  client key through management calls, and the key leaves the vault only in a call of its tool,
+  whose native confirmation names it. The app asks core for a key (`POST /v0/management/client-keys`
+  with `{"label"}`) and keeps the key and core's ID from the reply. Core refuses a label equal to
+  one of its keys before making a key. If the vault cannot keep the key, the app deletes it on core
+  again.
 - `client_key_enter` (label, client): reads an existing key from native key entry and keeps it once
   core takes it. Core's ID is recorded only when exactly one of core's keys has its masked form.
 

@@ -16,7 +16,8 @@ const t = strings("setupCheck", {
   noAccount: "There is no account to test yet.",
   addAccount: "Add an account",
   finishWithout: "Finish without testing",
-  explain: "This sends one short test message through {account}. It counts against that account's use.",
+  explain:
+    "This sends one short test message through {account}. The provider counts it against that account's limits. pluxy does not list it in Activity or Usage.",
   account: "Account",
   accountOption: "{account} ({provider})",
   chooseModel: "Choose a model",

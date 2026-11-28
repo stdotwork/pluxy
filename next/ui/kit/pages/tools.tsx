@@ -67,11 +67,18 @@ const t = strings("tools", {
   step1: "Make a key for {tool}.",
   makeKey: "Make key",
   step1Done: "Done. The key is in the text below.",
+  step1Again:
+    "pluxy already has a key named {name}, but a key is shown only once, when it is made, so its value cannot be shown again. You can make a new one for the text below. The old one keeps working until you delete it in Keys on the Tools page.",
+  makeAnother: "Make another key",
   step2: "Put this in {path}:",
   keepFile: "If the file already has settings, add these lines to them instead of replacing the file.",
   makeFirst: "Make the key first, or replace {placeholder} with a key you have.",
   model: "Replace {placeholder} with a model your accounts serve:",
   models: "Models your tools can ask for",
+  modelLabel: "Model {tool} starts with",
+  modelWhy:
+    "{tool} asks for a model of its own unless it is told which one, and your accounts may not serve that one. Pick a model your accounts serve.",
+  noModels: "pluxy serves no models yet, so the text below has {placeholder} where a model goes.",
   step3: "Start {tool} again so it reads the new settings.",
   copy: "Copy",
   copied: "Copied",
@@ -127,7 +134,12 @@ export interface ToolsOptions {
   localPages?: { name: string; page: string }[];
   /** Runs on Refresh, so the host can read its own tools again. */
   onRefresh?: () => void;
+  /** Lines the host puts above and under the list of tools, from the tools it lists. */
+  notes?: ToolNotes;
 }
+
+/** What a host says around the list of tools: above it, and under it. */
+export type ToolNotes = (clients: SetupClient[]) => { above?: ComponentChildren; below?: ComponentChildren };
 
 // ---- keys made on this page -------------------------------------------------------------------
 
@@ -178,7 +190,12 @@ export interface ToolsState {
   rescan(): Promise<Setup | undefined>;
 }
 
-export function useToolsState(): ToolsState {
+/**
+ * What the tools state asks of pluxy as its page opens. A pluxy that never scanned always scans;
+ * with lookAgain a pluxy that did is asked to look at its tools again too, for a page that must show
+ * what they are now (a tool connected on another page since the kept scan).
+ */
+export function useToolsState(opts: { lookAgain?: boolean } = {}): ToolsState {
   const { api, unauthorized } = useKit();
   const status = useRef(0);
   const setup = useLoad(async () => {
@@ -217,13 +234,18 @@ export function useToolsState(): ToolsState {
     if (!(await start())) return undefined;
     return new Promise((resolve) => waiting.current.push(resolve));
   };
-  // A pluxy that never scanned scans once as the page opens; while it scans, the page asks again
-  // every second (not while hidden), and stops when the scan is over or the page is left.
+  // A pluxy that never scanned scans once as the page opens (so does one that did, for lookAgain);
+  // while it scans, the page asks again every second (not while hidden), and stops when the scan is
+  // over or the page is left. A scan already running as the page opens is the one for it.
   const asked = useRef(false);
   const data = setup.data;
   const running = data?.scanning === true;
   useEffect(() => {
-    if (!data || data.scanned_at || data.scanning || asked.current) return;
+    if (!data || asked.current) return;
+    if (data.scanning || (data.scanned_at && !opts.lookAgain)) {
+      asked.current = data.scanning === true;
+      return;
+    }
     asked.current = true;
     void scan();
   }, [data]);
@@ -271,7 +293,18 @@ function Steps(props: { client: SetupClient; made: MadeKeys; onKeysChanged?: () 
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
   const tool = toolName(props.client);
-  const paste = useLoad(() => api.clientPaste(props.client.id));
+  // The model the person picked; until they pick, the text names pluxy's best match.
+  const [model, setModel] = useState<string>();
+  const paste = useLoad(() => api.clientPaste(props.client.id, undefined, model));
+  const askedFor = useRef(model);
+  useEffect(() => {
+    if (askedFor.current === model) return;
+    askedFor.current = model;
+    paste.reload();
+  }, [model, paste.reload]);
+  // Keys that already carry the tool's name: made here before, so Make key would add another.
+  const keys = useLoad(api.clientKeys);
+  const earlier = (keys.data?.keys ?? []).filter((k) => k.label?.trim() === tool).length;
   const key = props.made.list.find((k) => k.tool === props.client.id);
   const [error, setError] = useState<string>();
   const done = useRef<HTMLParagraphElement>(null);
@@ -294,6 +327,7 @@ function Steps(props: { client: SetupClient; made: MadeKeys; onKeysChanged?: () 
       tool: props.client.id,
     });
     props.onKeysChanged?.();
+    keys.reload();
   };
   if (paste.phase === "loading") return <Notice tone="muted">{t("stepsLoading")}</Notice>;
   const data = paste.data;
@@ -316,14 +350,42 @@ function Steps(props: { client: SetupClient; made: MadeKeys; onKeysChanged?: () 
         ) : (
           <>
             <p>{t("step1", { tool })}</p>
+            {earlier > 0 && <p class="muted">{t("step1Again", { name: tool })}</p>}
             {error && <Notice tone="danger">{error}</Notice>}
             <div class="actions">
-              <Button onClick={make}>{t("makeKey")}</Button>
+              <Button onClick={make}>{earlier > 0 ? t("makeAnother") : t("makeKey")}</Button>
             </div>
           </>
         )}
       </li>
       <li>
+        {(data.models?.length ?? 0) > 0 ? (
+          <label class="field" data-part="field">
+            <span class="label">{t("modelLabel", { tool })}</span>
+            <select
+              data-slot="select-trigger"
+              value={data.model ?? ""}
+              onChange={(e) => setModel(e.currentTarget.value)}
+            >
+              {data.model && !data.models?.includes(data.model) && (
+                <option value={data.model}>{data.model}</option>
+              )}
+              {data.models?.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+            <span class="muted">{t("modelWhy", { tool })}</span>
+          </label>
+        ) : (
+          // A pluxy that does not send the list (older) is not one that serves nothing.
+          data.models && (
+            <p class="muted">
+              {rich(t("noModels"), { placeholder: <span class="mono">{MODEL_PLACEHOLDER}</span> })}
+            </p>
+          )
+        )}
         {data.files.map((file) => {
           const text = withKey(file.content, data.key, key?.value);
           return (
@@ -365,6 +427,7 @@ export interface ToolListProps {
   localPages?: ToolsOptions["localPages"];
   /** Runs on Refresh, so the host can read its own tools again. */
   onRefresh?: () => void;
+  notes?: ToolNotes;
   /** The tools are on another computer than the one showing the page. */
   remote?: boolean;
   /** Opens the host's own way to add an account, in place of the link to Add an account. */
@@ -390,6 +453,7 @@ export function ToolListView(
     toolAction: props.toolAction,
     extraTools: props.extraTools,
     localPages: props.localPages,
+    notes: props.notes,
     remote,
     open,
     setOpen,
@@ -462,6 +526,7 @@ function ToolRows(props: {
   toolAction?: ToolsOptions["toolAction"];
   extraTools?: SetupClient[];
   localPages?: ToolsOptions["localPages"];
+  notes?: ToolNotes;
   remote: boolean;
   open?: string;
   setOpen: (id: string | undefined) => void;
@@ -480,6 +545,7 @@ function ToolRows(props: {
   const connected = groups.connected.length;
   const installed = shown.length;
   const remote = props.remote;
+  const notes = props.notes?.([...shown, ...groups.other]);
   const row = (client: SetupClient) => {
     const custom = props.toolAction?.(client);
     const hasCustom = custom !== undefined && custom !== null && custom !== false && custom !== "";
@@ -505,6 +571,7 @@ function ToolRows(props: {
   };
   return (
     <>
+      {notes?.above}
       {props.summary !== false && (
         <p class="tools-summary">
           <span>
@@ -542,6 +609,7 @@ function ToolRows(props: {
       ) : (
         props.appTools && <p class="muted tools-more">{t("appTools")}</p>
       )}
+      {notes?.below}
     </>
   );
 }
@@ -901,6 +969,7 @@ export function ToolsPage(props: { options?: ToolsOptions }) {
           toolAction={options?.toolAction}
           extraTools={options?.extraTools}
           localPages={options?.localPages}
+          notes={options?.notes}
           remote={remote}
           state={state}
           made={made}

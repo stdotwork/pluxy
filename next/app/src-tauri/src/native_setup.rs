@@ -3,17 +3,19 @@
 //! a first run: the session's core has nothing installed and no accounts, its bundled registry
 //! offers `pluxy/claude` as a pick, and a stand-in `claude` that prints `2.4.1 (Claude Code)`
 //! comes first on the PATH core inherits from the app. A curated device registry offers
-//! `pluxy/claude-code`, the Claude Code page's package, so the app offers its "Set up" link.
+//! `pluxy/claude-code`, the Claude Code page's package, so the app offers to install it.
 //! The bundled test packages are not installed (`native_test.rs`).
 //!
 //! - `first`: the window opens on Setup by itself (`#/setup`, "Set up pluxy") with step 1, "Your AI
 //!   accounts", open; the Claude kind is ticked, saying Claude Code is installed on this computer;
 //!   "Add Claude" adds it (its row says Added, and `GET /packages` through the app's host lists it
-//!   enabled); step 2, opened, has the app's own "Set up" link to `#/claude-code` on Claude Code's
-//!   row, and pressing it opens the app's Claude Code page; back on `#/setup`, "Leave setup for
-//!   now" lands on Home and `GET /setup` has `first_run` false.
+//!   enabled); step 2, opened, has the app's one button on Claude Code's row: Install add-on, which
+//!   installs the add-on and goes on to turn it on, in the one native confirmation it opens (which
+//!   says first "Turn on the" add-on); once that is answered, the app's Claude Code page opens by
+//!   itself, with "Setting up pluxy." and "Back to setup" above it, which goes back to `#/setup`; a later visit to the page by its address has no way
+//!   back; "Leave setup for now" lands on Home and `GET /setup` has `first_run` false.
 //! - `second`: the next launch opens on Home, not Setup; Setup, opened, is titled "Setup" with
-//!   every step folded and no "Leave setup for now"; step 1, opened, says Claude is added; the stage
+//!   every step folded and no "Leave setup for now"; step 1, opened, says pluxy can connect to Claude; the stage
 //!   stays on it, then switches GTK to its dark variant and stays again, so the session's last
 //!   screenshot shows it dark.
 //!
@@ -215,7 +217,7 @@ fn first(c: &mut Checks, app: &AppHandle) {
     let added = until(
         app,
         90,
-        "document.body.innerText.includes('Added: Claude.')",
+        "document.body.innerText.includes('pluxy can now connect to Claude.')",
     );
     let notices = main_eval(
         app,
@@ -224,7 +226,7 @@ fn first(c: &mut Checks, app: &AppHandle) {
     .unwrap_or(Value::Null);
     c.check(
         added,
-        format!("after Add, step 1 says \"Added: Claude.\" (notices: {notices})"),
+        format!("after Add, step 1 says \"pluxy can now connect to Claude.\" (notices: {notices})"),
     );
     let r = core(app, "GET", "/packages");
     let listed = r["body"]["packages"]
@@ -242,37 +244,91 @@ fn first(c: &mut Checks, app: &AppHandle) {
     ) {
         return;
     }
-    // The Set up link comes once the device's catalog and the registries' offers have loaded.
-    let want = json!({ "links": [["Set up", "#/claude-code"]], "buttons": [] });
-    let row = within(20, || {
-        let r = tool_row(app);
-        (r == want).then_some(r)
-    })
-    .unwrap_or_else(|| tool_row(app));
+    // The add-on is offered by the curated registry and not installed: the row's one button
+    // installs it (asking nothing for that), turns it on (the native confirmation), and then opens
+    // the tool's page. The button comes once the device's catalog and the registries' offers have
+    // loaded.
+    let (ok, row) = {
+        let want = json!({ "links": [], "buttons": ["Install add-on"] });
+        let row = within(20, || {
+            let r = tool_row(app);
+            (r == want).then_some(r)
+        })
+        .unwrap_or_else(|| tool_row(app));
+        (row == want, row)
+    };
     c.check(
-        row == want,
-        format!("Claude Code's row in step 2 has the app's \"Set up\" link to #/claude-code and no other control ({row})"),
+        ok,
+        format!("Claude Code's row in step 2 offers Install add-on and nothing else ({row})"),
     );
     shot("tool");
-
-    // The link goes to the app's own page for the tool.
-    let followed = until(
-        app,
-        10,
-        &format!("(() => {{ const a = {TOOL_ROW}?.querySelector('a[href=\"#/claude-code\"]'); if (!a) return false; a.click(); return true; }})()"),
-    );
-    let tool_page = followed
-        && until(
+    c.check(
+        until(
             app,
-            30,
-            "location.hash === '#/claude-code' && document.querySelector('[data-tool=claude-code]') !== null && document.querySelector('[data-part=page-title]')?.textContent === 'Claude Code'",
-        );
+            10,
+            &format!("(() => {{ const b = [...({TOOL_ROW}?.querySelectorAll('button') ?? [])].find((b) => b.textContent.trim() === 'Install add-on'); if (!b || b.disabled) return false; b.click(); return true; }})()"),
+        ),
+        "Install add-on is pressed",
+    );
+    let confirmed = super::vault::dialog_with(
+        app,
+        &["pluxy/claude-code", "full access to your user account"],
+    )
+    .and_then(|t| {
+        if !t.starts_with("Turn on the ") {
+            return Err(format!("it does not say first what it turns on: {t}"));
+        }
+        std::thread::sleep(Duration::from_millis(1300));
+        super::admission::press("alt+o")
+    });
+    c.check(
+        confirmed.is_ok(),
+        format!("Install add-on goes on to the turn-on confirmation, which says first \"Turn on the\", names pluxy/claude-code and is answered ({confirmed:?})"),
+    );
+
+    // Once on, the app's own page for the tool opens, with the way back to setup above it.
+    let tool_page = until(
+        app,
+        30,
+        "location.hash === '#/claude-code' && document.querySelector('[data-tool=claude-code]') !== null && document.querySelector('[data-part=page-title]')?.textContent === 'Claude Code'",
+    );
     c.check(
         tool_page,
         format!(
-            "pressing \"Set up\" opens the Claude Code page ({})",
+            "once the add-on is on, the Claude Code page opens by itself ({})",
             page(app)
         ),
+    );
+    c.check(
+        until(
+            app,
+            10,
+            "(() => { const s = document.querySelector('[data-part=setup-return]'); const a = s?.querySelector('a'); return s?.textContent.startsWith('Setting up pluxy.') === true && a?.textContent === 'Back to setup' && a.getAttribute('href') === '#/setup'; })()",
+        ),
+        "the page opened from step 2 says \"Setting up pluxy.\" with a \"Back to setup\" link to #/setup",
+    );
+    shot("back");
+    let _ = main_eval(
+        app,
+        "(document.querySelector('[data-part=setup-return] a')?.click(), true)",
+    );
+    c.check(
+        until(
+            app,
+            30,
+            "location.hash === '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Set up pluxy'",
+        ),
+        format!("back on #/setup, Setup is still \"Set up pluxy\" ({})", page(app)),
+    );
+    // The way back is forgotten once the page is left: the page opened by its address has none.
+    let _ = main_eval(app, "(location.hash = '#/claude-code', true)");
+    c.check(
+        until(
+            app,
+            30,
+            "location.hash === '#/claude-code' && document.querySelector('[data-tool=claude-code]') !== null && document.querySelector('[data-part=setup-return]') === null",
+        ),
+        format!("the Claude Code page opened by its address has no way back to setup ({})", page(app)),
     );
     let _ = main_eval(app, "(location.hash = '#/setup', true)");
     c.check(
@@ -281,7 +337,7 @@ fn first(c: &mut Checks, app: &AppHandle) {
             30,
             "location.hash === '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Set up pluxy'",
         ),
-        format!("back on #/setup, Setup is still \"Set up pluxy\" ({})", page(app)),
+        format!("Setup opens again ({})", page(app)),
     );
 
     if !c.check(
@@ -370,9 +426,9 @@ fn second(c: &mut Checks, app: &AppHandle) {
             && until(
                 app,
                 15,
-                "document.body.innerText.includes('Added: Claude.')",
+                "document.body.innerText.includes('pluxy can now connect to Claude.')",
             ),
-        "step 1, opened, says \"Added: Claude.\"",
+        "step 1, opened, says \"pluxy can now connect to Claude.\"",
     );
 
     // The same page in GTK's dark variant, which WebKitGTK reports as prefers-color-scheme: dark

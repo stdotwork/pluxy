@@ -414,7 +414,7 @@ function Opening(props: {
           {plan && (
             <>
               {" · "}
-              <PlanPill plan={plan} />
+              <PlanPill plan={plan} provider={a.extension} />
             </>
           )}
         </p>
@@ -658,7 +658,15 @@ function ChangeIt(props: {
                   {t("turnOff")}
                 </Button>
               )}
-              <AccountEdit account={a} name={props.name} onChanged={props.reload} disabled={act.busy} />
+              <AccountEdit
+                account={a}
+                name={props.name}
+                onChanged={() => {
+                  props.onSaved(t("saved"));
+                  props.reload();
+                }}
+                disabled={act.busy}
+              />
             </>
           )}
           <Button variant="danger" disabled={act.busy} onClick={() => setDialog("remove")}>

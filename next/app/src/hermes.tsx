@@ -6,6 +6,7 @@
 import { useState } from "preact/hooks";
 import { strings } from "../../ui/kit/strings";
 import { PageHead } from "../../ui/kit/ui";
+import type { AgentPage } from "./addonItems";
 import { Backups } from "./backups";
 import {
   DefaultModel,
@@ -21,7 +22,6 @@ import {
   useStart,
   useToolSetup,
 } from "./clientPage";
-import type { AgentPage } from "./easyMode";
 import { CLIENT, modelOf, PACKAGE, plainModel, type ReadBack, validModel } from "./hermesForm";
 
 const t = strings("hermes", {
@@ -165,7 +165,6 @@ export const hermesPage = (): AgentPage => ({
   id: "hermes",
   package: PACKAGE,
   dest: "tools",
-  kind: "topic",
   under: "tools",
   title: t("title"),
   tip: t("tip"),

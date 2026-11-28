@@ -18,77 +18,179 @@ export interface TokenDef {
 
 /** Every token and its defaults, in the order the README lists them. */
 export const TOKENS = {
-  "color.bg": { light: "#fdfcf9", dark: "#171614" },
-  "color.surface": { light: "#fdfcf9", dark: "#171614" },
-  "color.surface-raised": { light: "#f2f0e9", dark: "#24231f" },
-  "color.text": { light: "#1b1a17", dark: "#eceae3" },
-  "color.text-muted": { light: "#55524a", dark: "#b5b2a7" },
-  "color.border": { light: "#e3e0d6", dark: "#34322d" },
-  "color.accent": { light: "#1b1a17", dark: "#eceae3" },
-  "color.accent-text": { light: "#fdfcf9", dark: "#171614" },
-  "color.ok": { light: "#1f7a43", dark: "#86d3a0" },
-  "color.warn": { light: "#8f5600", dark: "#e5b866" },
-  "color.danger": { light: "#b3261e", dark: "#ff8f80" },
-  "color.focus": { light: "#1b1a17", dark: "#eceae3" },
-  "color.meter-track": { light: "var(--px-color-surface-raised)" },
-  "color.meter-fill": { light: "var(--px-color-accent)" },
-  "color.chart-success": { light: "var(--px-color-text)" },
-  "color.chart-failure": { light: "var(--px-color-danger)" },
-  "color.diff-add": { light: "#1f7a43", dark: "#86d3a0" },
-  "color.diff-remove": { light: "#b3261e", dark: "#ff8f80" },
-  "color.nav": {
-    light: "color-mix(in srgb, var(--px-color-surface) 97%, black)",
-    dark: "color-mix(in srgb, var(--px-color-surface) 80%, black)",
+  "color.bg": { light: "#fcfcfc", dark: "#111113" },
+  "color.chrome": {
+    light: "color-mix(in srgb, var(--px-color-bg) 96.5%, black)",
+    dark: "color-mix(in srgb, var(--px-color-bg) 53%, black)",
   },
+  "color.surface": { light: "#ffffff", dark: "#161618" },
+  "color.surface-raised": { light: "#f6f6f7", dark: "#1c1c1f" },
+  "color.text": { light: "#18181b", dark: "#f2f2f4" },
+  "color.text-muted": { light: "#6b6b73", dark: "#9898a1" },
+  "color.secondary-label": { light: "var(--px-color-text-muted)" },
+  "color.border": { light: "#e6e6e9", dark: "#242428" },
+  "color.accent": { light: "#2f5bea", dark: "#4f7bff" },
+  "color.accent-text": { light: "#ffffff", dark: "#0a0d1a" },
+  "color.message-action": {
+    light: "var(--px-color-accent)",
+    dark: "color-mix(in srgb, var(--px-color-accent) 85%, black)",
+  },
+  "color.message-action-foreground": { light: "var(--px-color-accent-text)", dark: "#ffffff" },
+  "color.message-action-hover": { light: "color-mix(in srgb, var(--px-color-message-action) 88%, black)" },
+  "color.ok": { light: "#15803d", dark: "#4ade80" },
+  "color.warn": { light: "#b45309", dark: "#fbbf24" },
+  "color.danger": { light: "#c42b31", dark: "#ff7a7e" },
+  "color.success": { light: "#14923f", dark: "#2fbf6a" },
+  "color.success-surface": {
+    light: "color-mix(in srgb, var(--px-color-success) 8%, var(--px-color-bg))",
+    dark: "color-mix(in srgb, var(--px-color-success) 16%, var(--px-color-bg))",
+  },
+  "color.warning": { light: "#c26a06", dark: "#f5b42a" },
+  "color.error": { light: "#e5484d", dark: "#f2555a" },
+  "color.info": { light: "#3b82f6", dark: "#60a5fa" },
+  "color.info-foreground": { light: "#1d4ed8", dark: "#93c5fd" },
+  "color.info-surface": {
+    light: "color-mix(in srgb, var(--px-color-info) 8%, var(--px-color-bg))",
+    dark: "color-mix(in srgb, var(--px-color-info) 16%, var(--px-color-bg))",
+  },
+  "color.update": { light: "var(--px-color-info)" },
+  "color.update-foreground": { light: "var(--px-color-info-foreground)" },
+  "color.update-surface": { light: "var(--px-color-info-surface)" },
+  "color.focus": { light: "var(--px-color-accent)" },
+  "color.meter-track": {
+    light: "color-mix(in srgb, var(--px-color-text) 8%, var(--px-color-surface))",
+  },
+  "color.meter-fill": { light: "var(--px-color-success)" },
+  "color.meter-mid": { light: "var(--px-color-warning)" },
+  "color.meter-low": { light: "var(--px-color-error)" },
+  "color.meter-unknown": {
+    light: "color-mix(in srgb, var(--px-color-text) 22%, var(--px-color-surface))",
+  },
+  "color.chart-success": {
+    light: "color-mix(in srgb, var(--px-color-text) 78%, var(--px-color-bg))",
+  },
+  "color.chart-failure": { light: "var(--px-color-error)" },
+  "color.chart-1": { light: "#cf6a49", dark: "#e08a6d" },
+  "color.chart-2": { light: "#5b6bf5", dark: "#7684f7" },
+  "color.chart-3": { light: "#3b7bf5", dark: "#6c9eff" },
+  "color.chart-4": { light: "var(--px-color-text)" },
+  "color.chart-5": { light: "#0f9a8b", dark: "#2dd4bf" },
+  "color.chart-6": { light: "#a855f7", dark: "#b875f8" },
+  "color.provider-claude": { light: "#d97757", dark: "#e08a6d" },
+  "color.provider-codex": { light: "#5b5ff5", dark: "#8b93ff" },
+  "color.provider-gemini": { light: "#3186ff", dark: "#5b9dff" },
+  "color.provider-kimi": { light: "#1783ff", dark: "#4ea1ff" },
+  "color.plan-top": {
+    light:
+      "linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 20%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 40%, var(--px-color-surface)))",
+    dark: "linear-gradient(135deg, color-mix(in srgb, var(--px-color-warning) 26%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-warning) 14%, var(--px-color-surface)))",
+  },
+  "color.plan-top-text": {
+    light: "color-mix(in srgb, var(--px-color-warning) 35%, var(--px-color-text))",
+    dark: "color-mix(in srgb, var(--px-color-warning) 55%, var(--px-color-text))",
+  },
+  "color.plan-top-border": {
+    light: "color-mix(in srgb, var(--px-color-warning) 55%, var(--px-color-surface))",
+    dark: "color-mix(in srgb, var(--px-color-warning) 40%, var(--px-color-surface))",
+  },
+  "color.plan-high": {
+    light:
+      "linear-gradient(180deg, var(--px-color-surface), color-mix(in srgb, var(--px-color-text) 10%, var(--px-color-surface)))",
+    dark: "linear-gradient(180deg, color-mix(in srgb, var(--px-color-text) 18%, var(--px-color-surface)), color-mix(in srgb, var(--px-color-text) 8%, var(--px-color-surface)))",
+  },
+  "color.plan-high-text": { light: "var(--px-color-text)" },
+  "color.plan-high-border": {
+    light: "color-mix(in srgb, var(--px-color-text) 24%, var(--px-color-surface))",
+  },
+  "color.plan-mid-text": { light: "var(--px-color-text)" },
+  "color.plan-mid-border": { light: "var(--px-color-input-border)" },
+  "color.plan-free-text": { light: "var(--px-color-secondary-label)" },
+  "color.diff-add": { light: "var(--px-color-ok)" },
+  "color.diff-remove": { light: "var(--px-color-danger)" },
+  "color.nav": { light: "var(--px-color-chrome)" },
   "color.nav-text": { light: "var(--px-color-text)" },
   "color.nav-muted": { light: "var(--px-color-text-muted)" },
-  "color.nav-hover": { light: "var(--px-color-surface-raised)" },
-  "color.nav-selected": {
-    light: "color-mix(in srgb, var(--px-color-accent) 7%, transparent)",
-    dark: "color-mix(in srgb, var(--px-color-accent) 9%, transparent)",
-  },
+  "color.nav-hover": { light: "color-mix(in srgb, var(--px-color-text) 5%, var(--px-color-nav))" },
+  "color.nav-active": { light: "color-mix(in srgb, var(--px-color-text) 9%, var(--px-color-nav))" },
+  "color.nav-selected": { light: "var(--px-color-surface)", dark: "var(--px-color-surface-raised)" },
   "color.nav-border": { light: "var(--px-color-border)" },
   "color.overlay": { light: "var(--px-color-surface)" },
-  "color.card": { light: "transparent" },
-  "color.card-border": { light: "transparent" },
+  "color.card": { light: "var(--px-color-surface)" },
+  "color.card-border": { light: "var(--px-color-border)" },
   "color.input-border": {
-    light: "color-mix(in srgb, var(--px-color-text-muted) 70%, var(--px-color-surface))",
+    light: "color-mix(in srgb, var(--px-color-text-muted) 80%, var(--px-color-surface))",
+    dark: "color-mix(in srgb, var(--px-color-text-muted) 65%, var(--px-color-surface))",
   },
   "color.placeholder": { light: "var(--px-color-text-muted)" },
   "color.selected": { light: "var(--px-color-surface-raised)" },
   "color.selected-text": { light: "var(--px-color-text)" },
-  "color.danger-surface": { light: "transparent" },
-  "color.warn-surface": { light: "transparent" },
+  "color.danger-surface": {
+    light: "color-mix(in srgb, var(--px-color-error) 8%, var(--px-color-bg))",
+    dark: "color-mix(in srgb, var(--px-color-error) 16%, var(--px-color-bg))",
+  },
+  "color.warn-surface": {
+    light: "color-mix(in srgb, var(--px-color-warning) 8%, var(--px-color-bg))",
+    dark: "color-mix(in srgb, var(--px-color-warning) 16%, var(--px-color-bg))",
+  },
   "color.code-bg": { light: "var(--px-color-surface-raised)" },
   "color.code-text": { light: "var(--px-color-text)" },
-  "font.body": { light: '"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif' },
-  "font.mono": { light: '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace' },
-  "font.size": { light: "13px" },
+  "color.search-match-background": { light: "#ffde8b", dark: "#8c6c1f" },
+  "color.search-match-foreground": { light: "#21180a", dark: "#f5f5f5" },
+  "font.body": {
+    light: '"Inter Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
+  },
+  "font.mono": { light: '"IBM Plex Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace' },
+  "font.size": { light: "14px" },
   "font.size-small": { light: "12px" },
+  "font.size-label": { light: "11px" },
   "font.size-title": { light: "14px" },
-  "font.size-mono": { light: "12px" },
+  "font.size-mono": { light: "13px" },
   "font.line-height": { light: "1.4" },
+  "font.weight-medium": { light: "500" },
   "font.weight-strong": { light: "600" },
   "space.unit": { light: "4px" },
   density: { light: "1" },
-  "size.nav": { light: "200px" },
+  "size.nav": { light: "232px" },
   "size.rail": { light: "48px" },
-  "size.header": { light: "44px" },
+  "size.header": { light: "48px" },
   "size.topics": { light: "180px" },
-  "size.row": { light: "36px" },
-  "size.row-tall": { light: "44px" },
+  "size.row": { light: "32px" },
+  "size.row-tall": { light: "40px" },
   "size.control": { light: "28px" },
   "size.control-main": { light: "32px" },
-  "size.width-wide": { light: "1200px" },
-  "size.width-narrow": { light: "760px" },
-  "size.detail": { light: "360px" },
-  "size.card-padding": { light: "0px" },
-  "shape.radius": { light: "4px" },
+  "size.width-wide": { light: "1240px" },
+  "size.width-narrow": { light: "880px" },
+  "size.detail": { light: "380px" },
+  "size.card-padding": { light: "14px" },
+  "size.frame-gap": { light: "8px" },
+  "shape.radius": { light: "8px" },
   "shape.border": { light: "1px" },
-  "shadow.raised": { light: "none" },
+  "shape.icon-stroke": { light: "1.75" },
+  "shadow.raised": { light: "0 1px 2px rgb(0 0 0 / 0.04)", dark: "none" },
+  "shadow.panel": {
+    light: "0 0 0 1px rgb(0 0 0 / 0.04), 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.1)",
+    dark: "0 0 0 1px rgb(255 255 255 / 0.04), 0 12px 32px -16px rgb(0 0 0 / 0.7)",
+  },
+  "shadow.overlay": {
+    light: "0 16px 40px -18px rgb(0 0 0 / 0.55)",
+    dark: "0 16px 40px -18px rgb(0 0 0 / 0.8)",
+  },
+  "shadow.dialog": { light: "0 24px 64px -24px rgb(0 0 0 / 0.65)" },
   "motion.duration": { light: "120ms" },
-  "motion.easing": { light: "ease-out" },
+  "motion.duration-menu": { light: "160ms" },
+  "motion.duration-slow": { light: "240ms" },
+  "motion.easing": { light: "cubic-bezier(0.2, 0, 0, 1)" },
+  "motion.easing-drawer": { light: "cubic-bezier(0.32, 0.72, 0, 1)" },
+  "motion.press-scale": { light: "0.97" },
+  "meter.mid-below": { light: "70" },
+  "meter.low-below": { light: "30" },
 } as const satisfies Record<string, TokenDef>;
+
+/** Tokens that hold a length of time: reduced motion sets each to 0ms. */
+export const DURATION_TOKENS = ["motion.duration", "motion.duration-menu", "motion.duration-slow"] as const;
+
+/** Tokens that hold a share of a limit, in percent: a number from 0 to 100. */
+const PERCENT_TOKENS: ReadonlySet<string> = new Set(["meter.mid-below", "meter.low-below"]);
 
 export type TokenName = keyof typeof TOKENS;
 
@@ -187,6 +289,10 @@ export const PARTS = [
   "state-pane",
   "plan-pill",
   "limits",
+  "provider-mark",
+  "pool-card",
+  "connection-card",
+  "needs-band",
   "activity",
   "activity-filters",
   "usage-chart",
@@ -207,6 +313,7 @@ export const SLOTS = ["button", "input", "switch", "select-trigger", "dialog-pop
 
 /** Each layout option's values; the first is the default. */
 export const LAYOUT = {
+  frame: ["inset", "flat"],
   nav: ["sidebar", "rail", "top"],
   list: ["table", "cards"],
   detail: ["side", "below"],
@@ -220,6 +327,7 @@ export type Layout = { [K in LayoutOption]: (typeof LAYOUT)[K][number] };
 export const LAYOUT_OPTIONS = Object.keys(LAYOUT) as LayoutOption[];
 
 export const DEFAULT_LAYOUT: Layout = {
+  frame: "inset",
   nav: "sidebar",
   list: "table",
   detail: "side",
@@ -243,6 +351,11 @@ export function tokenValueProblem(name: string, value: unknown): string | undefi
   if (name === "density") {
     const n = Number(value);
     if (!Number.isFinite(n) || n < 0.5 || n > 2) return "must be a number from 0.5 to 2";
+  }
+  if (PERCENT_TOKENS.has(name)) {
+    const n = Number(value);
+    if (value.trim() === "" || !Number.isFinite(n) || n < 0 || n > 100)
+      return "must be a number from 0 to 100";
   }
   return undefined;
 }

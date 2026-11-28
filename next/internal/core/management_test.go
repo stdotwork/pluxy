@@ -53,9 +53,9 @@ func errorCodeOf(t *testing.T, rec *httptest.ResponseRecorder) string {
 
 const managementTestConfig = `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"mgmt-key"}`
 
-// GET /status says which version of the management API core serves, as the README's compatibility
-// paragraph promises: a number that goes up when a call changes in a way an older client would
-// misread.
+// GET /status says which version of the management API core serves, as docs/management-api.md
+// ("Rules every call follows") promises: a number that goes up when a call changes in a way an
+// older client would misread.
 func TestStatusCarriesTheManagementAPIVersion(t *testing.T) {
 	h, _ := startManagementCore(t, managementTestConfig)
 	rec := manageCall(t, h, http.MethodGet, "/status", "")

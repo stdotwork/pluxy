@@ -9,12 +9,13 @@
 //! independent record; the app never shows them. Each refusal has a positive control on the same
 //! route:
 //!
-//! - label: a capture whose label core would refuse is refused before any confirmation;
-//! - cancel: a capture the person cancels adds no key to core and none to the vault;
-//! - capture: a confirmed capture adds one key to core's config and keeps it in the vault bound to
-//!   the core, core's key ID and the agent; sent with spaces around its label, it is named by the
-//!   trimmed label in the confirmation, in core's list and in the vault alike; the window gets the
-//!   secret's ID, that label and the binding only;
+//! - label: a capture whose label core would refuse is refused before core is asked;
+//! - capture: a capture, which asks no confirmation of its own, adds one key to core's config and
+//!   keeps it in the vault bound to the core, core's key ID and the agent; sent with spaces around
+//!   its label, it is named by the trimmed label in core's list and in the vault alike; the window
+//!   gets the secret's ID, that label and the binding only;
+//! - cancel: the agent's `serve` with the key asks a native confirmation naming the key; cancelled,
+//!   the agent gets nothing;
 //! - serve: the agent, given the key for its `serve` after a native confirmation, is served by
 //!   core with it (200); the key is in neither the agent's argv nor its environment nor its log
 //!   (argv and environment as the system has them, `proc_native.rs`; on Windows the command line
@@ -34,9 +35,9 @@
 
 use super::admission::{ok, press, require, settle, start};
 use super::key_entry_test::{clean_webview, watch};
-use super::routing::{enable, install, showing};
+use super::log;
+use super::routing::{enable, install};
 use super::vault::{dialog_with, settle_unasked, type_key};
-use super::{eval, log, wait_for};
 use crate::App;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -123,34 +124,15 @@ fn serve(
     settle_unasked(main, &slot)
 }
 
-/// A capture of a client key for the agent, confirmed (or cancelled): the window's answer and
-/// the text of the confirmation it asked.
-fn capture(
-    app: &AppHandle,
-    main: &Webview,
-    base: &str,
-    confirm: bool,
-) -> Result<(Value, String), String> {
+/// A capture of a client key for the agent: the window's answer. It asks no confirmation of its
+/// own (the key's use does): one that shows fails the check.
+fn capture(main: &Webview) -> Result<Value, String> {
     let slot = start(
         main,
         "client_key_capture",
         json!({"label": SENT, "client": AGENT}),
     )?;
-    // Answered without a confirmation: say so now, rather than wait for one.
-    wait_for("the capture's native confirmation", || {
-        if showing() {
-            return Some(Ok(()));
-        }
-        eval(
-            main,
-            &format!("window.__pluxyAdmission?.[{}] ?? null", json!(slot)),
-        )
-        .filter(|v| !v.is_null())
-        .map(|r| Err(format!("the capture answered without asking: {r}")))
-    })??;
-    let asked = dialog_with(app, &[base, AGENT, LABEL])?;
-    press(if confirm { "alt+o" } else { "alt+c" })?;
-    Ok((settle(main, &slot)?, asked))
+    settle_unasked(main, &slot)
 }
 
 /// The one key in after that is not in before.
@@ -371,36 +353,13 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         ),
     )?;
 
-    // ---- cancel
-    step(
-        "cancel",
-        (|| {
-            let before = core_keys(&config)?;
-            require(!before.is_empty(), "core's config has no client keys")?;
-            let (r, _) = capture(app, main, &base, false)?;
-            require(
-                r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("cancelled")),
-                format!("the cancelled capture: {r}"),
-            )?;
-            require(
-                core_keys(&config)? == before,
-                "a cancelled capture added a key to core",
-            )?;
-            let list = ok(main, "vault_secrets", json!({}))?;
-            require(
-                !list.to_string().contains(LABEL),
-                format!("a cancelled capture kept a secret: {list}"),
-            )
-        })(),
-    )?;
-
     // ---- capture
     let mut first = (String::new(), String::new());
     step(
         "capture",
         (|| {
             let before = core_keys(&config)?;
-            let (r, asked) = capture(app, main, &base, true)?;
+            let r = capture(main)?;
             let key = new_key(&before, &core_keys(&config)?)?;
             note(&audit, &key)?;
             keys.push(key.clone());
@@ -431,10 +390,6 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     in_core["label"], in_vault["label"]
                 ),
             )?;
-            require(
-                asked.contains(&format!("\"{LABEL}\"")),
-                format!("the confirmation should name the key {LABEL:?}: {asked}"),
-            )?;
             first = captured(&r, &base, &key)?;
             require(
                 listed["body"]["keys"]
@@ -452,6 +407,38 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             out["captured"] = r["value"].clone();
             Ok(())
+        })(),
+    )?;
+
+    // ---- cancel: the key's use asks, naming it; cancelled, the agent gets nothing
+    step(
+        "cancel",
+        (|| {
+            let file = at("served-cancelled");
+            let slot = start(
+                main,
+                "program_call",
+                json!({"package": AGENT, "op": "serve",
+                    "input": {"key": first.0, "base": base, "out": file}}),
+            )?;
+            let t = dialog_with(app, &["pluxy/agent serve", &format!("\"{LABEL}\"")])?;
+            // The app's own words first, from the operation's effect (a read): the add-on's
+            // description only after them, quoted as its own.
+            let first = t.lines().next().unwrap_or_default();
+            let quoted = t.find("The add-on says: \u{201c}Ask core with a client key\u{201d}");
+            require(
+                first.starts_with("The ")
+                    && first.ends_with(" add-on will read from this computer.")
+                    && quoted.is_some_and(|at| at > first.len()),
+                format!("the serve's confirmation does not say first, in the app's words, what it does: {t}"),
+            )?;
+            press("alt+c")?;
+            let r = settle(main, &slot)?;
+            require(
+                r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("cancelled")),
+                format!("the cancelled serve: {r}"),
+            )?;
+            require(!file.exists(), "a cancelled serve gave the agent the key")
         })(),
     )?;
 
@@ -505,7 +492,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         "deleted",
         (|| {
             let before = core_keys(&config)?;
-            let (r, _) = capture(app, main, &base, true)?;
+            let r = capture(main)?;
             let key = new_key(&before, &core_keys(&config)?)?;
             note(&audit, &key)?;
             keys.push(key.clone());

@@ -1,13 +1,16 @@
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import { type Account, type LoginMethod, type LoginMethodsExtension, problem } from "../api";
 import { LoginFlow } from "../loginFlow";
-import { Phases, providerName, StatePane } from "../parts";
+import { accountServer, Phases, providerName, StatePane } from "../parts";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
-import { Button, Notice, PageHead, useKit, useLoad } from "../ui";
+import { Button, Notice, PageHead, useKit, useLoad, usePoll } from "../ui";
 import { nameProblem } from "./accounts.helpers";
 import { AuthImport } from "./authImport";
+
+/** How many times the page asks again for a new account's check. */
+const CHECK_ASKS = 10;
 
 const t = strings("addAccount", {
   title: "Add an account",
@@ -25,7 +28,10 @@ const t = strings("addAccount", {
   start: "Start",
   startMethod: "Start: {method}",
   added: "Added {name}.",
-  addedUnnamed: "Added your {provider} account.",
+  addedUnnamed: "Added your {account}.",
+  checking: "Checking it with the service…",
+  checkOk: "pluxy checked it with the service, and it works.",
+  checkFailed: "pluxy could not check it with the service: {error}",
   name: "Name",
   namePlaceholder: "For example: Work OpenRouter",
   saveName: "Save name",
@@ -44,6 +50,8 @@ interface MethodRow {
 export interface ProviderChoice {
   id: string;
   title?: string;
+  /** What an account of it is called after "your", when "{title} account" does not read well. */
+  account?: string;
 }
 
 /** One provider's sign-in ways, under the provider's name. */
@@ -51,6 +59,8 @@ export interface MethodGroup {
   extension: string;
   /** The provider's name as AccountRow shows it. */
   title: string;
+  /** What an account of it is called after "your". */
+  account: string;
   rows: MethodRow[];
 }
 
@@ -67,14 +77,15 @@ export function groupMethods(
         extensions
           .filter((extension) => extension.extension === choice.id)
           .slice(0, 1)
-          .map((extension) => ({ extension, title: choice.title })),
+          .map((extension) => ({ extension, title: choice.title, account: choice.account })),
       )
-    : extensions.map((extension) => ({ extension, title: undefined }));
+    : extensions.map((extension) => ({ extension, title: undefined, account: undefined }));
   return shown
     .filter(({ extension }) => (extension.methods ?? []).length > 0)
-    .map(({ extension, title }) => ({
+    .map(({ extension, title, account }) => ({
       extension: extension.extension,
       title: title || providerName(extension.extension),
+      account: account ?? `${title || providerName(extension.extension)} account`,
       rows: extension.methods.map((method) => ({
         id: `${extension.extension}/${method.method}`,
         extension: extension.extension,
@@ -94,15 +105,18 @@ export function methodWords(method: LoginMethod): string {
  * Once the sign-in is done: the account is added under a name pluxy has for it (often the
  * account's e-mail address, none for an API key). The name is optional and is saved only by Save name.
  */
-function Added(props: { id: string; provider: string; embedded?: boolean; onAnother: () => void }) {
+function Added(props: { id: string; account: string; embedded?: boolean; onAnother: () => void }) {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
   const accounts = useLoad(api.accounts);
   const account: Account | undefined = accounts.data?.accounts.find((a) => a.id === props.id);
   // The Name field edits the real name. With privacy mode on it starts empty, with the masked name as its
   // example, so what is saved is only what the person types, never the mask.
+  // An account with no name yet and an address is offered the address as its name; it is saved
+  // only by Save name.
   const label = account?.label?.trim() ?? "";
-  const prefill = p.on ? "" : label;
+  const saved0 = p.on ? "" : label;
+  const prefill = saved0 || (p.on || !account ? "" : (accountServer(account) ?? ""));
   const [typed, setTyped] = useState<string>();
   const [kept, setKept] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -110,8 +124,21 @@ function Added(props: { id: string; provider: string; embedded?: boolean; onAnot
   const [saved, setSaved] = useState(false);
   const field = useRef<HTMLInputElement>(null);
   const value = typed ?? prefill;
-  const unchanged = value.trim() === (kept ?? prefill).trim();
+  const unchanged = value.trim() === (kept ?? saved0).trim();
   const ready = accounts.phase !== "loading";
+  // pluxy checks a new account with its service as it is added, which takes a moment: the page
+  // asks again until the check has an answer, a few times at most.
+  const check = account?.check;
+  const asks = useRef(0);
+  const waiting = ready && (check === undefined || check.state === "checking") && asks.current < CHECK_ASKS;
+  usePoll(
+    () => {
+      asks.current++;
+      accounts.reload();
+    },
+    1000,
+    waiting,
+  );
   useLayoutEffect(() => {
     if (ready) field.current?.focus();
   }, [ready]);
@@ -133,8 +160,21 @@ function Added(props: { id: string; provider: string; embedded?: boolean; onAnot
   return (
     <section class="added stack" data-part="account-added">
       <Notice tone="ok">
-        {label ? t("added", { name: p.id(label) }) : t("addedUnnamed", { provider: props.provider })}
+        {label ? t("added", { name: p.id(label) }) : t("addedUnnamed", { account: props.account })}
       </Notice>
+      {check?.state === "ok" && <p data-part="account-check">{t("checkOk")}</p>}
+      {check?.state === "failed" && (
+        <Notice tone="warn">
+          {t("checkFailed", {
+            error: p.text(check.error?.message ?? "", [...accountIdentities(account ?? {}), props.id]),
+          })}
+        </Notice>
+      )}
+      {waiting && (
+        <p class="muted" data-part="account-check">
+          {t("checking")}
+        </p>
+      )}
       <form
         class="stack"
         onSubmit={(e) => {
@@ -199,7 +239,7 @@ export function AddAccountPage(
   const { api } = useKit();
   const methods = useLoad(api.loginMethods);
   const [selected, setSelected] = useState<string>();
-  const [added, setAdded] = useState<{ id: string; provider: string }>();
+  const [added, setAdded] = useState<{ id: string; account: string }>();
   const [attempt, setAttempt] = useState(0);
   const root = useRef<HTMLDivElement>(null);
   // The method last left, so focus goes back to its Start button.
@@ -224,7 +264,7 @@ export function AddAccountPage(
       {!props.embedded && <PageHead title={t("title")} />}
       <div class="add-account stack" ref={root}>
         {added !== undefined ? (
-          <Added id={added.id} provider={added.provider} embedded={props.embedded} onAnother={reset} />
+          <Added id={added.id} account={added.account} embedded={props.embedded} onAnother={reset} />
         ) : (
           <Phases
             load={methods}
@@ -285,7 +325,7 @@ export function AddAccountPage(
                                   extension={row.extension}
                                   method={row.method}
                                   onSuccess={(id) => {
-                                    setAdded({ id, provider: group.title });
+                                    setAdded({ id, account: group.account });
                                     setSelected(undefined);
                                     props.onSuccess?.(id);
                                   }}

@@ -244,7 +244,13 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         )?;
         let e = r["error"].as_str().unwrap_or_default().to_string();
         require(
-            r["ok"] == false && e.contains("crashed") && e.contains("unknown"),
+            // What a person reads: the window gets the message without its protocol code
+            // (`CallError::user_message`), so "crashed" is no longer in it; the crash is told by
+            // the call stopping before it answered.
+            r["ok"] == false
+                && e.contains("stopped before it answered crash")
+                && e.contains("outcome is unknown")
+                && !e.contains("extension_crashed"),
             format!("crash call {n}: {r}"),
         )?;
         let s = wait_for("the crash to be recorded", || {

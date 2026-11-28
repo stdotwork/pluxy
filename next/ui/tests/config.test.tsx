@@ -60,6 +60,9 @@ const SETTINGS: CoreSettings = {
   },
   token_count_estimate: true,
   "proxy-url": "socks5://redacted@proxy.example:1080",
+  management_allow_remote: false,
+  listen: "127.0.0.1:8317",
+  from_this_computer: true,
 };
 const FILE = '{\n  "management_key": "<hidden>",\n  "logs": {}\n}\n';
 const DOC: Reply<unknown> = { status: 200, body: { format: "json", hash: "h1", content: FILE } };
@@ -87,16 +90,20 @@ function world(
   answer: (call: Call) => Reply<unknown> | Promise<Reply<unknown>> | undefined = () => undefined,
   features: Feature[] = ["rotateManagementKey"],
   privacy = false,
+  /** How the page reaches pluxy: other settings core holds, and the address the page was opened at. */
+  reach: { settings?: Partial<CoreSettings>; address?: string } = {},
 ) {
   const calls: Call[] = [];
+  const current = () => structuredClone({ ...SETTINGS, ...reach.settings });
   const host = {
+    address: reach.address,
     call: async (method: Method, path: string, body?: unknown): Promise<Reply<unknown>> => {
       const call = { method, path, body };
       calls.push(call);
       const own = await answer(call);
       if (own) return own;
-      if (method === "GET" && path === "/settings") return { status: 200, body: structuredClone(SETTINGS) };
-      if (method === "PATCH" && path === "/settings") return { status: 200, body: structuredClone(SETTINGS) };
+      if (method === "GET" && path === "/settings") return { status: 200, body: current() };
+      if (method === "PATCH" && path === "/settings") return { status: 200, body: current() };
       if (method === "GET" && path === "/config") return DOC;
       if (method === "GET" && path === "/status") return STATUS;
       return { status: 404, error: { code: "not_found", message: "no such call" } };
@@ -200,6 +207,8 @@ test("the Settings tab has no routing or token-count row, and shows each setting
   expect(rowNames(root)).toEqual([
     "Outbound proxy",
     "Account order, retries and cooldowns",
+    "Let other computers manage pluxy",
+    "Address pluxy listens on",
     "Write pluxy's log to a file",
     "Largest log size (MB)",
     "Failed requests to keep",
@@ -453,6 +462,8 @@ test("a settings file that does not parse turns every setting off and says so on
   );
   expect(settingRows.map((r) => withClass(r, "setting-name")[0]?.textContent)).toEqual([
     "Outbound proxy",
+    "Let other computers manage pluxy",
+    "Address pluxy listens on",
     "Write pluxy's log to a file",
     "Largest log size (MB)",
     "Failed requests to keep",
@@ -497,6 +508,26 @@ test("a check that finds a mistake with no words still says there is one", async
   await press(buttonIn(root, "Settings file"));
   await press(buttonIn(root, "Check for mistakes"));
   expect(root.textContent).toContain("There is a mistake in the file.");
+});
+
+test("a check that finds a mistake says the line and the column core gave, without core's lead-in", async () => {
+  const error =
+    "invalid config document: not valid JSON at line 3, column 2: invalid character ',' looking for beginning of object key string";
+  const w = world((c) =>
+    c.path === "/config/validate" ? { status: 200, body: { valid: false, error } } : undefined,
+  );
+  const { root } = await w.mount();
+  await press(buttonIn(root, "Settings file"));
+  await press(buttonIn(root, "Check for mistakes"));
+  expect(root.textContent).toContain(
+    "There is a mistake: not valid JSON at line 3, column 2: invalid character ',' looking for beginning of object key string",
+  );
+  expect(root.textContent).not.toContain("invalid config document");
+});
+
+test("the log size says that 0 means no limit", async () => {
+  const { root } = await world().mount();
+  expect(row(root, "Largest log size (MB)").textContent).toContain("0 means no limit");
 });
 
 test("a save refused because the file changed keeps the edits in the editor", async () => {
@@ -665,4 +696,184 @@ test("pluxy not answering puts a pane with Try again on the Settings tab, and th
 test("changeSetting is no longer exported from configSettings", () => {
   expect("changeSetting" in configSettings).toBe(false);
   expect("settingsChange" in configSettings).toBe(false);
+});
+
+// Reaching pluxy from another computer: the two settings that were only in the settings file.
+
+const FROM_ELSEWHERE = { from_this_computer: false, management_allow_remote: true };
+const dialog = (root: FakeNode) => withPart(root, "dialog")[0];
+const remoteSwitch = (root: FakeNode) =>
+  all(row(root, "Let other computers manage pluxy"), "input")[0] as FakeNode;
+const listenField = (root: FakeNode) => all(row(root, "Address pluxy listens on"), "input")[0] as FakeNode;
+
+test("the two rows say what they are in plain words, with their place in the file", async () => {
+  const { root } = await world().mount();
+  const remote = row(root, "Let other computers manage pluxy");
+  expect(remote.textContent).toContain("only the computer pluxy runs on can");
+  expect(remote.textContent).toContain("Takes effect at once");
+  expect(withClass(remote, "setting-key")[0]?.textContent).toBe("management_allow_remote");
+  const listen = row(root, "Address pluxy listens on");
+  expect(listen.textContent).toContain("0.0.0.0:8317 lets any computer that can reach it connect");
+  expect(listen.textContent).toContain("Takes effect the next time pluxy starts");
+  expect(withClass(listen, "setting-key")[0]?.textContent).toBe("listen");
+  expect(listenField(root).value).toBe("127.0.0.1:8317");
+});
+
+test("turning remote management on from this computer saves at once, with no question", async () => {
+  const w = world();
+  const { root } = await w.mount();
+  await toggle(remoteSwitch(root), true);
+  await settle();
+  expect(dialog(root)).toBeUndefined();
+  expect(patchesIn(w.calls)).toEqual([{ management_allow_remote: true }]);
+});
+
+test("turning remote management off while signed in from another computer asks first, and saves nothing until yes", async () => {
+  const w = world(() => undefined, undefined, false, { settings: FROM_ELSEWHERE });
+  const { root } = await w.mount();
+  await toggle(remoteSwitch(root), false);
+  await settle();
+  expect(dialog(root)?.textContent).toContain("Turn off remote management?");
+  expect(dialog(root)?.textContent).toContain("you are using pluxy from another computer".replace("y", "Y"));
+  expect(dialog(root)?.textContent).toContain("set management_allow_remote to true");
+  expect(patchesIn(w.calls)).toEqual([]);
+  await press(buttonIn(dialog(root) as FakeNode, "Turn off"));
+  expect(patchesIn(w.calls)).toEqual([{ management_allow_remote: false }]);
+});
+
+test("Keep it on sends nothing and the switch stays on", async () => {
+  const w = world(() => undefined, undefined, false, { settings: FROM_ELSEWHERE });
+  const { root } = await w.mount();
+  await toggle(remoteSwitch(root), false);
+  await settle();
+  await press(buttonIn(dialog(root) as FakeNode, "Keep it on"));
+  expect(dialog(root)).toBeUndefined();
+  expect(patchesIn(w.calls)).toEqual([]);
+  expect(remoteSwitch(root).checked).toBe(true);
+});
+
+test("turning remote management off from the computer pluxy runs on asks nothing", async () => {
+  const w = world(() => undefined, undefined, false, { settings: { management_allow_remote: true } });
+  const { root } = await w.mount();
+  await toggle(remoteSwitch(root), false);
+  await settle();
+  expect(dialog(root)).toBeUndefined();
+  expect(patchesIn(w.calls)).toEqual([{ management_allow_remote: false }]);
+});
+
+test("a listen address is sent alone on Enter, and a new one says it waits for a restart", async () => {
+  const waiting = { ...SETTINGS, listen_after_restart: "0.0.0.0:8317" };
+  const w = world((c) => (c.method === "PATCH" ? { status: 200, body: waiting } : undefined));
+  const { root } = await w.mount();
+  await type(listenField(root), "0.0.0.0:8317");
+  await enter(listenField(root));
+  expect(patchesIn(w.calls)).toEqual([{ listen: "0.0.0.0:8317" }]);
+  const r = row(root, "Address pluxy listens on");
+  expect(listenField(root).value).toBe("0.0.0.0:8317");
+  expect(r.textContent).toContain(
+    "pluxy answers at 127.0.0.1:8317 until it starts again, and at 0.0.0.0:8317 from then on",
+  );
+});
+
+test("text that is not an address and a port is not sent, and says what to type", async () => {
+  const w = world();
+  const { root } = await w.mount();
+  for (const bad of ["everywhere", "8317", "0.0.0.0:99999"]) {
+    await type(listenField(root), bad);
+    await enter(listenField(root));
+    expect(patchesIn(w.calls)).toEqual([]);
+    expect(row(root, "Address pluxy listens on").textContent).toContain("That is not an address and a port");
+  }
+});
+
+test("text typed just after a save's reply is kept: the reply does not put the field back to what pluxy holds", async () => {
+  const refusal = held();
+  const w = world((c) => (c.method === "PATCH" ? refusal.reply : undefined), undefined, false, {
+    address: "http://127.0.0.1:8317",
+  });
+  const { root } = await w.mount();
+  await type(listenField(root), "192.0.2.77:8317");
+  await enter(listenField(root));
+  expect(patchesIn(w.calls)).toEqual([{ listen: "192.0.2.77:8317" }]);
+  // The reply comes in and the page draws it; the next text is typed before the page has run what
+  // follows a reply (in a browser, the rest of that frame).
+  refusal.answer({ status: 400, error: { code: "invalid_request", message: "cannot serve on the address" } });
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  await type(listenField(root), "127.0.0.1:9000");
+  await settle();
+  expect(listenField(root).value).toBe("127.0.0.1:9000");
+  await enter(listenField(root));
+  expect(dialog(root)?.textContent).toContain("This page is open at 127.0.0.1:8317");
+});
+
+test("an address only this computer can use, saved from another computer, asks first", async () => {
+  const w = world(() => undefined, undefined, false, {
+    settings: { ...FROM_ELSEWHERE, listen: "0.0.0.0:8317" },
+    address: "http://10.0.0.2:8317",
+  });
+  const { root } = await w.mount();
+  await type(listenField(root), "127.0.0.1:8317");
+  await enter(listenField(root));
+  expect(dialog(root)?.textContent).toContain("Change the address pluxy listens on?");
+  expect(dialog(root)?.textContent).toContain("answer only on the computer it runs on");
+  expect(patchesIn(w.calls)).toEqual([]);
+  await press(buttonIn(dialog(root) as FakeNode, "Do not change it"));
+  expect(patchesIn(w.calls)).toEqual([]);
+  expect(listenField(root).value).toBe("0.0.0.0:8317");
+  await type(listenField(root), "127.0.0.1:8317");
+  await enter(listenField(root));
+  await press(buttonIn(dialog(root) as FakeNode, "Save the address"));
+  expect(patchesIn(w.calls)).toEqual([{ listen: "127.0.0.1:8317" }]);
+});
+
+test("an address that is not the one the page was reached at asks first; the page's own address and 0.0.0.0 do not", async () => {
+  const w = world(() => undefined, undefined, false, {
+    settings: { ...FROM_ELSEWHERE, listen: "10.0.0.2:8317" },
+    address: "http://10.0.0.2:8317",
+  });
+  const { root } = await w.mount();
+  await type(listenField(root), "192.168.1.9:8317");
+  await enter(listenField(root));
+  expect(dialog(root)?.textContent).toContain("You reached pluxy at 10.0.0.2:8317");
+  expect(dialog(root)?.textContent).toContain("only at 192.168.1.9");
+  await press(buttonIn(dialog(root) as FakeNode, "Do not change it"));
+  await type(listenField(root), "0.0.0.0:8317");
+  await enter(listenField(root));
+  expect(dialog(root)).toBeUndefined();
+  expect(patchesIn(w.calls)).toEqual([{ listen: "0.0.0.0:8317" }]);
+});
+
+test("a new port asks first when the page is open at the old one", async () => {
+  const w = world(() => undefined, undefined, false, { address: "http://127.0.0.1:8317" });
+  const { root } = await w.mount();
+  await type(listenField(root), "127.0.0.1:9000");
+  await enter(listenField(root));
+  expect(dialog(root)?.textContent).toContain("This page is open at 127.0.0.1:8317");
+  expect(dialog(root)?.textContent).toContain("answers at port 9000");
+});
+
+test("an address other computers can open says they cannot sign in while remote management is off", async () => {
+  const { root } = await world(() => undefined, undefined, false, {
+    settings: { listen: "0.0.0.0:8317", management_allow_remote: false },
+  }).mount();
+  expect(row(root, "Address pluxy listens on").textContent).toContain(
+    "cannot sign in until Let other computers manage pluxy is on",
+  );
+  const on = await world(() => undefined, undefined, false, {
+    settings: { listen: "0.0.0.0:8317", management_allow_remote: true },
+  }).mount();
+  expect(row(on.root, "Address pluxy listens on").textContent).not.toContain("cannot sign in");
+});
+
+test("a saved address that waits for a restart still says other computers cannot sign in while remote management is off", async () => {
+  const { root } = await world(() => undefined, undefined, false, {
+    settings: {
+      listen: "127.0.0.1:8317",
+      listen_after_restart: "0.0.0.0:8317",
+      management_allow_remote: false,
+    },
+  }).mount();
+  const text = row(root, "Address pluxy listens on").textContent;
+  expect(text).toContain("from then on");
+  expect(text).toContain("cannot sign in until Let other computers manage pluxy is on");
 });

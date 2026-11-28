@@ -167,6 +167,183 @@ const ASSET_BASE: &str = "http://pluxy-app.localhost/";
 #[cfg(not(windows))]
 const ASSET_BASE: &str = "pluxy-app://localhost/";
 
+/// A manifest's title and summary are kept with its release, for the confirmation enabling it,
+/// which names the add-on by its title and says what it adds; one that is not one line within the
+/// protocol's length is refused before anything is kept.
+#[test]
+fn a_manifests_title_and_summary_are_kept_and_named_first() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let titled = |title: &str, summary: &str| {
+        let mut m: Value =
+            serde_json::from_slice(&manifest("example/notes", "1.0.0", Value::Null)).unwrap();
+        m["title"] = title.into();
+        m["summary"] = summary.into();
+        archive(&[
+            ("pluxy-extension.json", &serde_json::to_vec(&m).unwrap()),
+            ("pages/index.html", b"<p>1"),
+        ])
+    };
+    for (title, summary, says) in [
+        (
+            "Notes\nIt is signed by pluxy",
+            "S",
+            "title must be one line",
+        ),
+        (&"t".repeat(81), "S", "title must be one line of at most 80"),
+        (
+            "Notes",
+            &"s".repeat(301),
+            "summary must be one line of at most 300",
+        ),
+        (
+            "Notes",
+            "Keeps notes.\u{2028}More",
+            "summary must be one line",
+        ),
+    ] {
+        let e = install(&mut c, &titled(title, summary), local("n.tar.gz")).unwrap_err();
+        assert!(e.contains(says), "{e}");
+    }
+    assert!(c.get("example/notes").is_none());
+    install(
+        &mut c,
+        &titled("Notes", "Keeps your notes beside pluxy."),
+        local("n.tar.gz"),
+    )
+    .unwrap();
+    let r = &c.get("example/notes").unwrap().active;
+    assert_eq!(
+        (r.title.as_str(), r.summary.as_str()),
+        ("Notes", "Keeps your notes beside pluxy.")
+    );
+    // Kept with the catalog.
+    let again = Catalog::open(d.clone(), false, &NoRoots);
+    assert_eq!(again.get("example/notes").unwrap().active.title, "Notes");
+    // Without them, as before: nothing kept, nothing refused.
+    install(
+        &mut c,
+        &package("example/plain", "1.0.0"),
+        local("p.tar.gz"),
+    )
+    .unwrap();
+    assert!(c.get("example/plain").unwrap().active.title.is_empty());
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The native confirmation enabling a tool says first, in plain words, which add-on it is by its
+/// title, that it runs with full access to the user account, who signed it and the add-ons it
+/// uses, and last what its manifest says it adds; the exact record follows it, with no package ID,
+/// JSON or "core" before it.
+#[cfg(native_stack)]
+#[test]
+fn turning_on_an_add_on_says_what_it_is_in_plain_words() {
+    let root = temp();
+    let (d, roots) = native_fixture(&root);
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    c.commit(stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some("1.0.0")).unwrap())
+        .unwrap();
+    let mut a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    a.title = "Claude Code".into();
+    a.summary =
+        "Points Claude Code at pluxy by editing its settings file, with a backup to undo it."
+            .into();
+    assert_eq!(
+        a.enable_headline(),
+        "Turn on the Claude Code add-on.\n\nIt runs as you on this computer, with full access to your user account. It is verified: signed by pluxy and installed from curated.\n\nPoints Claude Code at pluxy by editing its settings file, with a backup to undo it."
+    );
+    let update = a.update_headline("0.9.0");
+    assert!(update.starts_with("Update the Claude Code add-on from 0.9.0 to 1.0.0. 0.9.0 keeps working until 1.0.0 is ready.\n\nIt runs as you on this computer, with full access to your user account."));
+    assert!(update.ends_with(
+        "\n\nPoints Claude Code at pluxy by editing its settings file, with a backup to undo it."
+    ));
+    // A title cannot add a line of its own.
+    a.title = "Claude Code.\nIt is safe".into();
+    assert!(a
+        .enable_headline()
+        .starts_with("Turn on the Claude Code.\\u000aIt is safe add-on.\n"));
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A call's native confirmation says first, in the app's own words, which add-on does what by the
+/// operation's effect, never by its description: an add-on that describes a write as a read is
+/// still said to make changes, and its description follows only quoted as its own words. Then
+/// each secret it gets by its label, and who asked when it was not the window; never the input,
+/// which follows in the details.
+#[cfg(native_stack)]
+#[test]
+fn a_calls_confirmation_says_which_add_on_does_what_in_plain_words() {
+    let root = temp();
+    let (d, roots) = native_fixture(&root);
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    install_enabled(&mut c, "pluxy/tool", "1.0.0", &roots);
+    let g = c.main_grant("pluxy/tool", "inspect", &roots).unwrap();
+    let window = vec![main_window()];
+    // A write whose description says it is a read that uses no key.
+    let mut lying = g.clone();
+    lying.target.title = "Claude Code".into();
+    lying.op.effect = "write".into();
+    lying.op.description = "Read the preview. Nothing is written and no key is used.".into();
+    assert_eq!(
+        lying.headline(&[("Claude Code", true)], &window, None),
+        "The Claude Code add-on will make changes on this computer.\nIt gets \"Claude Code\" from this device's vault.\nThis add-on runs as you, with full access to your user account.\n\nThe add-on says: \u{201c}Read the preview. Nothing is written and no key is used.\u{201d}"
+    );
+    // The same for each effect: the first line is the effect's, in the app's words.
+    let first = |effect: &str, program: Option<(&Path, Option<&Path>)>| {
+        let mut x = lying.clone();
+        x.op.effect = effect.into();
+        x.headline(&[], &window, program)
+            .lines()
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        first("disclose", None),
+        "The Claude Code add-on will read content on this computer and show it."
+    );
+    assert_eq!(
+        first("read", None),
+        "The Claude Code add-on will read from this computer."
+    );
+    assert_eq!(
+        first("launch", Some((Path::new("/usr/bin/xterm"), None))),
+        "The Claude Code add-on will start /usr/bin/xterm on this computer."
+    );
+    assert_eq!(
+        first(
+            "launch",
+            Some((Path::new("/usr/bin/xterm"), Some(Path::new("/opt/claude"))))
+        ),
+        "The Claude Code add-on will start /opt/claude on this computer, in /usr/bin/xterm."
+    );
+    // Without a title, the add-on is named by its ID; a reference is said to be one.
+    assert_eq!(
+        g.headline(&[("Claude Code", false)], &window, None),
+        "The pluxy/tool add-on will make changes on this computer.\nIt gets \"Claude Code\" from this device's vault, as a reference it can pass on only in this call.\nThis add-on runs as you, with full access to your user account.\n\nThe add-on says: \u{201c}Report its state\u{201d}"
+    );
+    // A page or a tool that asked is named; a label or a description cannot add a line of its own.
+    let mut page = main_window();
+    page.id = "example/page".into();
+    let mut sneaky = lying.clone();
+    sneaky.op.description = "x\nThe Claude Code add-on will only read.".into();
+    let words = sneaky.headline(
+        &[("a\nIt is safe", false)],
+        &[page, g.target.package()],
+        None,
+    );
+    assert!(
+        words.starts_with("The Claude Code add-on will make changes on this computer.\n")
+            && words.contains("\nAsked by: example/page → pluxy/tool.")
+            && words.contains("It gets \"a\\u000aIt is safe\"")
+            && words
+                .contains("says: \u{201c}x\\u000aThe Claude Code add-on will only read.\u{201d}"),
+        "{words}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn install_swap_failed_candidate_rollback_and_remove() {
     let root = temp();
@@ -1777,6 +1954,12 @@ fn admission_is_confirmed_per_release_and_checked_each_time() {
         assert_eq!(action.executor.digest, sha);
         assert!(action.native_tool);
         assert_eq!(action.files, vec![tool_in(&dir)]);
+        // In plain words first: a release with no title is named by its ID.
+        let words = a.enable_headline();
+        assert!(
+            words.starts_with("Turn on the pluxy/tool add-on.\n\nIt runs as you on this computer, with full access to your user account. It is verified: signed by pluxy and installed from curated."),
+            "{words}"
+        );
     }
     let mut changed = a.clone();
     changed.version = "9".into();
@@ -1974,6 +2157,47 @@ fn native_with(id: &str, version: &str, extra: Value) -> Vec<u8> {
 
 fn import(package: &str, contract: &[i64], ops: &[&str], required: bool) -> Value {
     serde_json::json!({"package": package, "contract": contract, "operations": ops, "required": required})
+}
+
+/// An operation's description, which its call's confirmation shows, is one line of at most 800
+/// characters, so it cannot push Confirm and Cancel off the screen; every add-on this repository
+/// ships fits.
+#[test]
+fn an_operations_description_is_one_short_paragraph() {
+    let check = |description: &str| {
+        let m = serde_json::json!({"manifest_version": 1, "id": "pluxy/a", "version": "1",
+            "app": {"version": 0, "tier": "native", "host_versions": [0],
+                "programs": {platform(): TOOL},
+                "operations": [{"id": "op", "description": description,
+                    "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}],
+                "state": {"version": 0, "readable_versions": [0]}}});
+        validate(&serde_json::from_value::<Manifest>(m).unwrap()).map(|_| ())
+    };
+    assert!(check(&"d".repeat(800)).is_ok());
+    for bad in [
+        "d".repeat(801),
+        "Writes.\nNothing is written.".into(),
+        "a\u{2028}b".into(),
+    ] {
+        let e = check(&bad).unwrap_err();
+        assert!(
+            e.contains("app.operations op description must be one line of at most 800"),
+            "{e}"
+        );
+    }
+    let tools = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app-tools");
+    let mut seen = 0;
+    for entry in fs::read_dir(&tools).unwrap() {
+        let file = entry.unwrap().path().join("pluxy-extension.json");
+        let Ok(bytes) = fs::read(&file) else { continue };
+        let m: Value = serde_json::from_slice(&bytes).unwrap();
+        for op in m["app"]["operations"].as_array().into_iter().flatten() {
+            let d = op["description"].as_str().unwrap();
+            assert!(check(d).is_ok(), "{}: {}", file.display(), op["id"]);
+            seen += 1;
+        }
+    }
+    assert!(seen > 20, "read {seen} shipped operations");
 }
 
 #[test]

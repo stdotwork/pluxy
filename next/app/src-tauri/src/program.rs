@@ -494,6 +494,88 @@ impl std::fmt::Display for CallError {
     }
 }
 
+/// Whether s is one of the extension protocol's error codes (`../../protocol/README.md#errors`,
+/// plus `incompatible`).
+fn is_protocol_code(s: &str) -> bool {
+    matches!(
+        s.to_ascii_lowercase().as_str(),
+        "invalid_request"
+            | "auth"
+            | "permission"
+            | "account_closed"
+            | "not_found"
+            | "rate_limit"
+            | "quota"
+            | "unsupported"
+            | "upstream"
+            | "unavailable"
+            | "cancelled"
+            | "internal"
+            | "extension_crashed"
+            | "extension_protocol"
+            | "extension_unavailable"
+            | "extension_timeout"
+            | "incompatible"
+    )
+}
+
+/// Plain-language fallback for a protocol error code when the add-on's message is empty or says
+/// nothing on its own.
+fn plain_code_message(code: &str) -> &'static str {
+    match code.to_ascii_lowercase().as_str() {
+        "invalid_request" => "The add-on rejected the request.",
+        "auth" => "The sign-in was not accepted.",
+        "permission" => "The add-on does not have permission to do that.",
+        "account_closed" => "The account is closed.",
+        "not_found" => "What the add-on looked for could not be found.",
+        "rate_limit" => "Too many requests. Try again in a moment.",
+        "quota" => "The usage limit has been reached.",
+        "unsupported" => "This add-on does not support that.",
+        "upstream" => "The service returned an error.",
+        "unavailable" => "The add-on is not available right now.",
+        "cancelled" => "The action was cancelled.",
+        "internal" => "The add-on ran into an unexpected problem.",
+        "extension_crashed" => "The add-on stopped unexpectedly.",
+        "extension_protocol" => "The add-on sent an unexpected reply.",
+        "extension_unavailable" => "The add-on is not available.",
+        "extension_timeout" => "The add-on took too long to answer.",
+        "incompatible" => "This add-on is not compatible with this version of pluxy.",
+        _ => "The add-on could not finish the request.",
+    }
+}
+
+impl CallError {
+    /// The error as a person reads it, without its protocol code. When the message itself is
+    /// empty, repeats only the code, or carries no words, falls back to a plain sentence for the
+    /// code. For the `cancelled` code, keeps `cancelled: <message>` so window callers detect any
+    /// cancel by its code rather than by matching message text. `Display` keeps `code: message`
+    /// for logs and tests.
+    pub fn user_message(&self) -> String {
+        let code = self.code.trim();
+        let mut msg = self.message.trim();
+        if let Some((prefix, rest)) = msg.split_once(':') {
+            let p = prefix.trim();
+            if (!code.is_empty() && p.eq_ignore_ascii_case(code)) || is_protocol_code(p) {
+                msg = rest.trim();
+            }
+        }
+        let body = if !msg.is_empty()
+            && !msg.eq_ignore_ascii_case(code)
+            && !is_protocol_code(msg)
+            && msg.chars().any(char::is_alphanumeric)
+        {
+            msg
+        } else {
+            plain_code_message(code)
+        };
+        if code.eq_ignore_ascii_case("cancelled") {
+            format!("cancelled: {body}")
+        } else {
+            body.to_string()
+        }
+    }
+}
+
 fn fail(code: &str, message: impl Into<String>) -> CallError {
     CallError {
         code: code.into(),
@@ -2265,7 +2347,12 @@ fn handshake(
     run.describing.lock().unwrap().take();
     let d = match reply? {
         Ok(Reply::Result(d)) => d,
-        Ok(Reply::Error(e)) => return Err(incompatible(format!("describe failed: {e}"))),
+        Ok(Reply::Error(e)) => {
+            return Err(incompatible(format!(
+                "describe failed: {}",
+                e.user_message()
+            )))
+        }
         Err(RecvTimeoutError::Timeout) => return Err(timeout()),
         Err(RecvTimeoutError::Disconnected) => return Err(exited()),
     };

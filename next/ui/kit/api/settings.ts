@@ -1,5 +1,5 @@
-// Core's basic and routing settings, by today's core's names (GET and PATCH /settings;
-// next/README.md, the settings table; next/internal/core/manageconfig.go). Several pages show
+// Core's basic and routing settings, by the names GET and PATCH /settings use
+// (docs/management-api.md, "Settings"; next/internal/core/manageconfig.go). Several pages show
 // the same settings, so they all read and change them here.
 
 import type { Host } from "../host";
@@ -42,6 +42,14 @@ export interface CoreSettings {
    * "" removes it; core answers 400 for a value that is not a proxy URL.
    */
   "proxy-url": string;
+  /** Whether computers other than the one pluxy runs on may use the management API. */
+  management_allow_remote: boolean;
+  /** The address pluxy serves on now, as host:port. */
+  listen: string;
+  /** The address the settings file holds, when it is not the one pluxy serves on: it takes it when it next starts. */
+  listen_after_restart?: string;
+  /** Whether this call came from the computer pluxy runs on. */
+  from_this_computer: boolean;
 }
 
 type Change<T> = { [K in keyof T]?: T[K] extends Record<string, unknown> ? Change<T[K]> : T[K] };

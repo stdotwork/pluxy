@@ -330,6 +330,20 @@ export function accountFix(a: Account, c: Condition): Fix | undefined {
 export const accountName = (a: Pick<Account, "id" | "label">) => a.label?.trim() || a.id;
 
 /**
+ * The address an account sends its requests to, as host and port (an API-key account keeps it as
+ * its base_url setting); nothing for an account with none, or one that is not a web address.
+ */
+export function accountServer(a: Pick<Account, "settings">): string | undefined {
+  const base = a.settings?.base_url;
+  if (typeof base !== "string") return undefined;
+  try {
+    return new URL(base.trim()).host || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * A client key's name: its label, else its masked value ("Key sk…48"). keys are the keys as
  * GET /client-keys lists them; label is the event's own copy of the key's name. mask is for the
  * label, a name a person gave (usePrivacy().id); the masked value never goes through it.
@@ -349,18 +363,43 @@ export function keyName(
 
 // ---- plan -------------------------------------------------------------------------------------
 
-/** How much a plan weighs on a row: top (the largest plans), mid, or free. */
-export type PlanTier = "top" | "mid" | "free";
+/**
+ * How much a plan weighs on a row, by what it costs: top (the largest plans and pay-as-you-go API
+ * use: about $200 a month and up), high (the next: about $100), mid (any other paid plan) or free.
+ */
+export type PlanTier = "top" | "high" | "mid" | "free";
 
 /**
- * The tier of a plan word: Max (5x and 20x) and Ultra are the largest plans the providers sell;
- * Free is free; any other plan, known or not, is mid. One table: themes colour the tiers by
+ * The plan words each provider uses for its largest plans. A word means a different plan at each
+ * provider (ChatGPT's Pro is its $200 plan, Claude's Pro its $20 one), so the tier comes from the
+ * provider and the plan together, until extensions report a tier themselves.
+ */
+const TIERS: Record<string, { top: RegExp; high?: RegExp }> = {
+  claude: { top: /^max\s*20x\b/, high: /^max\b/ },
+  codex: { top: /^pro\b/ },
+  gemini: { top: /^ultra\b/ },
+  vertex: { top: /^ultra\b/ },
+  "ai-studio": { top: /^ultra\b/ },
+  aistudio: { top: /^ultra\b/ },
+  xai: { top: /^(supergrok\s+heavy|api)\b/ },
+  "openai-compatible": { top: /^(paid|api)\b/ },
+};
+
+/** Any provider not in TIERS, or a plan with no provider: the words of the largest plans anywhere. */
+const ANY = { top: /^(max\s*20x|ultra|api|paid)\b/, high: /^max\b/ };
+
+/**
+ * The tier of a plan word at its provider (extension, as an account names it): see TIERS. Free is
+ * free everywhere; a plan a provider's table does not place is mid. Themes colour the tiers by
  * data-plan-tier.
  */
-export function planTier(plan: string): PlanTier {
+export function planTier(plan: string, extension?: string): PlanTier {
   const p = plan.trim().toLowerCase();
   if (/^free\b/.test(p)) return "free";
-  if (/^(max|ultra)\b/.test(p)) return "top";
+  const own = extension ? extension.slice(extension.lastIndexOf("/") + 1) : "";
+  const tiers = Object.hasOwn(TIERS, own) ? (TIERS[own] as (typeof TIERS)[string]) : ANY;
+  if (tiers.top.test(p)) return "top";
+  if (tiers.high?.test(p)) return "high";
   return "mid";
 }
 

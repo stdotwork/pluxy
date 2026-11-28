@@ -18,8 +18,8 @@ export interface Field {
   note?: string;
 }
 
-/** The rows of the Settings tab's Network and Logging sections, in the order they show. */
-export const fields = (): { network: Field[]; logging: Field[] } => ({
+/** The rows of the Settings tab's Network, Other computers and Logging sections, in the order they show. */
+export const fields = (): { network: Field[]; access: Field[]; logging: Field[] } => ({
   network: [
     {
       key: "proxy-url",
@@ -28,6 +28,23 @@ export const fields = (): { network: Field[]; logging: Field[] } => ({
       about: t("proxyAbout"),
       file: { json: "proxy_url", yaml: "requests.proxy-url" },
       placeholder: t("proxyPlaceholder"),
+    },
+  ],
+  access: [
+    {
+      key: "management_allow_remote",
+      kind: "switch",
+      name: t("remote"),
+      about: t("remoteAbout"),
+      file: { json: "management_allow_remote", yaml: "management.allow-remote" },
+    },
+    {
+      key: "listen",
+      kind: "text",
+      name: t("listen"),
+      about: t("listenAbout"),
+      file: { json: "listen", yaml: "server.host and server.port" },
+      placeholder: t("listenPlaceholder"),
     },
   ],
   logging: [

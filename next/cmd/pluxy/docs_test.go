@@ -32,7 +32,7 @@ func TestDocs(t *testing.T) {
 var docFiles = []string{
 	"README.md", "AGENTS.md", "next/README.md", "next/management/README.md", "next/ui/README.md",
 	"next/app/README.md", "next/protocol/README.md", "next/corpus/README.md", "next/app-tools/README.md",
-	// docs/*.md are added by readDocs.
+	// docs/*.md and docs/design/*.md are added by readDocs.
 }
 
 // docLine is one line of a doc, with whether it is inside a fenced block and that block's
@@ -71,6 +71,13 @@ func readDocs(t *testing.T, root string) []docLine {
 	}
 	for _, m := range more {
 		docs = append(docs, "docs/"+filepath.Base(m))
+	}
+	design, err := filepath.Glob(filepath.Join(root, "docs", "design", "*.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range design {
+		docs = append(docs, "docs/design/"+filepath.Base(m))
 	}
 	var lines []docLine
 	for _, d := range docs {
@@ -184,7 +191,7 @@ func commandFlags(cmd *command) []string {
 	return names
 }
 
-// plannedCommands are commands the management README's Resources tables name before they exist
+// plannedCommands are commands the management API docs (docs/management-api.md) name before they exist
 // (laterCommands in cli_test.go lists the calls behind them). The list only shrinks: a command
 // added to the CLI comes out of it.
 var plannedCommands = []string{"config validate", "config apply", "ext config"}
@@ -272,7 +279,7 @@ var envName = regexp.MustCompile(`PLUXY_[A-Z0-9_]*[A-Z0-9]`)
 // undocumentedEnv are the PLUXY_ variables shipped Go code reads and no doc names. The list may
 // only shrink: a variable added to the code is named in a doc, or in the doc that is its home.
 var undocumentedEnv = map[string]string{
-	// next/cmd/pluxy-bench, the benchmark program docs/perf.md's numbers come from.
+	// next/cmd/pluxy-bench, the benchmark program docs/design/perf.md's numbers come from.
 	"PLUXY_BENCH_PROFILE": "", "PLUXY_BENCH_PROFILE_SECONDS": "", "PLUXY_BENCH_PROFILE_STOP": "",
 	// next/internal/catalogue/gen.go, the model catalogue's generator.
 	"PLUXY_MODELS_DEV_URL": "",
@@ -345,7 +352,7 @@ func docsEnvVars(t *testing.T) {
 		_, allowed := undocumentedEnv[n]
 		switch {
 		case !documented[n] && !allowed:
-			t.Errorf("shipped code reads %s and no doc names it: add it to the doc that lists the variables it belongs with (next/README.md for core's), or to undocumentedEnv in next/cmd/pluxy/docs_test.go, a list that may only shrink", n)
+			t.Errorf("shipped code reads %s and no doc names it: add it to the doc that lists the variables it belongs with (docs/config.md for core's), or to undocumentedEnv in next/cmd/pluxy/docs_test.go, a list that may only shrink", n)
 		case documented[n] && allowed:
 			t.Errorf("%s is named in a doc now: take it out of undocumentedEnv in next/cmd/pluxy/docs_test.go", n)
 		}

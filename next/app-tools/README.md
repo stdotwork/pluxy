@@ -351,16 +351,23 @@ Rules every setup tool follows:
 
 ### `claude-code`
 
-Page: Claude Code. Set `claude-code`, one file: `~/.claude/settings.json`. `preview` refuses, and
-makes no folder, while `~/.claude` does not exist (Claude Code makes it on first run).
+Page: Claude Code. Set `claude-code`, one file: `~/.claude/settings.json`. While `~/.claude` does
+not exist yet (Claude Code makes it on first run), `preview` reads and makes nothing: `settings` is
+`not-configured`, `applied` is false, the target has every identity and `sha256` null (no pin: only
+`apply` takes it, with `create_folder`), and `create_folder` names `~/.claude`.
 
 `preview`'s `settings`: `state` (`refused` for a file Claude Code would not take), `base_url`,
 `key_set`, each role's model and 1M switch, `startup_model`, `subagent_model`, `max_context_tokens`,
 `auto_compact_pct`, `disable_auto_compact`.
 
-`apply` input: one pin, `base_url`, `key`, `opus`, `sonnet`, `haiku`, `fable` (empty: follows Sonnet)
-with `<role>_1m`, `startup_model`, `subagent_model` (empty: removed), `max_context_tokens` (100000 to
-1000000), `auto_compact_pct` (1 to 100), `disable_auto_compact`.
+`apply` input: one pin, or the preview's target and `create_folder` (the folder it named),
+`base_url`, `key`, `opus`, `sonnet`, `haiku`, `fable` (empty: follows Sonnet) with `<role>_1m`,
+`startup_model`, `subagent_model` (empty: removed), `max_context_tokens` (100000 to 1000000),
+`auto_compact_pct` (1 to 100), `disable_auto_compact`. With `create_folder`, `apply` first makes
+`~/.claude` with the system's default permissions (the file is written private), then pins the file
+in it, which must still be at the path the preview named and still not exist (a folder made
+meanwhile is used); a folder it made is removed while still empty if the write fails. Claude Code's
+first start then reads these settings and asks for no sign-in of its own.
 
 `apply` writes, keeping everything else (keys in order, numbers with their digits):
 
@@ -604,17 +611,17 @@ mapping, a tag or other value the settings do not use, a key that is neither tex
 ### `pi-setup`
 
 Page: Pi. Set `pi`, three files in this order, all in Pi's agent folder `~/.pi/agent` on every system:
-`cliproxyapi.json`, `settings.json` and `cliproxyapi-models.json`. The folder must exist (Pi makes it
-on first run). Pi reaches pluxy through the CLIProxyAPI provider plugin, which reads
-`cliproxyapi.json` (`baseUrl`, `apiKey`, optional `providerId`, `providerName`, `fast`, `pause`;
-`CLIPROXYAPI_*` variables in Pi's environment win over every key but `pause`), registers the provider `cliproxyapi`, lists the
-core's Codex catalog (`/v1/models?client_version=pi`), sends requests to the
-core's `/backend-api/` Codex routes and caches the list in `cliproxyapi-models.json`.
+`cliproxyapi.json`, `settings.json` and `cliproxyapi-models.json`. Pi reaches pluxy through the
+CLIProxyAPI provider plugin, which reads `cliproxyapi.json` (`baseUrl`, `apiKey`, optional
+`providerId`, `providerName`, `fast`, `pause`; `CLIPROXYAPI_*` variables in Pi's environment win
+over every key but `pause`), registers the provider `cliproxyapi`, lists the core's Codex catalog
+(`/v1/models?client_version=pi`), sends requests to the core's `/backend-api/` Codex routes and
+caches the list in `cliproxyapi-models.json`.
 
 | Operation | Notes |
 | --- | --- |
-| `preview` | `targets`: the three selections in one folder, or `folder`: an agent folder (a link inside it is refused, so linked files are selected as `targets`). `pi`: `state` (`not-configured`: the plugin is not listed), `base_url`, `key_set`, `provider`, `default_provider`, `model`, `registered` (settings.json lists pluxy's plugin), `legacy` (it lists an older npm copy), `adapter`: `installed`, `version`, `bundled`, `update`, `foreign` (a folder of that name pluxy did not install), `pin` (the pin of pluxy's copy, from its marker `.pluxy-adapter.json`; null when pluxy's copy is not there). |
-| `apply` | Three pins, `base_url`, `key`, `model` (one model ID; the key may not hold spaces). Output also holds `adapter`: `installed` or `kept`. |
+| `preview` | `targets`: the three selections in one folder, or `folder`: an agent folder (a link inside it is refused, so linked files are selected as `targets`). While `~/.pi/agent` does not exist yet (Pi makes it on first run), `preview` reads and makes nothing: `pi` is `not-configured` with no plugin, the three targets have every identity and `sha256` null (no pins: only `apply` takes them, with `create_folder`), and `create_folder` names `~/.pi/agent`; when `~/.pi` is a link (or not a folder) and has no `agent`, `preview` refuses instead so no folder is made through it outside the home folder. `pi`: `state` (`not-configured`: the plugin is not listed), `base_url`, `key_set`, `provider`, `default_provider`, `model`, `registered` (settings.json lists pluxy's plugin), `legacy` (it lists an older npm copy), `adapter`: `installed`, `version`, `bundled`, `update`, `foreign` (a folder of that name pluxy did not install), `pin` (the pin of pluxy's copy, from its marker `.pluxy-adapter.json`; null when pluxy's copy is not there). |
+| `apply` | Three pins, or the preview's targets and `create_folder` (the folder it named), `base_url`, `key`, `model` (one model ID; the key may not hold spaces). Output also holds `adapter`: `installed` or `kept`. With `create_folder`, `apply` first makes `~/.pi` (when missing) and `~/.pi/agent` with the system's default permissions (the files are written private), each of which must then be a folder itself (not a link), then pins the three files there, which must still be at the paths the preview named and still not exist; folders it made are removed while still empty if the write fails. |
 | `update` (`write`) | Three pins, `plugin`: the preview's `adapter.pin`. Returns `{"outcome": "updated", "version"}`. |
 | `uninstall` (`write`) | Three pins, `plugin`: the preview's `adapter.pin` (null when no copy was found). Returns the library's outcome and `adapter_removed`. |
 | `clear`, `restore` | Three pins; also return `adapter_removed`. |

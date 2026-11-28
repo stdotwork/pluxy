@@ -84,7 +84,7 @@ base64 = "=0.23.1"
 # (src/private_windows.rs) and the vault's folders (src/vault_windows.rs): access lists, and
 # opening, renaming and listing relative to a held folder; the native test's process and thread
 # listing (src/proc_native.rs, Tool Help); opening an address in the browser (src/updates.rs,
-# ShellExecuteExW). Already in the tree through cap-std and tauri's dirs; the version is the locked
+# ShellExecuteExW); the interface list (src/tailnet.rs, GetAdaptersAddresses). Already in the tree through cap-std and tauri's dirs; the version is the locked
 # one.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = [
@@ -93,6 +93,8 @@ windows-sys = { version = "=0.61.2", features = [
     "Wdk_Storage_FileSystem",
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
+    # The interface list's operational state (src/tailnet.rs).
+    "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Authorization",
@@ -136,6 +138,7 @@ zeroize = "1"
 webview2-com = "=0.39.1"
 
 [target.'cfg(unix)'.dependencies]
+# Among other uses, the interface list (src/tailnet.rs, getifaddrs).
 libc = "0.2"
 
 # Native key entry and confirmations on macOS (src/key_entry_macos.rs,

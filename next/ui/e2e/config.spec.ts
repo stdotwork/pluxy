@@ -338,7 +338,7 @@ test("a settings file that does not parse turns every setting off, says so on bo
   await expect(message).toBeVisible();
   await expect(page.getByRole("switch", { name: "Log every request", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Replace key", exact: true })).toBeDisabled();
-  await expect(page.getByText("Fix the settings file first.", { exact: true })).toHaveCount(7);
+  await expect(page.getByText("Fix the settings file first.", { exact: true })).toHaveCount(9);
   await tab(page, "Settings file").click();
   await expect(message).toBeVisible();
   await expect(editor(page)).toHaveCount(0);
@@ -736,3 +736,151 @@ for (const theme of THEMES) {
     }
   }
 }
+
+// Reaching pluxy from another computer: remote management and the address pluxy listens on.
+
+/** Shows the page a core that sees it as another computer: its settings say so. */
+async function asAnotherComputer(page: Page) {
+  await page.route("**/v0/management/settings", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const reply = await route.fetch();
+    const body = await reply.json();
+    await route.fulfill({ response: reply, json: { ...body, from_this_computer: false } });
+  });
+}
+
+test("remote management and the listen address save from the Settings tab, and a new address waits for a restart", async ({
+  page,
+}) => {
+  const active = (await settings()).listen;
+  expect(active).toMatch(/^127\.0\.0\.1:\d+$/);
+  const sent = patches(page);
+  await openPanel(page, core, "/panel/#/config");
+  await signIn(page, core);
+  const remote = page.getByRole("switch", { name: "Let other computers manage pluxy", exact: true });
+  const listen = page.getByRole("textbox", { name: "Address pluxy listens on", exact: true });
+  await expect(remote).not.toBeChecked();
+  await expect(listen).toHaveValue(active);
+
+  // From the computer pluxy runs on, nothing is asked: both switches turn at once.
+  await remote.check();
+  await expect.poll(async () => (await settings()).management_allow_remote).toBe(true);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(row(page, "Address pluxy listens on")).not.toContainText("cannot sign in");
+
+  // A bad address is not sent and says what to type.
+  await listen.fill("everywhere");
+  await listen.press("Enter");
+  await expect(row(page, "Address pluxy listens on")).toContainText("That is not an address and a port");
+
+  // An address this computer does not have is refused by pluxy, with its reason.
+  const [, port] = active.split(":");
+  await listen.fill(`192.0.2.77:${port}`);
+  await listen.press("Enter");
+  await expect(row(page, "Address pluxy listens on")).toContainText("cannot serve on the address");
+  // The box goes back to the address pluxy serves on a moment after the reason shows: wait for
+  // that before typing the next address, or the typing and the box going back cross.
+  await expect(listen).toHaveValue(active);
+  expect((await settings()).listen_after_restart).toBeUndefined();
+
+  // A new port: the page is open at the old one, so it asks first.
+  const next = `127.0.0.1:${Number(port) + 1}`;
+  await listen.fill(next);
+  await listen.press("Enter");
+  const ask = page.getByRole("dialog", { name: "Change the address pluxy listens on?", exact: true });
+  await expect(ask).toContainText(`This page is open at ${active}`);
+  await ask.getByRole("button", { name: "Do not change it", exact: true }).click();
+  await expect(listen).toHaveValue(active);
+  expect((await settings()).listen_after_restart).toBeUndefined();
+  await listen.fill(next);
+  await listen.press("Enter");
+  await ask.getByRole("button", { name: "Save the address", exact: true }).click();
+  await expect.poll(async () => (await settings()).listen_after_restart).toBe(next);
+  expect((await settings()).listen).toBe(active);
+  await expect(listen).toHaveValue(next);
+  await expect(row(page, "Address pluxy listens on")).toContainText(
+    `pluxy answers at ${active} until it starts again, and at ${next} from then on`,
+  );
+  // The settings file holds it, and the page's other saves still work meanwhile.
+  expect((await core.mgmt<{ content: string }>("GET", "/config")).body.content).toContain(next);
+  await remote.uncheck();
+  await expect.poll(async () => (await settings()).management_allow_remote).toBe(false);
+  expect((await settings()).listen_after_restart).toBe(next);
+
+  // Back to the address pluxy serves on: nothing waits any more.
+  await listen.fill(active);
+  await listen.press("Enter");
+  await expect.poll(async () => (await settings()).listen_after_restart).toBeUndefined();
+  await expect(listen).toHaveValue(active);
+  expect(sent).toEqual([
+    { management_allow_remote: true },
+    { listen: `192.0.2.77:${port}` }, // refused by pluxy
+    { listen: next },
+    { management_allow_remote: false },
+    { listen: active },
+  ]);
+});
+
+test("turning remote management off while using pluxy from another computer says it would lock the person out, before saving", async ({
+  page,
+}) => {
+  await core.mgmt("PATCH", "/settings", { management_allow_remote: true });
+  await asAnotherComputer(page);
+  const sent = patches(page);
+  await openPanel(page, core, "/panel/#/config");
+  await signIn(page, core);
+  const remote = page.getByRole("switch", { name: "Let other computers manage pluxy", exact: true });
+  await expect(remote).toBeChecked();
+  await remote.click();
+  const ask = page.getByRole("dialog", { name: "Turn off remote management?", exact: true });
+  await expect(ask).toContainText("You are using pluxy from another computer");
+  await expect(ask).toContainText("set management_allow_remote to true");
+  expect(sent).toEqual([]);
+  await ask.getByRole("button", { name: "Keep it on", exact: true }).click();
+  await expect(remote).toBeChecked();
+  expect(sent).toEqual([]);
+  expect((await settings()).management_allow_remote).toBe(true);
+  await remote.click();
+  await ask.getByRole("button", { name: "Turn off", exact: true }).click();
+  await expect.poll(async () => (await settings()).management_allow_remote).toBe(false);
+  expect(sent).toEqual([{ management_allow_remote: false }]);
+});
+
+test("a listen address only this computer can use, saved from another computer, asks first", async ({
+  page,
+}) => {
+  await asAnotherComputer(page);
+  const sent = patches(page);
+  await openPanel(page, core, "/panel/#/config");
+  await signIn(page, core);
+  const listen = page.getByRole("textbox", { name: "Address pluxy listens on", exact: true });
+  const active = await listen.inputValue();
+  await listen.fill(active.replace("127.0.0.1", "localhost"));
+  await listen.press("Enter");
+  const ask = page.getByRole("dialog", { name: "Change the address pluxy listens on?", exact: true });
+  await expect(ask).toContainText("answer only on the computer it runs on");
+  await ask.getByRole("button", { name: "Do not change it", exact: true }).click();
+  expect(sent).toEqual([]);
+  expect((await settings()).listen_after_restart).toBeUndefined();
+});
+
+test("Check for mistakes names the line and column of a mistake in the file", async ({ page }) => {
+  await openPanel(page, core, "/panel/#/config/source");
+  await signIn(page, core);
+  await expect(editor(page)).not.toHaveValue("");
+  const lines = (await editor(page).inputValue()).split("\n");
+  lines.splice(2, 0, "  ,");
+  await editor(page).fill(lines.join("\n"));
+  await page.getByRole("button", { name: "Check for mistakes", exact: true }).click();
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText(
+    "There is a mistake: not valid JSON at line 3, column 3: invalid character ','",
+  );
+  await expect(alert).not.toContainText("invalid config document");
+});
+
+test("the log size row says that 0 means no limit", async ({ page }) => {
+  await openPanel(page, core, "/panel/#/config");
+  await signIn(page, core);
+  await expect(row(page, "Largest log size (MB)")).toContainText("0 means no limit");
+});

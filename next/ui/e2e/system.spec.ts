@@ -33,7 +33,7 @@ test("System shows the build, the served models and the addresses for other prog
   await expect(about).toContainText(status.body.version);
   await expect(about).toContainText("Built");
   await expect(about).toContainText("Settings file");
-  await expect(about).toContainText("In use");
+  await expect(about).toContainText("pluxy is using it as it is saved.");
   await expect(about).toContainText(core.base);
 
   const models = page.getByRole("region", { name: "Models your tools can ask for" });

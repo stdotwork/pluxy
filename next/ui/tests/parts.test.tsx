@@ -7,6 +7,7 @@ import { act } from "preact/test-utils";
 import { renderToString } from "preact-render-to-string";
 import type { Account, QuotaLimit, SetupClient, UsageEvent } from "../kit/api";
 import type { Reply } from "../kit/host";
+import { Meter, meterTone } from "../kit/meter";
 import {
   AccountRow,
   accountCondition,
@@ -72,6 +73,23 @@ const shown = (html: string) =>
 
 const attr = (html: string, name: string) => new RegExp(`${name}="([^"]*)"`).exec(html)?.[1];
 const plain = (html: string) => html.replace(/<[^>]+>/g, "").replaceAll("&amp;", "&");
+
+// ---- AccountRow: the address an API-key account sends its requests to ---------------------------
+
+test("AccountRow shows an API-key account's address under its provider, and nothing for one with none", () => {
+  const keyed = account({
+    extension: "pluxy/openai-compatible",
+    settings: { base_url: "http://127.0.0.1:18500/v1", api_key: "pluxy-redacted-1" },
+  });
+  const html = row(keyed);
+  expect(plain(html)).toContain("OpenAI Compatible");
+  expect(plain(html)).toContain("127.0.0.1:18500");
+  // The path and the scheme stay out of a row, and the key is never in it.
+  expect(plain(html)).not.toContain("/v1");
+  expect(html).not.toContain("pluxy-redacted");
+  expect(plain(row(account()))).not.toContain("127.0.0.1");
+  expect(plain(row(account({ settings: { base_url: "not an address" } })))).not.toContain("not an address");
+});
 
 // ---- AccountRow: conditions, groups and fixes --------------------------------------------------
 
@@ -154,6 +172,8 @@ for (const c of CASES) {
   test(`AccountRow, ${c.name}: group ${c.group}, mark "${c.word}", ${c.fix ? c.fix.label : "no button"}`, () => {
     const html = row(c.a, { running: c.running });
     expect(attr(html, "data-group")).toBe(c.group);
+    // The mark's colour group matches the condition's own group (a model cooldown stays serving).
+    expect(html).toContain(`class="group-mark" data-group="${c.group}"`);
     // The mark's accessible name is the condition word, the same as stateText's.
     expect(html).toContain(`role="img" aria-label="${c.word}"`);
     const found = buttons(html);
@@ -295,12 +315,26 @@ test("an account's name is its label, else its ID, never shown twice, and masked
   expect(old).not.toContain("alice@example.com");
 });
 
-test("an account that needs the person or is turned off shows no limits, even when some were read", () => {
+test("an account that needs the person or is turned off shows no limits, even when some were read, but keeps its plan pill", () => {
   const windows: Windows = {
     state: "read",
+    plan: "Max 20x",
     limits: [{ id: "five", window_seconds: 18000, used_percent: 10 }],
   };
-  expect(row(account({ health: { state: "banned" } }), { windows })).not.toContain('data-part="limits"');
+  const banned = row(account({ health: { state: "banned" } }), { windows });
+  expect(banned).not.toContain('data-part="limits"');
+  expect(banned).toContain('data-part="plan-pill"');
+  expect(banned).toContain("Max 20x");
+  // Also reads a stored plan carried on the account when no windows were passed.
+  const stored = row(
+    account({
+      health: { state: "needs_login" },
+      quota: { fetched_at: iso(NOW), quota: { plan: "Pro", limits: [] } },
+    }),
+  );
+  expect(stored).not.toContain('data-part="limits"');
+  expect(stored).toContain('data-plan-tier="mid"');
+  expect(stored).toContain("Pro");
   expect(row(account({ disabled: true }), { windows })).not.toContain('data-part="limits"');
   expect(row(account(), { windows })).toContain('data-part="limits"');
 });
@@ -358,13 +392,35 @@ test("limits are read only for accounts that serve or wait", async () => {
 // ---- plan and gauge ---------------------------------------------------------------------------
 
 test("the plan pill's tier follows the plan word, and there is no pill without a plan", () => {
+  // The largest plans (Max 20x, Ultra, an API key's) are top; the next (Max 5x) are high.
+  // Claude: Max 20x ($200) gold, Max 5x and Max ($100) silver, Pro ($20) and Team an outline.
+  expect(planTier("Max 20x", "pluxy/claude")).toBe("top");
+  expect(planTier("Max 5x", "pluxy/claude")).toBe("high");
+  expect(planTier("Max", "pluxy/claude")).toBe("high");
+  expect(planTier("Pro", "pluxy/claude")).toBe("mid");
+  expect(planTier("Team", "pluxy/claude")).toBe("mid");
+  expect(planTier("Free", "pluxy/claude")).toBe("free");
+  // ChatGPT (Codex): pro is its $200 plan, gold; plus and the business plans an outline.
+  expect(planTier("pro", "pluxy/codex")).toBe("top");
+  expect(planTier("plus", "pluxy/codex")).toBe("mid");
+  expect(planTier("team", "pluxy/codex")).toBe("mid");
+  expect(planTier("enterprise", "pluxy/codex")).toBe("mid");
+  expect(planTier("free", "pluxy/codex")).toBe("free");
+  // Gemini: Ultra gold, Pro an outline. xAI: SuperGrok Heavy gold, SuperGrok an outline.
+  expect(planTier("Ultra", "pluxy/gemini")).toBe("top");
+  expect(planTier("Pro", "pluxy/gemini")).toBe("mid");
+  expect(planTier("SuperGrok Heavy", "pluxy/xai")).toBe("top");
+  expect(planTier("SuperGrok", "pluxy/xai")).toBe("mid");
+  // An OpenAI-compatible key: paid (pay-as-you-go API use) is with the largest plans.
+  expect(planTier("paid", "pluxy/openai-compatible")).toBe("top");
+  expect(planTier("free", "pluxy/openai-compatible")).toBe("free");
+  // No provider, or one with no table: the words of the largest plans anywhere.
   expect(planTier("Max 20x")).toBe("top");
-  expect(planTier("Max 5x")).toBe("top");
+  expect(planTier("Max 5x")).toBe("high");
   expect(planTier("Ultra")).toBe("top");
+  expect(planTier("API")).toBe("top");
   expect(planTier("Pro")).toBe("mid");
-  expect(planTier("Team")).toBe("mid");
-  expect(planTier("Plus")).toBe("mid");
-  expect(planTier("Enterprise")).toBe("mid");
+  expect(planTier("Plus", "acme/other")).toBe("mid");
   expect(planTier("Free")).toBe("free");
   expect(renderToString(<PlanPill plan=" Max 20x " />)).toBe(
     '<span class="plan-pill" data-part="plan-pill" data-plan-tier="top">Max 20x</span>',
@@ -380,19 +436,25 @@ test("the plan pill's tier follows the plan word, and there is no pill without a
 const limitsOf = (limits: QuotaLimit[], now = NOW) =>
   renderToString(<Limits windows={{ state: "read", limits }} account="alpha" now={now} />);
 
-test("the gauge shows what is left: 7% left warns with a 7% fill, used up is danger", () => {
+test("the gauge shows what is left: ok from 70%, warn under 70%, danger under 30% and used up", () => {
   const seven = limitsOf([
     { id: "five", window_seconds: 18000, used_percent: 93, resets_at: (NOW + 85 * 60_000) / 1000 },
   ]);
-  expect(seven).toContain('data-tone="warn"');
+  expect(seven).toContain('data-tone="danger"');
   expect(seven).toContain('data-mode="left"');
   expect(seven).toContain("width:7%");
   expect(plain(seven)).toContain("7% left");
   expect(attr(seven, "title")).toBe("5-hour limit: 7% left, resets in 1h 25m");
-  const plenty = limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 42 }]);
-  expect(plenty).toContain('data-tone="ok"');
-  expect(plenty).toContain("width:58%");
-  expect(plain(plenty)).toBe("wk58% left");
+  const half = limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 42 }]);
+  expect(half).toContain('data-tone="warn"');
+  expect(half).toContain("width:58%");
+  expect(plain(half)).toBe("wk58% left");
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 30 }])).toContain('data-tone="ok"');
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 31 }])).toContain('data-tone="warn"');
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 70 }])).toContain('data-tone="warn"');
+  expect(limitsOf([{ id: "wk", window_seconds: 7 * 86400, used_percent: 71 }])).toContain(
+    'data-tone="danger"',
+  );
   const out = limitsOf([{ id: "five", window_seconds: 18000, used_percent: 100 }]);
   expect(out).toContain('data-tone="danger"');
   expect(plain(out)).toContain("Used up");
@@ -405,6 +467,27 @@ test("the gauge shows what is left: 7% left warns with a 7% fill, used up is dan
     { id: "five", window_seconds: 18000, used_percent: 1 },
   ]);
   expect([...two.matchAll(/class="limit-name">([^<]+)</g)].map((m) => m[1])).toEqual(["5h", "wk"]);
+});
+
+test("a theme moves where the gauge changes colour with meter.mid-below and meter.low-below", () => {
+  expect(meterTone(55, { mid: 50, low: 15 })).toBe("ok");
+  expect(meterTone(14, { mid: 50, low: 15 })).toBe("danger");
+  const themes = {
+    resolved: { tokens: { "meter.mid-below": "50", "meter.low-below": "15" } },
+    subscribe: () => () => {},
+  };
+  const kit = { themes } as unknown as Kit;
+  const gauge = (percent: number) =>
+    renderToString(
+      <KitContext.Provider value={kit}>
+        <Meter label="g" percent={percent} />
+      </KitContext.Provider>,
+    );
+  expect(gauge(55)).toContain('data-tone="ok"');
+  expect(gauge(30)).toContain('data-tone="warn"');
+  expect(gauge(14)).toContain('data-tone="danger"');
+  // Outside the kit's shell, the contract's defaults: 55% left is under 60.
+  expect(renderToString(<Meter label="g" percent={55} />)).toContain('data-tone="warn"');
 });
 
 test("the limits' other states are said in words", () => {
@@ -492,7 +575,7 @@ test("an account page's Refresh reads its limits from core again, though GET /ac
 
 test("failureWord names every code core sends, from a code alone and from a request", () => {
   const words: Record<string, string> = {
-    not_found: "No such model",
+    not_found: "Model not served",
     quota: "Limit used up",
     rate_limit: "Rate limited",
     auth: "Sign-in refused",

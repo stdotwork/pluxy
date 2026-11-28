@@ -1,8 +1,8 @@
 # Proxy overhead and footprint
 
 How much time and memory pluxy adds between a client and its upstream, how that is measured, and
-the budgets CI holds it to. The numbers below are a baseline on `main` at `1babf6deb`; rerun the
-benchmark to get them for another commit.
+the budgets CI holds it to, with CLIProxyAPI measured the same way for comparison. The numbers
+below were measured at commit `1babf6deb`; rerun the benchmark to get them for another commit.
 
 ## Rerunning it
 
@@ -109,15 +109,6 @@ medians are 0.44 to 0.52 ms.
 | Start, to the first request answered | 43 ms (33 to 72) |
 | Binary sizes as released (`-trimpath -ldflags=-s -w`) | `pluxy` 12.3 MiB, `openai-compatible` 8.2 MiB |
 
-Memory after a load is somewhat higher than it was before the latest fixes: idle 10 s after the load
-was 70.8 MB (66.9 to 71.8) on `main` at `9cde69a21`, measured with the same flags on the same
-machine, and 75.1 MB (73.0 to 81.4) at `1babf6deb`. The two ranges do not overlap, and the cause has
-not been separated. CLIProxyAPI's is 93.5 MB (92.2 to 97.4). Memory before any request did not
-change over that span (50.3 and 50.8 MB), and neither did the peak under `agents` (119 MB, 115 to
-122, at `9cde69a21`). The earlier baseline, at `35ad0d646`, had 42.3 MB before any request and 64.4
-MB after the load, with release binaries of 10.5 and 6.8 MiB. Why memory and binaries are larger
-than that has not been looked into.
-
 On GitHub's ubuntu-latest runners (4 vCPU), `-check` measured an added TTFT of about 1.2 ms in
 `stream-pass` and 1.8 ms in `stream-translate`, 50 MB idle and about 0.8 MB per open stream
 (median of 3 runs: 45285206647 on `main` at `3fce95ab1`, 45292441059 and 45302488915).
@@ -180,41 +171,30 @@ What is not better, or not clear:
   to 55 against 12 to 48), so the five rounds do not show which is higher. The CLIProxyAPI round
   that ran at 90% busy holds its highest value (48 ms); without it CLIProxyAPI's range is 12 to 30
   ms (median 23 ms), which still overlaps pluxy's. This is the one row of the table above where
-  pluxy's median is the higher one. - **Translated TTFT** is level, not lower: 3.0 against 3.1 ms in
-  the five rounds, +0.09 ms in the paired rounds. - **Memory after a load** is higher than before
-  the latest fixes (see the Baseline), though still below CLIProxyAPI's.
+  pluxy's median is the higher one.
+- **Translated TTFT** is level, not lower: 3.0 against 3.1 ms in the five rounds, +0.09 ms in the
+  paired rounds.
 
 pluxy uses less memory: 13% less idle before any request, 20% less 10 s after the load and 45%
 less at the peak under `agents` (medians).
 
 ## Where the added time goes
 
-At the baseline commit `35ad0d646` pluxy added about 13 to 16 ms to a 100 KB request and 84 ms to
-an 800 KB one. At `1babf6deb` it adds 2 to 3 ms and 6 ms. Changes since then that did this:
+Every request crosses two processes, core and the extension, so the work that grows with the size
+of a request is kept to one pass on each side:
 
-- A request's JSON is parsed once, and the request goes to the extension once (the next section).
+- **The request is parsed once on each side and sent to the extension once** (the next section).
   Idle upstream connections are kept for concurrent requests.
-- **A translated request's Chat body is built with less garbage** (#749). The extension copied each
-  long text four times and wrote the body into a slice that was too small, so a 100 KB request
-  allocated about 710 KB. It now writes the messages straight into one slice, sized once, and
-  escapes each text once: 129 KB. The extension's CPU per translated request fell from 4.4 to
-  3.25 ms (5 runs a side, ranges apart).
-- **Large call frames are written and read in one pass** (#765). A call's frame is about 100 KB,
-  nearly all of it the client's body. The general JSON encoder and decoder walked that body byte by
-  byte, twice when writing and twice when reading. Core now writes the body into the frame in one
-  pass and the extension reads the frame with the repository's own scanner. Core's `WriteFrame`
-  went from 0.53 to 0.10 ms a request and the extension's `ReadFrame` from 0.54 to 0.10 ms; the CPU
-  of both processes per translated request fell from 5.4 to 4.1 ms, and the added first-token time
-  of `stream-translate` from 3.2 to 2.6 ms (12 alternating rounds, 10 of them faster).
-- **Reply frames are read without the general decoder** (#770). Core read each reply frame with
-  two socket reads and decoded it with `encoding/json`; the extension decoded each Messages stream
-  event into a large struct; core decoded each event's `type` again. Core now reads a frame that
-  arrived whole with one read, and these fields are read with the scanner. Every chunk is still
-  forwarded as soon as it arrives, with no batching. CPU per request in `agents` fell about 10%
-  (14.0 to 12.4 ms, lower in 11 of 12 rounds).
-
-The figures in that list are from each change's own before-and-after runs, not from the table
-above.
+- **A translated request's Chat body is written in one pass.** The extension's body writer
+  (`next/format/openaichat/bodywriter.go`) writes the messages straight into one buffer, sized
+  once, and escapes each text once; a 100 KB request was measured allocating about 129 KB.
+- **Large call frames are written and read in one pass.** A call's frame is about 100 KB, nearly all
+  of it the client's body. Core writes the body into the frame without walking it through the
+  general JSON encoder, and the extension reads the frame with the repository's own JSON scanner
+  (`next/internal/jsonscan`).
+- **Reply frames are read without the general decoder.** Core reads a reply frame that arrived
+  whole with one read, and the fields it needs (each event's `type` among them) are read with the
+  scanner. Every chunk is forwarded as soon as it arrives, with no batching.
 
 CPU profiles of core and the extension at `1babf6deb` show what limits it now (`-profile`, one
 profile of each, on the same machine). Under `stream-translate` (2,000 requests of 10 chunks, the
@@ -241,23 +221,21 @@ there. What is left is the work of forwarding every chunk as it arrives, in two 
 
 ### The request goes to the extension once
 
-A generate call used to carry the client's request twice: parsed (`items`, `tools`, `origin`)
-and as the client's own body (`native.body`). Core encoded both into the call's JSON and the
-extension decoded both, though an extension that sends the client's body upstream unchanged never
-reads the parsed form. Profiles at the time put the largest remaining cost of a request in that
-encoding and decoding, on both sides of the socket; since the frame changes above, writing the
-frame is 6% of core's CPU and reading it 6% of the extension's.
+A generate call can carry the client's request in two forms: parsed (`items`, `tools`, `origin`)
+and as the client's own body (`native.body`). Sending both means core encodes the request twice and
+the extension decodes it twice, though an extension that sends the client's body upstream unchanged
+never reads the parsed form.
 
-Since protocol 0.27 an extension can say it parses the body itself, and with which version of
-core's parsers (the SDK does, with its own release's `format.ParserVersion`), and core then
-leaves the parsed form out whenever the body is still the one it parsed and the extension's
-parser version is core's. The extension parses the body with the same parsers core uses, so its
-handler gets the same request as before; an extension from another release whose parsers differ
-gets the full request. A test keeps what the parsers make of each corpus and format-test request
+So an extension can say it parses the body itself, and with which version of core's parsers (the
+SDK does, with its own release's `format.ParserVersion`), and core then leaves the parsed form out
+whenever the body is still the one it parsed and the extension's parser version is core's. The
+extension parses the body with the same parsers core uses, so its handler gets the same request it
+would get with the parsed form; an extension from another release whose parsers differ gets the
+full request. A test keeps what the parsers make of each corpus and format-test request
 in a golden file and fails, naming some of them, until the version is raised when a recorded
 request's parse changes; a request added to the corpus or the format tests need not be recorded
 to pass.
-The tradeoff: core no longer encodes the parsed form for such a call, but the extension parses the
+The tradeoff: core does not encode the parsed form for such a call, but the extension parses the
 body in place of decoding it, also when it only passes the body through, since a handler's
 request is a plain value that cannot be filled only when it is read. Core still sends the full
 request when the body changed after parsing (a thinking suffix taken off its model), when the
@@ -269,21 +247,21 @@ describes the rule (`next/protocol/README.md`, "Native-only calls").
 
 `go run ./cmd/pluxy-bench -check` runs `stream-pass`, `stream-translate`, `nonstream-pass` and
 `agents` (8 s) three times and fails when a median passes its budget. The budgets are constants in
-[`next/cmd/pluxy-bench/budget.go`](../next/cmd/pluxy-bench/budget.go), each with the CI runs it
+[`next/cmd/pluxy-bench/budget.go`](../../next/cmd/pluxy-bench/budget.go), each with the CI runs it
 came from. CI runs the check in `next-ci.yml`'s `bench` job.
 
 Time budgets are ratios of the proxy to the direct path in the same run, so the mock's own
 timing and the client's costs cancel out and the check needs no absolute times. The machine's
 speed does not cancel out: a slower runner adds more on the proxy side. So each budget leaves
-room for three times today's overhead on CI's runner (for `stream-pass`, 1.04 against measured
+room for three times the overhead measured on CI's runner (for `stream-pass`, 1.04 against measured
 ratios of 1.012, 1.012 and 1.018, that is a 4 ms budget against 1.2 to 1.8 ms overhead in three CI
 runs): a change that adds about 3 ms or more to a request fails, the spread between runners does
 not. Chunk delay is bounded as a fraction of the mock's chunk interval, since the direct chunk
 delay is too close to zero to divide by. A budget is also kept above the widest value any of the
 three runs measured: by 0.01 for a ratio, by 20% for a fraction or a size. Memory budgets are in MB
-and KB per open stream; they stayed at 100 MB and 2,200 KB, because three times the CI value
-(about 50 MB, and 0.8 MB a stream) is above them, and a budget is lowered when a fix lowers its
-value, never raised. The time budgets now are 1.04 (`stream-pass` and `agents` p99), 1.06
+and KB per open stream: 100 MB and 2,200 KB, which are below three times the CI values (about
+50 MB, and 0.8 MB a stream). A budget is lowered when a fix lowers its value, never raised. The
+time budgets are 1.04 (`stream-pass` and `agents` p99), 1.06
 (`stream-translate` and `nonstream-pass`) and 0.12 and 0.09 of the interval for chunk delay. Binary
 sizes, start time and throughput are reported, not checked: new features grow them on purpose.
 

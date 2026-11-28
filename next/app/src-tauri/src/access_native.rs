@@ -37,7 +37,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
 static CALLS: AtomicU64 = AtomicU64::new(0);
-const CONFIRMATION: &str = "pluxy native confirmation";
+const CONFIRMATION: &str = crate::confirmation::text::CONFIRM_TITLE;
 
 fn window(title: &str) -> Option<String> {
     x(&["search", "--onlyvisible", "--name", &format!("^{title}$")])

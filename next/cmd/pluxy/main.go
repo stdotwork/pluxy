@@ -1,7 +1,7 @@
 // Command pluxy is the pluxy core: pluxy serve (or pluxy with no subcommand) serves the client
 // APIs and answers through a provider extension; pluxy init writes a first config; pluxy help
 // lists the subcommands without calling core; every other subcommand is a client of a running
-// core's management API (next/management/README.md), but for pluxy key management, which reads
+// core's management API (docs/management-api.md), but for pluxy key management, which reads
 // only the config.
 package main
 
@@ -180,6 +180,70 @@ func firstStart(configPath string, inHome, inherited bool) error {
 	return nil
 }
 
+// displayListenAddr formats a bound listener address for a person to read. When the bound host
+// is unspecified (0.0.0.0, ::, or empty — Go's dual-stack tcp listener reports [::] on Linux
+// even for 0.0.0.0), it keeps the host family the config wrote (0.0.0.0 for empty or 0.0.0.0,
+// :: for ::) with the bound port, and reports everyAddress=true so callers can add plain words.
+// Specific addresses stay unchanged.
+func displayListenAddr(configured, bound string) (addr string, everyAddress bool) {
+	bHost, bPort, err := net.SplitHostPort(bound)
+	if err != nil {
+		return bound, false
+	}
+	bIP := net.ParseIP(bHost)
+	if bHost != "" && (bIP == nil || !bIP.IsUnspecified()) {
+		return bound, false
+	}
+	host := bHost
+	if configured != "" {
+		if cHost, _, err := net.SplitHostPort(configured); err == nil {
+			if cHost == "" {
+				host = "0.0.0.0"
+			} else if cIP := net.ParseIP(cHost); cIP != nil && cIP.IsUnspecified() {
+				if cIP.To4() != nil {
+					host = "0.0.0.0"
+				} else {
+					host = "::"
+				}
+			}
+		}
+	}
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	return net.JoinHostPort(host, bPort), true
+}
+
+// listeningLine is the first line core prints once its listener is bound: "listening on <url>"
+// with nothing after the URL (programs such as the desktop app read everything after the prefix
+// as core's base address). configured is cfg.Listen ("" when serving on an inherited -listen-fd
+// socket); bound is ln.Addr().String().
+func listeningLine(scheme, configured, bound string) string {
+	addr, _ := displayListenAddr(configured, bound)
+	return fmt.Sprintf("listening on %s://%s", scheme, addr)
+}
+
+// everyAddressLine is the plain-words line printed right after listeningLine when the bound
+// host is unspecified (0.0.0.0, ::, or empty). It returns "" for a specific address.
+func everyAddressLine(scheme, bound string) string {
+	_, every := displayListenAddr("", bound)
+	if !every {
+		return ""
+	}
+	_, port, err := net.SplitHostPort(bound)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("that is every address of this computer; on this computer open %s://127.0.0.1:%s", scheme, port)
+}
+
+// extensionPagesLine is the line core prints for its extension-pages listener: URL-only, using
+// the config's host family when unspecified.
+func extensionPagesLine(configured, bound string) string {
+	addr, _ := displayListenAddr(configured, bound)
+	return fmt.Sprintf("extension pages on http://%s", addr)
+}
+
 // setupStartLine is what core's start says while first-run setup has not ended: where to go
 // on. It names the panel only when this build serves one (panelBuilt), at local, the address
 // core is reached at on this machine, and the setup command with what it needs to find this
@@ -198,6 +262,36 @@ func setupStartLine(panelBuilt bool, local, configArg, listen string) string {
 		return "first-run setup is not finished. Next: run " + command
 	}
 	return fmt.Sprintf("first-run setup is not finished. Next: open %s%s in a browser and sign in with the management key, or run %s", local, panel.Prefix, command)
+}
+
+// otherComputerLine is the line after the panel's address while first-run setup has not ended:
+// that address is this computer's own, so it says how to open the panel from another computer
+// (listen is the address pluxy serves on, file its config file, secure whether it serves HTTPS).
+// "" when another computer can already open it.
+func otherComputerLine(listen string, allowRemote bool, file string, secure bool) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return ""
+	}
+	scheme := "http"
+	if secure {
+		scheme = "https"
+	}
+	address := fmt.Sprintf("%s://<this computer's address>:%s%s", scheme, port, panel.Prefix)
+	ip := net.ParseIP(host)
+	switch {
+	case server.IsLoopbackHost(host):
+		return fmt.Sprintf(`that address works only on this computer. To open the panel from another computer, set "listen" to "0.0.0.0:%s" and "management_allow_remote" to true in %s (Config in the panel sets both), restart pluxy, then open %s there`, port, quoteArg(file), address)
+	case allowRemote:
+		if host == "" || ip != nil && ip.IsUnspecified() {
+			return fmt.Sprintf("another computer opens the panel at %s, using this computer's address in place of the one above", address)
+		}
+		return ""
+	case host == "" || ip != nil && ip.IsUnspecified():
+		return fmt.Sprintf(`another computer opens the panel at %s, using this computer's address in place of the one above, after "management_allow_remote" is set to true in %s (Config in the panel sets it), or its sign-in is refused`, address, quoteArg(file))
+	default:
+		return fmt.Sprintf(`another computer opens the panel at the address above after "management_allow_remote" is set to true in %s (Config in the panel sets it), or its sign-in is refused`, quoteArg(file))
+	}
 }
 
 // initConfig is pluxy init: it writes a first config, as a first start does, without starting
@@ -420,8 +514,15 @@ func run(configPath string, byRule, safeMode bool, watch time.Duration, bundled 
 		}
 	}()
 
-	fmt.Fprintf(os.Stderr, "pluxy: listening on %s://%s\n", scheme, ln.Addr())
-	fmt.Fprintf(os.Stderr, "pluxy: extension pages on http://%s\n", pagesLn.Addr())
+	configuredListen := cfg.Listen
+	if listenFD >= 0 {
+		configuredListen = ""
+	}
+	fmt.Fprintf(os.Stderr, "pluxy: %s\n", listeningLine(scheme, configuredListen, ln.Addr().String()))
+	if note := everyAddressLine(scheme, ln.Addr().String()); note != "" {
+		fmt.Fprintf(os.Stderr, "pluxy: %s\n", note)
+	}
+	fmt.Fprintf(os.Stderr, "pluxy: %s\n", extensionPagesLine(cfg.ExtensionPages.Listen, pagesLn.Addr().String()))
 	// A core handed its socket was started by a program, which shows setup itself.
 	if listenFD < 0 && c.Status().FirstRun {
 		if local, err := server.LocalURL(ln.Addr().String(), tlsConfig != nil); err == nil {
@@ -430,6 +531,15 @@ func run(configPath string, byRule, safeMode bool, watch time.Duration, bundled 
 				configArg = "" // pluxy setup finds it as core did
 			}
 			fmt.Fprintf(os.Stderr, "pluxy: %s\n", setupStartLine(panel.Built(assets), local, configArg, cfg.Listen))
+			if panel.Built(assets) {
+				abs, err := filepath.Abs(configPath)
+				if err != nil {
+					abs = configPath
+				}
+				if line := otherComputerLine(ln.Addr().String(), cfg.ManagementAllowRemote, abs, tlsConfig != nil); line != "" {
+					fmt.Fprintf(os.Stderr, "pluxy: %s\n", line)
+				}
+			}
 		}
 	}
 

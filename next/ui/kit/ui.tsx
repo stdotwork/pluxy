@@ -389,7 +389,8 @@ export function ConfirmButton(props: {
   );
 }
 
-export type Tone = "ok" | "warn" | "danger" | "muted";
+/** A meaning: ok, warn and danger are states; info is a neutral notice; update says an update is ready. */
+export type Tone = "ok" | "warn" | "danger" | "muted" | "info" | "update";
 
 export function Badge(props: { tone: Tone; children: ComponentChildren }) {
   return (
