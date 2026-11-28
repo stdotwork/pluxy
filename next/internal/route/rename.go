@@ -15,8 +15,7 @@ func Renamed(req llm.Request, upstream string) llm.Request {
 	if req.Native != nil {
 		if body, ok := setModel(req.Native.Body, upstream); ok {
 			n := *req.Native
-			// Gemini's model is in the request path; a "model" in its body is a field
-			// the model has no place for, kept in the request's origin, so it changes them.
+			// Gemini's model is in the request path.
 			if n.IsParsed() && n.Format != llm.FormatGeminiGenerate {
 				n.Parsed = body
 			}
