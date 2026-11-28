@@ -136,7 +136,7 @@ test("a closed account set in the settings file can be turned on from its row, i
 test("an account whose saved sign-in cannot be read says what to do and offers only its removal", async ({
   page,
 }) => {
-  // What core lists for such a file (management README, "Accounts"): the file's name as the ID, no
+  // What core lists for such a file (docs/management-api.md, "Account fields"): the file's name as the ID, no
   // extension, kind or state, and the file and the error in the health's why.
   const why = "/home/a/pluxy/state/accounts/lost-1.json: unexpected end of JSON input";
   await page.route("**/v0/management/accounts", async (route) => {

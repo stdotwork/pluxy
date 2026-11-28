@@ -20,8 +20,8 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// laterCommands are the management calls whose commands later changes add (the README's
-// Resources tables name each one). The list only shrinks: a call added to core needs a command
+// laterCommands are the management calls whose commands later changes add (docs/management-api.md
+// names each one). The list only shrinks: a call added to core needs a command
 // with it.
 var laterCommands = []string{
 	// pluxy config validate <file>, pluxy config apply <file>

@@ -1697,7 +1697,7 @@ session's Downloads folder with the theme file's JSON (read from disk at the pat
 and the next launch paints in it. The session ends on the Themes page in that theme.
 
 One more managed session (`native/setup.ts`, with the stages in `src-tauri/src/native_setup.rs`)
-walks [Setup](../management/README.md#setup) on the app's first start, on the build with
+walks [Setup](../../docs/management-api.md#setup) on the app's first start, on the build with
 `artifact-test-trust`. Its core is a first run: nothing installed and no accounts, a bundled
 registry that offers `pluxy/claude` as a pick (`native/core-steps.ts` `firstRunSource`), and a
 stand-in `claude` printing `2.4.1 (Claude Code)` first on the PATH it inherits from the app; a

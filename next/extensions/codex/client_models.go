@@ -13,8 +13,8 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// clientModelsJSON is refreshed by hand as documented in next/README.md. It belongs only
-// to this program; ordinary model listing does not decode it or send it to core.
+// clientModelsJSON is refreshed by hand as documented in docs/map.md ("Codex client catalog").
+// It belongs only to this program; ordinary model listing does not decode it or send it to core.
 //
 //go:embed client_models.json
 var clientModelsJSON []byte

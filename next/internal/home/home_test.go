@@ -19,7 +19,7 @@ func abs(p string) string {
 
 // Each system's default folder, PLUXY_HOME in its place, and the paths that are refused rather
 // than taken from wherever pluxy runs. The expected paths are written out by hand from the
-// documented rule (next/README.md, "pluxy's home").
+// documented rule (docs/config.md, "pluxy's home").
 func TestDir(t *testing.T) {
 	for _, c := range []struct {
 		name, goos string
