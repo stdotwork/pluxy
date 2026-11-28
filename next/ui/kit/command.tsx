@@ -342,6 +342,11 @@ export function CommandMenu(props: CommandMenuProps) {
         aria-modal="true"
         aria-label={t("title")}
         onKeyDown={onKeyDown}
+        // A press on a heading, the footer or the padding would move focus out of the field, and
+        // Escape, the arrows and Tab would then miss this element: focus stays in the field.
+        onMouseDown={(e) => {
+          if (e.target !== input.current) e.preventDefault();
+        }}
       >
         <div class="command-field">
           <Icon name="search" />

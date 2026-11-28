@@ -75,6 +75,20 @@ test("Control K opens it from anywhere, and the same keys close it with focus ba
   await expect(refresh).toBeFocused();
 });
 
+test("a click on a heading or the footer leaves focus in the field, so Escape still closes it", async ({
+  page,
+}) => {
+  await open(page);
+  await menu(page).getByText("Pages", { exact: true }).click();
+  await expect(input(page)).toBeFocused();
+  await menu(page)
+    .locator(".command-foot")
+    .click({ position: { x: 4, y: 4 } });
+  await expect(input(page)).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(menu(page)).toHaveCount(0);
+});
+
 test("a menu opened by the keyboard is there at once, and one opened by the pointer fades in", async ({
   page,
 }) => {
