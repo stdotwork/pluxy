@@ -279,6 +279,8 @@ export const PARTS = [
   "auth-import",
   "round-notice",
   "method-group",
+  "provider-tiles",
+  "provider-tile",
   "more-options",
   "login-details",
   "account-added",
