@@ -10,14 +10,12 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Messages refuses a request whose tools share a name. A hosted tool translated from a Responses
-// request is dropped, with a reported loss, when a function or another hosted tool has its name.
 func TestHostedToolNameTakenIsDropped(t *testing.T) {
 	cases := []struct {
 		name      string
 		raw       string
-		wantTools []string // "name/type" of each tool sent, in order; a function has no type
-		wantPath  string   // the dropped tool
+		wantTools []string
+		wantPath  string
 	}{
 		{
 			name:      "function named code_execution",

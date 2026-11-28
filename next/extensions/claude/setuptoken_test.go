@@ -12,8 +12,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// A setup token kept as an API key goes upstream as an OAuth token: a bearer token, with the OAuth
-// beta after the client's own betas, and no x-api-key.
 func TestSetupTokenIsSentAsOAuthToken(t *testing.T) {
 	srv := claudetest.New(t)
 	token := srv.SetupToken()
@@ -40,8 +38,6 @@ func TestSetupTokenIsSentAsOAuthToken(t *testing.T) {
 	}
 }
 
-// The setup_token login keeps the token as an API key credential without a request: nothing
-// checks such a token for free. An API key login given a setup token keeps it the same way.
 func TestSetupTokenLoginKeepsTokenUnchecked(t *testing.T) {
 	srv := claudetest.New(t)
 	for _, method := range []string{"setup_token", "api_key"} {
@@ -60,8 +56,6 @@ func TestSetupTokenLoginKeepsTokenUnchecked(t *testing.T) {
 	}
 }
 
-// The setup_token login asks again for an empty value, and refuses a value that is not an OAuth
-// token, such as an API key, as an API key login refuses a bad key.
 func TestSetupTokenLoginRefusesOtherValues(t *testing.T) {
 	for in, code := range map[string]string{"": llm.CodeInvalidRequest, "  ": llm.CodeInvalidRequest, "sk-ant-api03-not-a-setup-token": llm.CodeAuth} {
 		_, err := setupTokenLogin(in)
@@ -71,7 +65,6 @@ func TestSetupTokenLoginRefusesOtherValues(t *testing.T) {
 	}
 }
 
-// The setup_token method is offered as a key entry with one secret input.
 func TestSetupTokenLoginMethod(t *testing.T) {
 	for _, m := range loginMethods {
 		if m.Method == "setup_token" {
@@ -84,7 +77,6 @@ func TestSetupTokenLoginMethod(t *testing.T) {
 	t.Error("no setup_token login method")
 }
 
-// A setup token is not checked: no free call is known for one, so nothing is sent.
 func TestCheckSetupTokenIsUnsupportedWithoutRequest(t *testing.T) {
 	srv := claudetest.New(t)
 	_, err := runCheck(srv, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: srv.SetupToken()})
@@ -96,8 +88,6 @@ func TestCheckSetupTokenIsUnsupportedWithoutRequest(t *testing.T) {
 	}
 }
 
-// A setup token's quota reads the subscription's usage as an OAuth token, and skips the profile,
-// which such a token cannot read: the usage is reported without a plan.
 func TestQuotaSetupTokenReadsUsageOnly(t *testing.T) {
 	srv := claudetest.New(t)
 	token := srv.SetupToken()

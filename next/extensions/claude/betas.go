@@ -6,23 +6,6 @@ import (
 	"strings"
 )
 
-// Betas a request body needs. Anthropic refuses some body features unless anthropic-beta names
-// their beta, so, as today's core does for a client it does not make look like Claude Code, every
-// request (a Messages client's own body or a translated one) gets the betas its body calls for,
-// after the client's own list and without repeats:
-//
-//   - advisor-tool-2026-03-01 for a tool whose type starts with advisor_;
-//   - the betas a body lists in a top-level betas field, which Messages does not take in the
-//     body: the field is removed and its betas sent in the header;
-//   - extended-cache-ttl-2025-04-11 for a cache_control marker with ttl "1h" on a tool, system
-//     block or message content block (not a top-level cache_control marker, and not on a token
-//     count);
-//   - thinking-binding-controls-2026-08-01 for thinking.block_binding;
-//   - mid-conversation-tool-changes-2026-07-01 for tool_addition or tool_removal blocks, or
-//     inline-tools-2026-09-15 when a tool_addition defines a tool inline (which also covers
-//     reference tool additions and removals).
-//
-// A client's own betas are never removed.
 const (
 	advisorBeta                    = "advisor-tool-2026-03-01"
 	extendedCacheTTLBeta           = "extended-cache-ttl-2025-04-11"
@@ -31,12 +14,7 @@ const (
 	inlineToolsBeta                = "inline-tools-2026-09-15"
 )
 
-// bodyBetas returns the betas body needs, in the order today's core adds them, and body without
-// a betas field. count is true for a token count. A body that is not a JSON object is returned
-// as it is, with no betas.
 func bodyBetas(body []byte, count bool) ([]byte, []string) {
-	// A body with none of these fields needs no beta; skip decoding it. (An advisor tool's type
-	// is matched ignoring case and spaces, so look for tools, not the type.)
 	if !bytes.Contains(body, []byte(`"tools"`)) && !bytes.Contains(body, []byte(`"betas"`)) &&
 		!bytes.Contains(body, []byte(`"1h"`)) && !bytes.Contains(body, []byte(`"block_binding"`)) &&
 		!bytes.Contains(body, []byte(`"tool_addition"`)) && !bytes.Contains(body, []byte(`"tool_removal"`)) {
@@ -56,8 +34,6 @@ func bodyBetas(body []byte, count bool) ([]byte, []string) {
 		}
 	}
 	if raw, ok := m["betas"]; ok {
-		// As today's core reads it: each item of a list, or the one value, as text (see
-		// betaText).
 		var list []json.RawMessage
 		if json.Unmarshal(raw, &list) != nil {
 			list = []json.RawMessage{raw}
@@ -68,8 +44,6 @@ func bodyBetas(body []byte, count bool) ([]byte, []string) {
 			}
 		}
 		delete(m, "betas")
-		// The rest of the body is written back as the client sent it: values verbatim, without
-		// the HTML escaping json.Marshal would add inside strings.
 		var buf bytes.Buffer
 		enc := json.NewEncoder(&buf)
 		enc.SetEscapeHTML(false)
@@ -92,9 +66,6 @@ func bodyBetas(body []byte, count bool) ([]byte, []string) {
 	return body, betas
 }
 
-// betaText is one item of a body's betas list as text: a string's value, or a number or boolean
-// as written. Null, an object or a list is nothing, and so is text with a control character,
-// which no header can carry: the client's own request would fail on it, not the account.
 func betaText(item json.RawMessage) string {
 	var t string
 	var v any
@@ -113,14 +84,11 @@ func betaText(item json.RawMessage) string {
 	return t
 }
 
-// cacheable is a tool or a block, as far as betas care: its type and cache marker.
 type cacheable struct {
 	Type         string          `json:"type"`
 	CacheControl json.RawMessage `json:"cache_control"`
 }
 
-// hasHourTTL reports whether a tool, a system block or a message content block carries
-// cache_control with ttl "1h".
 func hasHourTTL(m map[string]json.RawMessage, tools []cacheable) bool {
 	hour := func(cc json.RawMessage) bool {
 		var c struct {
@@ -156,10 +124,6 @@ func hasHourTTL(m map[string]json.RawMessage, tools []cacheable) bool {
 	return false
 }
 
-// toolChangeBeta returns the mid-conversation tool-change beta a Messages body calls for, if any:
-// inline-tools-2026-09-15 when a tool_addition block defines a tool inline (which also covers
-// adding and removing tools by reference), or mid-conversation-tool-changes-2026-07-01 for
-// reference-only tool_addition or tool_removal blocks.
 func toolChangeBeta(m map[string]json.RawMessage) string {
 	raw := m["messages"]
 	if !bytes.Contains(raw, []byte(`"tool_addition"`)) && !bytes.Contains(raw, []byte(`"tool_removal"`)) {
@@ -203,8 +167,6 @@ func toolChangeBeta(m map[string]json.RawMessage) string {
 	return ""
 }
 
-// addBetas adds each beta to the request's anthropic-beta list, after what is there, unless it
-// is already listed.
 func addBetas(list string, betas []string) string {
 	for _, b := range betas {
 		if b = strings.TrimSpace(b); b != "" {

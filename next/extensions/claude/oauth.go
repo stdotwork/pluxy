@@ -19,30 +19,18 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// Claude subscription login is OAuth's authorization code grant with PKCE (RFC 6749, RFC 7636),
-// with Claude's endpoints and client. The token endpoint takes and returns JSON. Account
-// settings can name another client (client_id). They can name other endpoints (authorize_url,
-// token_url) only under test (sdk.TestLoginHost): a stored account must not choose where the
-// code and refresh token go.
 const (
 	defaultAuthorizeURL = "https://claude.ai/oauth/authorize"
 	defaultTokenURL     = "https://platform.claude.com/v1/oauth/token"
 	defaultClientID     = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 )
 
-// redirectURI is where the sign-in page sends the browser. Nothing listens there: the user
-// pastes the address the browser was sent to back into pluxy, which works when core runs on
-// another machine.
 const redirectURI = "http://localhost:54545/callback"
 
-// scopes are the OAuth scopes a subscription login asks for.
 const scopes = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 
-// renewAhead is how long before an access token expires core renews it. Subscription access
-// tokens last hours; renewing well ahead leaves room for a token endpoint that is down a while.
 const renewAhead = time.Hour
 
-// loginMethods are the ways to add a Claude account.
 var loginMethods = []protocol.LoginMethod{
 	{Method: "subscription", Kind: protocol.LoginBrowser, Label: "Claude subscription"},
 	{Method: "api_key", Kind: protocol.LoginAPIKey, Label: "API key", Inputs: []protocol.LoginInput{
@@ -53,7 +41,6 @@ var loginMethods = []protocol.LoginMethod{
 	}},
 }
 
-// login signs in with the method the call names.
 func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*protocol.Grant, error) {
 	set, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -70,8 +57,6 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 	return nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("unknown login method %q", call.Method), Scope: llm.ScopeRequest}
 }
 
-// subscriptionLogin sends the user to the sign-in page with PKCE, takes the address the browser
-// was sent to (or the code Claude's page shows, code#state), and exchanges the code for tokens.
 func subscriptionLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*protocol.Grant, error) {
 	verifier := randomString(32)
 	sum := sha256.Sum256([]byte(verifier))
@@ -125,8 +110,6 @@ func subscriptionLogin(ctx context.Context, set settings, s *sdk.LoginSession) (
 	return &protocol.Grant{Credential: tr.credential(time.Now()), Label: tr.Account.EmailAddress, Identity: tr.identity()}, nil
 }
 
-// readCallback reads what the user pasted: the redirect address (with code and state, or error),
-// or Claude's code#state.
 func readCallback(pasted string) (code, state, failure string) {
 	pasted = strings.TrimSpace(pasted)
 	if u, err := url.Parse(pasted); err == nil && u.Scheme != "" && u.Host != "" {
@@ -144,10 +127,6 @@ func readCallback(pasted string) (code, state, failure string) {
 	return code, state, ""
 }
 
-// setupTokenLogin keeps the long-lived OAuth token `claude setup-token` prints, as an api_key
-// credential: it is static and has no refresh token, so core never renews it, and every
-// request sends it as an OAuth token (see authorize). It is stored unchecked: no call is known
-// that checks such a token without spending from the subscription.
 func setupTokenLogin(token string) (*protocol.Grant, error) {
 	token = strings.TrimSpace(token)
 	switch {
@@ -159,8 +138,6 @@ func setupTokenLogin(token string) (*protocol.Grant, error) {
 	return &protocol.Grant{Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: token}}, nil
 }
 
-// apiKeyLogin checks a key by listing models, which costs nothing, and keeps it when Anthropic
-// accepts it. A setup token entered as a key is kept as setup_token keeps it.
 func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -181,7 +158,6 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		// A login error is retryable only when the request never reached Anthropic.
 		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach Anthropic: " + err.Error(), Retryable: !sent(), Scope: llm.ScopeEndpoint}
 	}
 	defer resp.Body.Close()
@@ -191,14 +167,11 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return nil, refused("Anthropic refused the key")
 	default:
-		// Core redacts the key as the user entered it; this one is trimmed, so remove it here.
 		e := upstreamError(resp, "", false)
 		if e.Code == llm.CodeAccountClosed {
 			return nil, refused("Anthropic refused the key")
 		}
 		if e.Status >= 500 {
-			// A model request that Anthropic refused with a 503 or 529 is safe to try again; a login
-			// call that got a 5xx is not, because it reached Anthropic and may have run.
 			e.Retryable = false
 		}
 		r := protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key})
@@ -206,7 +179,6 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 	}
 }
 
-// refresh renews a subscription credential with its refresh token.
 func refresh(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, error) {
 	set, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -228,14 +200,12 @@ func refresh(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, e
 		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "the token endpoint sent no access token", Scope: llm.ScopeEndpoint}
 	}
 	out := tr.credential(time.Now())
-	// The endpoint may not rotate the refresh token; then the old one still works.
 	if out.RefreshToken == "" {
 		out.RefreshToken = c.RefreshToken
 	}
 	return out, nil
 }
 
-// tokenResponse is a successful reply of Claude's token endpoint.
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
@@ -249,8 +219,6 @@ type tokenResponse struct {
 	} `json:"organization"`
 }
 
-// identity names who signed in, by the account's e-mail address and ID and its organization's ID
-// (those the token reply gives), so core can refuse a new login that signs in as someone else.
 func (tr *tokenResponse) identity() map[string]string {
 	id := map[string]string{}
 	for k, v := range map[string]string{"email": tr.Account.EmailAddress, "account_id": tr.Account.UUID, "organization_id": tr.Organization.UUID} {
@@ -261,31 +229,24 @@ func (tr *tokenResponse) identity() map[string]string {
 	return id
 }
 
-// credential builds the credential a token reply grants.
 func (tr *tokenResponse) credential(now time.Time) *protocol.Credential {
 	c := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: tr.AccessToken, RefreshToken: tr.RefreshToken}
 	if exp := sdk.ExpiryUnix(now, tr.ExpiresIn); exp > 0 {
 		c.ExpiresAt = exp
-		// Renew renewAhead before expiry, or halfway through a shorter life.
 		ahead := min(int64(renewAhead/time.Second), (exp-now.Unix())/2)
 		c.RefreshAt = c.ExpiresAt - ahead
 	}
 	return c
 }
 
-// tokenFailure is a token request that did not succeed: a refusal (status and OAuth error code),
-// or no reply (status 0 and err set).
 type tokenFailure struct {
 	status       int
 	code         string
 	retryAfterMS int64
 	err          error
-	// sent is whether any of the request was written to the connection. Only a request that was
-	// not sent is safe to try again.
-	sent bool
+	sent         bool
 }
 
-// tokenPost posts fields as JSON to the token endpoint and decodes a 200 reply into out.
 func tokenPost(ctx context.Context, endpoint string, fields map[string]string, out any) *tokenFailure {
 	body, _ := json.Marshal(fields)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
@@ -310,7 +271,6 @@ func tokenPost(ctx context.Context, endpoint string, fields map[string]string, o
 		case string:
 			f.code = v
 		case map[string]any:
-			// Anthropic's API error shape: {"error": {"type": ..., "message": ...}}.
 			f.code, _ = v["type"].(string)
 		}
 		f.code = sdk.LoginCode(f.code)
@@ -322,8 +282,6 @@ func tokenPost(ctx context.Context, endpoint string, fields map[string]string, o
 	return nil
 }
 
-// requestError is the error for a failed token request: the context's error when the call was
-// cancelled, otherwise what the failure means.
 func requestError(ctx context.Context, f *tokenFailure) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -331,7 +289,6 @@ func requestError(ctx context.Context, f *tokenFailure) error {
 	return tokenError(f)
 }
 
-// terminalCodes are token endpoint error codes that only a new login fixes.
 var terminalCodes = map[string]bool{
 	"invalid_grant":             true,
 	"invalid_client":            true,
@@ -342,8 +299,6 @@ var terminalCodes = map[string]bool{
 	"token_revoked":             true,
 }
 
-// tokenError turns a failed token request into an error. Only a request that never reached the
-// token endpoint is retryable, apart from a 429, where the endpoint refused to run the request.
 func tokenError(f *tokenFailure) error {
 	switch {
 	case f.status == 0:
@@ -361,19 +316,14 @@ func tokenError(f *tokenFailure) error {
 	}
 }
 
-// callbackRefusal is the error of a pasted address that holds an error. The text is the user's to
-// paste and reaches the client before any credential exists for core to redact, so it is bounded
-// and cleaned.
 func callbackRefusal(failure string) error {
 	return refused("Claude refused the sign-in: " + sdk.LoginText(failure))
 }
 
-// refused is the error for a sign-in the user or Claude turned down.
 func refused(msg string) error {
 	return &llm.Error{Code: llm.CodeAuth, Message: msg, Scope: llm.ScopeCredential}
 }
 
-// randomString returns n random bytes, base64url encoded without padding.
 func randomString(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)

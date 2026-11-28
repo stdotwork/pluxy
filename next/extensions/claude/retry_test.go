@@ -26,8 +26,6 @@ func brokenReply(w http.ResponseWriter) {
 	sdktest.HangUp(w)
 }
 
-// A renewal is retryable only when the request never reached the token endpoint, or when the
-// endpoint rate limited it.
 func TestRefreshRetryOnlyWhenNotSent(t *testing.T) {
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	for _, c := range []struct {
@@ -52,7 +50,6 @@ func TestRefreshRetryOnlyWhenNotSent(t *testing.T) {
 	}
 }
 
-// The same rule holds for the token endpoint of the claudetest server.
 func TestRefreshOutage(t *testing.T) {
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	srv := claudetest.New(t)
@@ -63,8 +60,6 @@ func TestRefreshOutage(t *testing.T) {
 	sdktest.WantError(t, err, llm.CodeUnavailable, false)
 }
 
-// An API key login is checked by one request: the same rule applies to it, and a 5xx is not
-// retryable even where the same status on a model request is.
 func TestAPIKeyLoginRetryOnlyWhenNotSent(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -86,7 +81,6 @@ func TestAPIKeyLoginRetryOnlyWhenNotSent(t *testing.T) {
 	}
 }
 
-// A model request that Anthropic refuses with a 503 stays retryable: it did not run.
 func TestModelRequestOutageStaysRetryable(t *testing.T) {
 	rec := httptest.NewRecorder()
 	rec.WriteHeader(http.StatusServiceUnavailable)

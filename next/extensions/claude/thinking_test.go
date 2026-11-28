@@ -10,8 +10,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// fields returns the named top-level fields of a JSON body, as JSON, with "-" for one that is
-// absent.
 func fields(body []byte, names ...string) string {
 	var m map[string]json.RawMessage
 	_ = json.Unmarshal(body, &m)
@@ -40,8 +38,6 @@ func lossPaths(tr *llm.Translation) []string {
 	return out
 }
 
-// A translated request's reasoning effort and tool choice reach each model family in the form
-// that model takes (Anthropic's effort and thinking tables), each difference reported.
 func TestBuildBodyThinkingPerModel(t *testing.T) {
 	tool := llm.Tool{Name: "w", Parameters: json.RawMessage(`{"type":"object"}`)}
 	for _, c := range []struct {
@@ -94,10 +90,6 @@ func TestBuildBodyThinkingPerModel(t *testing.T) {
 	}
 }
 
-// A Messages client's own body gets the same thinking repairs: thinking off sent as each model
-// takes it, a forced tool choice and top_k where the model refuses them, and a budget-thinking
-// tool turn that has no thinking block. Its thinking blocks and signatures are sent unchanged,
-// empty ones included.
 func TestBuildBodyFitsNativeThinking(t *testing.T) {
 	const signed = `{"role":"user","content":"a"},{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"CAISBAoCEAE="},{"type":"text","text":"b"}]},{"role":"user","content":"c"}`
 	for _, c := range []struct {
@@ -139,8 +131,6 @@ func TestBuildBodyFitsNativeThinking(t *testing.T) {
 	}
 }
 
-// A Responses client's reasoning.summary reaches Claude as thinking.display, and is no longer
-// reported as dropped.
 func TestBuildBodyMapsReasoningSummary(t *testing.T) {
 	req, err := openairesponses.ParseRequest([]byte(`{"model":"claude-opus-4-8","input":"hi","reasoning":{"effort":"high","summary":"auto"}}`))
 	if err != nil {
@@ -158,8 +148,6 @@ func TestBuildBodyMapsReasoningSummary(t *testing.T) {
 	}
 }
 
-// A translated request with both reasoning effort and a json_schema response format keeps both
-// output_config.effort and output_config.format, and needs no structured-outputs beta header.
 func TestBuildBodyKeepsFormatWithReasoningEffort(t *testing.T) {
 	req := chatRequest("claude-opus-4-6", chatText(llm.RoleUser, "Hi", 0))
 	req.Options.ReasoningEffort = "high"

@@ -13,8 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// TestConformance runs the extension conformance kit against this extension, with a fake
-// Anthropic that acts out each scenario, for an API key and for a subscription login.
 func TestConformance(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	for _, kind := range []string{protocol.CredentialAPIKey, protocol.CredentialOAuth} {
@@ -29,7 +27,6 @@ func TestConformance(t *testing.T) {
 	}
 }
 
-// prepare sets up a fake Anthropic so that a generate call with a credential of kind acts out s.
 func prepare(t *testing.T, s conformance.Scenario, kind string) conformance.Setup {
 	t.Helper()
 	srv := claudetest.New(t)
@@ -67,7 +64,6 @@ func prepare(t *testing.T, s conformance.Scenario, kind string) conformance.Setu
 			w.WriteHeader(http.StatusTooManyRequests)
 			io.WriteString(w, `{"type":"error","error":{"type":"rate_limit_error","message":"Number of requests has exceeded your rate limit"}}`)
 		case conformance.ScenarioAccountClosed:
-			// Captured reply from https://github.com/router-for-me/CLIProxyAPI/issues/2442.
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"This organization has been disabled."}}`)
@@ -93,7 +89,6 @@ func prepare(t *testing.T, s conformance.Scenario, kind string) conformance.Setu
 	return setup
 }
 
-// prepareLogin sets up a fake Anthropic so that a login with method, or a refresh, acts out s.
 func prepareLogin(t *testing.T, s conformance.LoginScenario, method string) conformance.LoginSetup {
 	t.Helper()
 	srv := claudetest.New(t)

@@ -36,13 +36,6 @@ const (
 // reset is a billing boundary, not a rate limit to wait out.
 const maxLimitWait = 7*24*time.Hour + time.Hour
 
-// rateLimit classifies a 429 as today's core does. A refused shared 5-hour or 7-day window (or an
-// aggregate refusal that is not only a model's own window or overage) is the account's quota,
-// which no model can use until the reset; with modelLevelCooling it is kept on the model alone.
-// A refusal of only a model's own window or of overage, and a plain 429, keep the model out on
-// this account and leave its other models free. wait is how long the upstream said to wait
-// (0 when it did not say), and window the length in minutes of the shared window whose reset
-// that is (300 or 10080; 0 for neither).
 func rateLimit(h http.Header, body []byte, modelLevelCooling bool, now time.Time) (code, scope string, wait time.Duration, window int64) {
 	unified, s5h, s7d, s7dOI := limitStatus(h, hUnifiedStatus), limitStatus(h, h5hStatus), limitStatus(h, h7dStatus), limitStatus(h, h7dOIStatus)
 	modelOnly := overageOrModelOnly(h, unified, s5h, s7d, s7dOI)
@@ -54,8 +47,6 @@ func rateLimit(h http.Header, body []byte, modelLevelCooling bool, now time.Time
 		}
 	}
 
-	// The wait is the latest reset among the refused windows (and Retry-After), as long as it
-	// is in the future and within maxLimitWait.
 	var latest, reset5h, reset7d time.Time
 	consider := func(t time.Time, ok bool) time.Time {
 		if !ok || !t.After(now) || t.Sub(now) > maxLimitWait {
@@ -67,8 +58,6 @@ func rateLimit(h http.Header, body []byte, modelLevelCooling bool, now time.Time
 		return t
 	}
 	if !modelOnly {
-		// A refusal of only a model's window or overage says nothing about the account, so its
-		// Retry-After (often days) is not waited out.
 		consider(parseRetryAfter(h.Get("Retry-After"), now))
 	}
 	if s5h == "rejected" {
@@ -97,7 +86,6 @@ func rateLimit(h http.Header, body []byte, modelLevelCooling bool, now time.Time
 	return code, scope, latest.Sub(now), window
 }
 
-// limitStatus reads a rate-limit status header: lower case, without surrounding spaces.
 func limitStatus(h http.Header, name string) string {
 	return strings.ToLower(strings.TrimSpace(h.Get(name)))
 }
@@ -120,13 +108,10 @@ func overageOrModelOnly(h http.Header, unified, s5h, s7d, s7dOI string) bool {
 	case ok5h && ok7d:
 		return true
 	case ok7d && s5h == "" && (utilizationHealthy(h.Get(h5hUtilization)) || (unified == "rejected" && len(h.Values(h5hUtilization)) == 0)):
-		// The 5-hour status is left out when that window has no use or the plan has none.
 		return true
 	case ok5h && s7d == "" && utilizationHealthy(h.Get(h7dUtilization)):
 		return true
 	}
-	// Both shared statuses left out: only an overage claim may use that, and only while the
-	// shared utilizations given (if any) are below 1.
 	if unified == "rejected" && s5h == "" && s7d == "" && strings.Contains(claim, "overage") {
 		u5, u7 := h.Get(h5hUtilization), h.Get(h7dUtilization)
 		return (strings.TrimSpace(u5) == "" || utilizationHealthy(u5)) && (strings.TrimSpace(u7) == "" || utilizationHealthy(u7))
@@ -134,8 +119,6 @@ func overageOrModelOnly(h http.Header, unified, s5h, s7d, s7dOI string) bool {
 	return false
 }
 
-// utilizationHealthy reports whether a utilization header holds a number from 0 up to, not
-// including, 1.
 func utilizationHealthy(raw string) bool {
 	u, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
 	return err == nil && !math.IsNaN(u) && !math.IsInf(u, 0) && u >= 0 && u < 1
@@ -177,8 +160,6 @@ func perMinuteLimit(h http.Header, body []byte, now time.Time) bool {
 	return ok && t.After(now) && t.Sub(now) <= maxLimitWait
 }
 
-// billingBoundary reports whether the aggregate reset is overage's billing-period reset: the
-// claim names overage and the two resets are the same time.
 func billingBoundary(h http.Header, unifiedReset string) bool {
 	if !strings.Contains(limitStatus(h, hRepresentative), "overage") {
 		return false
@@ -188,7 +169,6 @@ func billingBoundary(h http.Header, unifiedReset string) bool {
 	return ok1 && ok2 && u.Equal(o)
 }
 
-// parseReset reads a reset header: Unix seconds (fractions allowed), RFC 3339 or an HTTP date.
 func parseReset(raw string) (time.Time, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -210,7 +190,6 @@ func parseReset(raw string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// parseRetryAfter reads Retry-After: seconds (fractions allowed), an HTTP date or RFC 3339.
 func parseRetryAfter(raw string, now time.Time) (time.Time, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

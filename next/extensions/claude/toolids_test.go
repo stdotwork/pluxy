@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// An ID Anthropic does not take is made to fit 64 bytes: a call and its result still pair, two
-// different IDs stay different, and a valid short ID keeps today's base64 form.
 func TestRepairToolIDsFitsSixtyFour(t *testing.T) {
 	longPortable := strings.Repeat("x", 80)
 	longInvalid := strings.Repeat("a.", 25)
@@ -76,14 +74,11 @@ func TestRepairToolIDsFitsSixtyFour(t *testing.T) {
 	if ids[3] != "ok_id" {
 		t.Errorf("a valid ID changed to %q", ids[3])
 	}
-	// The same body is repaired the same way on the next request, so a conversation that is
-	// replayed maps its calls the same way.
 	if again, _ := repairToolIDs(raw); string(again) != string(out) {
 		t.Errorf("repair is not deterministic:\n%s\n%s", out, again)
 	}
 }
 
-// The short-ID form today's core gives stays: the prefix and the ID in unpadded URL-safe base64.
 func TestRepairToolIDsKeepsBase64ForShortIDs(t *testing.T) {
 	raw := json.RawMessage(`[{"role":"assistant","content":[{"type":"tool_use","id":"fc:2","name":"f","input":{}}]}]`)
 	out, changed := repairToolIDs(raw)

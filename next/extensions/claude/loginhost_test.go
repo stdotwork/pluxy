@@ -6,8 +6,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// A stored account's settings must not decide where a login's codes and a refresh token go: they
-// move Claude's sign-in page and token endpoint only in a test run, which sets protocol.EnvTestLoginHosts.
 func TestSettingsMoveLoginHostOnlyUnderTest(t *testing.T) {
 	const raw = `{"authorize_url":"http://127.0.0.1:9/a","token_url":"http://127.0.0.1:9/t"}`
 	t.Setenv(protocol.EnvTestLoginHosts, "")

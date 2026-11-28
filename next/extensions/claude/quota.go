@@ -16,21 +16,12 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// Claude quota is read from the subscription's own endpoints under the API host, the ones Claude's
-// clients read for their usage display: /api/oauth/usage (the usage windows and extra usage) and
-// /api/oauth/profile (the plan). Neither spends from the plan.
 const (
-	usagePath   = "/api/oauth/usage"
-	profilePath = "/api/oauth/profile"
-	// maxQuotaBody bounds how much of each reply is read.
+	usagePath    = "/api/oauth/usage"
+	profilePath  = "/api/oauth/profile"
 	maxQuotaBody = 1 << 20
 )
 
-// quota reads a subscription's usage windows and extra usage, and its plan (protocol minor
-// version 4). An API key has no plan to report. The plan is a nicety: when the profile cannot be
-// read, the usage is still reported. A setup token belongs to a subscription, so its usage is
-// read, but not its profile: such a token is made for inference and lacks the profile scope
-// (today's core skips its profile lookup too).
 func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -61,9 +52,6 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	return q, nil
 }
 
-// getJSON reads a JSON reply from url with the account's credential. The headers are those the
-// extension sends a request of its own: the API version, and for a subscription the OAuth beta.
-// It sets no client identity (User-Agent and the like) of its own, as for any request.
 func getJSON(ctx context.Context, cred *protocol.Credential, url string) (json.RawMessage, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -85,7 +73,6 @@ func getJSON(ctx context.Context, cred *protocol.Credential, url string) (json.R
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		e := upstreamError(resp, "", false)
 		if e.Code == llm.CodeNotFound {
-			// The endpoint is missing; no model is involved.
 			e.Scope = llm.ScopeEndpoint
 		}
 		return nil, e
@@ -103,11 +90,6 @@ func getJSON(ctx context.Context, cred *protocol.Credential, url string) (json.R
 	return body, nil
 }
 
-// usageWindows are the usage reply's named windows, in the order the old panel shows them. Claude
-// gives the length of none: the 5-hour window is named so, the others are weekly. What a window
-// counts: the shared 5-hour and weekly windows count every request on the account; a model
-// family's window counts the requests to that family's models (family); the OAuth apps' and
-// Cowork's windows count a feature of the plan (feature), not the account's requests in general.
 var usageWindows = []struct {
 	key, id, label string
 	family         string
@@ -122,9 +104,6 @@ var usageWindows = []struct {
 	{"iguana_necktie", "seven_day_fable", "Weekly Fable limit", "fable", false},
 }
 
-// familyModels returns the models of the catalogue (models.json) whose ID names family, such as
-// "sonnet": the models a weekly window of that family counts. A model outside the catalogue is
-// not among them, so routing does not hold it on the family's window.
 func familyModels(family string) []string {
 	var list protocol.ModelList
 	if json.Unmarshal(modelsJSON, &list) != nil {
@@ -144,8 +123,6 @@ const (
 	weekSeconds     = 7 * 24 * 60 * 60
 )
 
-// usageWindow is one window of the usage reply. A window counted in dollars (a credit pool) also
-// gives the amounts.
 type usageWindow struct {
 	Utilization      number `json:"utilization"`
 	ResetsAt         string `json:"resets_at"`
@@ -154,12 +131,8 @@ type usageWindow struct {
 	RemainingDollars number `json:"remaining_dollars"`
 }
 
-// dollarFields are the fields that together make a window a balance in dollars.
 var dollarFields = []string{"limit_dollars", "used_dollars", "remaining_dollars", "utilization", "resets_at"}
 
-// usageLimits maps the usage reply to limits: the named windows, any other window counted in
-// dollars, and extra usage. A window counted in dollars is a credit pool for one product (cloud
-// sessions and the like): a feature's limit.
 func usageLimits(u map[string]json.RawMessage) []protocol.QuotaLimit {
 	out := []protocol.QuotaLimit{}
 	known := map[string]bool{"extra_usage": true}
@@ -177,10 +150,8 @@ func usageLimits(u map[string]json.RawMessage) []protocol.QuotaLimit {
 		}
 		if w.key == "iguana_necktie" {
 			if dollars {
-				// A credit pool: its amounts are dollars, and it is not a window of a known length.
 				id, label, secs, family, feature = "cloud_session_credits", "Cloud session credits", 0, "", true
 			} else if fable != nil {
-				// The reply's list of scoped limits has the Fable window, with its own reset.
 				continue
 			}
 		}
@@ -196,7 +167,6 @@ func usageLimits(u map[string]json.RawMessage) []protocol.QuotaLimit {
 		out = append(out, protocol.QuotaLimit{ID: "seven_day_fable", Label: "Weekly Fable limit", UsedPercent: &used,
 			ResetsAt: parseTime(fable.ResetsAt), WindowSeconds: weekSeconds, Models: familyModels("fable")})
 	}
-	// Other windows counted in dollars are listed by the name Claude gives them.
 	var keys []string
 	for k := range u {
 		if !known[k] {
@@ -217,15 +187,12 @@ func usageLimits(u map[string]json.RawMessage) []protocol.QuotaLimit {
 	return out
 }
 
-// readWindow reads one window of the usage reply; ok is false for anything that is not an object,
-// and dollars is true for a balance in dollars.
 func readWindow(raw json.RawMessage) (w usageWindow, dollars, ok bool) {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(raw, &fields) != nil || fields == nil || json.Unmarshal(raw, &w) != nil {
 		return w, false, false
 	}
 	if _, has := fields["utilization"]; !has {
-		// Not a window: some other object of the reply.
 		_, has = fields["limit_dollars"]
 		if !has {
 			return w, false, false
@@ -253,7 +220,6 @@ func (w usageWindow) limit(id, label string, seconds int64, dollars bool) protoc
 	return l
 }
 
-// scopedLimit is an entry of the usage reply's list of limits.
 type scopedLimit struct {
 	Kind     string   `json:"kind"`
 	Percent  *float64 `json:"percent"`
@@ -266,8 +232,6 @@ type scopedLimit struct {
 	} `json:"scope"`
 }
 
-// fableLimit finds the weekly limit scoped to the Fable model in the reply's list of limits,
-// preferring the active one.
 func fableLimit(raw json.RawMessage) *scopedLimit {
 	var list []scopedLimit
 	if json.Unmarshal(raw, &list) != nil {
@@ -291,8 +255,6 @@ func fableLimit(raw json.RawMessage) *scopedLimit {
 	return found
 }
 
-// extraUsage maps the reply's extra usage (spending beyond the plan). Its amounts are in the
-// currency's minor units (cents). Extra usage that is switched off has nothing to report.
 func extraUsage(raw json.RawMessage) (protocol.QuotaLimit, bool) {
 	var x struct {
 		IsEnabled    *bool  `json:"is_enabled"`
@@ -330,9 +292,6 @@ func extraUsage(raw json.RawMessage) (protocol.QuotaLimit, bool) {
 	return l, true
 }
 
-// planOf names the subscription plan from the profile, as the old panel does: a team organization
-// with an active subscription is Team; the organization's rate-limit tier separates Max 5x from
-// Max 20x; the account's flags give Max, Pro or Free. Empty when the profile says none.
 func planOf(profile json.RawMessage) string {
 	var p struct {
 		Account struct {
@@ -354,7 +313,6 @@ func planOf(profile json.RawMessage) string {
 	switch {
 	case lower(o.OrganizationType) == "claude_team" && lower(o.SubscriptionStatus) == "active":
 		return "Team"
-	// The tier is the only field that separates Max 5x from Max 20x; Pro, Team and Free share one.
 	case strings.HasSuffix(tier, "claude_max_20x"):
 		return "Max 20x"
 	case strings.HasSuffix(tier, "claude_max_5x"):
@@ -369,8 +327,6 @@ func planOf(profile json.RawMessage) string {
 	return ""
 }
 
-// flag is a JSON boolean, or a number or string standing for one; unset when the profile gives
-// none of those.
 type flag struct{ set, v bool }
 
 func (f *flag) UnmarshalJSON(b []byte) error {
@@ -398,7 +354,6 @@ func (f *flag) UnmarshalJSON(b []byte) error {
 func (f flag) on() bool  { return f.set && f.v }
 func (f flag) off() bool { return f.set && !f.v }
 
-// number is a JSON number or a string holding one; ok is false for anything else.
 type number struct {
 	v  float64
 	ok bool
@@ -428,7 +383,6 @@ func (n number) ptr() *float64 {
 
 func clampPercent(v float64) float64 { return math.Min(100, math.Max(0, v)) }
 
-// parseTime reads an RFC 3339 time as Unix seconds; 0 when s is empty or not one.
 func parseTime(s string) int64 {
 	t, err := time.Parse(time.RFC3339, strings.TrimSpace(s))
 	if err != nil {

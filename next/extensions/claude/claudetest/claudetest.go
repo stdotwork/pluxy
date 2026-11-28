@@ -1,9 +1,3 @@
-// Package claudetest is a fake Anthropic for tests of the Claude extension: the Messages API, the
-// models list that checks an API key, a subscription's usage and profile endpoints, and Claude's
-// OAuth sign-in page and token endpoint. It issues made-up tokens and never talks to Anthropic.
-//
-// Messages and models are served under any path prefix ({prefix}/v1/messages), so one server can
-// act out several upstream behaviours: the prefix is passed to the Messages handler.
 package claudetest
 
 import (
@@ -22,21 +16,15 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// ClientID is the OAuth client the server accepts. Accounts set it as client_id.
 const ClientID = "claudetest-client"
 
-// Email is the account e-mail the token endpoint reports.
 const Email = "user@claudetest.example"
 
-// AccountUUID and OrganizationUUID are the account and organization the token endpoint reports.
 const (
 	AccountUUID      = "11111111-1111-4111-8111-111111111111"
 	OrganizationUUID = "22222222-2222-4222-8222-222222222222"
 )
 
-// DefaultUsage and DefaultProfile are what the subscription's usage and profile endpoints answer by
-// default, in the shape of Anthropic's: a Max 5x plan with a 5-hour and a weekly window, a weekly
-// Sonnet window with no use yet, a window Claude has no use for, and extra usage in cents.
 const (
 	DefaultUsage = `{
   "five_hour": {"utilization": 37.0, "resets_at": "2026-11-09T15:00:00.123456+00:00"},
@@ -52,38 +40,28 @@ const (
 }`
 )
 
-// TokenLifetime is the expires_in the token endpoint gives, in seconds.
 const TokenLifetime = 8 * 3600
 
-// Request is a Messages request the server received.
 type Request struct {
 	Prefix string
 	Header http.Header
 	Body   []byte
 }
 
-// Server is the fake. Set its fields before requests arrive.
 type Server struct {
 	*httptest.Server
 
-	// Messages, if set, answers Messages requests whose credential is valid. The default replies
-	// "Hello" (streamed when the request asks) with usage 11 in, 7 out.
-	Messages func(w http.ResponseWriter, r *http.Request, req Request)
-	// Usage and Profile, if set, are the bodies of the usage and profile endpoints' replies (the
-	// defaults are DefaultUsage and DefaultProfile). ProfileStatus, if set, is the profile
-	// endpoint's status instead of a reply.
+	Messages       func(w http.ResponseWriter, r *http.Request, req Request)
 	Usage, Profile string
 	ProfileStatus  int
-	// DenySignIn makes the sign-in page refuse (redirect with error=access_denied).
-	DenySignIn bool
-	// TokenDown makes the token endpoint answer 503.
-	TokenDown bool
+	DenySignIn     bool
+	TokenDown      bool
 
 	mu       sync.Mutex
 	n        int
 	codes    map[string]codeGrant
-	refresh  map[string]bool // refresh tokens that work
-	access   map[string]bool // access tokens that work
+	refresh  map[string]bool
+	access   map[string]bool
 	apiKeys  map[string]bool
 	requests []Request
 	renewals int
@@ -93,9 +71,7 @@ type Server struct {
 
 type codeGrant struct{ challenge, redirect, state string }
 
-// New starts a fake that is closed when the test ends.
 func New(t testing.TB) *Server {
-	// The extension honours the fake's address in account settings only under this variable.
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	s := &Server{codes: map[string]codeGrant{}, refresh: map[string]bool{}, access: map[string]bool{}, apiKeys: map[string]bool{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
@@ -103,8 +79,6 @@ func New(t testing.TB) *Server {
 	return s
 }
 
-// Settings returns account settings that point every endpoint at the server, with Messages under
-// prefix (which may be empty).
 func (s *Server) Settings(prefix string) json.RawMessage {
 	b, _ := json.Marshal(map[string]string{
 		"base_url":      s.URL + prefix,
@@ -115,7 +89,6 @@ func (s *Server) Settings(prefix string) json.RawMessage {
 	return b
 }
 
-// IssueKey returns a new API key the server accepts.
 func (s *Server) IssueKey() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -125,8 +98,6 @@ func (s *Server) IssueKey() string {
 	return k
 }
 
-// SetupToken returns a new long-lived OAuth token, as `claude setup-token` prints one: an access
-// token in the sk-ant-oat form with no refresh token.
 func (s *Server) SetupToken() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -136,7 +107,6 @@ func (s *Server) SetupToken() string {
 	return t
 }
 
-// Grant returns a new access and refresh token pair, as a finished login would.
 func (s *Server) Grant() (access, refresh string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -150,44 +120,36 @@ func (s *Server) grantLocked() (string, string) {
 	return a, r
 }
 
-// Revoke makes an access token stop working, as when it expires.
 func (s *Server) Revoke(access string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.access, access)
 }
 
-// Requests returns the Messages requests received so far.
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Request(nil), s.requests...)
 }
 
-// ModelRequests returns how many model list requests the server has received, valid or not.
 func (s *Server) ModelRequests() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.listings
 }
 
-// OAuthRequests returns the requests the usage and profile endpoints received so far, with their
-// paths in Prefix.
 func (s *Server) OAuthRequests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Request(nil), s.oauth...)
 }
 
-// Renewals returns how many refresh grants the token endpoint has honoured.
 func (s *Server) Renewals() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.renewals
 }
 
-// SignIn plays the user on the sign-in page at authURL without following the redirect, and
-// returns the address the browser was sent to.
 func SignIn(t testing.TB, authURL string) string {
 	t.Helper()
 	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -221,8 +183,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// authorize is the sign-in page: it checks the PKCE parameters and sends the browser back with a
-// code.
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	redirect, err := url.Parse(q.Get("redirect_uri"))
@@ -246,7 +206,6 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, redirect.String(), http.StatusFound)
 }
 
-// token is the token endpoint, with JSON in and out as Claude's is.
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	if s.TokenDown {
 		http.Error(w, `{"error":"temporarily_unavailable"}`, http.StatusServiceUnavailable)
@@ -277,7 +236,6 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 			oauthError(w, http.StatusBadRequest, "invalid_grant")
 			return
 		}
-		// Refresh tokens rotate: the old one stops working.
 		delete(s.refresh, in["refresh_token"])
 		s.renewals++
 	default:
@@ -306,8 +264,6 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, `{"data":[{"type":"model","id":"claude-test","display_name":"Claude Test"}],"has_more":false}`)
 }
 
-// messages checks the credential as Anthropic does (an API key in x-api-key, or an OAuth token as
-// a bearer token with the OAuth beta) and answers.
 func (s *Server) messages(w http.ResponseWriter, r *http.Request, prefix string) {
 	body, _ := io.ReadAll(r.Body)
 	req := Request{Prefix: prefix, Header: r.Header.Clone(), Body: body}
@@ -340,8 +296,6 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, prefix string)
 		`"usage":{"input_tokens":11,"output_tokens":7}}`)
 }
 
-// account answers the usage and profile endpoints for an OAuth access token the fake issued, sent
-// with the OAuth beta as Anthropic requires. An API key is refused: only a subscription has a plan.
 func (s *Server) account(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.oauth = append(s.oauth, Request{Prefix: r.URL.Path, Header: r.Header.Clone()})
@@ -371,8 +325,6 @@ func (s *Server) account(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, body)
 }
 
-// StreamText writes a Messages stream of the given text pieces, flushing after each, that ends
-// normally with usage 11 in, 7 out.
 func StreamText(w http.ResponseWriter, pieces ...string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	f, _ := w.(http.Flusher)
