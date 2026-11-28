@@ -13,7 +13,6 @@ import (
 	"unicode/utf8"
 )
 
-// Limits of a schema and its values.
 const (
 	MaxFields      = 50
 	MaxString      = 4096
@@ -25,13 +24,12 @@ const (
 
 var fieldName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
-// Field is one setting.
 type Field struct {
 	Name        string
-	Type        string // string, integer, number or boolean
+	Type        string
 	Title       string
 	Description string
-	Default     json.RawMessage // nil when absent
+	Default     json.RawMessage
 	Enum        []string
 	MinLength   *int
 	MaxLength   *int
@@ -41,16 +39,13 @@ type Field struct {
 	Required    bool
 }
 
-// Schema is a parsed settings schema.
 type Schema struct {
 	Fields []Field
 	raw    json.RawMessage
 }
 
-// Raw returns the schema as the manifest gave it, keys in their order.
 func (s *Schema) Raw() json.RawMessage { return s.raw }
 
-// Field returns the field called name.
 func (s *Schema) Field(name string) (Field, bool) {
 	for _, f := range s.Fields {
 		if f.Name == name {
@@ -63,16 +58,13 @@ func (s *Schema) Field(name string) (Field, bool) {
 var (
 	topKeys   = []string{"type", "properties", "required"}
 	fieldKeys = map[string][]string{
-		"string": {"type", "title", "description", "default", "writeOnly", "enum", "minLength", "maxLength"},
-		// writeOnly is for secrets, which are text.
+		"string":  {"type", "title", "description", "default", "writeOnly", "enum", "minLength", "maxLength"},
 		"integer": {"type", "title", "description", "default", "minimum", "maximum"},
 		"number":  {"type", "title", "description", "default", "minimum", "maximum"},
 		"boolean": {"type", "title", "description", "default"},
 	}
 )
 
-// Parse reads and checks a schema. Any keyword the contract does not list is refused, so a
-// schema never means something core does not check.
 func Parse(raw json.RawMessage) (*Schema, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &top); err != nil || top == nil {
@@ -121,7 +113,6 @@ func Parse(raw json.RawMessage) (*Schema, error) {
 	return s, nil
 }
 
-// orderedObject returns a JSON object's keys in order and their values. A key may appear once.
 func orderedObject(raw json.RawMessage) ([]string, []json.RawMessage, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
@@ -134,7 +125,7 @@ func orderedObject(raw json.RawMessage) ([]string, []json.RawMessage, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		name := t.(string) // object keys are strings
+		name := t.(string)
 		if slices.Contains(names, name) {
 			return nil, nil, fmt.Errorf("%q appears twice", name)
 		}
@@ -246,7 +237,6 @@ func parseField(name string, raw json.RawMessage) (Field, error) {
 	return f, nil
 }
 
-// Check reports why v is not a value of f, as "must ..."; nil when it is one.
 func (f Field) Check(v json.RawMessage) error {
 	switch f.Type {
 	case "boolean":
@@ -290,14 +280,11 @@ func (f Field) Check(v json.RawMessage) error {
 	return nil
 }
 
-// The integers every JSON reader holds exactly.
 var (
 	maxSafeInt = new(big.Float).SetInt64(1 << 53)
 	minSafeInt = new(big.Float).SetInt64(-(1 << 53))
 )
 
-// exact reads a JSON number at a precision far beyond float64, so a value just past a bound or
-// just off a whole number is not rounded onto it.
 func exact(v json.RawMessage) (*big.Float, error) {
 	var n json.Number
 	text := string(bytes.TrimSpace(v))
@@ -321,18 +308,13 @@ func compact(v json.RawMessage) json.RawMessage {
 	return b.Bytes()
 }
 
-// Values are settings by field name, each a JSON value.
 type Values map[string]json.RawMessage
 
-// Stored is what core keeps of an extension's settings: the values, and which of them were
-// saved as secrets, so a later schema that drops writeOnly never shows them.
 type Stored struct {
 	Values    Values   `json:"values"`
 	WriteOnly []string `json:"write_only,omitempty"`
 }
 
-// kept returns the stored values this schema may use: fields it declares, and no secret it no
-// longer treats as one.
 func (s *Schema) kept(stored Stored) Values {
 	out := Values{}
 	for _, f := range s.Fields {
@@ -344,9 +326,6 @@ func (s *Schema) kept(stored Stored) Values {
 	return out
 }
 
-// Merge applies change to stored: a field set to null goes back to its default. It returns the
-// result, keeping only fields the schema declares, or the first problem with it as
-// "<field> must ...".
 func (s *Schema) Merge(stored Stored, change Values) (Stored, error) {
 	next := s.kept(stored)
 	for name, v := range change {
@@ -372,7 +351,6 @@ func (s *Schema) Merge(stored Stored, change Values) (Stored, error) {
 			}
 			continue
 		}
-		// A value kept from an earlier version of the schema is checked again too.
 		if err := f.Check(v); err != nil {
 			return Stored{}, fmt.Errorf("%s %w", f.Name, err)
 		}
@@ -383,15 +361,11 @@ func (s *Schema) Merge(stored Stored, change Values) (Stored, error) {
 	return out, nil
 }
 
-// View is what core shows of an extension's settings: never a writeOnly value.
 type View struct {
-	// Values holds every field with a value or a default, except writeOnly fields.
-	Values Values `json:"values"`
-	// Set names the writeOnly fields that have a value.
-	Set []string `json:"set"`
+	Values Values   `json:"values"`
+	Set    []string `json:"set"`
 }
 
-// View returns what may be shown of stored.
 func (s *Schema) View(stored Stored) View {
 	kept := s.kept(stored)
 	v := View{Values: Values{}, Set: []string{}}

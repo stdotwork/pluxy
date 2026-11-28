@@ -176,7 +176,6 @@ func TestStoreSavesPrivatelyAndRefusesWithoutSaving(t *testing.T) {
 	}
 }
 
-// Review finding 2: a value saved as a secret stays secret when a later schema drops writeOnly.
 func TestASecretIsNeverShownAfterTheSchemaDeclassifiesIt(t *testing.T) {
 	secret := mustParse(t, `{"type": "object", "properties": {"token": {"type": "string", "writeOnly": true}, "on": {"type": "boolean"}}}`)
 	plain := mustParse(t, `{"type": "object", "properties": {"token": {"type": "string", "default": "d"}, "on": {"type": "boolean"}}}`)
@@ -200,7 +199,6 @@ func TestASecretIsNeverShownAfterTheSchemaDeclassifiesIt(t *testing.T) {
 	}
 }
 
-// Review finding 4: the largest values the schema allows can be saved and read back.
 func TestStoreHoldsTheLargestAllowedSettings(t *testing.T) {
 	props := map[string]any{}
 	for i := range MaxFields {
@@ -220,7 +218,6 @@ func TestStoreHoldsTheLargestAllowedSettings(t *testing.T) {
 	}
 }
 
-// Review finding 5: writeOnly is for text; a secret number or switch is refused.
 func TestWriteOnlyOnlyOnText(t *testing.T) {
 	for _, typ := range []string{"integer", "number", "boolean"} {
 		if _, err := Parse(json.RawMessage(`{"type": "object", "properties": {"a": {"type": "` + typ + `", "writeOnly": true}}}`)); err == nil {
@@ -229,7 +226,6 @@ func TestWriteOnlyOnlyOnText(t *testing.T) {
 	}
 }
 
-// Review finding 7: a bound or wholeness check does not round the value first.
 func TestNumbersAreCheckedWithoutRounding(t *testing.T) {
 	s := mustParse(t, `{"type": "object", "properties": {"i": {"type": "integer", "maximum": 1}, "n": {"type": "number", "maximum": 1}}}`)
 	for _, change := range []string{`{"i": 1.0000000000000001}`, `{"n": 1.0000000000000001}`, `{"i": 1e400}`, `{"i": 9007199254740993}`} {

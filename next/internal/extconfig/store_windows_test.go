@@ -11,12 +11,6 @@ import (
 	pt "github.com/stdotwork/pluxy/next/internal/private/privatetest"
 )
 
-// The settings folder, a publisher's folder and a settings file each let in only this user and
-// SYSTEM: the settings folder by a protected access list, the publisher's folder by the entries
-// it inherits from it, and the file by a protected list of its own, after the first save and
-// after another. A settings folder that already exists, open to Everyone, is made private when
-// settings are loaded, with no save, and a file already in it then holds only the entries it
-// inherits from it.
 func TestStoreWindowsAccessList(t *testing.T) {
 	s := mustParse(t, schemaText)
 	dir := filepath.Join(t.TempDir(), "packages", ".settings")
@@ -53,9 +47,6 @@ func TestStoreWindowsAccessList(t *testing.T) {
 	pt.CheckInherited(t, "file already in the folder after loading", left, false)
 }
 
-// A settings folder another account owns is refused, by loading and by saving, though this user
-// may change its list: the owner could open it again. The refusal names the account and says
-// how to fix it, and nothing is written.
 func TestStoreWindowsRefusesAnotherOwner(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), ".settings")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -79,8 +70,6 @@ func TestStoreWindowsRefusesAnotherOwner(t *testing.T) {
 	}
 }
 
-// A settings folder that is a link (here a junction) to another folder is refused, not made
-// private through the link, and nothing is written through it.
 func TestStoreWindowsRefusesALink(t *testing.T) {
 	base := t.TempDir()
 	target := filepath.Join(base, "target")
@@ -102,8 +91,6 @@ func TestStoreWindowsRefusesALink(t *testing.T) {
 	}
 }
 
-// A settings file another account owns (put there before the folder was private) is skipped
-// with a notice naming it and its owner, not loaded; the next save replaces it with core's own.
 func TestStoreWindowsSkipsAFileAnotherAccountOwns(t *testing.T) {
 	s := mustParse(t, schemaText)
 	dir := filepath.Join(t.TempDir(), ".settings")
