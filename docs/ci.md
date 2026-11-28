@@ -68,27 +68,30 @@ runners, Namespace's. It holds a bare runner profile label, for example
 `namespace-profile-macos-26` (no `;key=value` settings: the runner check refuses them). When it is not set, those jobs run on `macos-latest`.
 
 Pull requests do not use it: all their macOS jobs run on `macos-latest`. Merge groups, pushes, the
-daily runs and manual runs use it for the jobs listed below, except the `tools` job in
-`next-app-tools-platforms.yml`, which in pull requests and merge groups also runs on `macos-latest`.
-The app tools' Terminal launch
-tests failed on GitHub's macOS runners in both runs tried on 2026-11-19 (Terminal did not take the
-launch's Apple event in time, error -1712), which kept the `tools` job on Namespace; those tests now
-run one at a time. Namespace runs one macOS job at a time, about 20 an hour. From 19:30
-to 23:40 UTC on 2026-11-19 each merge group needed 6 to 8 of them, and three groups building at once
-shared that line with pull requests' runs: one group's macOS jobs ran over 2 hours, while the rest of
-a group's work takes about 23 minutes.
+daily runs and manual runs split their macOS jobs between Namespace and GitHub, except the `tools`
+job in `next-app-tools-platforms.yml`, which uses `PLUXY_MACOS_CLOUD_RUNNER` only on daily and
+manual runs (in pull requests and merge groups it runs on `macos-latest`). Namespace runs one macOS
+job at a time, while GitHub runs five account-wide (shared with `full-ci` pull requests), so
+Namespace's single slot goes to the jobs that save the most GitHub runner time per Namespace minute:
+over 48 hours of successful runs, `native` `platform` (3.6 to 0.7 minutes, 5.1x), `native` `package`
+(14.3 to 3.3 minutes, 4.3x) and `app` (9.3 to 2.4 minutes, 3.9x) gain more than `dialogs` (6.1 to
+1.9 minutes, 3.2x) and `native` `tools` (8.7 to 4.5 minutes, 1.9x), which stay on `macos-latest`
+instead of queueing behind one slot. The app tools' Terminal launch tests failed on GitHub's macOS
+runners in both runs tried on 2026-11-19 (Terminal did not take the launch's Apple event in time,
+error -1712), which kept the `tools` job on Namespace; those tests now run one at a time.
 
 It applies to these jobs:
-- the `app` job in `next-app-platforms.yml`;
-- the macOS legs of the `native` and `dialogs` jobs in `next-app-platforms.yml`, except the `native`
-  job's `open` shard, whose session runs only on a GitHub-hosted runner, and its `update` shard,
-  whose sessions need passwordless `sudo`, which Namespace's macOS runner no longer gives. Their tests write
-  the account's own folders, so they also check the runner (`next/app/native/runner.ts`): the job
-  passes the label in `PLUXY_EPHEMERAL_CI_RUNNER`, and the check accepts only a Namespace profile
-  label, a runner Namespace named and Namespace's own variable. Another provider needs a change to
-  that check;
-- the `tools` job in `next-app-tools-platforms.yml`;
-- the `build` jobs in `next-app-tools-pack.yml`.
+- the macOS leg of the `app` job in `next-app-platforms.yml`;
+- the macOS legs of the `native` job's `package` and `platform` shards in `next-app-platforms.yml`.
+  The other macOS `native` shards and `dialogs` stay on `macos-latest`: `open` runs only on a
+  GitHub-hosted runner, `update` needs passwordless `sudo` (which Namespace's macOS runner no longer
+  gives), and `tools` and `dialogs` have lower speedups there. The `native` job's tests write the
+  account's own folders, so they also check the runner (`next/app/native/runner.ts`): the job passes
+  the label in `PLUXY_EPHEMERAL_CI_RUNNER` only for the shards it sends to Namespace, and the check
+  accepts only a Namespace profile label, a runner Namespace named and Namespace's own variable.
+  Another provider needs a change to that check;
+- the macOS leg of the `tools` job in `next-app-tools-platforms.yml` (daily and manual runs only);
+- the macOS `build` job in `next-app-tools-pack.yml`.
 
 Some macOS jobs and every Windows job stay on GitHub's runners:
 - The app's Windows registry tests run only on a runner that reports itself GitHub-hosted.
