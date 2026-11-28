@@ -16,9 +16,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// A Responses Lite client (the Codex app) sends tools in input items of type additional_tools, and
-// xAI does not take those items. The extension runs as a process, as core runs it, against the
-// fake xAI: the tests read the body the fake received and the response the client was sent.
 type liteRun struct {
 	srv *xaitest.Server
 	ext *host.Extension
@@ -37,11 +34,8 @@ func newLiteRun(t *testing.T) *liteRun {
 	return &liteRun{srv: srv, ext: ext, key: srv.Key()}
 }
 
-// call is the call xAI answers with: the function it names, with its arguments.
 type call struct{ name, arguments string }
 
-// send sends request to the extension and has the fake answer with one call. It returns the body
-// the fake received and the client's response.
 func (r *liteRun) send(t *testing.T, request string, c call) (sent, got map[string]any) {
 	t.Helper()
 	before := len(r.srv.Requests())
@@ -100,7 +94,6 @@ func (r *liteRun) send(t *testing.T, request string, c call) (sent, got map[stri
 	return sent, got
 }
 
-// sentTools describes the tools of the body the fake received: type and name, in order.
 func sentTools(body map[string]any) []string {
 	var out []string
 	list, _ := body["tools"].([]any)
@@ -111,7 +104,6 @@ func sentTools(body map[string]any) []string {
 	return out
 }
 
-// output0 describes the first output item of the client's response: type, name and namespace.
 func output0(resp map[string]any) string {
 	list, _ := resp["output"].([]any)
 	if len(list) == 0 {
@@ -129,12 +121,6 @@ func ntools(prefix string, from, to int) string {
 	return strings.Join(s, ",")
 }
 
-// The tools of each additional_tools item are sent in the tools list and the item is not sent; the
-// messages around it stay. A custom tool in the item is sent as a function, a namespace in it is
-// flattened, and xAI's call to it comes back as the call in its namespace. Expected values are
-// today's core's (TestPromoteXAIAdditionalTools, TestXAIExecutorDeduplicatesToolsAcrossAdditionalTools,
-// TestPromoteXAIAdditionalTools_DeduplicatesAndPreservesWinningNamespaceRef and
-// TestXAIShouldFoldNamespaceTools_DeduplicatesAcrossAdditionalTools).
 func TestAdditionalToolsPromoted(t *testing.T) {
 	run := newLiteRun(t)
 	for _, stream := range []bool{false, true} {
@@ -167,8 +153,6 @@ func TestAdditionalToolsPromoted(t *testing.T) {
 				}
 			})
 
-			// A tool the top-level list has beats the same tool in an item, and the first of
-			// two items beats the second.
 			t.Run("first declaration wins", func(t *testing.T) {
 				top := `{"type":"namespace","name":"clock","tools":[{"type":"function","name":"sleep","description":"top declaration","parameters":{"type":"object","properties":{"duration_ms":{"type":"string"}},"required":["duration_ms"]}}]}`
 				history := `{"type":"namespace","name":"clock","tools":[{"type":"function","name":"sleep","description":"history declaration","parameters":{"type":"object","properties":{"seconds":{"type":"string"}},"required":["seconds"]}}]}`
@@ -205,10 +189,6 @@ func TestAdditionalToolsPromoted(t *testing.T) {
 				}
 			})
 
-			// 120 tools in a namespace declared at the top level and again in an item are 120, not
-			// 240, so nothing is folded; with more tools than xAI takes, the namespace of an item
-			// is folded as a top-level one is, one namespace declared twice is one function whose
-			// children are those of both, each as its first declaration has it.
 			t.Run("counted and folded as top-level tools", func(t *testing.T) {
 				ns := `{"type":"namespace","name":"mcp__app","tools":[` + ntools("tool_", 0, 120) + `]}`
 				sent, _ := run.send(t, with(fmt.Sprintf(`{"model":"grok-4.7","tools":[%s],"input":[{"type":"additional_tools","tools":[%s]},{"role":"user","content":"hi"}]}`, ns, ns)),

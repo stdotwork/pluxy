@@ -32,8 +32,6 @@ func sameJSON(t *testing.T, what string, got []byte, want string) {
 	}
 }
 
-// responsesBody builds the body for a Responses client request, the way the Responses format
-// reads it, and returns the body the extension sends.
 func responsesBody(t *testing.T, body string) []byte {
 	t.Helper()
 	req, err := openairesponses.ParseRequest([]byte(body))
@@ -60,8 +58,6 @@ func TestRemovedFields(t *testing.T) {
 	sameJSON(t, "removed fields", got, `{"model":"grok-4.6","store":false,"include":["reasoning.encrypted_content"],"stream":false,"input":[],"temperature":0.2}`)
 }
 
-// Responses are not kept on xAI unless the client asks, and encrypted reasoning is asked for
-// alongside the client's own include values.
 func TestStoreAndInclude(t *testing.T) {
 	got := responsesBody(t, `{"model":"grok-4.6","input":[],"store":true,"include":["web_search_call.action.sources"]}`)
 	sameJSON(t, "client store and include", got, `{"model":"grok-4.6","stream":false,"input":[],"store":true,
@@ -70,8 +66,6 @@ func TestStoreAndInclude(t *testing.T) {
 	sameJSON(t, "include once", got, `{"model":"grok-4.6","stream":false,"input":[],"store":false,"include":["reasoning.encrypted_content"]}`)
 }
 
-// A custom tool is sent as a function with one input argument, its format moved into the
-// description (customtools_test.go has the rest).
 func TestCustomToolBecomesFunction(t *testing.T) {
 	got := responsesBody(t, `{"model":"grok-4.6","input":[],"tools":[
 		{"type":"custom","name":"run_shell","description":"run","format":{"type":"grammar","syntax":"lark","definition":"x"}}]}`)
@@ -84,7 +78,6 @@ func TestFunctionSchemaInlined(t *testing.T) {
 		"type":"object","$defs":{"C":{"type":"string","enum":["a","b"]}},"properties":{"c":{"$ref":"#/$defs/C"}}}}]}`)
 	sameJSON(t, "schema", got, `{"model":"grok-4.6","store":false,"include":["reasoning.encrypted_content"],"stream":false,"input":[],"tools":[{"type":"function","name":"f","parameters":{
 		"type":"object","properties":{"c":{"type":"string","enum":["a","b"]}}}}]}`)
-	// A definitions block is removed too, and an $ref in an array is inlined.
 	got = responsesBody(t, `{"model":"grok-4.6","input":[],"tools":[{"type":"function","name":"f","parameters":{
 		"type":"object","definitions":{"N":{"type":"integer"}},"properties":{"xs":{"type":"array","items":{"$ref":"#/definitions/N"}}}}}]}`)
 	if strings.Contains(string(got), "definitions") || strings.Contains(string(got), "$ref") {
@@ -108,7 +101,6 @@ func TestToolLimit(t *testing.T) {
 	if len(m.Tools) != maxTools {
 		t.Fatalf("tools = %d, want %d", len(m.Tools), maxTools)
 	}
-	// A function without parameters gets the empty object schema, as in the core.
 	var first struct {
 		Parameters map[string]any `json:"parameters"`
 	}
@@ -216,9 +208,6 @@ type promptFunc func(protocol.Prompt)
 
 func (f promptFunc) Prompt(p protocol.Prompt) error { f(p); return nil }
 
-// A Grok login: the device code is approved, and the credential holds the tokens, the expiry with
-// renewal five minutes before it, the token endpoint discovery named, and the ID token's e-mail
-// address as its label.
 func TestDeviceLogin(t *testing.T) {
 	srv := xaitest.New(t)
 	set, _ := readSettings(srv.Settings())
@@ -237,8 +226,6 @@ func TestDeviceLogin(t *testing.T) {
 	}
 }
 
-// A device poll that gets a 429, with no OAuth error or with xAI's own error text, is tried
-// again; one that gets another error ends the login without echoing the device code.
 func TestDevicePollErrors(t *testing.T) {
 	srv := xaitest.New(t)
 	old := waitPoll
@@ -276,8 +263,6 @@ func TestDevicePollErrors(t *testing.T) {
 	}
 }
 
-// Login endpoints must be HTTPS on x.ai, or on the configured issuer's own address; a discovery
-// document or credential naming another host is not trusted with the user's codes and tokens.
 func TestLoginEndpointsChecked(t *testing.T) {
 	for _, c := range []struct {
 		url, issuer string
@@ -310,8 +295,6 @@ func TestLoginEndpointsChecked(t *testing.T) {
 	}
 }
 
-// A renewal sends the refresh token to the token endpoint the credential holds, or, when that is
-// not one xAI's could be, to the one discovery names.
 func TestRefreshEndpoint(t *testing.T) {
 	srv := xaitest.New(t)
 	access, rt := srv.Grant()
@@ -328,8 +311,6 @@ func TestRefreshEndpoint(t *testing.T) {
 	}
 }
 
-// A Grok login's requests go to the Grok CLI's endpoint, or to base_url when it names another
-// address, and carry the CLI's identity; an API key's go to base_url with pluxy's.
 func TestLoginRequests(t *testing.T) {
 	def, _ := readSettings(nil)
 	login := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "a"}
@@ -340,7 +321,6 @@ func TestLoginRequests(t *testing.T) {
 		t.Errorf("API key goes to %q (cli %v), want %q", tg.base, tg.cli, defaultBaseURL)
 	}
 	srv := xaitest.New(t)
-	// The fake refuses the request, so generate ends before it would stream to the core.
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req xaitest.Request) {
 		http.Error(w, `{"error":"stop here"}`, http.StatusBadRequest)
 	}
@@ -362,8 +342,6 @@ func TestLoginRequests(t *testing.T) {
 	}
 }
 
-// A renewal whose reply has no refresh token keeps the one the credential holds, as today's core
-// keeps it.
 func TestRefreshKeepsRefreshToken(t *testing.T) {
 	srv := xaitest.New(t)
 	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool {
@@ -381,7 +359,6 @@ func TestRefreshKeepsRefreshToken(t *testing.T) {
 	}
 }
 
-// slow_down makes every later poll wait 5 seconds longer, as RFC 8628 and today's core have it.
 func TestDeviceSlowDown(t *testing.T) {
 	srv := xaitest.New(t)
 	slowed := false
@@ -398,7 +375,6 @@ func TestDeviceSlowDown(t *testing.T) {
 	set, _ := readSettings(srv.Settings())
 	var code string
 	approveLater := promptFunc(func(p protocol.Prompt) { code = p.UserCode })
-	// The waits are recorded instead of slept; the user approves during the second.
 	var waits []time.Duration
 	old := waitPoll
 	t.Cleanup(func() { waitPoll = old })
@@ -417,9 +393,6 @@ func TestDeviceSlowDown(t *testing.T) {
 	}
 }
 
-// A refused login call keeps xAI's Retry-After for a rate limit or an outage. A rate limit is
-// retryable; an outage is not, because the request reached xAI and may have run. A refused grant
-// asks for a new login and is not retried.
 func TestLoginFailure(t *testing.T) {
 	for _, c := range []struct {
 		name   string

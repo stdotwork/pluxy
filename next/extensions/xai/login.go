@@ -17,26 +17,16 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// An xAI account signs in as the Grok CLI does and today's core does: the OAuth 2.0 device
-// authorization grant (RFC 8628) with the Grok CLI's own public client, at the endpoints xAI's
-// OpenID discovery document names. xAI registers no clients for other programs, so the login uses
-// the CLI's, as pluxy's Codex and Kimi extensions use their apps' clients. The client has no
-// secret. A logged-in account's chat requests go to the Grok CLI's chat endpoint
-// (cli-chat-proxy.grok.com) with the CLI's identity (main.go).
 const (
-	clientID      = "b1a00492-073a-47ea-816f-4c329264a828"
-	defaultIssuer = "https://auth.x.ai"
-	loginScope    = "openid profile email offline_access grok-cli:access api:access"
-	deviceGrant   = "urn:ietf:params:oauth:grant-type:device_code"
-	// minPollInterval is the shortest wait between token polls, and the step slow_down adds;
-	// maxPollDuration bounds the wait for the user. Both are today's core's.
+	clientID        = "b1a00492-073a-47ea-816f-4c329264a828"
+	defaultIssuer   = "https://auth.x.ai"
+	loginScope      = "openid profile email offline_access grok-cli:access api:access"
+	deviceGrant     = "urn:ietf:params:oauth:grant-type:device_code"
 	minPollInterval = 5 * time.Second
 	maxPollDuration = 30 * time.Minute
-	// refreshLead is how long before expiry core renews the token, as today's core does.
-	refreshLead = 5 * time.Minute
+	refreshLead     = 5 * time.Minute
 )
 
-// waitPoll waits d between token polls, and reports false when ctx ends first. Tests replace it.
 var waitPoll = func(ctx context.Context, d time.Duration) bool {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -55,22 +45,17 @@ var loginMethods = []protocol.LoginMethod{
 	{Method: "device", Kind: protocol.LoginDevice, Label: "Grok account (device code)"},
 }
 
-// authClient talks to xAI's login endpoints. Its timeout covers only signing in and renewing,
-// never a model request. It follows no redirect, which would send the form wherever it points.
 var authClient = &http.Client{
 	Transport:     sdk.Upstream(http.DefaultTransport.(*http.Transport).Clone()),
 	Timeout:       30 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
-// prompter shows the user a login prompt; *sdk.LoginSession is one.
 type prompter interface {
 	Prompt(protocol.Prompt) error
 }
 
-// credentialData is what a login's credential keeps besides its tokens.
 type credentialData struct {
-	// TokenEndpoint is the token endpoint discovery named at sign-in, which renewals use.
 	TokenEndpoint string `json:"token_endpoint,omitempty"`
 }
 
@@ -92,9 +77,6 @@ type endpoints struct {
 	device, token string
 }
 
-// discover reads the device authorization and token endpoints from the issuer's OpenID discovery
-// document. Each must be HTTPS on x.ai, as today's core requires, or on the configured issuer's
-// own scheme and host (a test server).
 func discover(ctx context.Context, set settings) (endpoints, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, set.AuthIssuer+"/.well-known/openid-configuration", nil)
 	if err != nil {
@@ -118,8 +100,6 @@ func discover(ctx context.Context, set settings) (endpoints, error) {
 	return endpoints{device: doc.Device, token: doc.Token}, nil
 }
 
-// allowedEndpoint reports whether a login endpoint may receive the user's codes and tokens:
-// HTTPS on x.ai or a subdomain, or the configured issuer's own scheme and host.
 func allowedEndpoint(raw, issuer string) bool {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
@@ -156,8 +136,6 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 	if json.Unmarshal(body, &dc) != nil || dc.DeviceCode == "" || dc.UserCode == "" || dc.VerificationURI == "" && dc.VerificationURIComplete == "" {
 		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "xAI's login sent no device code", Scope: llm.ScopeEndpoint}
 	}
-	// The code's life and the poll interval are the server's numbers: bounded, so a huge one cannot
-	// overflow a duration and a negative one cannot make a tight polling loop.
 	lifetime := sdk.BoundSeconds(dc.ExpiresIn, sdk.MaxLoginWait)
 	verify := dc.VerificationURI
 	if verify == "" {
@@ -189,7 +167,6 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 		}
 		return ctx.Err()
 	}
-	// The first poll goes at once, as today's core polls.
 	for first := true; ; first = false {
 		if !first && !waitPoll(ctx, interval) {
 			return nil, ended()
@@ -199,8 +176,6 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 			if ctx.Err() != nil {
 				return nil, ended()
 			}
-			// A poll that never left this machine is tried again at the next interval. One that was
-			// sent may have run, so the login stops.
 			var le *llm.Error
 			if errors.As(err, &le) && le.Retryable {
 				continue
@@ -208,7 +183,6 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 			return nil, err
 		}
 		if status >= 500 {
-			// A 5xx may have run the poll, whatever its body says, so the login stops.
 			return nil, hideSecrets(loginFailure(status, body, h), dc.DeviceCode)
 		}
 		var e struct {
@@ -221,8 +195,6 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 				return grantFrom(body, ep.token, "")
 			}
 			if status == http.StatusTooManyRequests {
-				// A 429 refused the poll without running it and leaves the device code good: poll
-				// again.
 				continue
 			}
 			return nil, hideSecrets(loginFailure(status, body, h), dc.DeviceCode)
@@ -239,15 +211,11 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 				// {"error": "Rate limit reached"}): poll again.
 				continue
 			}
-			// Core does not know the device code, so it cannot redact it.
 			return nil, hideSecrets(loginFailure(status, body, h), dc.DeviceCode)
 		}
 	}
 }
 
-// grantFrom builds the credential from a token reply. A reply without a refresh token keeps
-// oldRefresh. The account is labelled with the e-mail address in the ID token, as today's core
-// labels it, and its identity is the token's subject and e-mail address.
 func grantFrom(body []byte, tokenEndpoint, oldRefresh string) (*protocol.Grant, error) {
 	var t struct {
 		AccessToken  string `json:"access_token"`
@@ -271,14 +239,11 @@ func grantFrom(body []byte, tokenEndpoint, oldRefresh string) (*protocol.Grant, 
 	return &protocol.Grant{Credential: c, Label: claims.Email, Identity: claims.identity()}, nil
 }
 
-// idClaims are the claims of an ID token that tell xAI accounts apart.
 type idClaims struct {
 	Subject string `json:"sub"`
 	Email   string `json:"email"`
 }
 
-// identity is who signed in, by the ID token's subject and e-mail address, so that core can refuse
-// a new login to an account that signs in as someone else. Only the claims the token has.
 func (c idClaims) identity() map[string]string {
 	id := map[string]string{}
 	if c.Subject != "" {
@@ -290,9 +255,6 @@ func (c idClaims) identity() map[string]string {
 	return id
 }
 
-// idTokenClaims reads the sub and email claims of an ID token. The token came straight from xAI's
-// token endpoint over TLS, and the claims only label and tell apart the account, so its signature
-// is not checked.
 func idTokenClaims(tok string) idClaims {
 	parts := strings.Split(tok, ".")
 	if len(parts) != 3 {
@@ -307,8 +269,6 @@ func idTokenClaims(tok string) idClaims {
 	return claims
 }
 
-// refresh renews a login's access token with its refresh token, at the token endpoint the login
-// found, or found again when the credential's is missing or not one xAI's could be.
 func refresh(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, error) {
 	set, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -354,8 +314,6 @@ func postForm(ctx context.Context, endpoint string, form url.Values) (int, []byt
 	return do(ctx, req)
 }
 
-// do sends a login request. A request that failed is retryable only when it never reached xAI:
-// one that did may have run.
 func do(ctx context.Context, req *http.Request) (int, []byte, http.Header, error) {
 	req, sent := sdk.TrackSend(req)
 	resp, err := authClient.Do(req)
@@ -373,21 +331,15 @@ func do(ctx context.Context, req *http.Request) (int, []byte, http.Header, error
 	return resp.StatusCode, body, resp.Header, nil
 }
 
-// terminalGrantErrors are the refusals after which only a new login helps, as today's core reads
-// them.
 var terminalGrantErrors = []string{"invalid_grant", "invalid_client", "unauthorized_client", "refresh_token_reused",
 	"refresh_token_expired", "refresh_token_invalidated", "token_revoked"}
 
-// loginFailure turns a refusal from xAI's login into an error. A 429 is retryable, with the wait
-// it names; a 5xx is not, because the request reached xAI and may have run.
 func loginFailure(status int, body []byte, h http.Header) *llm.Error {
 	var b struct {
 		Error       string `json:"error"`
 		Description string `json:"error_description"`
 	}
 	_ = json.Unmarshal(body, &b)
-	// The code and the description are the provider's text, shown to the client before any
-	// credential exists for core to redact: both are bounded and cleaned.
 	code := sdk.LoginCode(b.Error)
 	msg := fmt.Sprintf("xAI's login answered %d", status)
 	if code != "" {
@@ -414,8 +366,6 @@ func loginFailure(status int, body []byte, h http.Header) *llm.Error {
 	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Status: status, ProviderCode: code, Scope: llm.ScopeEndpoint}
 }
 
-// hideSecrets returns err with each secret in its message replaced, for errors whose message
-// carries text from xAI that may echo a code core does not know.
 func hideSecrets(err *llm.Error, secrets ...string) *llm.Error {
 	c := *err
 	for _, s := range secrets {
@@ -430,7 +380,6 @@ func refused(msg string) *llm.Error {
 	return &llm.Error{Code: llm.CodeAuth, Message: msg, Scope: llm.ScopeCredential}
 }
 
-// apiKeyLogin lists models without generating, and retains only a key the API accepted.
 func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -442,7 +391,6 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 		e = redact.Event(llm.Event{Type: llm.EventError, Error: e}).Error
 		e.Message = sdk.LoginText(e.Message)
 		e.ProviderCode = sdk.LoginCode(e.ProviderCode)
-		// A login needs the refusal reason, not a raw body that may echo credentials.
 		e.Raw = nil
 		return e
 	}

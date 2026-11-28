@@ -11,8 +11,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// TestConformance runs the extension conformance kit against this extension, with a fake xAI that
-// acts out each scenario, for an API key and for a Grok login.
 func TestConformance(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	t.Run("api_key", func(t *testing.T) {

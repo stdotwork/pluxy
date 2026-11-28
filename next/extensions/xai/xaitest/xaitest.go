@@ -1,7 +1,3 @@
-// Package xaitest is a fake xAI for tests of the xAI extension: its Responses API under
-// /v1/responses, its model list under /v1/models, the Grok CLI's billing and profile reads
-// (/v1/billing, /v1/user, /v1/settings) and its sign-in (OpenID discovery, device authorization and
-// token endpoints). It accepts only the API keys and tokens it issued and never talks to xAI.
 package xaitest
 
 import (
@@ -18,7 +14,6 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Request is an API request the server answered with a valid key.
 type Request struct {
 	Method string
 	Path   string
@@ -27,28 +22,20 @@ type Request struct {
 	Body   []byte
 }
 
-// Server is the fake. Set its fields before requests arrive.
 type Server struct {
 	*httptest.Server
 
-	// Generate, if set, answers requests whose key is valid. The default replies "Hello" as a
-	// Responses message (streamed when asked) with usage 11 in, 7 out.
-	Generate func(w http.ResponseWriter, r *http.Request, req Request)
-	// DenyDevice makes every device login end with access_denied once polled.
+	Generate   func(w http.ResponseWriter, r *http.Request, req Request)
 	DenyDevice bool
-	// TokenDown makes the token endpoint answer 503.
-	TokenDown bool
-	// Billing, if set, answers the billing and profile reads of a Grok login (GET /v1/billing,
-	// /v1/user and /v1/settings) whose token is valid, in place of the default bodies below.
-	Billing func(w http.ResponseWriter, r *http.Request)
-	// Answer, if set, sees every request first; it answers one by returning true.
-	Answer func(w http.ResponseWriter, r *http.Request) bool
+	TokenDown  bool
+	Billing    func(w http.ResponseWriter, r *http.Request)
+	Answer     func(w http.ResponseWriter, r *http.Request) bool
 
 	mu       sync.Mutex
 	n        int
-	keys     map[string]bool // API keys and access tokens
+	keys     map[string]bool
 	refresh  map[string]bool
-	devices  map[string]*device // device code to its state
+	devices  map[string]*device
 	requests []Request
 	models   int
 }
@@ -58,12 +45,9 @@ type device struct {
 	approved bool
 }
 
-// Email is the e-mail address the ID tokens name.
 const Email = "grok-user@example.com"
 
-// New starts a fake that is closed when the test ends.
 func New(t testing.TB) *Server {
-	// The extension honours the fake's address in account settings only under this variable.
 	t.Setenv(protocol.EnvTestLoginHosts, "1")
 	s := &Server{keys: map[string]bool{}, refresh: map[string]bool{}, devices: map[string]*device{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
@@ -71,13 +55,11 @@ func New(t testing.TB) *Server {
 	return s
 }
 
-// Settings returns account settings that point the extension at the server.
 func (s *Server) Settings() json.RawMessage {
 	b, _ := json.Marshal(map[string]string{"base_url": s.URL + "/v1", "auth_issuer": s.URL})
 	return b
 }
 
-// Key issues a new API key the server accepts.
 func (s *Server) Key() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -87,7 +69,6 @@ func (s *Server) Key() string {
 	return k
 }
 
-// Grant returns a new access token and refresh token, as a finished Grok login holds them.
 func (s *Server) Grant() (access, refresh string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -101,7 +82,6 @@ func (s *Server) grant() (string, string) {
 	return a, r
 }
 
-// Approve approves the device login showing userCode, as the user would on xAI's page.
 func (s *Server) Approve(userCode string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -114,21 +94,18 @@ func (s *Server) Approve(userCode string) bool {
 	return false
 }
 
-// Revoke makes the server refuse a key or token it issued.
 func (s *Server) Revoke(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.keys, key)
 }
 
-// ModelRequests returns how many model list requests the server has received, valid or not.
 func (s *Server) ModelRequests() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.models
 }
 
-// Requests returns the API requests the server answered, in order.
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -162,7 +139,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/v1/models" && r.Method == http.MethodGet {
-		// The account check: the model list, for a key or token the server issued.
 		key, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		s.mu.Lock()
 		s.models++
@@ -262,7 +238,6 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// idToken is an unsigned ID token naming Email.
 func idToken() string {
 	enc := func(v any) string {
 		b, _ := json.Marshal(v)
@@ -271,25 +246,17 @@ func idToken() string {
 	return enc(map[string]string{"alg": "none"}) + "." + enc(map[string]string{"sub": "user-1", "email": Email}) + ".x"
 }
 
-// The default bodies of the billing and profile reads, shaped as the Grok CLI's endpoint answers
-// them: amounts in cents under "val", periods as RFC 3339 times.
 const (
-	// CreditsBody answers GET /v1/billing?format=credits: the weekly window.
 	CreditsBody = `{"config":{"currentPeriod":{"type":"BILLING_PERIOD_TYPE_WEEKLY","start":"2026-11-02T00:00:00Z","end":"2026-11-09T00:00:00Z"},` +
 		`"creditUsagePercent":42.5,"productUsage":[{"product":"grok-build","usagePercent":30}]}}`
-	// BillingBody answers GET /v1/billing: the monthly credits, the cap and the prepaid balance.
 	BillingBody = `{"config":{"monthlyLimit":{"val":"15000"},"used":{"val":"16000"},"onDemandCap":{"val":"5000"},` +
 		`"prepaidBalance":{"val":"2500"},"billingPeriodStart":"2026-11-01T00:00:00Z","billingPeriodEnd":"2026-12-01T00:00:00Z"}}`
-	// UserBody answers GET /v1/user?include=subscription.
-	UserBody = `{"subscriptionTier":"SUBSCRIPTION_TIER_SUPER_GROK_PRO"}`
-	// SettingsBody answers GET /v1/settings.
+	UserBody     = `{"subscriptionTier":"SUBSCRIPTION_TIER_SUPER_GROK_PRO"}`
 	SettingsBody = `{"subscription_tier_display":"SuperGrok"}`
 )
 
-// Usage is the usage the default replies report.
 var Usage = map[string]int{"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}
 
-// StreamText writes a streamed Responses reply holding one message of text, one delta per piece.
 func StreamText(w http.ResponseWriter, pieces ...string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	resp := map[string]any{"id": "resp_xaitest", "object": "response", "created_at": 1700000000, "status": "in_progress", "model": "grok-test", "output": []any{}, "usage": nil}
@@ -308,7 +275,6 @@ func StreamText(w http.ResponseWriter, pieces ...string) {
 	event(w, "response.completed", map[string]any{"type": "response.completed", "sequence_number": 3 + len(pieces), "response": resp})
 }
 
-// JSONText writes a Responses reply holding one message of text.
 func JSONText(w http.ResponseWriter, text string) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": "resp_xaitest", "object": "response", "created_at": 1700000000, "status": "completed",
 		"model": "grok-test", "output": []any{messageItem(text)}, "usage": Usage})
