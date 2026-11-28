@@ -29,12 +29,9 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	if c == nil || c.Kind != protocol.CredentialOAuth || !strings.HasPrefix(c.RefreshToken, "dca:") {
 		return nil, &llm.Error{Code: llm.CodeAuth, Message: "the account has no Muse Code device token; log in again", Scope: llm.ScopeCredential}
 	}
-	// The device token renews the account, so it goes only where a renewal
-	// sends it: Meta's own key endpoint (mint_url only in a test run, see sdk.TestLoginHost), never to
-	// base_url, which an account may point at a relay. Meta has no other usage endpoint. The call makes a new API key; the reply's key is
-	// dropped here, never returned and never kept, and the credential's own key is left alone: if Meta
-	// retires it, the account's next request is refused and core renews the credential (a renewal makes
-	// a key from the device token the same way).
+	// The device token renews the account, so it goes only to Meta's own key endpoint, never to
+	// base_url, which an account may point at a relay. Meta has no other usage endpoint. The call
+	// makes a new API key; the reply's key is dropped, never returned and never kept.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.MintURL, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad key endpoint: " + err.Error(), Scope: llm.ScopeCredential}

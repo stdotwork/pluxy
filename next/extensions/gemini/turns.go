@@ -29,9 +29,7 @@ func fixTurns(body []byte, vertex, stream, translated bool) []byte {
 		}
 	}
 	// On Vertex AI, trailing model turns made only of thoughts (a replayed reasoning item) are
-	// dropped first, keeping at least one turn. In a request translated from another format, a
-	// replayed reasoning item reaches Google as an empty text part carrying only its thought
-	// signature (geminigenerate.EncodeRequest), which counts as a thought here.
+	// dropped first, keeping at least one turn.
 	drop := func() {
 		if !vertex {
 			return
