@@ -647,7 +647,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             let mut page = Page::open(app, main, PAGE)?;
             let id = page.send(EXECUTION, "launch", same.clone())?;
             dialog_with(app, &[PAGE, EXECUTION, &s(&terminal)])?;
-            notice(app, &[PAGE, "awaiting native confirmation"])?;
+            notice(app, &[PAGE, "waiting for you to confirm"])?;
             std::thread::sleep(Duration::from_millis(1100));
             press("alt+c")?;
             require(
