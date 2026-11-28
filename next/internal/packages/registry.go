@@ -1,10 +1,3 @@
-// Package packages installs extension packages. It reads registry indexes, downloads a
-// release's archive and checks it against the digest and size the registry pins, unpacks it
-// into a staging folder with only regular files and folders, checks the manifest inside, and
-// moves the package into its own folder. It also keeps the record of what is installed
-// (packages.json). Running packages is core's business, not this package's.
-//
-// The formats are in the protocol README: "Release archives" and "Registry index".
 package packages
 
 import (
@@ -28,79 +21,51 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/host"
 )
 
-// IndexVersion is the registry index format this core reads.
 const IndexVersion = 0
 
-// Limits on what core reads from a registry.
 const (
-	maxIndex       = 8 << 20   // bytes of an index
-	maxUnpacked    = 512 << 20 // bytes of an archive's files, unpacked
-	maxEntries     = 10000     // entries in an archive
+	maxIndex       = 8 << 20
+	maxUnpacked    = 512 << 20
+	maxEntries     = 10000
 	maxArchiveSize = maxUnpacked
 )
 
-// Errors, by what the management API answers.
 var (
-	// ErrNotFound: no registry lists the package, or the release asked for.
 	ErrNotFound = errors.New("not found")
-	// ErrRefused: a check failed (digest, size, archive contents, manifest, compatibility);
-	// nothing was installed.
-	ErrRefused = errors.New("refused")
-	// ErrFetch: a registry index or archive could not be read.
-	ErrFetch = errors.New("fetch failed")
-	// ErrConflict: the operation clashes with what is installed or running.
+	ErrRefused  = errors.New("refused")
+	ErrFetch    = errors.New("fetch failed")
 	ErrConflict = errors.New("conflict")
 )
 
-// Registry is one source of packages.
 type Registry struct {
 	Name string `json:"name"`
-	// URL is an https:// URL or an absolute path of the index file.
-	URL string `json:"url"`
+	URL  string `json:"url"`
 }
 
-// Index is a registry index, version 0.
 type Index struct {
 	RegistryVersion int                `json:"registry_version"`
 	Packages        map[string]Package `json:"packages"`
 }
 
-// Package is what a registry offers of one package.
 type Package struct {
-	// Title and Summary say what the package is, for someone who does not know its ID: a name
-	// of a few words and one sentence. Both are optional.
-	Title   string `json:"title,omitempty"`
-	Summary string `json:"summary,omitempty"`
-	// Kind is what the package adds: KindProvider or KindClient, or another word a later
-	// registry uses. Optional.
-	Kind string `json:"kind,omitempty"`
-	// Tier is how far the registry vouches for the package: TierPick, TierVerified or
-	// TierUnverified. Core shows it and enforces nothing by it. Absent means unverified.
-	Tier string `json:"tier,omitempty"`
-	// Releases, newest first.
+	Title    string    `json:"title,omitempty"`
+	Summary  string    `json:"summary,omitempty"`
+	Kind     string    `json:"kind,omitempty"`
+	Tier     string    `json:"tier,omitempty"`
 	Releases []Release `json:"releases"`
 }
 
-// What a package adds (Package.Kind).
 const (
-	// KindProvider: an extension core runs that serves models from an upstream.
 	KindProvider = "provider"
-	// KindClient: a tool that points a coding client at core, such as the desktop app's
-	// writer of Claude Code's settings.
-	KindClient = "client"
+	KindClient   = "client"
 )
 
-// How far a registry vouches for a package (Package.Tier).
 const (
-	// TierPick: offered when a new install is set up.
-	TierPick = "pick"
-	// TierVerified: reviewed by the registry's maintainers; installable, not offered.
-	TierVerified = "verified"
-	// TierUnverified: listed, not reviewed.
+	TierPick       = "pick"
+	TierVerified   = "verified"
 	TierUnverified = "unverified"
 )
 
-// Limits on a package's description in an index.
 const (
 	maxTitle   = 80
 	maxSummary = 300
@@ -108,8 +73,6 @@ const (
 
 var wordPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 
-// describedText reports whether s is fit to show as one line: valid UTF-8 of at most max
-// characters with no control characters, which a terminal would act on.
 func describedText(s string, max int) bool {
 	if !utf8.ValidString(s) || utf8.RuneCountInString(s) > max {
 		return false
@@ -117,14 +80,12 @@ func describedText(s string, max int) bool {
 	return !strings.ContainsFunc(s, unicode.IsControl)
 }
 
-// Release is one pinned release of a package.
 type Release struct {
 	Version   string              `json:"version"`
 	Protocol  []int               `json:"protocol"`
 	Artifacts map[string]Artifact `json:"artifacts"`
 }
 
-// Artifact is a release's archive for one platform.
 type Artifact struct {
 	URL    string `json:"url"`
 	SHA256 string `json:"sha256"`
@@ -133,8 +94,6 @@ type Artifact struct {
 
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// validate checks the index's own consistency; whether a release fits this core is decided
-// when one is picked.
 func (ix *Index) validate() error {
 	if ix.RegistryVersion != IndexVersion {
 		return fmt.Errorf("registry_version %d is not supported (this core reads %d)", ix.RegistryVersion, IndexVersion)
@@ -173,8 +132,6 @@ func (ix *Index) validate() error {
 	return nil
 }
 
-// pick returns the release of id to install: version's, or without a version the first listed
-// that speaks one of protocols and has an archive for platform.
 func (ix *Index) pick(id, version string, protocols []int, platform string) (Release, Artifact, error) {
 	p, ok := ix.Packages[id]
 	if !ok {
@@ -219,8 +176,6 @@ func (ix *Index) pick(id, version string, protocols []int, platform string) (Rel
 	return Release{}, Artifact{}, fmt.Errorf("no release of %s runs here: %w", id, first)
 }
 
-// RedactURL returns loc fit to show: an https:// URL without its user name, password and
-// query, which may hold secrets; a path as it is.
 func RedactURL(loc string) string {
 	if !isHTTPS(loc) {
 		return loc
@@ -236,12 +191,8 @@ func RedactURL(loc string) string {
 	return u.String()
 }
 
-// isHTTPS reports whether loc is an https:// URL rather than a path.
 func isHTTPS(loc string) bool { return strings.HasPrefix(strings.ToLower(loc), "https://") }
 
-// CheckLocation reports whether loc may name a registry index: an https:// URL or an absolute
-// path. Plain http:// is refused: an index or archive fetched over it could be swapped on the
-// way.
 func CheckLocation(loc string) error {
 	if isHTTPS(loc) {
 		u, err := url.Parse(loc)
@@ -259,7 +210,6 @@ func CheckLocation(loc string) error {
 	return nil
 }
 
-// resolve returns where an artifact's url points, relative to the index at index.
 func resolve(index, ref string) (string, error) {
 	u, err := url.Parse(ref)
 	if err != nil {
@@ -288,9 +238,6 @@ func resolve(index, ref string) (string, error) {
 	return filepath.Join(filepath.Dir(index), filepath.FromSlash(u.Path)), nil
 }
 
-// DefaultClient is the HTTP client for registries: connecting and the TLS handshake are
-// bounded, nothing after that (a long download is not a failure; the caller's context ends
-// it), and a redirect may only go to another https:// URL.
 func DefaultClient() *http.Client {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.Proxy = http.ProxyFromEnvironment
@@ -309,8 +256,6 @@ func httpsRedirectsOnly(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// open opens loc for reading at most limit bytes: a local path, or an https:// URL fetched
-// with client.
 func open(ctx context.Context, client *http.Client, loc string, limit int64) (io.ReadCloser, error) {
 	if !isHTTPS(loc) {
 		f, err := os.Open(loc)
@@ -323,7 +268,6 @@ func open(ctx context.Context, client *http.Client, loc string, limit int64) (io
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s is not a valid URL", ErrFetch, RedactURL(loc))
 	}
-	// The digest pins the bytes as published: no transparent decompression.
 	req.Header.Set("Accept-Encoding", "identity")
 	if client.CheckRedirect == nil {
 		c := *client
@@ -350,12 +294,8 @@ func open(ctx context.Context, client *http.Client, loc string, limit int64) (io
 	return resp.Body, nil
 }
 
-// IndexTimeout is how long ReadIndex waits for one registry's index, from the request to
-// its last byte. An index is small, so a registry that is slower than this is stalled.
-// Archive downloads are not bound by it. It is a variable so tests can shorten it.
 var IndexTimeout = 30 * time.Second
 
-// ReadIndex reads and checks the index of r. It gives up after IndexTimeout.
 func ReadIndex(ctx context.Context, client *http.Client, r Registry) (*Index, error) {
 	if client == nil {
 		client = DefaultClient()

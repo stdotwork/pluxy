@@ -19,7 +19,6 @@ import (
 	"time"
 )
 
-// entry is one archive entry; typ 0 is a regular file.
 type entry struct {
 	name string
 	typ  byte
@@ -33,7 +32,6 @@ func manifest(id, version, program string) string {
 	return string(b)
 }
 
-// good is a valid package archive's entries for test/ext 1.0.0.
 func good() []entry {
 	return []entry{{name: "pluxy-extension.json", body: manifest("test/ext", "1.0.0", "bin/ext")}, {name: "bin/ext", body: "#!/bin/sh\n"}}
 }
@@ -75,8 +73,6 @@ func digest(b []byte) string {
 	return hex.EncodeToString(s[:])
 }
 
-// localRegistry writes a registry offering arc as test/ext 1.0.0 and returns its index path.
-// edit may change the release before it is written.
 func localRegistry(t *testing.T, arc []byte, edit func(*Release)) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -102,8 +98,6 @@ func installer(t *testing.T, index string) (*Installer, string) {
 	return &Installer{Dir: root, Registries: []Registry{{Name: "test", URL: index}}, Protocols: []int{0}}, root
 }
 
-// The archive and manifest checks: each refused archive leaves nothing installed and writes
-// nothing outside the staging folder.
 func TestFetchRefusesBadPackages(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -153,7 +147,7 @@ func TestFetchRefusesBadPackages(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			outside := t.TempDir()
-			t.Chdir(outside) // a relative escape would land here
+			t.Chdir(outside)
 			in, root := installer(t, localRegistry(t, archive(t, tt.entries), tt.edit))
 			s, err := in.Fetch(context.Background(), Request{ID: "test/ext"})
 			if err == nil {
@@ -179,8 +173,6 @@ func TestFetchRefusesBadPackages(t *testing.T) {
 	}
 }
 
-// A good package is unpacked with its program executable and moved into its own folder; its
-// record holds the archive's digest and the unpacked files' fingerprint.
 func TestFetchAndCommit(t *testing.T) {
 	arc := archive(t, good())
 	in, root := installer(t, localRegistry(t, arc, nil))
@@ -214,8 +206,6 @@ func TestFetchAndCommit(t *testing.T) {
 	}
 }
 
-// An HTTPS registry: the archive's relative url resolves against the index's URL, and a
-// redirect to plain http is not followed.
 func TestHTTPSRegistry(t *testing.T) {
 	arc := archive(t, good())
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +249,6 @@ func TestHTTPSRegistry(t *testing.T) {
 	}
 }
 
-// A registry named by plain http:// or a relative path is refused before anything is read.
 func TestRegistryLocations(t *testing.T) {
 	for loc, ok := range map[string]bool{
 		"https://example.com/index.json": true,
@@ -274,8 +263,6 @@ func TestRegistryLocations(t *testing.T) {
 	}
 }
 
-// A link already inside the packages folder is never followed: installing and removing write
-// and delete only inside the folder.
 func TestCommitAndRemoveStayInsideThePackagesFolder(t *testing.T) {
 	in, root := installer(t, localRegistry(t, archive(t, good()), nil))
 	outside := t.TempDir()
@@ -310,8 +297,6 @@ func TestCommitAndRemoveStayInsideThePackagesFolder(t *testing.T) {
 	}
 }
 
-// A package's description is read when it is one line of bounded length, with kind and tier as
-// lower-case words; an index with a title that would move a terminal's cursor is refused.
 func TestIndexDescriptions(t *testing.T) {
 	sum := strings.Repeat("a", 64)
 	ix := func(p string) Index {
@@ -341,8 +326,6 @@ func TestIndexDescriptions(t *testing.T) {
 	}
 }
 
-// A registry that accepts the connection and then says nothing, before or after the response
-// headers, ends in an error within IndexTimeout.
 func TestReadIndexStalledRegistry(t *testing.T) {
 	old := IndexTimeout
 	IndexTimeout = 300 * time.Millisecond
@@ -374,7 +357,6 @@ func TestReadIndexStalledRegistry(t *testing.T) {
 		}
 	}
 
-	// The caller's own cancel is not reported as a timeout.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := ReadIndex(ctx, srv.Client(), Registry{Name: "x", URL: srv.URL + "/headers/index.json"}); err == nil || strings.Contains(err.Error(), "no answer within") {
@@ -382,7 +364,6 @@ func TestReadIndexStalledRegistry(t *testing.T) {
 	}
 }
 
-// IndexTimeout does not cut a slow archive download.
 func TestSlowDownloadOutlastsIndexTimeout(t *testing.T) {
 	old := IndexTimeout
 	IndexTimeout = 200 * time.Millisecond

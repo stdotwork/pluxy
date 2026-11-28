@@ -21,44 +21,29 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/host"
 )
 
-// Platform is this core's platform, as registries and manifests name it.
 const Platform = runtime.GOOS + "/" + runtime.GOARCH
 
-// stagingDir is the folder under the packages folder where downloads are checked before they
-// are moved into place.
 const stagingDir = ".staging"
 
-// Installer fetches and checks packages for one packages folder.
 type Installer struct {
-	// Dir is the packages folder.
-	Dir string
-	// Registries are searched in order when a request names none.
+	Dir        string
 	Registries []Registry
-	// Protocols are the protocol versions core speaks.
-	Protocols []int
-	// Client fetches https:// registries and archives. Default: DefaultClient.
-	Client *http.Client
+	Protocols  []int
+	Client     *http.Client
 }
 
-// Request says what to install.
 type Request struct {
-	ID string
-	// Version: empty for the first release listed that runs here.
-	Version string
-	// Registry: a registry's name; empty searches every registry in order.
+	ID       string
+	Version  string
 	Registry string
 }
 
-// Staged is a downloaded and checked package waiting in the staging folder.
 type Staged struct {
 	Installed
 	in  *Installer
-	dir string // the staging folder: dir/pkg holds the package
+	dir string
 }
 
-// Fetch finds the release req asks for, downloads its archive for this platform, checks its
-// size and digest, unpacks it and checks the manifest inside. Nothing outside the staging
-// folder changes; Commit moves the package into place.
 func (in *Installer) Fetch(ctx context.Context, req Request) (*Staged, error) {
 	if !host.ValidID(req.ID) {
 		return nil, fmt.Errorf("%w: %q is not a package ID of the form publisher/name", ErrRefused, req.ID)
@@ -101,7 +86,6 @@ func (in *Installer) Fetch(ctx context.Context, req Request) (*Staged, error) {
 	return s, nil
 }
 
-// find returns the registry to install req from and its index.
 func (in *Installer) find(ctx context.Context, client *http.Client, req Request) (Registry, *Index, error) {
 	if req.Registry != "" {
 		i := slices.IndexFunc(in.Registries, func(r Registry) bool { return r.Name == req.Registry })
@@ -126,7 +110,6 @@ func (in *Installer) find(ctx context.Context, client *http.Client, req Request)
 		}
 	}
 	if len(errs) > 0 {
-		// A registry that could not be read may be the one listing it.
 		return Registry{}, nil, fmt.Errorf("no readable registry lists %s: %w", req.ID, errors.Join(errs...))
 	}
 	return Registry{}, nil, fmt.Errorf("%w: no registry lists %s", ErrNotFound, req.ID)
@@ -150,8 +133,6 @@ func (s *Staged) fetch(ctx context.Context, client *http.Client, art Artifact) e
 	return s.check(pkg)
 }
 
-// download copies the archive at loc to dst, refusing it unless it has exactly art.Size bytes
-// with digest art.SHA256.
 func download(ctx context.Context, client *http.Client, loc string, art Artifact, dst string) error {
 	body, err := open(ctx, client, loc, art.Size)
 	if err != nil {
@@ -183,16 +164,12 @@ func download(ctx context.Context, client *http.Client, loc string, art Artifact
 	return nil
 }
 
-// unpack unpacks the gzip-compressed tar archive at path into dir, which must be empty. Only
-// regular files and folders inside dir are allowed, within the size and entry limits.
 func unpack(path, dir string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	// Every write goes through root, which refuses any path that leaves dir, lexically or
-	// through a link: a second guard behind the name check below.
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return err
@@ -217,7 +194,7 @@ func unpack(path, dir string) error {
 		}
 		name := strings.TrimSuffix(strings.TrimPrefix(h.Name, "./"), "/")
 		if (name == "" || name == ".") && h.Typeflag == tar.TypeDir {
-			continue // the folder itself
+			continue
 		}
 		local := filepath.FromSlash(name)
 		if strings.Contains(name, `\`) || !filepath.IsLocal(local) {
@@ -259,8 +236,6 @@ func unpack(path, dir string) error {
 	}
 }
 
-// check checks the unpacked package in dir against the release and this core, and records its
-// fingerprint.
 func (s *Staged) check(dir string) error {
 	mpath := filepath.Join(dir, host.ManifestFile)
 	if fi, err := os.Lstat(mpath); err != nil || !fi.Mode().IsRegular() {
@@ -289,13 +264,6 @@ func (s *Staged) check(dir string) error {
 	return nil
 }
 
-// Commit moves the staged package into its folder, {Dir}/{publisher}/{name}/{version}, and
-// returns its record (not yet saved: the caller saves the State). A folder already there for
-// the version that inUse does not claim is left over from an interrupted install or removal and
-// is replaced; one in use is a conflict.
-//
-// Every change goes through an os.Root on the packages folder, so a link inside the folder
-// never leads a write or a removal outside it.
 func (s *Staged) Commit(inUse func(dir string) bool) (Installed, error) {
 	defer s.Discard()
 	root, err := os.OpenRoot(s.in.Dir)
@@ -326,22 +294,16 @@ func (s *Staged) Commit(inUse func(dir string) bool) (Installed, error) {
 	return s.Installed, nil
 }
 
-// Discard removes the staging folder.
 func (s *Staged) Discard() {
 	if s.dir != "" {
 		os.RemoveAll(s.dir)
 	}
 }
 
-// ClearStaging removes what interrupted installs left in the staging folder. Call it before
-// any install runs.
 func ClearStaging(dir string) error {
 	return os.RemoveAll(filepath.Join(dir, stagingDir))
 }
 
-// Remove removes the folder of id at version, and its publisher's and name's folders when
-// they are left empty.
-// It removes only inside dir, through an os.Root.
 func Remove(dir, id, version string) error {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -353,7 +315,7 @@ func Remove(dir, id, version string) error {
 		return err
 	}
 	name := filepath.Dir(final)
-	_ = root.Remove(name)               // fails when another version is there
-	_ = root.Remove(filepath.Dir(name)) // fails when another package of the publisher is there
+	_ = root.Remove(name)
+	_ = root.Remove(filepath.Dir(name))
 	return nil
 }
